@@ -13598,7 +13598,6 @@ fn checkedRuntimeLoweringConfig(
             .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
             .erased_capture_prefix = devCapturePrefix(roots, opt, target),
             .specialization_strategy = specialization_strategy,
-            .boxy_composition_sites = readsCompositionSites(opt, target),
             .inline_mode = postCheckInlineModeForOpt(opt),
             .specialize_arc_modes = optimizeLirForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
@@ -13623,25 +13622,6 @@ fn checkedRuntimeLoweringConfig(
             .proc_debug_names = proc_debug_names,
         },
     };
-}
-
-/// Whether the code `opt` runs for `target` reads composition sites: the
-/// interpreter, the native dev backend and the LLVM backend do, the wasm
-/// dev backend does not.
-fn readsCompositionSites(opt: cli_args.OptLevel, target: RocTarget) bool {
-    return switch (opt) {
-        .interpreter, .size, .speed => true,
-        .dev => target.toCpuArch() != .wasm32,
-    };
-}
-
-test "every consumer but the wasm dev backend gets composition sites" {
-    try std.testing.expect(readsCompositionSites(.interpreter, .x64musl));
-    try std.testing.expect(readsCompositionSites(.dev, .x64musl));
-    try std.testing.expect(!readsCompositionSites(.dev, .wasm32));
-    try std.testing.expect(readsCompositionSites(.size, .x64musl));
-    try std.testing.expect(readsCompositionSites(.speed, .x64musl));
-    try std.testing.expect(readsCompositionSites(.speed, .wasm32));
 }
 
 /// The bytes a program's erased callables reserve at the start of their

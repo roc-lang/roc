@@ -18,7 +18,6 @@ const reporting = @import("reporting");
 const builtin_static = can.BuiltinStatic;
 const CompileTimeFinalization = @import("compile_time_finalization.zig");
 const Interpreter = @import("interpreter.zig").Interpreter;
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const RuntimeHostEnv = @import("runtime_host.zig");
 const object_image = @import("object_image.zig");
 const InspectedRun = @import("inspected_run.zig");
@@ -2535,7 +2534,6 @@ pub fn devEvalSharedBoolRootModulesWithOptions(allocator: Allocator, modules: []
                 call_cursor += 1;
                 calls[i] = .{
                     .shape = .{ .layouts = layouts, .arg_layouts = root.arg_layouts, .ret_layout = root.ret_layout },
-                    .composes = store.runtime_contract == .boxy,
                     .target = .{ .dev = .{ .executable = &executable, .entry_offset = entry_offsets[i] } },
                     .expect_site_count = partition.expect_site_count,
                     .expect_site_base = expect_site_base,
@@ -2701,9 +2699,6 @@ const BoolRootCall = struct {
     /// Null for a root of a unit image, which takes no arguments and
     /// returns a `Bool`.
     shape: ?BoolRootShape,
-    /// Whether the root's code composes Boxy descriptors at run time, so
-    /// the batch's workers enter a `BoxyInProcessState`.
-    composes: bool,
     target: BoolRootCallTarget,
     expect_site_base: usize = 0,
     expect_site_count: usize = 0,
@@ -2740,7 +2735,6 @@ pub fn runUnitImageBoolRootModules(allocator: Allocator, modules: []const UnitIm
         for (module.roots) |root| {
             calls[cursor] = .{
                 .shape = null,
-                .composes = true,
                 .target = .{ .unit_image = root.entry },
                 .expect_site_base = expect_site_base,
                 .expect_site_count = expect_site_count,
@@ -2770,9 +2764,6 @@ fn zeroedBoolBuffer(allocator: Allocator) Error![]align(collections.max_roc_alig
 const BoolRootWorkerState = struct {
     allocator: Allocator,
     calls: []const BoolRootCall,
-    /// What the batch's `.boxy` code composes while it runs, current on
-    /// each worker.
-    composition: ?*BoxyInProcessState,
     next_call: std.atomic.Value(usize),
     results: []?BoolRootEvalResult,
     errors: []?Error,
@@ -2795,8 +2786,6 @@ fn boolRootWorker(args: *BoolRootWorkerArgs) void {
     // stack overflow in a test and longjmp back to the crash boundary.
     // Without this, the handler would run on the just-overflowed stack.
     _ = base.stack_overflow.installForCurrentThread();
-    const composition = if (state.composition) |composition| composition.enter() else null;
-    defer if (composition) |entered| BoxyInProcessState.leave(entered);
     while (true) {
         const index = state.next_call.fetchAdd(1, .monotonic);
         if (index >= state.calls.len) break;
@@ -2896,17 +2885,9 @@ fn runBoolRootCalls(
     defer allocator.free(worker_expect_failed);
     @memset(worker_expect_failed, 0);
 
-    // The batch is one program: every call runs its code, so what the calls
-    // compose lives until the batch is done.
-    var composes = false;
-    for (calls) |call| composes = composes or call.composes;
-    const composition = if (composes) try BoxyInProcessState.create(allocator) else null;
-    defer if (composition) |owned| owned.destroy();
-
     var state = BoolRootWorkerState{
         .allocator = allocator,
         .calls = calls,
-        .composition = composition,
         .next_call = std.atomic.Value(usize).init(0),
         .results = slots,
         .errors = errors,
@@ -3175,7 +3156,6 @@ pub fn llvmEvalBoolRootModules(
         for (module.roots) |root| {
             calls[call_index] = .{
                 .shape = .{ .layouts = module.layouts, .arg_layouts = root.arg_layouts, .ret_layout = root.ret_layout },
-                .composes = module.store.runtime_contract == .boxy,
                 .target = .{ .llvm = lib.lookup(LlvmBoolRootEntryFn, root.symbol_name) orelse return error.LlvmBackendUnavailable },
                 .expect_site_base = expect_site_base,
                 .expect_site_count = module.expect_site_count,

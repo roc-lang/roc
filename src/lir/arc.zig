@@ -18222,6 +18222,36 @@ test "ARC dynamic product takes independently stored fields and preserves aliase
     }
 }
 
+test "ARC places no reference counts around a callable read from a type table" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const erased_callable = try d.f.layouts.insertErasedCallable();
+    const table = try d.desc();
+    const callable = try d.f.local(erased_callable);
+    const first = try d.f.local(.u64);
+    const second = try d.f.local(.u64);
+    const ret = try d.f.ret(second);
+    const second_call = try d.op(second, .{ .call_erased = .{ .closure = callable, .args = null } }, ret);
+    const first_call = try d.op(first, .{ .call_erased = .{ .closure = callable, .args = null } }, second_call);
+    const body = try d.op(callable, .{ .table_entry = .{ .table = table, .index = 0 } }, first_call);
+    const proc = try d.proc(&.{table}, body, .u64, null);
+    try testing.expect(d.f.store.getProcSpec(proc).shapes.static_literal);
+    try d.run(&.{proc});
+    // ARC owns the word as it owns a static-data literal read: no retain
+    // around its uses, one release where it dies, which names image data.
+    try d.f.expectRc(callable, 0, 1, 0);
+    var immortal = try @import("immortal_locals.zig").compute(testing.allocator, &d.f.store);
+    defer immortal.deinit(testing.allocator);
+    try testing.expect(immortal.contains(callable));
+    try testing.expectEqual(@as(usize, 1), try @import("immortal_locals.zig").elide(testing.allocator, &d.f.store));
+    var walk = try body_clone.ReachableStmts.initWithAllocator(&d.f.store, d.f.store.getProcSpec(proc).body.?, testing.allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| switch (d.f.store.getCFStmt(stmt_id)) {
+        .incref, .decref, .decref_if_initialized, .free => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+    };
+}
+
 test "ARC dyn copy of an owned dynamic parameter into the result moves its unit" {
     var d = try DynFixture.init();
     defer d.deinit();
@@ -18300,7 +18330,7 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     const result = try d.value(field_desc, .result);
     const ret = try d.f.ret(result);
     const copy = try d.op(result, .{ .copy = .{ .src = view, .desc = field_desc } }, ret);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, copy);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, copy);
     const proc = try d.proc(&.{ desc, field_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     // The field borrows from the record until one retain gives the result
@@ -18331,7 +18361,7 @@ test "ARC dyn field views supply ownership to consuming low-level operations" {
         .args = try d.f.span(&.{ view, view, elem_desc }),
         .next = ret,
     } }, .test_fixture);
-    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, concat);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = .{ .immediate = 0 } } }, concat);
     const proc = try d.proc(&.{ desc, field_desc, elem_desc, param }, read, d.dynamic, result);
     try d.run(&.{proc});
     try d.f.expectRc(view, 2, 0, 0);
@@ -18347,7 +18377,7 @@ test "ARC dyn eq and inspect borrow their operand" {
     const equal = try d.f.local(.bool);
     const text = try d.f.local(.str);
     const ret = try d.f.ret(text);
-    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc } }, ret);
+    const inspect = try d.op(text, .{ .inspect = .{ .value = param, .desc = desc, .names = desc } }, ret);
     const eq = try d.op(equal, .{ .eq = .{ .lhs = param, .rhs = param, .desc = desc } }, inspect);
     const proc = try d.proc(&.{ desc, param }, eq, .str, null);
     try d.run(&.{proc});

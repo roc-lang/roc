@@ -427,13 +427,6 @@ pub const Interpreter = struct {
     /// Heap-pinned owner used by host-facing integrations whose erased
     /// callables can outlive the evaluation that created them.
     retained_owner: ?*Retained = null,
-    /// The descriptors and dictionaries `.boxy` dynamic operations compose,
-    /// created on first use.
-    boxy_immortals: ?*BoxyImmortals = null,
-    /// Interpreter-owned instances of the program's static composition slots.
-    /// Their snapshots must not outlive this interpreter's immortal arena.
-    composition_sites: collections.DenseMapUnmanaged(LIR.StaticDataId, boxy.compose.CompositionSite) = .empty,
-    composition_operands: std.ArrayList(usize) = .empty,
     /// The result storage a call passes to a callee whose result is dynamic,
     /// between the call and the callee's activation binding it.
     pending_dyn_result: ?[*]u8 = null,
@@ -920,9 +913,6 @@ pub const Interpreter = struct {
     }
 
     pub fn deinit(self: *LirInterpreter) void {
-        self.composition_sites.deinit(self.allocator);
-        self.composition_operands.deinit(self.allocator);
-        if (self.boxy_immortals) |immortals| immortals.destroy(self.allocator);
         self.failed_call_stack.deinit(self.allocator);
         self.call_stack.deinit(self.allocator);
         self.pending_erased_storage.deinit(self.allocator);
@@ -8039,150 +8029,6 @@ pub const Interpreter = struct {
     // descriptor describes. Everything except the operations below treats it
     // as that one pointer-sized word.
 
-    /// Descriptors, dictionary callables, and dictionary records that `.boxy`
-    /// operations compose while this interpreter runs, with their interning
-    /// tables. All of it is immortal until the interpreter is destroyed.
-    /// The program's composition state (`boxy.compiled.InProcessState`) is
-    /// current on the interpreter's thread for as long as it exists, so the
-    /// runtime's own walkers and adapters, which the interpreter calls,
-    /// compose into the same tables.
-    const BoxyImmortals = struct {
-        arena: std.heap.ArenaAllocator,
-        /// Descriptor composition allocates through these ops: arena memory,
-        /// with a crash delivered to the running evaluation.
-        ops: RocOps,
-        roc_env: *InterpreterRocEnv,
-        composition: Composition,
-        /// Dictionary callables and records, keyed by constructor tag and
-        /// operand words.
-        dictionaries: std.HashMapUnmanaged([]const u64, [*]u8, WordsContext, std.hash_map.default_max_load_percentage) = .empty,
-
-        const dict_compose_tag: u64 = 1;
-        const dict_record_tag: u64 = 2;
-
-        /// Where composition interns. A platform's runtime allocates
-        /// through its host symbols whatever ops it is given, so there
-        /// composition interns in the process-global cache and its
-        /// descriptors live as long as the process; in the compiler's
-        /// process the interpreter's program owns its state and keeps it
-        /// current on its thread.
-        const Composition = if (builtins.host_abi.host_role == .platform) struct {
-            fn create(_: Allocator) Allocator.Error!@This() {
-                return .{};
-            }
-
-            fn destroy(_: *@This()) void {}
-
-            fn cache(_: *@This()) *boxy.Cache {
-                return &boxy.compose.process_cache;
-            }
-        } else struct {
-            state: *boxy.compiled.InProcessState,
-            entered: boxy.compiled.InProcessState.Entered,
-
-            fn create(allocator: Allocator) Allocator.Error!@This() {
-                const state = try boxy.compiled.InProcessState.create(allocator);
-                return .{ .state = state, .entered = state.enter() };
-            }
-
-            fn destroy(self: *@This()) void {
-                boxy.compiled.InProcessState.leave(self.entered);
-                self.state.destroy();
-            }
-
-            fn cache(self: *@This()) *boxy.Cache {
-                return &self.state.descriptors;
-            }
-        };
-
-        fn create(allocator: Allocator, roc_env: *InterpreterRocEnv, hosted_fns: builtins.host_abi.HostedFunctions) Allocator.Error!*BoxyImmortals {
-            const self = try allocator.create(BoxyImmortals);
-            errdefer allocator.destroy(self);
-            self.* = .{
-                .arena = .init(allocator),
-                .ops = .{
-                    .env = @ptrCast(self),
-                    .roc_alloc = &immortalAlloc,
-                    .roc_dealloc = &immortalDealloc,
-                    .roc_realloc = &immortalRealloc,
-                    .roc_dbg = &forwardDbg,
-                    .roc_expect_failed = &forwardExpectFailed,
-                    .roc_crashed = &forwardCrashed,
-                    .hosted_fns = hosted_fns,
-                },
-                .roc_env = roc_env,
-                .composition = try Composition.create(allocator),
-            };
-            return self;
-        }
-
-        fn destroy(self: *BoxyImmortals, allocator: Allocator) void {
-            self.composition.destroy();
-            self.dictionaries.deinit(allocator);
-            self.arena.deinit();
-            allocator.destroy(self);
-        }
-
-        /// The cache descriptor composition interns in.
-        fn composeCache(self: *BoxyImmortals) *boxy.Cache {
-            return self.composition.cache();
-        }
-
-        fn fromOps(ops: *RocOps) *BoxyImmortals {
-            return @ptrCast(@alignCast(ops.env));
-        }
-
-        fn immortalAlloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
-            const self = fromOps(ops);
-            return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
-                self.roc_env.crashAllocationFailed();
-        }
-
-        /// Arena memory is released with the interpreter.
-        fn immortalDealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
-
-        fn immortalRealloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
-            base.invariant("{s}", .{"LIR/interpreter invariant violated: descriptor composition reallocated immortal memory"});
-        }
-
-        fn forwardDbg(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-            const caller = fromOps(ops).roc_env.currentRocOps();
-            caller.roc_dbg(caller, bytes, len);
-        }
-
-        fn forwardExpectFailed(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-            const caller = fromOps(ops).roc_env.currentRocOps();
-            caller.roc_expect_failed(caller, bytes, len);
-        }
-
-        fn forwardCrashed(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-            fromOps(ops).roc_env.deliverCrash(bytes[0..len]);
-        }
-    };
-
-    const WordsContext = struct {
-        pub fn hash(_: WordsContext, key: []const u64) u64 {
-            var hasher = std.hash.Wyhash.init(0);
-            for (key) |word| hasher.update(std.mem.asBytes(&word));
-            return hasher.final();
-        }
-
-        pub fn eql(_: WordsContext, a: []const u64, b: []const u64) bool {
-            if (a.len != b.len) return false;
-            for (a, b) |x, y| {
-                if (x != y) return false;
-            }
-            return true;
-        }
-    };
-
-    fn boxyImmortals(self: *LirInterpreter) Error!*BoxyImmortals {
-        if (self.boxy_immortals) |immortals| return immortals;
-        const immortals = try BoxyImmortals.create(self.allocator, self.roc_env, self.roc_ops.hosted_fns);
-        self.boxy_immortals = immortals;
-        return immortals;
-    }
-
     fn readAddress(value: Value) [*]u8 {
         return @ptrFromInt(value.read(usize));
     }
@@ -8216,11 +8062,20 @@ pub const Interpreter = struct {
         return @ptrFromInt(word);
     }
 
-    /// The name an `opaque_ptr` name local holds.
-    fn nameAt(self: *LirInterpreter, frame: *const Frame, name_local: LocalId) Error!*const boxy.Name {
-        const word = try self.localWord(frame, name_local);
-        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: name local {d} is null", .{@backingInt(name_local)});
+    /// The static data an `opaque_ptr` plan local addresses.
+    fn planAt(self: *LirInterpreter, frame: *const Frame, comptime T: type, plan_local: LocalId) Error!*const T {
+        const word = try self.localWord(frame, plan_local);
+        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: plan local {d} is null", .{@backingInt(plan_local)});
         return @ptrFromInt(word);
+    }
+
+    /// The value of an index operand: the immediate, or the `u32` local
+    /// holding it.
+    fn indexAt(self: *LirInterpreter, frame: *const Frame, index: LIR.DynIndex) Error!u32 {
+        return switch (index) {
+            .immediate => |value| value,
+            .local => |local| (try self.getLocalChecked(frame, local)).read(u32),
+        };
     }
 
     /// The descriptor of dynamic local `local`.
@@ -8521,13 +8376,6 @@ pub const Interpreter = struct {
         try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, address), false);
     }
 
-    fn descsAt(self: *LirInterpreter, frame: *const Frame, span: LocalSpan) Error![]*const TypeDesc {
-        const locals = self.store.getLocalSpan(span);
-        const descs = try self.evalAllocator().alloc(*const TypeDesc, locals.len);
-        for (descs, 0..) |*desc, i| desc.* = try self.descAt(frame, GuardedList.at(locals, i));
-        return descs;
-    }
-
     fn recordFields(self: *LirInterpreter, desc: *const TypeDesc) Error!*const TypeDesc {
         const backing = backingDesc(desc);
         if (backing.kind != .record and backing.kind != .tuple) {
@@ -8544,15 +8392,15 @@ pub const Interpreter = struct {
         return record.fieldBySemanticIndex(semantic_index);
     }
 
-    fn variantNamed(self: *LirInterpreter, desc: *const TypeDesc, name: *const boxy.Name) Error!struct { union_desc: *const TypeDesc, variant: *const boxy.Variant } {
+    fn variantAt(self: *LirInterpreter, desc: *const TypeDesc, discriminant: u32) Error!struct { union_desc: *const TypeDesc, variant: *const boxy.Variant } {
         const union_desc = backingDesc(desc);
         if (union_desc.kind != .tag_union) {
             return self.invariantFailedError("LIR/interpreter invariant violated: tag of a {s} descriptor", .{@tagName(union_desc.kind)});
         }
-        for (union_desc.variants()) |*variant| {
-            if (variant.name.eql(name)) return .{ .union_desc = union_desc, .variant = variant };
+        if (discriminant >= union_desc.count) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: discriminant {d} of a {d}-variant union", .{ discriminant, union_desc.count });
         }
-        return self.invariantFailedError("LIR/interpreter invariant violated: tag {s} is not in its union's descriptor", .{name.text()});
+        return .{ .union_desc = union_desc, .variant = &union_desc.variants()[discriminant] };
     }
 
     /// The offset of argument `index` of `variant` within the union's bytes.
@@ -8593,264 +8441,24 @@ pub const Interpreter = struct {
             2 => std.mem.writeInt(u16, at[0..2], @intCast(discriminant), .little),
             4 => std.mem.writeInt(u32, at[0..4], discriminant, .little),
             8 => std.mem.writeInt(u64, at[0..8], discriminant, .little),
-            else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+            else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
         }
-    }
-
-    /// The interned immortal dictionary object for `key`, built by `build`
-    /// on first use.
-    fn internDictionary(
-        self: *LirInterpreter,
-        key: []const u64,
-        build_context: anytype,
-        comptime build: fn (@TypeOf(build_context), *LirInterpreter, Allocator) Allocator.Error![*]u8,
-    ) Error![*]u8 {
-        const immortals = try self.boxyImmortals();
-        if (immortals.dictionaries.get(key)) |existing| return existing;
-        const arena = immortals.arena.allocator();
-        const stored_key = try arena.dupe(u64, key);
-        const object = try build(build_context, self, arena);
-        try immortals.dictionaries.put(self.allocator, stored_key, object);
-        return object;
-    }
-
-    const DictCallableBuild = struct {
-        worker: LirProcSpecId,
-        captures: []const u64,
-
-        /// An immortal erased callable of `worker` whose capture bytes are
-        /// the capture words in order.
-        fn build(self: DictCallableBuild, interp: *LirInterpreter, arena: Allocator) Allocator.Error![*]u8 {
-            const capture_size = erased_callable_context_capture_offset + self.captures.len * @sizeOf(usize);
-            const payload_size = builtins.erased_callable.payloadSize(capture_size);
-            const bytes = try arena.alignedAlloc(u8, .@"16", static_callable_payload_offset + payload_size);
-            const data_ptr = bytes.ptr + static_callable_payload_offset;
-            const refcount: *isize = @ptrCast(@alignCast(data_ptr - @sizeOf(isize)));
-            refcount.* = builtins.utils.REFCOUNT_STATIC_DATA;
-            builtins.erased_callable.payloadPtr(data_ptr).* = .{
-                .callable_fn_ptr = &interpreterErasedCallableTrampoline,
-                .on_drop = null,
-            };
-            erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
-                .owner = null,
-                .interpreter = interp,
-                .proc_id = @backingInt(self.worker),
-                .drop_layout_plus_one = 0,
-                .capture_value_offset = @intCast(erased_callable_context_capture_offset),
-                .drop_kind = @backingInt(ErasedCallableCaptureDrop.none),
-                .padding = .{ 0, 0, 0 },
-            };
-            const values: [*]usize = @ptrCast(@alignCast(erasedCallableInterpreterCaptureValuePtr(data_ptr)));
-            for (self.captures, 0..) |capture, i| values[i] = @intCast(capture);
-            return data_ptr;
-        }
-    };
-
-    const DictRecordBuild = struct {
-        methods: []const u64,
-
-        /// An immortal record of method callable pointers.
-        fn build(self: DictRecordBuild, _: *LirInterpreter, arena: Allocator) Allocator.Error![*]u8 {
-            const record = try arena.alloc(usize, @max(self.methods.len, 1));
-            for (self.methods, 0..) |method, i| record[i] = @intCast(method);
-            return @ptrCast(record.ptr);
-        }
-    };
-
-    fn localWords(self: *LirInterpreter, frame: *const Frame, key: []u64, span: LocalSpan) Error!void {
-        const locals = self.store.getLocalSpan(span);
-        for (key, 0..) |*word, i| word.* = try self.localWord(frame, GuardedList.at(locals, i));
     }
 
     fn execDyn(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target_or_null: ?LocalId, op: LIR.DynOp) Error!void {
-        const slot = self.store.getCFStmt(stmt_id).dyn.composition_cache orelse
-            return self.execDynUncached(frame, stmt_id, target_or_null, op);
-        const target = try self.requireDynTarget(target_or_null, op);
-        const site = try self.composition_sites.getOrPutValue(self.allocator, slot, .{});
-        const operands = @import("lir").DynOps.Operands.of(op);
-        self.composition_operands.clearRetainingCapacity();
-        for (operands.singles[0..operands.single_count]) |local| {
-            try self.composition_operands.append(self.allocator, @intCast(try self.localWord(frame, local)));
-        }
-        for (operands.spans[0..operands.span_count]) |span| {
-            const locals = self.store.getLocalSpan(span);
-            for (0..locals.len) |i| {
-                try self.composition_operands.append(self.allocator, @intCast(try self.localWord(frame, GuardedList.at(locals, i))));
-            }
-        }
-        const words = self.composition_operands.items;
-        if (site.value_ptr.load()) |entry| {
-            if (entry.holds(words)) return self.setWordTarget(frame, stmt_id, target, entry.result);
-        }
-        try self.execDynUncached(frame, stmt_id, target, op);
-        const result: usize = @intCast(try self.localWord(frame, target));
-        if (op == .desc_recursive_open and boxy.compose.recursiveIsOpen(@ptrFromInt(result))) return;
-        const immortals = try self.boxyImmortals();
-        site.value_ptr.publish(immortals.composeCache(), &immortals.ops, words, result);
-    }
-
-    fn execDynUncached(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target_or_null: ?LocalId, op: LIR.DynOp) Error!void {
         if (op == .frame_alloc) return self.dynFrameAlloc(frame);
         const target = try self.requireDynTarget(target_or_null, op);
         switch (op) {
             .frame_alloc => unreachable, // handled above
-            .desc_list => |d| {
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.list(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.elem));
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_presence_slot => |d| {
-                const immortals = try self.boxyImmortals();
-                const missing: *const boxy.Name = @ptrFromInt(try self.localWord(frame, d.missing));
-                const present: *const boxy.Name = @ptrFromInt(try self.localWord(frame, d.present));
-                const desc = boxy.compose.presenceSlot(immortals.composeCache(), &immortals.ops, missing, present, try self.descAt(frame, d.payload));
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_box => |d| {
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.box(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.payload));
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_record => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const descs = self.store.getLocalSpan(d.descs);
-                if (names.len != descs.len) {
-                    return self.invariantFailedError("LIR/interpreter invariant violated: desc_record has {d} names for {d} descriptors", .{ names.len, descs.len });
+            .table_entry => |entry| {
+                const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, entry.table));
+                const word = std.mem.readInt(usize, table[LIR.tableEntryOffset(entry.index, @sizeOf(usize))..][0..@sizeOf(usize)], builtin.cpu.arch.endian());
+                if (self.store.getLocal(target).layout_idx == .u32) {
+                    // A field's or variant's position: the word's low 32 bits.
+                    try self.setScalarTarget(frame, stmt_id, target, u32, @truncate(word));
+                } else {
+                    try self.setWordTarget(frame, stmt_id, target, word);
                 }
-                const fields = try self.evalAllocator().alloc(boxy.compose.FieldInput, names.len);
-                for (fields, 0..) |*field, i| field.* = .{
-                    .name = try self.nameAt(frame, GuardedList.at(names, i)),
-                    .desc = try self.descAt(frame, GuardedList.at(descs, i)),
-                };
-                const immortals = try self.boxyImmortals();
-                const composed = if (d.ext) |ext|
-                    boxy.compose.recordExtended(immortals.composeCache(), &immortals.ops, fields, try self.descAt(frame, ext))
-                else
-                    boxy.compose.record(immortals.composeCache(), &immortals.ops, fields);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(composed));
-            },
-            .desc_declared_record => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const descs = self.store.getLocalSpan(d.descs);
-                const padding = self.store.getU32Span(d.padding);
-                if (names.len + padding.len != descs.len) {
-                    return self.invariantFailedError("LIR/interpreter invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
-                }
-                const fields = try self.evalAllocator().alloc(boxy.compose.DeclaredFieldInput, descs.len);
-                var next_name: usize = 0;
-                var next_padding: usize = 0;
-                for (fields, 0..) |*field, i| {
-                    const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
-                    field.* = .{
-                        .name = if (is_padding) null else try self.nameAt(frame, GuardedList.at(names, next_name)),
-                        .desc = try self.descAt(frame, GuardedList.at(descs, i)),
-                        .is_padding = @intFromBool(is_padding),
-                    };
-                    if (is_padding) next_padding += 1 else next_name += 1;
-                }
-                const immortals = try self.boxyImmortals();
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.declaredRecord(immortals.composeCache(), &immortals.ops, fields)));
-            },
-            .desc_tuple => |d| {
-                const elems = try self.descsAt(frame, d.elems);
-                const immortals = try self.boxyImmortals();
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.tuple(immortals.composeCache(), &immortals.ops, elems)));
-            },
-            .desc_args => |d| {
-                const elems = try self.descsAt(frame, d.elems);
-                const immortals = try self.boxyImmortals();
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(boxy.compose.args(immortals.composeCache(), &immortals.ops, elems)));
-            },
-            .desc_tag_union => |d| {
-                const names = self.store.getLocalSpan(d.names);
-                const counts = self.store.getU32Span(d.payload_counts);
-                if (names.len != counts.len) {
-                    return self.invariantFailedError("LIR/interpreter invariant violated: desc_tag_union has {d} names for {d} payload counts", .{ names.len, counts.len });
-                }
-                const payloads = try self.descsAt(frame, d.payloads);
-                const variants = try self.evalAllocator().alloc(boxy.compose.VariantInput, names.len);
-                var next: usize = 0;
-                for (variants, 0..) |*variant, i| {
-                    const count = GuardedList.at(counts, i);
-                    if (next + count > payloads.len) {
-                        return self.invariantFailedError("LIR/interpreter invariant violated: desc_tag_union payload counts exceed its {d} payloads", .{payloads.len});
-                    }
-                    variant.* = .{
-                        .name = try self.nameAt(frame, GuardedList.at(names, i)),
-                        .payload_count = count,
-                        .payloads = payloads.ptr + next,
-                    };
-                    next += count;
-                }
-                if (next != payloads.len) {
-                    return self.invariantFailedError("LIR/interpreter invariant violated: desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, payloads.len });
-                }
-                const immortals = try self.boxyImmortals();
-                const composed = if (d.ext) |ext|
-                    boxy.compose.tagUnionExtended(immortals.composeCache(), &immortals.ops, variants, try self.descAt(frame, ext))
-                else
-                    boxy.compose.tagUnion(immortals.composeCache(), &immortals.ops, variants);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(composed));
-            },
-            .desc_nominal => |d| {
-                const backing = try self.descAt(frame, d.backing);
-                const name_word = try self.localWord(frame, d.name);
-                const name: ?*const boxy.Name = if (name_word == 0) null else @ptrFromInt(name_word);
-                const methods: ?*const boxy.Methods = if (d.methods) |methods_local| blk: {
-                    const word = try self.localWord(frame, methods_local);
-                    break :blk if (word == 0) null else @ptrFromInt(word);
-                } else null;
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.nominal(immortals.composeCache(), &immortals.ops, backing, name, methods, d.inspect_opaque);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_recursive_box => |d| {
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.recursiveBox(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.payload));
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_recursive_open => |d| {
-                const key: *const u8 = @ptrFromInt(try self.localWord(frame, d.key));
-                const vars = try self.descsAt(frame, d.vars);
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.recursiveOpen(immortals.composeCache(), &immortals.ops, key, vars);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_recursive_close => |d| {
-                const key: *const u8 = @ptrFromInt(try self.localWord(frame, d.key));
-                const vars = try self.descsAt(frame, d.vars);
-                const immortals = try self.boxyImmortals();
-                const desc = boxy.compose.recursiveClose(immortals.composeCache(), &immortals.ops, try self.descAt(frame, d.shell), try self.descAt(frame, d.desc), key, vars);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(desc));
-            },
-            .desc_note => |d| try self.setWordTarget(frame, stmt_id, target, try self.localWord(frame, d.desc)),
-            .dict_compose => |d| {
-                const captures = self.store.getLocalSpan(d.captures);
-                const key = try self.evalAllocator().alloc(u64, 2 + captures.len);
-                key[0] = BoxyImmortals.dict_compose_tag;
-                key[1] = @backingInt(d.worker);
-                try self.localWords(frame, key[2..], d.captures);
-                const callable = try self.internDictionary(key, DictCallableBuild{ .worker = d.worker, .captures = key[2..] }, DictCallableBuild.build);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(callable));
-            },
-            .dict_patch => |d| {
-                const dict = try self.localWord(frame, d.dict);
-                const data: [*]u8 = @ptrFromInt(dict);
-                const values: [*]usize = @ptrCast(@alignCast(erasedCallableInterpreterCaptureValuePtr(data)));
-                values[d.index] = @intCast(try self.localWord(frame, d.value));
-                try self.setWordTarget(frame, stmt_id, target, dict);
-            },
-            .dict_record => |d| {
-                const methods = self.store.getLocalSpan(d.methods);
-                const key = try self.evalAllocator().alloc(u64, 1 + methods.len);
-                key[0] = BoxyImmortals.dict_record_tag;
-                try self.localWords(frame, key[1..], d.methods);
-                const record = try self.internDictionary(key, DictRecordBuild{ .methods = key[1..] }, DictRecordBuild.build);
-                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(record));
-            },
-            .dict_method => |d| {
-                const record: [*]const usize = @ptrFromInt(try self.localWord(frame, d.dict));
-                try self.setWordTarget(frame, stmt_id, target, record[d.index]);
             },
             .copy => |c| {
                 const desc = try self.descAt(frame, c.desc);
@@ -8862,17 +8470,7 @@ pub const Interpreter = struct {
                 }
             },
             .field_addr => |f| {
-                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), f.field_index);
-                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
-            },
-            .field_addr_named => |f| {
-                const record = try self.recordFields(try self.descAt(frame, f.desc));
-                const name = try self.nameAt(frame, f.name);
-                const field = for (record.fields()) |*field| {
-                    if (field.name) |field_name| {
-                        if (field_name.eql(name)) break field;
-                    }
-                } else return self.invariantFailedError("LIR/interpreter invariant violated: field {s} is not in its record's descriptor", .{name.text()});
+                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), try self.indexAt(frame, f.field_index));
                 try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
             },
             .list_item_addr => |e| {
@@ -8903,10 +8501,6 @@ pub const Interpreter = struct {
                 }
                 try self.setScalarTarget(frame, stmt_id, target, u32, desc.readDiscriminant(try self.localBytes(frame, t.base)));
             },
-            .tag_discriminant_of => |t| {
-                const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
-                try self.setScalarTarget(frame, stmt_id, target, u32, found.variant.discriminant);
-            },
             .tag_payload_addr => |t| {
                 const address = boxy.compiled.tagPayloadAddr(try self.descAt(frame, t.desc), try self.localBytes(frame, t.base), t.payload_index, &self.roc_ops);
                 try self.setComponentTarget(frame, stmt_id, target, address);
@@ -8923,23 +8517,18 @@ pub const Interpreter = struct {
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .record_update => |u| {
-                const names_span = self.store.getLocalSpan(u.names);
                 const values_span = self.store.getLocalSpan(u.values);
-                const names = try self.allocator.alloc(*const boxy.desc.Name, names_span.len);
-                defer self.allocator.free(names);
                 const values = try self.allocator.alloc([*]const u8, values_span.len);
                 defer self.allocator.free(values);
-                for (names, values, 0..) |*name, *value, i| {
-                    name.* = try self.nameAt(frame, GuardedList.at(names_span, i));
-                    value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
-                }
+                for (values, 0..) |*value, i| value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
                 const desc = try self.descAt(frame, u.desc);
+                const plan: [*]const u32 = @ptrCast(try self.planAt(frame, u32, u.plan));
                 const dst = try self.targetStorage(frame, target);
-                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, names, values, &self.roc_ops);
+                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, plan, values, &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .tag => |t| {
-                const found = try self.variantNamed(try self.descAt(frame, t.desc), try self.nameAt(frame, t.name));
+                const found = try self.variantAt(try self.descAt(frame, t.desc), try self.indexAt(frame, t.discriminant));
                 const payloads = self.store.getLocalSpan(t.payloads);
                 if (payloads.len != found.variant.payload_count) {
                     return self.invariantFailedError("LIR/interpreter invariant violated: tag with {d} payloads for {d} arguments", .{ payloads.len, found.variant.payload_count });
@@ -9033,23 +8622,23 @@ pub const Interpreter = struct {
             },
             .inspect => |i| {
                 const desc = try self.descAt(frame, i.desc);
+                const names: ?*const boxy.desc.Names = @ptrFromInt(try self.localWord(frame, i.names));
                 const value = try self.localBytes(frame, i.value);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
-                const rendered = boxy.walk.inspect(desc, value, &self.roc_ops);
+                const rendered = boxy.walk.inspect(desc, names, value, &self.roc_ops);
                 try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
             },
             .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
             .adapt => |a| {
-                const from = try self.descAt(frame, a.from);
-                const to = try self.descAt(frame, a.to);
+                const plan = try self.planAt(frame, boxy.desc.AdaptPlan, a.plan);
                 const src = try self.localBytes(frame, a.src);
                 const dst = try self.targetStorage(frame, target);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
                 if (crash_boundary.set() != 0) return self.crashError();
-                boxy.compiled.adapt(from, to, dst, src, &self.roc_ops);
+                boxy.compiled.adapt(plan, dst, src, &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .closure => |c| {

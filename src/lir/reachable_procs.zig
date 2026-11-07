@@ -475,14 +475,12 @@ const Pass = struct {
                 packed_fn.data = try self.store.addStmtRow(LIR.PackedErasedFnData, data);
             },
             .dyn => |*dyn| {
-                if (dyn.composition_cache) |slot| dyn.composition_cache = self.remapStaticData(slot);
                 var op = self.store.stmtRow(dyn.data);
                 switch (op) {
-                    .dict_compose => |*dict| dict.worker = self.remapProc(dict.worker),
                     .closure => |*closure| closure.proc = self.remapProc(closure.proc),
-                    .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => {},
+                    .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => {},
                 }
-                if (op == .dict_compose or op == .closure) dyn.data = try self.store.addStmtRow(LIR.DynOp, op);
+                if (op == .closure) dyn.data = try self.store.addStmtRow(LIR.DynOp, op);
             },
             .assign_literal => |*literal| {
                 switch (literal.value) {
@@ -646,8 +644,8 @@ const Pass = struct {
         for (data.exports, 0..) |item, index| {
             if (!self.reachable_exports[index]) continue;
             const value_id = if (item.value_id) |id| self.remapStaticData(id) else null;
-            const name = if (value_id != null and !item.is_mutable)
-                try LirProgram.staticDataSymbolName(data.allocator, value_id.?)
+            const name = if (value_id) |id|
+                try LirProgram.staticDataSymbolName(data.allocator, id)
             else
                 try data.allocator.dupe(u8, item.symbol_name);
             errdefer data.allocator.free(name);
@@ -895,14 +893,9 @@ fn stmtRefs(store: *const LirStore, stmt: LIR.CFStmt) StmtRefs {
     switch (stmt) {
         .assign_call => |call| return .{ .procs = .{ call.proc, null } },
         .assign_packed_erased_fn => |packed_fn| return .{ .procs = .{ store.stmtRow(packed_fn.data).proc, null } },
-        .dyn => |dyn| {
-            var refs: StmtRefs = switch (store.stmtRow(dyn.data)) {
-                .dict_compose => |dict| .{ .procs = .{ dict.worker, null } },
-                .closure => |closure| .{ .procs = .{ closure.proc, null } },
-                .frame_alloc, .desc_list, .desc_box, .desc_record, .desc_declared_record, .desc_tuple, .desc_presence_slot, .desc_tag_union, .desc_args, .desc_nominal, .desc_recursive_box, .desc_recursive_open, .desc_recursive_close, .desc_note, .dict_patch, .dict_record, .dict_method, .copy, .field_addr, .field_addr_named, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_discriminant_of, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => .{},
-            };
-            refs.static_data = dyn.composition_cache;
-            return refs;
+        .dyn => |dyn| return switch (store.stmtRow(dyn.data)) {
+            .closure => |closure| .{ .procs = .{ closure.proc, null } },
+            .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .view, .adapt => .{},
         },
         .assign_literal => |literal| {
             var refs: StmtRefs = .{};

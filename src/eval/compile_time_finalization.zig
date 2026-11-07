@@ -21,7 +21,6 @@ const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
 const NativeRootExport = @import("native_root_export.zig");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 const CompileTimeHost = @import("compile_time_host.zig");
 const checked_root_graph = @import("checked_root_graph.zig");
@@ -1391,7 +1390,6 @@ const BoxyLinkedImages = struct {
     registered: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
     candidates: std.ArrayList(Candidate) = .empty,
     providers: std.StringHashMapUnmanaged(usize) = .empty,
-    dirty: std.ArrayList(bool) = .empty,
     function_metadata: std.AutoHashMapUnmanaged([32]u8, []const u8) = .empty,
     function_addresses: std.AutoHashMapUnmanaged(usize, FunctionOrigin) = .empty,
 
@@ -1443,27 +1441,8 @@ const BoxyLinkedImages = struct {
         for (self.candidates.items) |candidate| self.allocator.free(candidate.dependencies);
         self.candidates.deinit(self.allocator);
         self.providers.deinit(self.allocator);
-        self.dirty.deinit(self.allocator);
         self.function_metadata.deinit(self.allocator);
         self.function_addresses.deinit(self.allocator);
-    }
-
-    /// Return reachable reused objects' mutable data to its loaded state. An
-    /// object's composition sites (design.md "Runtime") publish entries of
-    /// the composing program's state, which dies with that program, so a
-    /// program finds the objects it shares with earlier ones holding no
-    /// entry at all.
-    fn resetMutableData(self: *BoxyLinkedImages, selection: Selection) void {
-        if (comptime compilerHostMustUseInterpreterForCtfe()) return;
-        self.lock();
-        defer self.mutex.unlock();
-        switch (boxy_object_code) {
-            .image => for (selection.indices) |index| {
-                if (self.dirty.items[index]) self.images.items[index].resetZeroFill();
-                self.dirty.items[index] = true;
-            },
-            .pieces => for (self.images.items) |*image| image.resetZeroFilled(),
-        }
     }
 
     fn lock(self: *BoxyLinkedImages) void {
@@ -1543,9 +1522,7 @@ const BoxyLinkedImages = struct {
                 try self.images.ensureUnusedCapacity(self.allocator, 1);
                 try self.code.ensureUnusedCapacity(self.allocator, 1);
                 try self.locations.ensureUnusedCapacity(self.allocator, 1);
-                try self.dirty.ensureUnusedCapacity(self.allocator, 1);
                 try self.loadImage(candidate, index, timing);
-                self.dirty.appendAssumeCapacity(false);
                 candidate.loaded_index = self.images.items.len - 1;
                 newly_loaded += 1;
             }
@@ -2327,11 +2304,6 @@ const ModuleEvaluation = struct {
             .pending => finalizationInvariant("a module's compile-time program was run before it was built"),
             .failed => return build.failure,
             .built => {},
-        }
-        // Every object's composition sites publish entries of the composing
-        // program's state, which died with the earlier programs.
-        if (comptime !compilerHostMustUseInterpreterForCtfe()) {
-            if (build.linked) build.build_options.boxy_linked_images.?.resetMutableData(build.program.?.ptr().image_selection);
         }
         const roots = shared.roots;
         const states = shared.states;
@@ -4842,9 +4814,7 @@ fn evalDevLiteralRoot(
     var root_call: DevRootCall = .{ .host = &host, .executable = &native.executable, .entry_offset = entry_offset, .ret = ret_buf.ptr };
     var crash_boundary = host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(host.ops(), null);
-    const composition = native.enterComposition();
     const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
-    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
     _ = try ran;
@@ -5852,9 +5822,6 @@ const DevProgram = struct {
     /// The bytes the program's erased callables reserve before their
     /// captures (`LirProgram.Result.erased_capture_prefix`).
     capture_prefix: u32,
-    /// What a `.boxy` program's code composes while it runs, current on
-    /// each thread that runs it.
-    composition: ?*BoxyInProcessState,
     /// The objects a linked program's code calls into.
     linked_images: ?*BoxyLinkedImages,
     image_selection: BoxyLinkedImages.Selection,
@@ -6009,22 +5976,10 @@ const DevProgram = struct {
             .entry_offsets = entry_offsets,
             .excerpts = artifacts,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
-            .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
             .linked_images = options.boxy_linked_images,
             .image_selection = image_selection,
             .lir_store = &lowered.lir_result.store,
         };
-    }
-
-    /// Make the program's composition state current on this thread while
-    /// its code runs here.
-    fn enterComposition(self: *const DevProgram) ?BoxyInProcessState.Entered {
-        const composition = self.composition orelse return null;
-        return composition.enter();
-    }
-
-    fn leaveComposition(entered: ?BoxyInProcessState.Entered) void {
-        if (entered) |composition| BoxyInProcessState.leave(composition);
     }
 
     fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
@@ -6154,7 +6109,6 @@ const DevProgram = struct {
 
     fn deinit(self: *DevProgram) void {
         self.image_selection.deinit(self.allocator);
-        if (self.composition) |composition| composition.destroy();
         self.entry_offsets.deinit();
         self.executable.deinit();
         self.splice.deinit();
@@ -6358,7 +6312,7 @@ fn evalDevProgramRoots(
     });
     if (lowered.boxy_functions) |retained| {
         if (native.linked_images) |images| retained.metadata = .{ .context = images, .get = BoxyLinkedImages.metadataFor };
-        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .composition = native.composition.? });
+        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result });
     }
 
     var had_problem = false;
@@ -6453,9 +6407,7 @@ fn devRootWorker(_: Allocator, context: *DevRunContext, item_id: usize) void {
     var root_call: DevRootCall = .{ .host = &job.host, .executable = &context.program.executable, .entry_offset = job.entry_offset, .ret = job.ret_buf.ptr };
     var crash_boundary = job.host.enterCrashBoundary();
     const entered = builtins.in_process_host.enter(job.host.ops(), null);
-    const composition = context.program.enterComposition();
     const ran = crash_boundary.run(DevRootCall, &root_call, DevRootCall.call);
-    DevProgram.leaveComposition(composition);
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
 
@@ -7642,15 +7594,8 @@ fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (Finalize
     const Fn = *const fn () callconv(.c) i32;
     const callback: *const Fn = @ptrFromInt(images.lookup("callback").?);
     try std.testing.expectEqual(@as(i32, 42), callback.*());
-    images.resetMutableData(first);
-    const leaf_index = images.candidates.items[0].loaded_index.?;
-    const leaf_image = &images.images.items[leaf_index];
-    const cell: *u64 = @ptrCast(@alignCast(leaf_image.memory.ptr + leaf_image.bss_offset));
-    cell.* = 73;
     const second = try images.select(allocator, &.{"unused"}, null);
     defer second.deinit(allocator);
-    images.resetMutableData(second);
-    try std.testing.expectEqual(@as(u64, 73), cell.*);
     // Growing the shared arrays must not invalidate the first program's ranges.
     try std.testing.expectEqual(@as(usize, 2), first.code.len);
     try std.testing.expectEqual(@as(i32, 42), callback.*());
@@ -7658,11 +7603,9 @@ fn ctfeSelectionTest(allocator: Allocator, built: CtfeSelectionImages) (Finalize
     defer again.deinit(allocator);
     try std.testing.expectEqualSlices(usize, first.indices, again.indices);
     try std.testing.expectEqual(@as(usize, 3), images.images.items.len);
-    images.resetMutableData(again);
-    try std.testing.expectEqual(@as(u64, 0), cell.*);
 }
 
-test "CTFE image demand follows data callbacks and resets only reused reachable images" {
+test "CTFE image demand follows data callbacks" {
     if (comptime boxy_object_code != .image) return error.SkipZigTest;
     const built = try CtfeSelectionImages.init(std.testing.allocator);
     defer built.deinit(std.testing.allocator);

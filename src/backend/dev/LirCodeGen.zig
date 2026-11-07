@@ -17415,6 +17415,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, self.localSlot(local));
         }
 
+        /// Pass an index operand: its value, or the `u32` local holding it,
+        /// whose slot's low 32 bits the callee reads.
+        fn addIndexArg(self: *Self, builder: *Builder, index: LIR.DynIndex) Allocator.Error!void {
+            switch (index) {
+                .immediate => |value| try builder.addImmArg(value),
+                .local => |local| try self.addWordArg(builder, local),
+            }
+        }
+
         /// Pass the address of a local's bytes: a dynamic local's address, or
         /// a closed local's slot.
         fn addBytesArg(self: *Self, builder: *Builder, local: LocalId) Allocator.Error!void {
@@ -17697,73 +17706,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(reg);
         }
 
-        /// Inline the site's acquire-load and operand comparisons. Only a miss
-        /// builds the runtime arguments, probes the interner, and publishes.
-        fn generateCachedComposition(self: *Self, dst: LocalId, op: LIR.DynOp, cache: LIR.StaticDataId) Allocator.Error!void {
-            try self.spillAllVectorLocals();
-            var operands: std.ArrayList(LocalId) = .empty;
-            defer operands.deinit(self.allocator);
-            try lir.DynOps.Operands.of(op).appendAll(self.store, self.allocator, &operands);
-            var misses: std.ArrayList(usize) = .empty;
-            defer misses.deinit(self.allocator);
-            const result_slot = self.codegen.allocStackSlot(8);
-            const site_slot = self.codegen.allocStackSlot(8);
-            {
-                const entry, const current, const expected = try self.allocTempGenerals(3);
-                defer self.freeGenerals(.{ entry, current, expected });
-                switch (self.generation_mode) {
-                    .native_execution => try self.codegen.emitLoadImm(entry, @bitCast(@as(u64, self.nativeStaticDataAddress(cache)))),
-                    .shim_execution, .object_file => try self.emitStaticDataAddress(entry, cache),
-                }
-                try self.emitStore(.w64, frame_ptr, site_slot, entry);
-                if (comptime target.toCpuArch() == .aarch64)
-                    try self.codegen.emit.ldarRegMem(entry, entry)
-                else
-                    // Aligned x86 loads have acquire ordering.
-                    try self.emitLoad(.w64, entry, entry, 0);
-                try self.emitCmpImm(entry, 0);
-                try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
-                for (operands.items, 0..) |operand, i| {
-                    try self.emitLoad(.w64, current, frame_ptr, self.localSlot(operand));
-                    try self.emitLoad(.w64, expected, entry, @intCast((i + 1) * 8));
-                    try self.emitCmpReg(current, expected);
-                    try misses.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
-                }
-                try self.emitLoad(.w64, current, entry, @offsetOf(boxy_runtime.compose.CompositionEntry, "result"));
-                try self.emitStore(.w64, frame_ptr, result_slot, current);
-            }
-            const hit = try self.codegen.emitJump();
-            for (misses.items) |miss| try self.codegen.patchJump(miss, self.codegen.currentOffset());
-            try self.generateDyn(dst, op);
-            const words = self.codegen.allocStackSlot(@intCast(@max(operands.items.len, 1) * 8));
-            var open: ?usize = null;
-            {
-                const reg = try self.allocTempGeneral();
-                defer self.codegen.freeGeneral(reg);
-                try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(dst));
-                try self.emitStore(.w64, frame_ptr, result_slot, reg);
-                if (op == .desc_recursive_open) {
-                    try self.emitLoad(.w32, reg, reg, @offsetOf(boxy_runtime.TypeDesc, "size"));
-                    try self.emitCmpImm(reg, std.math.maxInt(u32));
-                    open = try self.codegen.emitCondJump(condCode(.equal));
-                }
-                for (operands.items, 0..) |operand, i| {
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(operand));
-                    try self.emitStore(.w64, frame_ptr, words + @as(i32, @intCast(i * 8)), reg);
-                }
-            }
-            var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-            defer builder.deinit();
-            try builder.addMemArg(frame_ptr, site_slot);
-            try builder.addImmArg(@intCast(operands.items.len));
-            try builder.addLeaArg(frame_ptr, words);
-            try builder.addMemArg(frame_ptr, result_slot);
-            try self.callBoxyRuntime(&builder, "roc_desc_site_publish");
-            if (open) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
-            try self.codegen.patchJump(hit, self.codegen.currentOffset());
-            try self.bindAssignedLocal(dst, self.stackLocationForLayout(self.localLayout(dst), result_slot));
-        }
-
         fn generateDyn(self: *Self, target_or_null: ?LocalId, op: LIR.DynOp) Allocator.Error!void {
             try self.spillAllVectorLocals();
             if (op == .frame_alloc) return self.generateDynFrameAlloc();
@@ -17772,199 +17714,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             switch (op) {
                 .frame_alloc => unreachable, // handled above
-                .desc_list => |d| {
-                    try self.addWordArg(&builder, d.elem);
-                    try self.callBoxyRuntime(&builder, "roc_desc_list");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_box => |d| {
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_box");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_box => |d| {
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_box");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_open => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.key);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_open");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_recursive_close => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.shell);
-                    try self.addWordArg(&builder, d.desc);
-                    try self.addWordArg(&builder, d.key);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_recursive_close");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_note => |d| {
-                    const vars = try self.emitLocalArray(d.vars, .words);
-                    try self.addWordArg(&builder, d.desc);
-                    try builder.addImmArg(@intCast(d.ty));
-                    inline for (0..4) |word| try builder.addImmArg(@bitCast(std.mem.readInt(u64, d.owner[word * 8 ..][0..8], .little)));
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.vars).len));
-                    try builder.addLeaArg(frame_ptr, vars);
-                    try self.callBoxyRuntime(&builder, "roc_desc_note");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_presence_slot => |d| {
-                    try self.addWordArg(&builder, d.missing);
-                    try self.addWordArg(&builder, d.present);
-                    try self.addWordArg(&builder, d.payload);
-                    try self.callBoxyRuntime(&builder, "roc_desc_presence_slot");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_record => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const descs = self.store.getLocalSpan(d.descs);
-                    if (names.len != descs.len) base.invariant("LIR/codegen invariant violated: desc_record has {d} names for {d} descriptors", .{ names.len, descs.len });
-                    const entry_size: i32 = @sizeOf(boxy_runtime.compose.FieldInput);
-                    const fields = self.codegen.allocStackSlot(@intCast(@max(names.len, 1) * entry_size));
+                .table_entry => |entry| {
                     const reg = try self.allocTempGeneral();
-                    for (0..names.len) |i| {
-                        const entry = fields + @as(i32, @intCast(i)) * entry_size;
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.FieldInput, "name"), reg);
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(descs, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.FieldInput, "desc"), reg);
-                    }
-                    self.codegen.freeGeneral(reg);
-                    try builder.addImmArg(@intCast(names.len));
-                    try builder.addLeaArg(frame_ptr, fields);
-                    if (d.ext) |ext| {
-                        try self.addWordArg(&builder, ext);
-                        try self.callBoxyRuntime(&builder, "roc_desc_record_extended");
-                    } else {
-                        try self.callBoxyRuntime(&builder, "roc_desc_record");
-                    }
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_declared_record => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const descs = self.store.getLocalSpan(d.descs);
-                    const padding = self.store.getU32Span(d.padding);
-                    if (names.len + padding.len != descs.len) base.invariant("LIR/codegen invariant violated: desc_declared_record has {d} names and {d} padding fields for {d} descriptors", .{ names.len, padding.len, descs.len });
-                    const entry_size: i32 = @sizeOf(boxy_runtime.compose.DeclaredFieldInput);
-                    const fields = self.codegen.allocStackSlot(@intCast(@max(descs.len, 1) * entry_size));
-                    const reg = try self.allocTempGeneral();
-                    var next_name: usize = 0;
-                    var next_padding: usize = 0;
-                    for (0..descs.len) |i| {
-                        const entry = fields + @as(i32, @intCast(i)) * entry_size;
-                        const is_padding = next_padding < padding.len and GuardedList.at(padding, next_padding) == i;
-                        if (is_padding) {
-                            next_padding += 1;
-                            try self.codegen.emit.movRegImm64(reg, 0);
-                        } else {
-                            try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, next_name)));
-                            next_name += 1;
-                        }
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "name"), reg);
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(descs, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "desc"), reg);
-                        try self.codegen.emit.movRegImm64(reg, @intFromBool(is_padding));
-                        try self.emitStore(.w32, frame_ptr, entry + @offsetOf(boxy_runtime.compose.DeclaredFieldInput, "is_padding"), reg);
-                    }
-                    self.codegen.freeGeneral(reg);
-                    try builder.addImmArg(@intCast(descs.len));
-                    try builder.addLeaArg(frame_ptr, fields);
-                    try self.callBoxyRuntime(&builder, "roc_desc_declared_record");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_tuple => |d| {
-                    const elems = try self.emitLocalArray(d.elems, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.elems).len));
-                    try builder.addLeaArg(frame_ptr, elems);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tuple");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_args => |d| {
-                    const elems = try self.emitLocalArray(d.elems, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.elems).len));
-                    try builder.addLeaArg(frame_ptr, elems);
-                    try self.callBoxyRuntime(&builder, "roc_desc_args");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_tag_union => |d| {
-                    const names = self.store.getLocalSpan(d.names);
-                    const counts = self.store.getU32Span(d.payload_counts);
-                    if (names.len != counts.len) base.invariant("LIR/codegen invariant violated: desc_tag_union has {d} names for {d} payload counts", .{ names.len, counts.len });
-                    const payloads = try self.emitLocalArray(d.payloads, .words);
-                    const payload_total = self.store.getLocalSpan(d.payloads).len;
-                    const VariantInput = boxy_runtime.compose.VariantInput;
-                    const entry_size: i32 = @sizeOf(VariantInput);
-                    const variants = self.codegen.allocStackSlot(@intCast(@max(names.len, 1) * entry_size));
-                    const reg = try self.allocTempGeneral();
-                    var next: usize = 0;
-                    for (0..names.len) |i| {
-                        const count = GuardedList.at(counts, i);
-                        const entry = variants + @as(i32, @intCast(i)) * entry_size;
-                        try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(GuardedList.at(names, i)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(VariantInput, "name"), reg);
-                        try self.codegen.emitLoadImm(reg, count);
-                        try self.emitStore(.w32, frame_ptr, entry + @offsetOf(VariantInput, "payload_count"), reg);
-                        try self.emitLeaStack(reg, payloads + @as(i32, @intCast(next * 8)));
-                        try self.emitStore(.w64, frame_ptr, entry + @offsetOf(VariantInput, "payloads"), reg);
-                        next += count;
-                    }
-                    self.codegen.freeGeneral(reg);
-                    if (next != payload_total) base.invariant("LIR/codegen invariant violated: desc_tag_union payload counts cover {d} of its {d} payloads", .{ next, payload_total });
-                    try builder.addImmArg(@intCast(names.len));
-                    try builder.addLeaArg(frame_ptr, variants);
-                    if (d.ext) |ext| {
-                        try self.addWordArg(&builder, ext);
-                        try self.callBoxyRuntime(&builder, "roc_desc_tag_union_extended");
-                    } else {
-                        try self.callBoxyRuntime(&builder, "roc_desc_tag_union");
-                    }
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .desc_nominal => |d| {
-                    try self.addWordArg(&builder, d.backing);
-                    try self.addWordArg(&builder, d.name);
-                    if (d.methods) |methods| try self.addWordArg(&builder, methods) else try builder.addImmArg(0);
-                    try builder.addImmArg(@intFromBool(d.inspect_opaque));
-                    try self.callBoxyRuntime(&builder, "roc_desc_nominal");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_compose => |d| {
-                    const fn_slot = self.codegen.allocStackSlot(8);
-                    try self.emitProcAddressToSlot(d.worker, fn_slot);
-                    const captures = try self.emitLocalArray(d.captures, .words);
-                    try builder.addMemArg(frame_ptr, fn_slot);
-                    try builder.addImmArg(self.erased_capture_prefix);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.captures).len));
-                    try builder.addLeaArg(frame_ptr, captures);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_compose");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_patch => |d| {
-                    try self.addWordArg(&builder, d.dict);
-                    try builder.addImmArg(self.erased_capture_prefix);
-                    try builder.addImmArg(@intCast(d.index));
-                    try self.addWordArg(&builder, d.value);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_patch");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_record => |d| {
-                    const methods = try self.emitLocalArray(d.methods, .words);
-                    try builder.addImmArg(@intCast(self.store.getLocalSpan(d.methods).len));
-                    try builder.addLeaArg(frame_ptr, methods);
-                    try self.callBoxyRuntime(&builder, "roc_desc_dict_record");
-                    try self.bindReturnedScalar(dst_local, 8);
-                },
-                .dict_method => |d| {
-                    const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(d.dict));
-                    try self.emitLoad(.w64, reg, reg, @intCast(d.index * 8));
+                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(entry.table));
+                    try self.emitLoad(.w64, reg, reg, @intCast(LIR.tableEntryOffset(entry.index, 8)));
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
@@ -17981,15 +17734,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .field_addr => |f| {
                     try self.addWordArg(&builder, f.desc);
                     try self.addBytesArg(&builder, f.base);
-                    try builder.addImmArg(f.field_index);
+                    try self.addIndexArg(&builder, f.field_index);
                     try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
-                    try self.bindComponentAddress(dst_local);
-                },
-                .field_addr_named => |f| {
-                    try self.addWordArg(&builder, f.desc);
-                    try self.addBytesArg(&builder, f.base);
-                    try self.addWordArg(&builder, f.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_field_addr_named");
                     try self.bindComponentAddress(dst_local);
                 },
                 .list_item_addr => |e| {
@@ -18011,12 +17757,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant");
                     try self.bindReturnedScalar(dst_local, 4);
                 },
-                .tag_discriminant_of => |t| {
-                    try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant_of");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
@@ -18035,15 +17775,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.finishTarget(dst_local, dst);
                 },
                 .record_update => |u| {
-                    const names = try self.emitLocalArray(u.names, .words);
                     const values = try self.emitLocalArray(u.values, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, u.base_desc);
                     try self.addBytesArg(&builder, u.base);
                     try self.addWordArg(&builder, u.desc);
                     try addTargetArg(&builder, dst);
+                    try self.addWordArg(&builder, u.plan);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(u.values).len));
-                    try builder.addLeaArg(frame_ptr, names);
                     try builder.addLeaArg(frame_ptr, values);
                     try self.callBoxyRuntime(&builder, "roc_desc_update_record");
                     try self.finishTarget(dst_local, dst);
@@ -18052,7 +17791,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const payloads = try self.emitLocalArray(t.payloads, .bytes);
                     const dst = try self.dynTarget(dst_local);
                     try self.addWordArg(&builder, t.desc);
-                    try self.addWordArg(&builder, t.name);
+                    try self.addIndexArg(&builder, t.discriminant);
                     try addTargetArg(&builder, dst);
                     try builder.addImmArg(@intCast(self.store.getLocalSpan(t.payloads).len));
                     try builder.addLeaArg(frame_ptr, payloads);
@@ -18117,14 +17856,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const dst = try self.dynTarget(dst_local);
                     try addTargetArg(&builder, dst);
                     try self.addWordArg(&builder, i.desc);
+                    try self.addWordArg(&builder, i.names);
                     try self.addBytesArg(&builder, i.value);
                     try self.callBoxyRuntime(&builder, "roc_desc_inspect");
                     try self.finishTarget(dst_local, dst);
                 },
                 .adapt => |a| {
                     const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, a.from);
-                    try self.addWordArg(&builder, a.to);
+                    try self.addWordArg(&builder, a.plan);
                     try addTargetArg(&builder, dst);
                     try self.addBytesArg(&builder, a.src);
                     try self.callBoxyRuntime(&builder, "roc_desc_adapt");
@@ -20837,11 +20576,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const stmt = self.store.getCFStmt(stmt_id);
                     switch (stmt) {
                         .dyn => |dyn_stmt| {
-                            const op = self.store.stmtRow(dyn_stmt.data);
-                            if (dyn_stmt.composition_cache) |cache|
-                                try self.generateCachedComposition(dyn_stmt.target.?, op, cache)
-                            else
-                                try self.generateDyn(dyn_stmt.target, op);
+                            try self.generateDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
                             try work.append(wa, .{ .node = dyn_stmt.next });
                         },
                         .assign_ref => |assign| {

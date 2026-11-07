@@ -1,8 +1,8 @@
 # A generic function over a type that recurses through a list. Under
-# `--specialize=no` its one worker composes the descriptor of `Tree(a)` from
-# the hidden descriptor of `a` at runtime, and the composition must break the
-# cycle at the list element, which is a pointer, instead of expanding `Tree(a)`
-# inside its own node.
+# `--specialize=no` its one worker reads the descriptor of `Tree(a)` from its
+# type table, filled at each `a` the program reaches, and that descriptor must
+# break the cycle at the list element, which is a pointer, instead of
+# expanding `Tree(a)` inside its own node.
 Tree(a) := [Leaf(a), Node(List(Tree(a)))]
 
 count : Tree(a) -> U64

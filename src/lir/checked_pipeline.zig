@@ -193,9 +193,6 @@ pub const TargetConfig = struct {
     boxy_stored_functions: bool = false,
     /// Content identity of a compiler-only module unit's function/type metadata.
     boxy_function_unit: ?[32]u8 = null,
-    /// The consumer reads composition sites
-    /// (`postcheck.Boxy.Lower.Input.composition_sites`).
-    boxy_composition_sites: bool = true,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     inline_mode: InlineMode = .none,
@@ -2000,7 +1997,6 @@ pub const PreparedBoxy = struct {
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
             .function_unit = target.boxy_function_unit,
-            .composition_sites = target.boxy_composition_sites,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();

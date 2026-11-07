@@ -1,10 +1,10 @@
-//! Tests of descriptor composition, interning, and the walkers.
+//! Tests of the descriptor walkers and the runtime's entry points.
 
 const std = @import("std");
 const builtins = @import("builtins");
 const shape = @import("layout_shape");
 const desc_mod = @import("desc.zig");
-const compose = @import("compose.zig");
+const test_descs = @import("test_descs.zig");
 const walk = @import("walk.zig");
 const exports = @import("exports.zig");
 const compiled = @import("compiled.zig");
@@ -34,21 +34,21 @@ const name_b = name("b");
 const name_c = name("c");
 const name_ok = name("Ok");
 const name_err = name("Err");
-const name_point = name("Point");
 
 /// The errors these tests' helpers return.
 const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult };
 
-/// A test host: allocation tracking plus a fresh composition cache.
+/// A test host: allocation tracking, and the tests' descriptors.
 const Env = struct {
     test_env: TestEnv,
-    cache: compose.Cache = .{},
+    descs: test_descs.Builder,
 
     fn init() Env {
-        return .{ .test_env = TestEnv.init(testing.allocator) };
+        return .{ .test_env = TestEnv.init(testing.allocator), .descs = .init(testing.allocator, .native) };
     }
 
     fn deinit(self: *Env) void {
+        self.descs.deinit();
         self.test_env.deinit();
     }
 
@@ -90,66 +90,22 @@ fn i64List(values: []const i64, ops: *RocOps) RocList {
 }
 
 fn expectInspect(env: *Env, d: *const TypeDesc, ptr: [*]u8, expected: []const u8) TestError!void {
-    const rendered = walk.inspect(d, ptr, env.ops());
+    const rendered = walk.inspect(d, env.descs.names(d), ptr, env.ops());
     defer rendered.decref(env.ops());
     try testing.expectEqualStrings(expected, rendered.asSlice());
 }
 
 fn recordAB(env: *Env, a: *const TypeDesc, b: *const TypeDesc) *const TypeDesc {
-    return compose.record(&env.cache, env.ops(), &.{ .{ .name = &name_b, .desc = b }, .{ .name = &name_a, .desc = a } });
-}
-
-test "composing again returns the same descriptor and allocates nothing" {
-    var env = Env.init();
-    defer env.deinit();
-    const ops = env.ops();
-    const u64_desc = compose.scalarDesc(.u64);
-    const list = compose.list(&env.cache, ops, u64_desc);
-    const record = recordAB(&env, u64_desc, compose.strDesc());
-    const union_desc = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 2, .payloads = &.{ list, record } },
-        .{ .name = &name_err, .payload_count = 0, .payloads = &.{} },
-    });
-    const nominal = compose.nominal(&env.cache, ops, record, &name_point, null, false);
-    const after_first = env.allocations();
-
-    try testing.expectEqual(list, compose.list(&env.cache, ops, u64_desc));
-    try testing.expectEqual(record, recordAB(&env, u64_desc, compose.strDesc()));
-    try testing.expectEqual(union_desc, compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 2, .payloads = &.{ list, record } },
-        .{ .name = &name_err, .payload_count = 0, .payloads = &.{} },
-    }));
-    try testing.expectEqual(nominal, compose.nominal(&env.cache, ops, record, &name_point, null, false));
-    try testing.expectEqual(after_first, env.allocations());
-
-    try testing.expect(compose.list(&env.cache, ops, compose.scalarDesc(.u32)) != list);
-}
-
-test "many compositions grow the cache and stay interned" {
-    var env = Env.init();
-    defer env.deinit();
-    const ops = env.ops();
-    var lists: [200]*const TypeDesc = undefined;
-    var current = compose.scalarDesc(.u8);
-    for (&lists) |*slot| {
-        current = compose.list(&env.cache, ops, current);
-        slot.* = current;
-    }
-    current = compose.scalarDesc(.u8);
-    for (lists) |expected| {
-        current = compose.list(&env.cache, ops, current);
-        try testing.expectEqual(expected, current);
-    }
+    return env.descs.record(&.{ .{ .name = &name_b, .desc = b }, .{ .name = &name_a, .desc = a } });
 }
 
 test "a record lays out by descending alignment, then field name" {
     var env = Env.init();
     defer env.deinit();
-    const ops = env.ops();
-    const record = compose.record(&env.cache, ops, &.{
-        .{ .name = &name_c, .desc = compose.scalarDesc(.u8) },
-        .{ .name = &name_a, .desc = compose.scalarDesc(.u8) },
-        .{ .name = &name_b, .desc = compose.scalarDesc(.u64) },
+    const record = env.descs.record(&.{
+        .{ .name = &name_c, .desc = desc_mod.scalarDesc(.u8) },
+        .{ .name = &name_a, .desc = desc_mod.scalarDesc(.u8) },
+        .{ .name = &name_b, .desc = desc_mod.scalarDesc(.u64) },
     });
     try testing.expectEqual(@as(u32, 16), record.size);
     try testing.expectEqual(@as(u32, 8), record.alignment);
@@ -167,7 +123,7 @@ test "a record lays out by descending alignment, then field name" {
 test "argument records keep declared order at natural alignment" {
     var env = Env.init();
     defer env.deinit();
-    const args = compose.args(&env.cache, env.ops(), &.{ compose.scalarDesc(.u8), compose.scalarDesc(.u64), compose.scalarDesc(.u8) });
+    const args = env.descs.args(&.{ desc_mod.scalarDesc(.u8), desc_mod.scalarDesc(.u64), desc_mod.scalarDesc(.u8) });
     try testing.expectEqual(@as(u32, 0), args.fields()[0].offset);
     try testing.expectEqual(@as(u32, 8), args.fields()[1].offset);
     try testing.expectEqual(@as(u32, 16), args.fields()[2].offset);
@@ -178,9 +134,8 @@ test "argument records keep declared order at natural alignment" {
 test "zero-sized records keep their kind with the zero-sized shape" {
     var env = Env.init();
     defer env.deinit();
-    const ops = env.ops();
-    const empty = compose.record(&env.cache, ops, &.{});
-    const nested = compose.record(&env.cache, ops, &.{.{ .name = &name_a, .desc = empty }});
+    const empty = env.descs.record(&.{});
+    const nested = env.descs.record(&.{.{ .name = &name_a, .desc = empty }});
     try testing.expectEqual(desc_mod.Kind.record, nested.kind);
     try testing.expectEqual(@as(u32, 0), nested.size);
     try testing.expectEqual(@as(u32, 1), nested.alignment);
@@ -194,8 +149,8 @@ test "inspect renders records, tuples, tag unions, lists, and boxes" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const i64_desc = compose.scalarDesc(.i64);
-    const str_desc = compose.strDesc();
+    const i64_desc = desc_mod.scalarDesc(.i64);
+    const str_desc = desc_mod.strDesc();
 
     const record = recordAB(&env, i64_desc, str_desc);
     var record_slot: Slot = .{};
@@ -203,16 +158,16 @@ test "inspect renders records, tuples, tag unions, lists, and boxes" {
     record_slot.write(fieldOffset(record, 1), RocStr, RocStr.fromSliceSmall("x"));
     try expectInspect(&env, record, record_slot.ptr(), "{ a: 1, b: \"x\" }");
 
-    const pair = compose.tuple(&env.cache, ops, &.{ i64_desc, str_desc });
+    const pair = env.descs.tuple(&.{ i64_desc, str_desc });
     var pair_slot: Slot = .{};
     pair_slot.write(fieldOffset(pair, 0), i64, 1);
     pair_slot.write(fieldOffset(pair, 1), RocStr, RocStr.fromSliceSmall("a"));
     try expectInspect(&env, pair, pair_slot.ptr(), "(1, \"a\")");
 
-    const list_desc = compose.list(&env.cache, ops, i64_desc);
-    const result = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 1, .payloads = &.{list_desc} },
-        .{ .name = &name_err, .payload_count = 1, .payloads = &.{str_desc} },
+    const list_desc = env.descs.list(i64_desc);
+    const result = env.descs.tagUnion(&.{
+        .{ .name = &name_ok, .payloads = &.{list_desc} },
+        .{ .name = &name_err, .payloads = &.{str_desc} },
     });
     try testing.expectEqual(@as(u32, 1), result.discriminant_size);
     var ok_slot: Slot = .{};
@@ -226,15 +181,15 @@ test "inspect renders records, tuples, tag unions, lists, and boxes" {
     err_slot.write(0, RocStr, RocStr.fromSliceSmall("no"));
     try expectInspect(&env, result, err_slot.ptr(), "Err(\"no\")");
 
-    const two_args = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 2, .payloads = &.{ str_desc, i64_desc } },
+    const two_args = env.descs.tagUnion(&.{
+        .{ .name = &name_ok, .payloads = &.{ str_desc, i64_desc } },
     });
     var two_slot: Slot = .{};
     two_slot.write(fieldOffset(two_args.variants()[0].payload, 0), RocStr, RocStr.fromSliceSmall("s"));
     two_slot.write(fieldOffset(two_args.variants()[0].payload, 1), i64, -7);
     try expectInspect(&env, two_args, two_slot.ptr(), "Ok(\"s\", -7)");
 
-    const records = compose.list(&env.cache, ops, record);
+    const records = env.descs.list(record);
     const record_list = RocList.list_allocate(record.alignment, 2, record.size, true, ops);
     for (0..2) |index| {
         var element: Slot = .{};
@@ -247,7 +202,7 @@ test "inspect renders records, tuples, tag unions, lists, and boxes" {
     try expectInspect(&env, records, records_slot.ptr(), "[{ a: 1, b: \"x\" }, { a: 2, b: \"y\" }]");
     walk.decref(records, records_slot.ptr(), ops);
 
-    const nested = compose.list(&env.cache, ops, list_desc);
+    const nested = env.descs.list(list_desc);
     const outer = RocList.list_allocate(list_desc.alignment, 2, list_desc.size, true, ops);
     const inner_lists = [_]RocList{ i64List(&.{ 1, 2 }, ops), RocList.empty() };
     @memcpy(@as([*]RocList, @ptrCast(@alignCast(outer.bytes.?)))[0..2], &inner_lists);
@@ -256,7 +211,7 @@ test "inspect renders records, tuples, tag unions, lists, and boxes" {
     try expectInspect(&env, nested, nested_slot.ptr(), "[[1, 2], []]");
     walk.decref(nested, nested_slot.ptr(), ops);
 
-    const boxed = compose.box(&env.cache, ops, i64_desc);
+    const boxed = env.descs.box(i64_desc);
     const payload = utils.allocateWithRefcount(8, 8, false, ops);
     @as(*i64, @ptrCast(@alignCast(payload))).* = 5;
     var box_slot: Slot = .{};
@@ -270,20 +225,20 @@ test "inspect renders primitives the way the to_str builtins do" {
     defer env.deinit();
     var slot: Slot = .{};
     slot.write(0, f64, 1.5);
-    try expectInspect(&env, compose.scalarDesc(.f64), slot.ptr(), "1.5");
+    try expectInspect(&env, desc_mod.scalarDesc(.f64), slot.ptr(), "1.5");
     slot.write(0, i128, RocDec.fromU64(3).num);
-    try expectInspect(&env, compose.scalarDesc(.dec), slot.ptr(), "3.0");
+    try expectInspect(&env, desc_mod.scalarDesc(.dec), slot.ptr(), "3.0");
     slot.write(0, i8, -3);
-    try expectInspect(&env, compose.scalarDesc(.i8), slot.ptr(), "-3");
+    try expectInspect(&env, desc_mod.scalarDesc(.i8), slot.ptr(), "-3");
     slot.write(0, u128, std.math.maxInt(u128));
-    try expectInspect(&env, compose.scalarDesc(.u128), slot.ptr(), "340282366920938463463374607431768211455");
+    try expectInspect(&env, desc_mod.scalarDesc(.u128), slot.ptr(), "340282366920938463463374607431768211455");
     slot.write(0, u8, 1);
-    try expectInspect(&env, compose.boolDesc(), slot.ptr(), "True");
+    try expectInspect(&env, desc_mod.boolDesc(), slot.ptr(), "True");
     slot.write(0, u8, 0);
-    try expectInspect(&env, compose.boolDesc(), slot.ptr(), "False");
+    try expectInspect(&env, desc_mod.boolDesc(), slot.ptr(), "False");
     slot.write(0, RocStr, RocStr.fromSliceSmall("q\""));
-    try expectInspect(&env, compose.strDesc(), slot.ptr(), "\"q\\\"\"");
-    try expectInspect(&env, compose.erasedCallableDesc(), slot.ptr(), "<function>");
+    try expectInspect(&env, desc_mod.strDesc(), slot.ptr(), "\"q\\\"\"");
+    try expectInspect(&env, desc_mod.erasedCallableDesc(), slot.ptr(), "<function>");
 }
 
 test "a long rendering grows its string" {
@@ -292,10 +247,10 @@ test "a long rendering grows its string" {
     const ops = env.ops();
     var values: [300]i64 = undefined;
     for (&values, 0..) |*value, index| value.* = @intCast(index);
-    const list_desc = compose.list(&env.cache, ops, compose.scalarDesc(.i64));
+    const list_desc = env.descs.list(desc_mod.scalarDesc(.i64));
     var slot: Slot = .{};
     slot.write(0, RocList, i64List(&values, ops));
-    const rendered = walk.inspect(list_desc, slot.ptr(), ops);
+    const rendered = walk.inspect(list_desc, env.descs.names(list_desc), slot.ptr(), ops);
     defer rendered.decref(ops);
     try testing.expect(std.mem.startsWith(u8, rendered.asSlice(), "[0, 1, 2, "));
     try testing.expect(std.mem.endsWith(u8, rendered.asSlice(), ", 298, 299]"));
@@ -306,10 +261,10 @@ test "decref releases nested allocations and incref keeps them alive" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const str_desc = compose.strDesc();
-    const strs = compose.list(&env.cache, ops, str_desc);
-    const record = recordAB(&env, compose.scalarDesc(.i64), strs);
-    const boxed = compose.box(&env.cache, ops, record);
+    const str_desc = desc_mod.strDesc();
+    const strs = env.descs.list(str_desc);
+    const record = recordAB(&env, desc_mod.scalarDesc(.i64), strs);
+    const boxed = env.descs.box(record);
     const baseline = env.allocations();
 
     const list = RocList.list_allocate(str_desc.alignment, 2, str_desc.size, true, ops);
@@ -341,8 +296,8 @@ test "simple values retain multiple owners and release their allocations exactly
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const text_desc = compose.strDesc();
-    const nominal_text = compose.nominal(&env.cache, ops, text_desc, &name_point, null, false);
+    const text_desc = desc_mod.strDesc();
+    const nominal_text = env.descs.nominal(text_desc, null, false);
     for ([_]*const TypeDesc{ text_desc, nominal_text }) |d| {
         for ([_][]const u8{ "small", "a string long enough to need a separate allocation" }) |text| {
             const baseline = env.allocations();
@@ -358,7 +313,7 @@ test "simple values retain multiple owners and release their allocations exactly
             try testing.expectEqual(baseline, env.allocations());
         }
     }
-    const list_desc = compose.list(&env.cache, ops, compose.scalarDesc(.i64));
+    const list_desc = env.descs.list(desc_mod.scalarDesc(.i64));
     for ([_][]const i64{ &.{}, &.{ 4, 7 } }) |values| {
         const baseline = env.allocations();
         var value = i64List(values, ops);
@@ -371,8 +326,8 @@ test "simple values retain multiple owners and release their allocations exactly
         walk.decref(list_desc, @ptrCast(&value), ops);
         try testing.expectEqual(baseline, env.allocations());
     }
-    for ([_]*const TypeDesc{ compose.zstDesc(), compose.scalarDesc(.i64) }) |payload| {
-        const d = compose.box(&env.cache, ops, payload);
+    for ([_]*const TypeDesc{ desc_mod.zstDesc(), desc_mod.scalarDesc(.i64) }) |payload| {
+        const d = env.descs.box(payload);
         const baseline = env.allocations();
         var value: ?[*]u8 = if (payload.size == 0) null else utils.allocateWithRefcount(payload.size, payload.alignment, false, ops);
         if (value) |ptr| @memset(ptr[0..payload.size], 0);
@@ -394,8 +349,8 @@ test "decref of a deep recursive value keeps its work off the call stack" {
     // A list of lists nested 10_000 deep, each level one element.
     const depth = 10_000;
     var descs: [depth + 1]*const TypeDesc = undefined;
-    descs[0] = compose.strDesc();
-    for (1..depth + 1) |level| descs[level] = compose.list(&env.cache, ops, descs[level - 1]);
+    descs[0] = desc_mod.strDesc();
+    for (1..depth + 1) |level| descs[level] = env.descs.list(descs[level - 1]);
     const baseline = env.allocations();
 
     var innermost = bigStr("the string at the bottom of the nesting", ops);
@@ -419,18 +374,18 @@ test "reference counting follows deep wrappers and preserves pending container r
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    var wrapped = compose.strDesc();
+    var wrapped = desc_mod.strDesc();
     for (0..10_000) |_| {
-        wrapped = compose.nominal(&env.cache, ops, wrapped, &name_point, null, false);
-        wrapped = compose.tagUnion(&env.cache, ops, &.{
-            .{ .name = &name_ok, .payload_count = 1, .payloads = &.{wrapped} },
+        wrapped = env.descs.nominal(wrapped, null, false);
+        wrapped = env.descs.tagUnion(&.{
+            .{ .name = &name_ok, .payloads = &.{wrapped} },
         });
-        wrapped = compose.tuple(&env.cache, ops, &.{wrapped});
-        wrapped = recordAB(&env, compose.zstDesc(), wrapped);
+        wrapped = env.descs.tuple(&.{wrapped});
+        wrapped = recordAB(&env, desc_mod.zstDesc(), wrapped);
     }
     const record = recordAB(&env, wrapped, wrapped);
-    const boxed = compose.box(&env.cache, ops, record);
-    const list_desc = compose.list(&env.cache, ops, boxed);
+    const boxed = env.descs.box(record);
+    const list_desc = env.descs.list(boxed);
     const baseline = env.allocations();
     const payload = utils.allocateWithRefcount(record.size, record.alignment, true, ops);
     const text = "a heap string under many nominal and tag wrappers";
@@ -469,13 +424,13 @@ test "record traversal preserves final drop order and pending container releases
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const leaf = recordAB(&env, compose.scalarDesc(.u64), compose.erasedCallableDesc());
+    const leaf = recordAB(&env, desc_mod.scalarDesc(.u64), desc_mod.erasedCallableDesc());
     const fields: [40]*const TypeDesc = @splat(leaf);
     // One child, multiple siblings, and enough siblings to grow the work stack.
     for ([_]usize{ 1, 3, 40 }) |count| {
-        const tuple = compose.tuple(&env.cache, ops, fields[0..count]);
-        const boxed = compose.box(&env.cache, ops, tuple);
-        const list_desc = compose.list(&env.cache, ops, boxed);
+        const tuple = env.descs.tuple(fields[0..count]);
+        const boxed = env.descs.box(tuple);
+        const list_desc = env.descs.list(boxed);
         const baseline = env.allocations();
         var drops: Drops = .{};
         const payload = utils.allocateWithRefcount(tuple.size, tuple.alignment, true, ops);
@@ -506,7 +461,7 @@ test "equality compares structure and honors is_eq overrides" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const record = recordAB(&env, compose.scalarDesc(.i64), compose.strDesc());
+    const record = recordAB(&env, desc_mod.scalarDesc(.i64), desc_mod.strDesc());
     var lhs: Slot = .{};
     var rhs: Slot = .{};
     lhs.write(fieldOffset(record, 0), i64, 1);
@@ -517,10 +472,10 @@ test "equality compares structure and honors is_eq overrides" {
     rhs.write(fieldOffset(record, 1), RocStr, RocStr.fromSliceSmall("y"));
     try testing.expect(!walk.eq(record, lhs.ptr(), rhs.ptr(), ops));
 
-    const list_desc = compose.list(&env.cache, ops, compose.scalarDesc(.i64));
-    const result = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 1, .payloads = &.{list_desc} },
-        .{ .name = &name_err, .payload_count = 0, .payloads = &.{} },
+    const list_desc = env.descs.list(desc_mod.scalarDesc(.i64));
+    const result = env.descs.tagUnion(&.{
+        .{ .name = &name_ok, .payloads = &.{list_desc} },
+        .{ .name = &name_err, .payloads = &.{} },
     });
     var ok_a: Slot = .{};
     var ok_b: Slot = .{};
@@ -538,11 +493,11 @@ test "equality compares structure and honors is_eq overrides" {
     // A nominal whose `is_eq` says every two values are equal.
     const always = erased_callable.allocate(&Overrides.alwaysEqual, null, 0, ops);
     const methods: desc_mod.Methods = .{ .is_eq = always, .to_hash = null, .to_inspect = null };
-    const nominal = compose.nominal(&env.cache, ops, compose.scalarDesc(.i64), &name_point, &methods, false);
+    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false);
     lhs.write(0, i64, 1);
     rhs.write(0, i64, 2);
     try testing.expect(walk.eq(nominal, lhs.ptr(), rhs.ptr(), ops));
-    try testing.expect(!walk.eq(compose.scalarDesc(.i64), lhs.ptr(), rhs.ptr(), ops));
+    try testing.expect(!walk.eq(desc_mod.scalarDesc(.i64), lhs.ptr(), rhs.ptr(), ops));
     erased_callable.decref(always, ops);
 }
 
@@ -568,16 +523,16 @@ test "hashing feeds the hasher builtins in structural order" {
     const seed: u64 = 0x1234;
     const D = hash_mod.HasherDomain;
 
-    const record = recordAB(&env, compose.scalarDesc(.u8), compose.strDesc());
+    const record = recordAB(&env, desc_mod.scalarDesc(.u8), desc_mod.strDesc());
     var slot: Slot = .{};
     slot.write(fieldOffset(record, 0), u8, 9);
     slot.write(fieldOffset(record, 1), RocStr, RocStr.fromSliceSmall("hi"));
     const by_hand = hash_mod.hasher_write_bytes(hash_mod.hasher_write_u64(seed, @backingInt(D.u8), 9, 1), @backingInt(D.str), "hi", 2);
     try testing.expectEqual(by_hand, walk.hash(record, seed, slot.ptr(), ops));
 
-    const result = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_ok, .payload_count = 1, .payloads = &.{compose.scalarDesc(.i32)} },
-        .{ .name = &name_err, .payload_count = 0, .payloads = &.{} },
+    const result = env.descs.tagUnion(&.{
+        .{ .name = &name_ok, .payloads = &.{desc_mod.scalarDesc(.i32)} },
+        .{ .name = &name_err, .payloads = &.{} },
     });
     var ok: Slot = .{};
     ok.write(0, i32, -1);
@@ -585,7 +540,7 @@ test "hashing feeds the hasher builtins in structural order" {
     const ok_by_hand = hash_mod.hasher_write_u64(hash_mod.hasher_write_u64(seed, @backingInt(D.u64), 1, 8), @backingInt(D.i32), 0xffff_ffff, 4);
     try testing.expectEqual(ok_by_hand, walk.hash(result, seed, ok.ptr(), ops));
 
-    const list_desc = compose.list(&env.cache, ops, compose.scalarDesc(.u16));
+    const list_desc = env.descs.list(desc_mod.scalarDesc(.u16));
     var list_slot: Slot = .{};
     const list = RocList.list_allocate(2, 2, 2, false, ops);
     @as([*]u16, @ptrCast(@alignCast(list.bytes.?)))[0..2].* = .{ 3, 4 };
@@ -601,7 +556,7 @@ test "hashing feeds the hasher builtins in structural order" {
 
     const seven = erased_callable.allocate(&Overrides.hashToSeven, null, 0, ops);
     const methods: desc_mod.Methods = .{ .is_eq = null, .to_hash = seven, .to_inspect = null };
-    const nominal = compose.nominal(&env.cache, ops, compose.scalarDesc(.i64), &name_point, &methods, false);
+    const nominal = env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false);
     try testing.expectEqual(@as(u64, 7), walk.hash(nominal, seed, slot.ptr(), ops));
     erased_callable.decref(seven, ops);
 }
@@ -614,9 +569,9 @@ test "nominal inspection uses the override, hides opaque structure, or shows the
     const methods: desc_mod.Methods = .{ .is_eq = null, .to_hash = null, .to_inspect = custom };
     var slot: Slot = .{};
     slot.write(0, i64, 4);
-    try expectInspect(&env, compose.nominal(&env.cache, ops, compose.scalarDesc(.i64), &name_point, &methods, false), slot.ptr(), "four");
-    try expectInspect(&env, compose.nominal(&env.cache, ops, compose.scalarDesc(.i64), &name_point, null, true), slot.ptr(), "<opaque>");
-    try expectInspect(&env, compose.nominal(&env.cache, ops, compose.scalarDesc(.i64), &name_point, null, false), slot.ptr(), "4");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), &methods, false), slot.ptr(), "four");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), null, true), slot.ptr(), "<opaque>");
+    try expectInspect(&env, env.descs.nominal(desc_mod.scalarDesc(.i64), null, false), slot.ptr(), "4");
     erased_callable.decref(custom, ops);
 }
 
@@ -624,7 +579,7 @@ test "the shared capture drop releases a dynamic capture record" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const captures = compose.args(&env.cache, ops, &.{ compose.scalarDesc(.opaque_ptr), compose.strDesc() });
+    const captures = env.descs.args(&.{ desc_mod.scalarDesc(.opaque_ptr), desc_mod.strDesc() });
     const baseline = env.allocations();
 
     const callable = erased_callable.allocate(&Overrides.alwaysEqual, &walk.captureDrop, captures.size, ops);
@@ -635,12 +590,12 @@ test "the shared capture drop releases a dynamic capture record" {
 
     var slot: Slot = .{};
     slot.write(0, ?[*]u8, callable);
-    walk.incref(compose.erasedCallableDesc(), slot.ptr(), 2, ops);
+    walk.incref(desc_mod.erasedCallableDesc(), slot.ptr(), 2, ops);
     for (0..2) |_| {
-        walk.decref(compose.erasedCallableDesc(), slot.ptr(), ops);
+        walk.decref(desc_mod.erasedCallableDesc(), slot.ptr(), ops);
         try testing.expectEqual(baseline + 2, env.allocations());
     }
-    walk.decref(compose.erasedCallableDesc(), slot.ptr(), ops);
+    walk.decref(desc_mod.erasedCallableDesc(), slot.ptr(), ops);
     try testing.expectEqual(baseline, env.allocations());
 }
 
@@ -650,12 +605,8 @@ test "list element callbacks and C entry points reach the entered host" {
     const ops = env.ops();
     const saved = builtins.in_process_host.enter(ops, null);
     defer builtins.in_process_host.leave(saved);
-    const state = try compiled.InProcessState.create(testing.allocator);
-    defer state.destroy();
-    const entered = state.enter();
-    defer compiled.InProcessState.leave(entered);
 
-    const str_desc = compose.strDesc();
+    const str_desc = desc_mod.strDesc();
     var element = bigStr("an element string long enough for the heap", ops);
     const baseline = env.allocations();
     walk.elemIncref(@ptrCast(@constCast(str_desc)), @ptrCast(&element));
@@ -664,103 +615,20 @@ test "list element callbacks and C entry points reach the entered host" {
     exports.roc_desc_decref(str_desc, @ptrCast(&element));
     try testing.expectEqual(baseline - 1, env.allocations());
 
-    const list = exports.roc_desc_list(compose.scalarDesc(.u8));
-    try testing.expectEqual(list, exports.roc_desc_list(compose.scalarDesc(.u8)));
     var rendered: RocStr = undefined;
     var byte: u8 = 7;
-    exports.roc_desc_inspect(&rendered, compose.scalarDesc(.u8), @ptrCast(&byte));
+    exports.roc_desc_inspect(&rendered, desc_mod.scalarDesc(.u8), null, @ptrCast(&byte));
     try testing.expectEqualStrings("7", rendered.asSlice());
 }
 
-test "boxy composition site retains complete snapshots and reuses alternating instantiations" {
-    var env = Env.init();
-    defer env.deinit();
-    var site: compose.CompositionSite = .{};
-    try testing.expectEqual(null, site.load());
-    const a = [_]usize{ @intFromPtr(compose.scalarDesc(.u64)), @intFromPtr(compose.strDesc()) };
-    const b = [_]usize{ a[1], a[0] };
-    const ra = @intFromPtr(recordAB(&env, compose.scalarDesc(.u64), compose.strDesc()));
-    const rb = @intFromPtr(recordAB(&env, compose.strDesc(), compose.scalarDesc(.u64)));
-    site.publish(&env.cache, env.ops(), &a, ra);
-    const old = site.load().?;
-    site.publish(&env.cache, env.ops(), &b, rb);
-    try testing.expectEqualSlices(usize, &a, old.operands(a.len));
-    try testing.expectEqual(ra, old.result);
-    try testing.expectEqualSlices(usize, &b, site.load().?.operands(b.len));
-    try testing.expectEqual(rb, site.load().?.result);
-    const allocations = env.allocations();
-    for (0..100) |_| {
-        site.publish(&env.cache, env.ops(), &a, ra);
-        try testing.expectEqual(old, site.load().?);
-        site.publish(&env.cache, env.ops(), &b, rb);
-    }
-    try testing.expectEqual(allocations, env.allocations());
-    // Zero-operand dictionaries have a valid entry too.
-    site.publish(&env.cache, env.ops(), &.{}, ra);
-    try testing.expectEqual(ra, site.load().?.result);
-    try testing.expectEqual(@as(usize, 0), site.load().?.operands(0).len);
-}
-
-test "composition temporary large keys do not grow the immortal arena on hits" {
-    const state = try compiled.InProcessState.create(testing.allocator);
-    defer state.destroy();
-    const elems: [65]*const TypeDesc = @splat(compose.scalarDesc(.u64));
-    const first = compose.tuple(&state.descriptors, &state.ops, &elems);
-    const capacity = state.arena.queryCapacity();
-    for (0..2000) |_| try testing.expectEqual(first, compose.tuple(&state.descriptors, &state.ops, &elems));
-    try testing.expectEqual(capacity, state.arena.queryCapacity());
-}
-
-test "dictionary composition temporary keys do not grow the immortal arena on hits" {
-    const state = try compiled.InProcessState.create(testing.allocator);
-    defer state.destroy();
-    const entered = state.enter();
-    defer compiled.InProcessState.leave(entered);
-    const methods: [65]usize = @splat(17);
-    const first = compiled.dictRecord(&methods, &state.ops);
-    const capacity = state.arena.queryCapacity();
-    for (0..2000) |_| try testing.expectEqual(first, compiled.dictRecord(&methods, &state.ops));
-    try testing.expectEqual(capacity, state.arena.queryCapacity());
-    try testing.expectEqualSlices(usize, &methods, first[0..methods.len]);
-}
-
-test "boxy composition site concurrent writers publish whole operand result pairs" {
-    if (@import("builtin").single_threaded) return error.SkipZigTest;
-    const state = try compiled.InProcessState.create(testing.allocator);
-    defer state.destroy();
-    var site: compose.CompositionSite = .{};
-    const Worker = struct {
-        fn run(slot: *compose.CompositionSite, shared: *compiled.InProcessState, word: usize, failed: *std.atomic.Value(bool)) void {
-            const operands = [_]usize{ word, word + 1, word + 2 };
-            for (0..2000) |_| {
-                slot.publish(&shared.descriptors, &shared.ops, &operands, word + 3);
-                const entry = slot.load().?;
-                const words = entry.operands(3);
-                if (words[1] != words[0] + 1 or words[2] != words[0] + 2 or entry.result != words[0] + 3) failed.store(true, .monotonic);
-            }
-        }
-    };
-    var failed: std.atomic.Value(bool) = .init(false);
-    var threads: [4]std.Thread = undefined;
-    var started: usize = 0;
-    defer for (threads[0..started]) |thread| thread.join();
-    for (&threads, 0..) |*thread, i| {
-        thread.* = try std.Thread.spawn(.{}, Worker.run, .{ &site, state, 100 * (i + 1), &failed });
-        started += 1;
-    }
-    for (threads) |thread| thread.join();
-    started = 0;
-    try testing.expect(!failed.load(.monotonic));
-}
-
-test "tag lookup finds every member of sorted composed and nominal descriptors" {
+test "tag construction by discriminant reaches every variant of structural and nominal descriptors" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
     var labels: [257][6]u8 = undefined;
     var names: [257]Name = undefined;
-    var variants: [257]compose.VariantInput = undefined;
-    const payloads = [_]*const TypeDesc{compose.scalarDesc(.i64)};
+    var variants: [257]test_descs.VariantInput = undefined;
+    const payloads = [_]*const TypeDesc{desc_mod.scalarDesc(.i64)};
     for (&labels, &names, 0..) |*label, *tag_name, index| {
         const text = try std.fmt.bufPrint(label, "Tag{d:0>3}", .{index});
         tag_name.* = .{ .id = desc_mod.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
@@ -768,18 +636,18 @@ test "tag lookup finds every member of sorted composed and nominal descriptors" 
     for ([_]usize{ 1, 2, 3, 4, 17, 257 }) |count| {
         // Composition must establish sorted order from arbitrary input order.
         for (variants[0..count], 0..) |*variant, index| {
-            variant.* = .{ .name = &names[count - index - 1], .payload_count = 1, .payloads = &payloads };
+            variant.* = .{ .name = &names[count - index - 1], .payloads = &payloads };
         }
-        const union_desc = compose.tagUnion(&env.cache, ops, variants[0..count]);
-        const nominal = compose.nominal(&env.cache, ops, union_desc, &name_point, null, false);
+        const union_desc = env.descs.tagUnion(variants[0..count]);
+        const nominal = env.descs.nominal(union_desc, null, false);
         for ([_]*const TypeDesc{ union_desc, nominal }) |desc| {
             for (names[0..count], 0..) |tag_name, index| {
-                // A different address for the same name must work too.
-                const queried_name = tag_name;
+                // Composition sorts the variants, so a tag's discriminant
+                // is its name's rank.
+                _ = tag_name;
                 const value: i64 = @intCast(index + 1);
                 var slot: Slot = .{};
-                compiled.buildTag(desc, &queried_name, slot.ptr(), &.{@ptrCast(&value)}, ops);
-                try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminantOf(desc, &queried_name, ops));
+                compiled.buildTag(desc, @intCast(index), slot.ptr(), &.{@ptrCast(&value)}, ops);
                 try testing.expectEqual(@as(u32, @intCast(index)), compiled.tagDiscriminant(desc, slot.ptr(), ops));
                 const result: *const i64 = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, slot.ptr(), 0, ops)));
                 try testing.expectEqual(value, result.*);
@@ -788,49 +656,110 @@ test "tag lookup finds every member of sorted composed and nominal descriptors" 
     }
 }
 
-test "adapting re-tags a row holding False and True to and from Bool by name" {
+/// A re-tag plan from `from` to `to` whose entries are `targets`.
+fn retagPlan(from: *const TypeDesc, to: *const TypeDesc, targets: []const desc_mod.AdaptVariant) desc_mod.AdaptPlan {
+    return .{ .kind = .retag, .count = @intCast(targets.len), .discriminant = 0, .from = from, .to = to, .child = null, .entries = targets.ptr };
+}
+
+test "adapting follows a re-tag plan between a row holding False and True and Bool" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
     const name_false = name("False");
     const name_true = name("True");
     const name_maybe = name("Maybe");
-    const just_false = compose.tagUnion(&env.cache, ops, &.{.{ .name = &name_false, .payload_count = 0, .payloads = &.{} }});
-    const just_true = compose.tagUnion(&env.cache, ops, &.{.{ .name = &name_true, .payload_count = 0, .payloads = &.{} }});
-    const wider = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_false, .payload_count = 0, .payloads = &.{} },
-        .{ .name = &name_maybe, .payload_count = 0, .payloads = &.{} },
-        .{ .name = &name_true, .payload_count = 0, .payloads = &.{} },
+    const just_false = env.descs.tagUnion(&.{.{ .name = &name_false, .payloads = &.{} }});
+    const just_true = env.descs.tagUnion(&.{.{ .name = &name_true, .payloads = &.{} }});
+    const wider = env.descs.tagUnion(&.{
+        .{ .name = &name_false, .payloads = &.{} },
+        .{ .name = &name_maybe, .payloads = &.{} },
+        .{ .name = &name_true, .payloads = &.{} },
     });
-    const bool_nominal = compose.nominal(&env.cache, ops, compose.boolDesc(), &name_point, null, false);
+    const absent = desc_mod.AdaptVariant.absent;
+    const to_false = [_]desc_mod.AdaptVariant{.{ .discriminant = 0, .plan = null }};
+    const to_true = [_]desc_mod.AdaptVariant{.{ .discriminant = 1, .plan = null }};
+    const wider_to_bool = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = absent, .plan = null }, .{ .discriminant = 1, .plan = null } };
+    const from_false = retagPlan(just_false, desc_mod.boolDesc(), &to_false);
+    const from_true = retagPlan(just_true, desc_mod.boolDesc(), &to_true);
+    const from_wider = retagPlan(wider, desc_mod.boolDesc(), &wider_to_bool);
 
     // A row's own discriminant is not Bool's byte: its tags sort around others.
-    for ([_]struct { from: *const TypeDesc, tag: *const Name, byte: u8 }{
-        .{ .from = just_false, .tag = &name_false, .byte = 0 },
-        .{ .from = just_true, .tag = &name_true, .byte = 1 },
-        .{ .from = wider, .tag = &name_false, .byte = 0 },
-        .{ .from = wider, .tag = &name_true, .byte = 1 },
+    for ([_]struct { plan: *const desc_mod.AdaptPlan, discriminant: u32, byte: u8 }{
+        .{ .plan = &from_false, .discriminant = 0, .byte = 0 },
+        .{ .plan = &from_true, .discriminant = 0, .byte = 1 },
+        .{ .plan = &from_wider, .discriminant = 0, .byte = 0 },
+        .{ .plan = &from_wider, .discriminant = 2, .byte = 1 },
     }) |case| {
         var source: Slot = .{};
-        compiled.buildTag(case.from, case.tag, source.ptr(), &.{}, ops);
-        for ([_]*const TypeDesc{ compose.boolDesc(), bool_nominal }) |to| {
-            var target: Slot = .{};
-            target.bytes[0] = 0xff;
-            compiled.adapt(case.from, to, target.ptr(), source.ptr(), ops);
-            try testing.expectEqual(case.byte, target.bytes[0]);
-        }
+        compiled.buildTag(case.plan.from.?, case.discriminant, source.ptr(), &.{}, ops);
+        var target: Slot = .{};
+        target.bytes[0] = 0xff;
+        compiled.adapt(case.plan, target.ptr(), source.ptr(), ops);
+        try testing.expectEqual(case.byte, target.bytes[0]);
     }
 
-    for ([_]struct { tag: *const Name, byte: u8 }{
-        .{ .tag = &name_false, .byte = 0 },
-        .{ .tag = &name_true, .byte = 1 },
+    const bool_to_wider = [_]desc_mod.AdaptVariant{ .{ .discriminant = 0, .plan = null }, .{ .discriminant = 2, .plan = null } };
+    const to_wider = retagPlan(desc_mod.boolDesc(), wider, &bool_to_wider);
+    for ([_]struct { discriminant: u32, byte: u8 }{
+        .{ .discriminant = 0, .byte = 0 },
+        .{ .discriminant = 2, .byte = 1 },
     }) |case| {
         var source: Slot = .{};
         source.bytes[0] = case.byte;
         var target: Slot = .{};
-        compiled.adapt(compose.boolDesc(), wider, target.ptr(), source.ptr(), ops);
-        try testing.expectEqual(compiled.tagDiscriminantOf(wider, case.tag, ops), compiled.tagDiscriminant(wider, target.ptr(), ops));
+        compiled.adapt(&to_wider, target.ptr(), source.ptr(), ops);
+        try testing.expectEqual(case.discriminant, compiled.tagDiscriminant(wider, target.ptr(), ops));
     }
+}
+
+test "adapting follows a record plan's offsets and wraps, unwraps, and fills presence slots" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = desc_mod.scalarDesc(.u8);
+    const wide = desc_mod.scalarDesc(.u64);
+    const name_missing = name("#Missing");
+    const name_present = name("#Present");
+    const optional_byte = env.descs.presenceSlot(&name_missing, &name_present, byte);
+    // `{ a : U8, b : U64 }` to `{ a : U8?, b : U64, c : U8? }`, laid out
+    // differently.
+    const from = recordAB(&env, byte, wide);
+    const to = env.descs.record(&.{
+        .{ .name = &name_a, .desc = optional_byte },
+        .{ .name = &name_b, .desc = wide },
+        .{ .name = &name_c, .desc = optional_byte },
+    });
+    const copy_byte: desc_mod.AdaptPlan = .{ .kind = .copy, .count = 0, .discriminant = 0, .from = null, .to = byte, .child = null, .entries = null };
+    const copy_wide: desc_mod.AdaptPlan = .{ .kind = .copy, .count = 0, .discriminant = 0, .from = null, .to = wide, .child = null, .entries = null };
+    const wrap: desc_mod.AdaptPlan = .{ .kind = .wrap, .count = 0, .discriminant = 1, .from = null, .to = optional_byte, .child = &copy_byte, .entries = null };
+    const missing: desc_mod.AdaptPlan = .{ .kind = .missing, .count = 0, .discriminant = 0, .from = null, .to = optional_byte, .child = null, .entries = null };
+    const to_a = to.fieldBySemanticIndex(0);
+    const to_b = to.fieldBySemanticIndex(1);
+    const to_c = to.fieldBySemanticIndex(2);
+    const from_a = from.fieldBySemanticIndex(0);
+    const from_b = from.fieldBySemanticIndex(1);
+    const fields = [_]desc_mod.AdaptField{
+        .{ .to_offset = to_a.offset, .from_offset = from_a.offset, .plan = &wrap },
+        .{ .to_offset = to_b.offset, .from_offset = from_b.offset, .plan = &copy_wide },
+        .{ .to_offset = to_c.offset, .from_offset = 0, .plan = &missing },
+    };
+    const plan: desc_mod.AdaptPlan = .{ .kind = .record, .count = fields.len, .discriminant = 0, .from = from, .to = to, .child = null, .entries = &fields };
+    const a: u8 = 7;
+    const b: u64 = 0x0102030405060708;
+    var source: Slot = .{};
+    compiled.buildRecord(from, source.ptr(), &.{ @ptrCast(&a), @ptrCast(&b) }, ops);
+    var target: Slot = .{ .bytes = @splat(0xa5) };
+    compiled.adapt(&plan, target.ptr(), source.ptr(), ops);
+    try testing.expectEqual(@as(u32, 1), compiled.tagDiscriminant(optional_byte, target.ptr() + to_a.offset, ops));
+    try testing.expectEqual(a, compiled.tagPayloadAddr(optional_byte, target.ptr() + to_a.offset, 0, ops)[0]);
+    try testing.expectEqual(b, @as(*align(1) const u64, @ptrCast(target.ptr() + to_b.offset)).*);
+    try testing.expectEqual(@as(u32, 0), compiled.tagDiscriminant(optional_byte, target.ptr() + to_c.offset, ops));
+
+    // Back: the present slot unwraps to its payload.
+    const unwrap: desc_mod.AdaptPlan = .{ .kind = .unwrap, .count = 0, .discriminant = 1, .from = optional_byte, .to = null, .child = &copy_byte, .entries = null };
+    var unwrapped: Slot = .{};
+    compiled.adapt(&unwrap, unwrapped.ptr(), target.ptr() + to_a.offset, ops);
+    try testing.expectEqual(a, unwrapped.bytes[0]);
 }
 
 test "single-payload tag construction initializes the exact byte image and releases boxed payloads" {
@@ -839,29 +768,29 @@ test "single-payload tag construction initializes the exact byte image and relea
     const ops = env.ops();
     var labels: [257][6]u8 = undefined;
     var names: [257]Name = undefined;
-    var variants: [257]compose.VariantInput = undefined;
+    var variants: [257]test_descs.VariantInput = undefined;
     for (&labels, &names, 0..) |*label, *tag_name, index| {
         const text = try std.fmt.bufPrint(label, "Tag{d:0>3}", .{index});
         tag_name.* = .{ .id = desc_mod.labelId(text), .len = @intCast(text.len), .bytes = text.ptr };
     }
-    const wide = compose.scalarDesc(.i128);
+    const wide = desc_mod.scalarDesc(.i128);
     const wide_payload = [_]*const TypeDesc{wide};
-    const padded_record = recordAB(&env, compose.scalarDesc(.u8), compose.scalarDesc(.u64));
-    const boxed_int = compose.recursiveBox(&env.cache, ops, compose.scalarDesc(.i64));
-    const boxed_str = compose.recursiveBox(&env.cache, ops, compose.strDesc());
-    for ([_]*const TypeDesc{ compose.zstDesc(), compose.scalarDesc(.u8), compose.scalarDesc(.u64), wide, padded_record, boxed_int, boxed_str }) |payload| {
+    const padded_record = recordAB(&env, desc_mod.scalarDesc(.u8), desc_mod.scalarDesc(.u64));
+    const boxed_int = env.descs.recursiveBox(desc_mod.scalarDesc(.i64));
+    const boxed_str = env.descs.recursiveBox(desc_mod.strDesc());
+    for ([_]*const TypeDesc{ desc_mod.zstDesc(), desc_mod.scalarDesc(.u8), desc_mod.scalarDesc(.u64), wide, padded_record, boxed_int, boxed_str }) |payload| {
         const payloads = [_]*const TypeDesc{payload};
         // No discriminant, a one-byte discriminant, and a two-byte one.
         for ([_]usize{ 1, 2, 257 }) |count| {
             for (variants[0..count], 0..) |*variant, index| {
-                variant.* = .{ .name = &names[index], .payload_count = 1, .payloads = if (index + 1 == count) &payloads else &wide_payload };
+                variant.* = .{ .name = &names[index], .payloads = if (index + 1 == count) &payloads else &wide_payload };
             }
-            const desc = compose.tagUnion(&env.cache, ops, variants[0..count]);
+            const desc = env.descs.tagUnion(variants[0..count]);
             const allocations = env.allocations();
             var source: Slot = .{ .bytes = @splat(0x5a) };
             if (payload == boxed_str) source.write(0, RocStr, bigStr("a boxed payload with independently allocated string bytes", ops));
             var actual: Slot = .{ .bytes = @splat(0xa5) };
-            compiled.buildTag(desc, &names[count - 1], actual.ptr(), &.{source.ptr()}, ops);
+            compiled.buildTag(desc, @intCast(count - 1), actual.ptr(), &.{source.ptr()}, ops);
 
             var expected: Slot = .{ .bytes = @splat(0xa5) };
             @memset(expected.bytes[0..desc.size], 0);
@@ -890,20 +819,20 @@ test "reference field tables select physical slots and exclude scalars and paddi
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const text = compose.strDesc();
-    const number = compose.scalarDesc(.u64);
-    const structural = compose.record(&env.cache, ops, &.{
+    const text = desc_mod.strDesc();
+    const number = desc_mod.scalarDesc(.u64);
+    const structural = env.descs.record(&.{
         .{ .name = &name_a, .desc = text },
         .{ .name = &name_b, .desc = number },
         .{ .name = &name_c, .desc = text },
     });
-    const tuple = compose.tuple(&env.cache, ops, &.{ text, number, text });
-    const args = compose.args(&env.cache, ops, &.{ text, number, text });
-    const declared = compose.declaredRecord(&env.cache, ops, &.{
-        .{ .name = &name_b, .desc = number, .is_padding = 0 },
-        .{ .name = null, .desc = text, .is_padding = 1 },
-        .{ .name = &name_a, .desc = text, .is_padding = 0 },
-        .{ .name = &name_c, .desc = text, .is_padding = 0 },
+    const tuple = env.descs.tuple(&.{ text, number, text });
+    const args = env.descs.args(&.{ text, number, text });
+    const declared = env.descs.declaredRecord(&.{
+        .{ .name = &name_b, .desc = number, .is_padding = false },
+        .{ .name = null, .desc = text, .is_padding = true },
+        .{ .name = &name_a, .desc = text, .is_padding = false },
+        .{ .name = &name_c, .desc = text, .is_padding = false },
     });
     const cases = [_]struct { desc: *const TypeDesc, slots: []const u32 }{
         .{ .desc = structural, .slots = &.{ 1, 2 } },
@@ -926,87 +855,21 @@ test "reference field tables select physical slots and exclude scalars and paddi
         walk.decref(case.desc, value.ptr(), ops);
         try testing.expectEqual(baseline, env.allocations());
     }
-    const plain = compose.args(&env.cache, ops, &.{ number, compose.boolDesc(), compose.zstDesc() });
+    const plain = env.descs.args(&.{ number, desc_mod.boolDesc(), desc_mod.zstDesc() });
     try testing.expectEqual(@as(usize, 0), plain.refcountedFieldSlots().len);
-    const empty = compose.tuple(&env.cache, ops, &.{});
+    const empty = env.descs.tuple(&.{});
     try testing.expectEqual(@as(usize, 0), empty.refcountedFieldSlots().len);
-}
-
-test "a composed union equal to a recursive member is that member" {
-    var env = Env.init();
-    defer env.deinit();
-    const ops = env.ops();
-    // `Expr := [Leaf(Str), Next(Expr)]`, then `[Leaf(a), Next(b)]` at the same
-    // types, composed from `b`'s descriptor as a generic body does.
-    const leaf = name("Leaf");
-    const next = name("Next");
-    const expr_name = name("Expr");
-    var key: u8 = 0;
-    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
-    const box = compose.recursiveBox(&env.cache, ops, shell);
-    const str_payload = [_]*const TypeDesc{compose.strDesc()};
-    const boxed_payload = [_]*const TypeDesc{box};
-    const member = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &leaf, .payload_count = 1, .payloads = &str_payload },
-        .{ .name = &next, .payload_count = 1, .payloads = &boxed_payload },
-    });
-    const backed = compose.nominal(&env.cache, ops, member, &expr_name, null, false);
-    const expr = compose.recursiveClose(&env.cache, ops, shell, backed, &key, &.{});
-    const expr_payload = [_]*const TypeDesc{expr};
-    const composed = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &leaf, .payload_count = 1, .payloads = &str_payload },
-        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
-    });
-    try testing.expectEqual(member, composed);
-
-    // A union with other payloads is a type of its own, stored inline.
-    const u64_payload = [_]*const TypeDesc{compose.scalarDesc(.u64)};
-    const other = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &leaf, .payload_count = 1, .payloads = &u64_payload },
-        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
-    });
-    try testing.expect(other != member);
-    try testing.expectEqual(expr, other.variants()[1].payload);
-}
-
-test "a composed union is a recursive member whatever fills its payload-less tag's slot" {
-    var env = Env.init();
-    defer env.deinit();
-    const ops = env.ops();
-    // `Expr := [Leaf, Next(Expr)]`, whose compiled descriptor fills `Leaf`'s
-    // slot with an empty aggregate, then `[Leaf, Next(b)]` at the same type.
-    const leaf = name("Leaf");
-    const next = name("Next");
-    const expr_name = name("Expr");
-    var key: u8 = 0;
-    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
-    const box = compose.recursiveBox(&env.cache, ops, shell);
-    const boxed_payload = [_]*const TypeDesc{box};
-    const member = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &leaf, .payload_count = 0, .payloads = &.{} },
-        .{ .name = &next, .payload_count = 1, .payloads = &boxed_payload },
-    });
-    @constCast(&member.variants()[0]).payload = compose.tuple(&env.cache, ops, &.{});
-    const backed = compose.nominal(&env.cache, ops, member, &expr_name, null, false);
-    const expr = compose.recursiveClose(&env.cache, ops, shell, backed, &key, &.{});
-    const expr_payload = [_]*const TypeDesc{expr};
-    const composed = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &leaf, .payload_count = 0, .payloads = &.{} },
-        .{ .name = &next, .payload_count = 1, .payloads = &expr_payload },
-    });
-    try testing.expectEqual(member, composed);
 }
 
 test "reference field tables remain exact when recursive placeholders close" {
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    var key: u8 = 0;
-    const shell = compose.recursiveOpen(&env.cache, ops, &key, &.{});
-    const box = compose.recursiveBox(&env.cache, ops, shell);
-    const node = compose.args(&env.cache, ops, &.{ compose.scalarDesc(.u64), box });
+    const shell = env.descs.recursiveOpen();
+    const box = env.descs.recursiveBox(shell);
+    const node = env.descs.args(&.{ desc_mod.scalarDesc(.u64), box });
     try testing.expectEqualSlices(u32, &.{1}, node.refcountedFieldSlots());
-    const closed = compose.recursiveClose(&env.cache, ops, shell, node, &key, &.{});
+    const closed = env.descs.recursiveClose(shell, node);
     try testing.expectEqualSlices(u32, &.{1}, closed.refcountedFieldSlots());
     const baseline = env.allocations();
     const child = utils.allocateWithRefcount(closed.size, closed.alignment, true, ops);
@@ -1024,19 +887,19 @@ test "active tag payloads preserve physical ordering, zero size, and recursive b
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const boxed = compose.recursiveBox(&env.cache, ops, compose.strDesc());
-    const payloads = [_]*const TypeDesc{ compose.scalarDesc(.u8), compose.zstDesc(), boxed, compose.scalarDesc(.u64) };
-    const union_desc = compose.tagUnion(&env.cache, ops, &.{
-        .{ .name = &name_a, .payload_count = 0, .payloads = &.{} },
-        .{ .name = &name_b, .payload_count = payloads.len, .payloads = &payloads },
+    const boxed = env.descs.recursiveBox(desc_mod.strDesc());
+    const payloads = [_]*const TypeDesc{ desc_mod.scalarDesc(.u8), desc_mod.zstDesc(), boxed, desc_mod.scalarDesc(.u64) };
+    const union_desc = env.descs.tagUnion(&.{
+        .{ .name = &name_a, .payloads = &.{} },
+        .{ .name = &name_b, .payloads = &payloads },
     });
-    const desc = compose.nominal(&env.cache, ops, union_desc, &name_point, null, false);
+    const desc = env.descs.nominal(union_desc, null, false);
     const baseline = env.allocations();
     const small: u8 = 37;
     const large: u64 = 0x123456789abcdef0;
     const text = bigStr("a recursively boxed payload selected by the active tag", ops);
     var value: Slot = .{};
-    compiled.buildTag(desc, &name_b, value.ptr(), &.{ @ptrCast(&small), walk.zeroSizedPtr(), @ptrCast(&text), @ptrCast(&large) }, ops);
+    compiled.buildTag(desc, 1, value.ptr(), &.{ @ptrCast(&small), walk.zeroSizedPtr(), @ptrCast(&text), @ptrCast(&large) }, ops);
     try testing.expectEqual(small, compiled.tagPayloadAddr(desc, value.ptr(), 0, ops)[0]);
     try testing.expectEqual(value.ptr() + fieldOffset(union_desc.variants()[1].payload, 1), compiled.tagPayloadAddr(desc, value.ptr(), 1, ops));
     const loaded: *const RocStr = @ptrCast(@alignCast(compiled.tagPayloadAddr(desc, value.ptr(), 2, ops)));
@@ -1051,25 +914,25 @@ test "record construction initializes gaps and omitted fields without touching s
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const byte = compose.scalarDesc(.u8);
-    const wide = compose.scalarDesc(.u64);
-    const zero = compose.zstDesc();
-    const declared = compose.declaredRecord(&env.cache, ops, &.{
-        .{ .name = null, .desc = byte, .is_padding = 1 },
-        .{ .name = &name_c, .desc = byte, .is_padding = 0 },
-        .{ .name = &name_b, .desc = wide, .is_padding = 0 },
-        .{ .name = null, .desc = byte, .is_padding = 1 },
-        .{ .name = &name_a, .desc = zero, .is_padding = 0 },
-        .{ .name = null, .desc = byte, .is_padding = 1 },
+    const byte = desc_mod.scalarDesc(.u8);
+    const wide = desc_mod.scalarDesc(.u64);
+    const zero = desc_mod.zstDesc();
+    const declared = env.descs.declaredRecord(&.{
+        .{ .name = null, .desc = byte, .is_padding = true },
+        .{ .name = &name_c, .desc = byte, .is_padding = false },
+        .{ .name = &name_b, .desc = wide, .is_padding = false },
+        .{ .name = null, .desc = byte, .is_padding = true },
+        .{ .name = &name_a, .desc = zero, .is_padding = false },
+        .{ .name = null, .desc = byte, .is_padding = true },
     });
     const descriptors = [_]*const TypeDesc{
-        compose.record(&env.cache, ops, &.{}),
-        compose.tuple(&env.cache, ops, &.{ zero, zero }),
-        compose.tuple(&env.cache, ops, &.{ wide, wide }),
-        compose.tuple(&env.cache, ops, &.{ byte, wide, byte }),
+        env.descs.record(&.{}),
+        env.descs.tuple(&.{ zero, zero }),
+        env.descs.tuple(&.{ wide, wide }),
+        env.descs.tuple(&.{ byte, wide, byte }),
         recordAB(&env, byte, wide),
         declared,
-        compose.nominal(&env.cache, ops, declared, &name_point, null, false),
+        env.descs.nominal(declared, null, false),
     };
     var sources = [_]Slot{
         .{ .bytes = @splat(0x31) },
@@ -1101,15 +964,15 @@ test "record construction and updates preserve boxed fields and initialize all p
     var env = Env.init();
     defer env.deinit();
     const ops = env.ops();
-    const byte = compose.scalarDesc(.u8);
-    const boxed = compose.recursiveBox(&env.cache, ops, compose.strDesc());
-    const record = compose.declaredRecord(&env.cache, ops, &.{
-        .{ .name = null, .desc = byte, .is_padding = 1 },
-        .{ .name = &name_b, .desc = boxed, .is_padding = 0 },
-        .{ .name = &name_a, .desc = byte, .is_padding = 0 },
-        .{ .name = null, .desc = byte, .is_padding = 1 },
+    const byte = desc_mod.scalarDesc(.u8);
+    const boxed = env.descs.recursiveBox(desc_mod.strDesc());
+    const record = env.descs.declaredRecord(&.{
+        .{ .name = null, .desc = byte, .is_padding = true },
+        .{ .name = &name_b, .desc = boxed, .is_padding = false },
+        .{ .name = &name_a, .desc = byte, .is_padding = false },
+        .{ .name = null, .desc = byte, .is_padding = true },
     });
-    const desc = compose.nominal(&env.cache, ops, record, &name_point, null, false);
+    const desc = env.descs.nominal(record, null, false);
     const allocations = env.allocations();
     const text = "a heap string moved into a recursive record field";
     const source = bigStr(text, ops);
@@ -1120,10 +983,12 @@ test "record construction and updates preserve boxed fields and initialize all p
     var actual: Slot = .{ .bytes = @splat(0xb6) };
     // Updating another field must share the existing box before releasing
     // the old record; changing the boxed field must move the new string.
-    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{&name_a}, &.{@ptrCast(&changed)}, ops);
+    // Memory slots: padding, `b`, `a`, padding.
+    const flag = desc_mod.update_value_flag;
+    compiled.updateRecord(desc, base.ptr(), desc, actual.ptr(), &.{ 0, 1, flag, 0 }, &.{@ptrCast(&changed)}, ops);
     const replacement = bigStr("a replacement heap string in the recursive record field", ops);
     var replaced: Slot = .{ .bytes = @splat(0xc7) };
-    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{&name_b}, &.{@ptrCast(&replacement)}, ops);
+    compiled.updateRecord(desc, actual.ptr(), desc, replaced.ptr(), &.{ 0, flag, 2, 0 }, &.{@ptrCast(&replacement)}, ops);
     const field_a = record.fieldBySemanticIndex(0);
     const field_b = record.fieldBySemanticIndex(1);
     var expected: Slot = .{ .bytes = @splat(0xc7) };
@@ -1138,8 +1003,8 @@ test "record construction and updates preserve boxed fields and initialize all p
 }
 
 test "frame runs place each local at its alignment and report the run end" {
-    const u8_desc = compose.scalarDesc(.u8);
-    const u64_desc = compose.scalarDesc(.u64);
+    const u8_desc = desc_mod.scalarDesc(.u8);
+    const u64_desc = desc_mod.scalarDesc(.u64);
     try testing.expectEqual(@as(usize, 3), exports.roc_desc_frame_run_size(u8_desc, 3, 0));
     // A u64 run after three bytes starts at the next multiple of eight.
     try testing.expectEqual(@as(usize, 24), exports.roc_desc_frame_run_size(u64_desc, 2, 3));
@@ -1154,4 +1019,34 @@ test "frame runs place each local at its alignment and report the run end" {
     try testing.expectEqual(@as(usize, 24), words_end);
     try testing.expectEqual(@as([*]u8, region[8..]), words[0]);
     try testing.expectEqual(@as([*]u8, region[16..]), words[1]);
+}
+
+/// How many times `needle` occurs in `haystack`.
+fn occurrences(haystack: []const u8, needle: []const u8) usize {
+    var count: usize = 0;
+    var start: usize = 0;
+    while (std.mem.indexOfPos(u8, haystack, start, needle)) |at| {
+        count += 1;
+        start = at + needle.len;
+    }
+    return count;
+}
+
+test "the runtime reads names only to print them" {
+    // Every operation on values reaches a field or variant by the position
+    // the compiler computed (`compiled.zig`, `exports.zig`); a name's text
+    // is read in one place, inspect's printing of a label (`walk.zig`).
+    for ([_][]const u8{ @embedFile("compiled.zig"), @embedFile("exports.zig") }) |source| {
+        for ([_][]const u8{ "desc_mod.Name;", "const Name)", "const Name,", ".name", ".text()", ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
+            try testing.expectEqual(@as(usize, 0), occurrences(source, forbidden));
+        }
+    }
+    const walk_source = @embedFile("walk.zig");
+    try testing.expectEqual(@as(usize, 1), occurrences(walk_source, ".text()"));
+    try testing.expectEqual(@as(usize, 1), occurrences(walk_source, ".label => |name| out.append(name.text(), ops)"));
+    for ([_][]const u8{ ".id[", "std.mem.eql(u8", "std.mem.order(u8" }) |forbidden| {
+        try testing.expectEqual(@as(usize, 0), occurrences(walk_source, forbidden));
+    }
+    // A name has no equality to compare by.
+    try testing.expect(!@hasDecl(Name, "eql"));
 }

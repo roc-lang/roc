@@ -2178,12 +2178,15 @@ pub fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         .switch_stmt => self.shapes.switch_stmt = true,
         .assign_struct => self.shapes.struct_build = true,
         .assign_tag => self.shapes.tag_build = true,
+        // A type table word is static data.
+        .dyn => |dyn| if (self.stmtRow(dyn.data) == .table_entry) {
+            self.shapes.static_literal = true;
+        },
         .init_uninitialized,
         .assign_ref,
         .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_list,
-        .dyn,
         .store_struct,
         .store_tag,
         .set_local,

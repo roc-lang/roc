@@ -25,6 +25,7 @@ const Body = @import("body.zig");
 const Codec = @import("codec.zig");
 const const_schema = @import("const_schema.zig");
 const StoredFn = @import("stored_fn.zig");
+const Tables = @import("tables.zig");
 const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
@@ -65,15 +66,12 @@ pub const Input = struct {
     /// parameter is a dictionary (`Program.runtimeDictionary`) and each
     /// instance-dependent literal is converted where it is.
     compile_time: bool = false,
-    /// The program evaluates roots holding function values: it notes where
-    /// each descriptor came from (`LIR.DynOp.desc_note`), and the lowering
-    /// keeps the program for reading those values (`Output.retained`).
+    /// The program evaluates roots holding function values: each type table
+    /// names itself (`StaticDescs.table_identities`), and the lowering keeps
+    /// the program for reading those values (`Output.retained`).
     stored_functions: bool = false,
     /// Only a demanded compiler-only unit has persistent capture/type metadata.
     function_unit: ?[32]u8 = null,
-    /// The consumer reads composition sites, so each composition statement
-    /// gets a slot (design.md "Runtime").
-    composition_sites: bool = true,
     /// What this lowering emits: one program, or one module's object.
     unit: Unit = .program,
 };
@@ -119,6 +117,9 @@ pub const ExportInterface = struct {
     rc_ret_unique_fields: u64 = 0,
     rc_ret_conditions: []const u32 = &.{},
     may_leave_pending: bool = false,
+    /// For a worker that takes a type table: its encoded needs list
+    /// (`StoredFn.encodeNeeds`), which an importer fills its tables from.
+    table_needs: []const u8 = &.{},
 };
 
 /// The export interfaces of every object a unit imports, by worker identity.
@@ -181,12 +182,14 @@ pub const ExportInterfaces = struct {
         defer self.mutex.unlock(self.io);
         var owned = interface;
         owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, interface.rc_ret_conditions);
+        owned.table_needs = try self.arena.allocator().dupe(u8, interface.table_needs);
         try self.map.put(self.allocator, identity, owned);
     }
 
-    /// Record the interface ARC solved for `proc` of `store`, under the
-    /// procedure's identity, and return it.
-    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId) Allocator.Error!ExportInterface {
+    /// Record the interface ARC solved for `proc` of `store`, with the
+    /// worker's encoded needs list `table_needs`, under the procedure's
+    /// identity, and return it.
+    pub fn putProc(self: *ExportInterfaces, store: *const lir_core.LirStore, proc: LIR.LirProcSpecId, table_needs: []const u8) Allocator.Error!ExportInterface {
         const spec = store.getProcSpec(proc);
         const words = store.getU32Span(spec.rc_ret_conditions);
         self.mutex.lockUncancelable(self.io);
@@ -202,6 +205,7 @@ pub const ExportInterfaces = struct {
             .rc_ret_unique_fields = spec.rc_ret_unique_fields,
             .rc_ret_conditions = conditions,
             .may_leave_pending = spec.may_leave_pending,
+            .table_needs = try self.arena.allocator().dupe(u8, table_needs),
         };
         try self.map.put(self.allocator, spec.identity, interface);
         return interface;
@@ -345,7 +349,7 @@ pub const Worker = struct {
     proc: LIR.LirProcSpecId,
     module: ModuleIndex,
     /// The checked scheme variables of the worker's scope, in hidden
-    /// descriptor parameter order. A template's sealed variables (design.md
+    /// descriptor order. A template's sealed variables (design.md
     /// "Sealed Result Rows") are omitted: they seal to the empty row.
     scheme_vars: []const checked.CheckedTypeId,
     /// For a template worker: its scheme's kind variables.
@@ -356,12 +360,10 @@ pub const Worker = struct {
     checked_slots: []const u32 = &.{},
     checked_scheme_count: u32 = 0,
     /// Evidence parameters that are runtime dictionaries, in hidden
-    /// dictionary parameter order (indices into the template's params).
+    /// dictionary order (indices into the template's params).
     dictionary_params: []const u32,
     params: []const TypeId,
     ret: TypeId,
-    /// Immutable descriptor requirements derived from the declared signature.
-    passed_descriptor_types: ?[]const TypeId = null,
     lowered: bool = false,
     /// Whether the worker's body is queued for lowering.
     queued: bool = false,
@@ -405,6 +407,9 @@ pub const Worker = struct {
     /// For a generalized local procedure: how many literal arguments of its
     /// own scope its argument record carries after its own dictionaries.
     own_literals: u32 = 0,
+    /// For a worker with inputs (`Program.inputCount`), once lowered or
+    /// imported: what each word of its type tables is (`tables.zig`).
+    needs: ?Tables.Needs = null,
 
     /// The bytes of the worker's procedure identity.
     pub fn identityBytes(self: Worker, program: *const Program) [32]u8 {
@@ -426,6 +431,21 @@ pub const Worker = struct {
         return count - self.own_literals;
     }
 };
+
+fn hashWord(hasher: *base.TypeDigestHasher, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hasher.update(&bytes);
+}
+
+/// Mix `bytes` into `hasher` after their length, so no two splits of a key
+/// into fields hash alike.
+fn hashLengthPrefixed(hasher: *base.TypeDigestHasher, bytes: []const u8) void {
+    var len: [8]u8 = undefined;
+    std.mem.writeInt(u64, &len, bytes.len, .little);
+    hasher.update(&len);
+    hasher.update(bytes);
+}
 
 /// The content identity of the template worker of module `link_name`'s
 /// template `template` (`Program.workerIdentity`), a function of the checked
@@ -578,6 +598,8 @@ pub const Program = struct {
     workers: std.ArrayList(Worker) = .empty,
     worker_ids: std.AutoHashMapUnmanaged(WorkerKey, WorkerId) = .empty,
     worklist: std.ArrayList(WorkerId) = .empty,
+    /// Each type's content digest (`typeContent`), once computed.
+    type_contents: collections.DenseMapUnmanaged(TypeId, [32]u8) = .empty,
     /// The Builtin module, found on first use (`builtinModule`).
     builtin_module: ?ModuleIndex = null,
     /// The program-local source file of each module, by module index.
@@ -615,7 +637,6 @@ pub const Program = struct {
     /// Imported code called only by symbol needs no local body lookup tables.
     body_indexed: []bool = &.{},
     /// Types explicitly named by emitted compile-time descriptor notes.
-    noted_types: collections.DenseMapUnmanaged(TypeId, void) = .{},
     /// The generalized-local scope a lambda or closure expression owns.
     local_scopes: std.AutoHashMapUnmanaged(ExprKey, checked.DispatchScopeId) = .empty,
     /// The lambda and closure expressions local procedures bind.
@@ -791,6 +812,141 @@ pub const Program = struct {
         return local.derived("boxy.unit", &self.modules.linkName(self.modules.views.items[0].index));
     }
 
+    /// The identity of `key`'s worker, of a kind the lowering that reaches it
+    /// defines rather than a module's object (an adapter, a structural
+    /// method or map, a crash dictionary, a literal thunk, a codec piece, or
+    /// a row conversion). In a module unit it is a digest of what the
+    /// worker's code is a function of: its role, its types by content, the
+    /// workers it calls by identity, and, for a kind a program has one of
+    /// per module, its module by link name. Every unit lowering the same
+    /// worker therefore defines one procedure, which a link keeps once. In a
+    /// program it is local to the program, as `raw` names it there.
+    /// `signature` is the worker's parameter and result types where its key
+    /// does not determine them (a codec piece's), and empty otherwise.
+    pub fn generatedWorkerIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, raw: u64, signature: []const TypeId) Allocator.Error!LIR.ProcIdentity {
+        const role: []const u8 = switch (key) {
+            .adapter => "boxy.adapter",
+            .structural => "boxy.structural",
+            .structural_map => "boxy.structural_map",
+            .crash_dictionary => "boxy.crash_dictionary",
+            .literal_thunk => "boxy.literal_thunk",
+            .codec => "boxy.codec",
+            .convert => "boxy.convert",
+            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => invariant("a worker a module's object defines has no generated identity"),
+        };
+        if (self.moduleUnit() == null) return LIR.ProcIdentity.programLocal(role, raw);
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.generated_worker.v1");
+        hashLengthPrefixed(&hasher, role);
+        switch (key) {
+            .adapter => |adapter| {
+                hasher.update(&self.worker(adapter.outer).identityBytes(self));
+                hasher.update(&try self.typeContent(adapter.from));
+                hasher.update(&try self.typeContent(adapter.to));
+            },
+            .structural => |method| hasher.update(&[_]u8{@backingInt(method)}),
+            .structural_map => |map| {
+                hashLengthPrefixed(&hasher, self.store.nameText(map.name));
+                hashWord(&hasher, map.payload_index);
+                hashWord(&hasher, map.arity);
+                hasher.update(&[_]u8{@intFromBool(map.effectful)});
+            },
+            .crash_dictionary => |kind| hasher.update(&[_]u8{@backingInt(kind)}),
+            .literal_thunk => |thunk| {
+                hasher.update(&self.worker(thunk.target).identityBytes(self));
+                hasher.update(&try self.typeContent(thunk.bound));
+                hashWord(&hasher, thunk.literal_requirement);
+            },
+            .codec => |index| {
+                // A piece belongs to its module's codec family.
+                hasher.update(&self.modules.linkName(module_index));
+                try Codec.hashPieceContent(self, &hasher, index);
+            },
+            .convert => |convert| {
+                hasher.update(&self.modules.linkName(convert.module));
+                hasher.update(&try self.typeContent(convert.from));
+                hasher.update(&try self.typeContent(convert.to));
+            },
+            .template, .lambda, .default, .method_entry, .root, .static_data, .root_slot => unreachable, // rejected above
+        }
+        try self.hashTypes(&hasher, signature);
+        return .{ .bytes = hasher.finalResult() };
+    }
+
+    /// The content digest of `ty`, the same in every lowering: its
+    /// structure, its labels by text, a nominal type by its declaration's
+    /// module link name and position, and a variable by its index.
+    pub fn typeContent(self: *Program, ty: TypeId) Allocator.Error![32]u8 {
+        if (self.type_contents.get(ty)) |known| return known;
+        const store = &self.store;
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.boxy.type_content.v1");
+        const node = store.get(ty);
+        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(node))});
+        switch (node) {
+            .primitive => |primitive| hasher.update(&[_]u8{@backingInt(primitive)}),
+            .empty_record => {},
+            .record => |record| {
+                const fields = store.fieldSpan(record.fields);
+                hashWord(&hasher, @intCast(fields.len));
+                for (fields) |field| {
+                    hashLengthPrefixed(&hasher, store.nameText(field.name));
+                    hasher.update(&try self.typeContent(field.ty));
+                    hasher.update(&[_]u8{@backingInt(field.kind)});
+                    hashWord(&hasher, field.slot_variable);
+                }
+                try self.hashOptionalType(&hasher, record.ext);
+                if (record.declared) |declared| {
+                    hasher.update(&[_]u8{1});
+                    try self.hashTypes(&hasher, store.span(declared.padding));
+                    const slots = store.declaredSlots(declared);
+                    hashWord(&hasher, @intCast(slots.len));
+                    for (slots) |slot| hashWord(&hasher, slot);
+                } else hasher.update(&[_]u8{0});
+            },
+            .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
+            .tag_union => |tag_union| {
+                const tags = store.tagSpan(tag_union.tags);
+                hashWord(&hasher, @intCast(tags.len));
+                for (tags) |tag| {
+                    hashLengthPrefixed(&hasher, store.nameText(tag.name));
+                    try self.hashTypes(&hasher, store.span(tag.payloads));
+                }
+                try self.hashOptionalType(&hasher, tag_union.ext);
+            },
+            .list, .box => |child| hasher.update(&try self.typeContent(child)),
+            .nominal => |nominal| {
+                hasher.update(&self.modules.linkName(nominal.decl.module));
+                hashWord(&hasher, @backingInt(nominal.decl.decl));
+                try self.hashTypes(&hasher, store.nominalArgs(nominal));
+                hashLengthPrefixed(&hasher, store.nameText(nominal.name));
+                hasher.update(&[_]u8{ @intFromBool(nominal.is_opaque), if (nominal.builtin) |builtin| @as(u8, @backingInt(builtin)) + 1 else 0, @intFromBool(nominal.has_backing) });
+            },
+            .function => |function| {
+                try self.hashTypes(&hasher, store.span(function.args));
+                hasher.update(&try self.typeContent(function.ret));
+                hasher.update(&[_]u8{@intFromBool(function.effectful)});
+            },
+            .variable => |index| hashWord(&hasher, index),
+        }
+        const digest = hasher.finalResult();
+        try self.type_contents.put(self.allocator, ty, digest);
+        return digest;
+    }
+
+    /// Mix the content digests of `tys` into `hasher`, after their count.
+    pub fn hashTypes(self: *Program, hasher: *base.TypeDigestHasher, tys: []const TypeId) Allocator.Error!void {
+        hashWord(hasher, @intCast(tys.len));
+        for (tys) |ty| hasher.update(&try self.typeContent(ty));
+    }
+
+    fn hashOptionalType(self: *Program, hasher: *base.TypeDigestHasher, ty: ?TypeId) Allocator.Error!void {
+        if (ty) |present| {
+            hasher.update(&[_]u8{1});
+            hasher.update(&try self.typeContent(present));
+        } else hasher.update(&[_]u8{0});
+    }
+
     /// The module unit this lowering emits, or null for a program.
     pub fn moduleUnit(self: *const Program) ?ModuleUnit {
         return switch (self.input.unit) {
@@ -836,36 +992,6 @@ pub const Program = struct {
         }, base.SourceLoc.none);
     }
 
-    /// The signature's dynamic descriptor graph, in breadth-first order.
-    /// Both defining and importing units derive it from checked types alone.
-    /// Passing its components also covers body uses of a nominal's backing
-    /// or a nested payload without asking an importer to inspect the body.
-    pub fn passedDescriptorTypes(self: *Program, allocator: Allocator, id: WorkerId) Allocator.Error![]TypeId {
-        if (self.worker(id).passed_descriptor_types) |cached| return allocator.dupe(TypeId, cached);
-        var result: std.ArrayList(TypeId) = .empty;
-        defer result.deinit(self.allocator);
-        var pending: std.ArrayList(TypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        var seen: collections.DenseMapUnmanaged(TypeId, void) = .empty;
-        defer seen.deinit(self.allocator);
-        const target = self.worker(id).*;
-        if (target.key == .template) {
-            try pending.appendSlice(self.allocator, target.params);
-            try pending.append(self.allocator, target.ret);
-            var index: usize = 0;
-            while (index < pending.items.len) : (index += 1) {
-                const ty = pending.items[index];
-                if ((try seen.getOrPut(self.allocator, ty)).found_existing) continue;
-                if (self.store.get(ty) == .variable or try self.converter().representationClosed(ty)) continue;
-                try result.append(self.allocator, ty);
-                try self.appendDescriptorComponents(ty, &pending, self.allocator);
-            }
-        }
-        const cached = try self.arena.allocator().dupe(TypeId, result.items);
-        self.worker(id).passed_descriptor_types = cached;
-        return allocator.dupe(TypeId, cached);
-    }
-
     /// The immediate types whose descriptors compose `ty`'s. This is the
     /// same graph for caller preparation and the body's composition walk.
     pub fn appendDescriptorComponents(self: *Program, ty: TypeId, out: *std.ArrayList(TypeId), allocator: Allocator) Allocator.Error!void {
@@ -890,7 +1016,7 @@ pub const Program = struct {
 
     /// Declare the signature of imported template worker `id`, exactly as
     /// its defining unit's body lowering declares it: explicit parameters,
-    /// then hidden descriptors and dictionaries, and a dynamic result slot
+    /// then its type table when it has inputs, and a dynamic result slot
     /// when the result is dynamic. A dynamic parameter's descriptor local
     /// is never read: the worker has no body here.
     fn declareImportedTemplateSignature(self: *Program, id: WorkerId) Allocator.Error!void {
@@ -907,13 +1033,7 @@ pub const Program = struct {
                 try args.append(self.allocator, try store.addLocal(.{ .layout_idx = dynamic_layout, .dyn = .{ .desc = desc, .storage = .param } }));
             }
         }
-        for (imported.scheme_vars) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
-        const erased = try self.result.layouts.insertErasedCallable();
-        for (imported.dictionary_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
-        for (0..imported.literal_params) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = erased }));
-        const passed_types = try self.passedDescriptorTypes(self.allocator, id);
-        defer self.allocator.free(passed_types);
-        for (passed_types) |_| try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
+        if (self.inputCount(id) != 0) try args.append(self.allocator, try store.addLocal(.{ .layout_idx = .opaque_ptr }));
         const proc = store.getProcSpecPtr(imported.proc);
         proc.args = try store.addLocalSpan(args.items);
         if (try self.converter().representationClosed(imported.ret)) {
@@ -938,6 +1058,7 @@ pub const Program = struct {
         self.workers.deinit(self.allocator);
         self.worker_ids.deinit(self.allocator);
         self.worklist.deinit(self.allocator);
+        self.type_contents.deinit(self.allocator);
         self.by_module_idx.deinit(self.allocator);
         self.exported_bindings.deinit(self.allocator);
         self.callable_eval_by_pattern.deinit(self.allocator);
@@ -949,7 +1070,6 @@ pub const Program = struct {
         self.wrapper_by_root.deinit(self.allocator);
         self.hosted.deinit(self.allocator);
         self.allocator.free(self.body_indexed);
-        self.noted_types.deinit(self.allocator);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
@@ -1026,31 +1146,32 @@ pub const Program = struct {
         const view = self.module(module_index);
         const template = view.view.checked_procedure_templates.templates.items[@backingInt(template_id)];
         const checked_scheme_vars = poolSlice(checked.CheckedTypeId, view.view.checked_procedure_templates.scheme_vars_pool, template.scheme_vars);
-        // A sealed variable (design.md "Sealed Result Rows") is no hidden
-        // parameter: it seals to the empty row wherever the body mentions it,
-        // and an evidence parameter dispatching on it is no dictionary.
+        // A sealed variable (design.md "Sealed Result Rows"), which checking
+        // records (`CheckedProcedureTemplate.sealed_slots`), is no hidden
+        // input: it seals to the empty row wherever the body mentions it, and
+        // an evidence parameter dispatching on it is no dictionary.
         var scheme_vars: std.ArrayList(checked.CheckedTypeId) = .empty;
         var checked_slots: std.ArrayList(u32) = .empty;
-        var sealed_slots: std.ArrayList(u32) = .empty;
-        defer sealed_slots.deinit(self.allocator);
-        const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
+        const templates = view.view.checked_procedure_templates;
+        const evidence_params = templates.templateEvidenceParams(&template);
+        const sealed_slots = templates.templateSealedSlots(&template);
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
-            // parameter either.
+            // input either, and no sealed one.
             if (self.converter().platformIdentity(module_index, variable) != null) continue;
-            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
-                try sealed_slots.append(self.allocator, @intCast(slot));
-                continue;
-            }
+            if (std.mem.findScalar(u32, sealed_slots, @intCast(slot)) != null) continue;
             try scheme_vars.append(self.arena.allocator(), variable);
             try checked_slots.append(self.arena.allocator(), @intCast(slot));
         }
-        const literal_requirements = view.view.checked_procedure_templates.templateLiteralRequirements(&template);
+        const literal_requirements = templates.templateLiteralRequirements(&template);
         var dictionary_params: std.ArrayList(u32) = .empty;
         for (evidence_params, 0..) |param, index| {
-            const sealed_dispatcher = if (param.slot) |slot| std.mem.findScalar(u32, sealed_slots.items, slot) != null else false;
+            const sealed_dispatcher = if (param.slot) |slot|
+                std.mem.findScalar(u32, sealed_slots, slot) != null and self.converter().platformIdentity(module_index, checked_scheme_vars[slot]) == null
+            else
+                false;
             if (sealed_dispatcher) continue;
             try dictionary_params.append(self.arena.allocator(), @intCast(index));
         }
@@ -2139,7 +2260,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = self.programLocalIdentity("boxy.adapter", @backingInt(id)),
+            .identity = try self.generatedWorkerIdentity(key, outer_worker.module, @backingInt(id), &.{}),
             .emission_unit = .isolated,
             .args = .empty(),
             .ret_layout = .zst,
@@ -2336,7 +2457,7 @@ pub const Program = struct {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const proc = try self.result.store.addProcSpec(.{
             .name = self.result.store.freshSyntheticSymbol(),
-            .identity = self.programLocalIdentity("boxy.convert", @backingInt(id)),
+            .identity = try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
             .emission_unit = LIR.EmissionUnit.module(@backingInt(module_index)),
             .args = .empty(),
             .ret_layout = .zst,
@@ -2380,7 +2501,14 @@ pub const Program = struct {
             try self.worker_ids.put(self.allocator, key, id);
             return id;
         }
-        return try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
+        const id = try self.addErasedWorkerWithIdentity(key, target_worker.module, target_worker.scheme_vars, target_worker.params, target_worker.ret, identity);
+        // The entry runs in its target's scopes, whose descriptors,
+        // dictionaries, and literal arguments it captures.
+        const entry = self.worker(id);
+        entry.dict_scopes = target_worker.dict_scopes;
+        entry.dict_scope_params = target_worker.dict_scope_params;
+        entry.literal_scopes = target_worker.literal_scopes;
+        return id;
     }
 
     /// The thunk of literal requirement `literal requirement` of the own scope of `target`
@@ -2451,7 +2579,13 @@ pub const Program = struct {
 
     fn addErasedWorker(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, role: []const u8) Allocator.Error!WorkerId {
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
-        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, self.programLocalIdentity(role, @backingInt(id)));
+        const identity = switch (key) {
+            // Only a compile-time program reads a root's slot.
+            .root_slot => self.programLocalIdentity(role, @backingInt(id)),
+            .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .codec, .convert => try self.generatedWorkerIdentity(key, module_index, @backingInt(id), &.{}),
+            .template, .lambda, .default, .method_entry, .root, .static_data => invariant("a worker a module's object defines is no generated erased worker"),
+        };
+        return try self.addErasedWorkerWithIdentity(key, module_index, scheme_vars, params, ret, identity);
     }
 
     fn addErasedWorkerWithIdentity(self: *Program, key: WorkerKey, module_index: ModuleIndex, scheme_vars: []const checked.CheckedTypeId, params: []const TypeId, ret: TypeId, identity: LIR.ProcIdentity) Allocator.Error!WorkerId {
@@ -2590,14 +2724,316 @@ pub const Program = struct {
         return try self.templateWorker(view.index, ref.template);
     }
 
+    /// Where two types of one value differ: nowhere; only in the tags of
+    /// rows, one widening the other along the coercion's reach (design.md
+    /// "Sealed Result Rows"); in the memory order of a record, one being the
+    /// record a padded nominal lifts it into (design.md "Nominal Record Field
+    /// Order"); or inside the function type the value has.
+    pub const StorageDifference = enum { none, rows, record_order, function };
+
+    /// A function value inside data is outside every row widening's reach
+    /// (design.md "Row Coercion Primitive"), so both types of the value store
+    /// such a function's signature alike.
+    const nested_function_storage = "two types of one value store the signature of a function value inside data differently";
+
+    pub fn storageDifference(self: *Program, from_root: TypeId, to_root: TypeId) Allocator.Error!StorageDifference {
+        if (from_root == to_root) return .none;
+        const store = &self.store;
+        // Where a pair sits: in data, in the signature of the root function
+        // or of a function its signature passes (each adapted by its own
+        // adapter), in data such a signature passes, or in a function type
+        // inside data.
+        const Place = enum { data, root_function, signature_data, nested_function };
+        const Pair = struct { from: TypeId, to: TypeId, place: Place };
+        var pending: std.ArrayList(Pair) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ .from = from_root, .to = to_root, .place = .data });
+        var result: StorageDifference = .none;
+        while (pending.pop()) |pair| {
+            if (pair.from == pair.to) continue;
+            const from = store.get(pair.from);
+            const to = store.get(pair.to);
+            if ((from == .variable) != (to == .variable)) {
+                // A value whose type a variable of the body leaves open, flowing
+                // into a tag row or out of one (a `?` return's error into the
+                // function's composed row): the variable's tags are known
+                // only at run time, so the value is re-tagged by name under
+                // the destination's descriptor. Elsewhere a variable has the
+                // one representation every type has.
+                if (pair.place == .data and try self.isTagRow(if (from == .variable) pair.to else pair.from)) {
+                    if (result == .none) result = .rows;
+                }
+                continue;
+            }
+            if (from == .variable) continue;
+            if (std.meta.activeTag(from) != std.meta.activeTag(to)) {
+                // A nominal shares its backing's representation.
+                if (from == .nominal and from.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ .from = try self.converter().backing(pair.from), .to = pair.to, .place = pair.place });
+                } else if (to == .nominal and to.nominal.has_backing) {
+                    try pending.append(self.allocator, .{ .from = pair.from, .to = try self.converter().backing(pair.to), .place = pair.place });
+                } else if (paddedAgainstEmpty(from, to)) {
+                    switch (pair.place) {
+                        .data => result = .record_order,
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant(nested_function_storage),
+                    }
+                }
+                continue;
+            }
+            // The place of a component of a non-function type.
+            const inner: Place = if (pair.place == .root_function) .signature_data else pair.place;
+            switch (from) {
+                .record => |record| {
+                    if (!store.sameRecordOrder(record, to.record)) switch (pair.place) {
+                        .data => result = .record_order,
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant(nested_function_storage),
+                    };
+                    for (store.fieldSpan(to.record.fields)) |to_field| {
+                        for (store.fieldSpan(record.fields)) |from_field| {
+                            if (from_field.name != to_field.name) continue;
+                            if (from_field.kind != to_field.kind or from_field.slot_variable != to_field.slot_variable) {
+                                invariant("two types of one value store a record field differently, though a field has one storage at an instantiation");
+                            }
+                            try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
+                        }
+                    }
+                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
+                },
+                .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
+                .tag_union => |tag_union| {
+                    // A row the destination widens holds its tags under
+                    // other discriminants: the value is converted.
+                    if (tag_union.tags.len != to.tag_union.tags.len or (tag_union.ext == null) != (to.tag_union.ext == null)) switch (pair.place) {
+                        .data => if (result == .none) {
+                            result = .rows;
+                        },
+                        .root_function, .signature_data => return .function,
+                        .nested_function => invariant(nested_function_storage),
+                    };
+                    for (store.tagSpan(to.tag_union.tags)) |to_tag| {
+                        for (store.tagSpan(tag_union.tags)) |from_tag| {
+                            if (from_tag.name != to_tag.name or from_tag.payloads.len != to_tag.payloads.len) continue;
+                            for (store.span(from_tag.payloads), store.span(to_tag.payloads)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner });
+                        }
+                    }
+                    if (tag_union.ext != null and to.tag_union.ext != null) try pending.append(self.allocator, .{ .from = tag_union.ext.?, .to = to.tag_union.ext.?, .place = inner });
+                },
+                .list => |elem| try pending.append(self.allocator, .{ .from = elem, .to = to.list, .place = inner }),
+                .box => |payload| try pending.append(self.allocator, .{ .from = payload, .to = to.box, .place = inner }),
+                .nominal => |nominal| for (store.nominalArgs(nominal), store.nominalArgs(to.nominal)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
+                .function => |function| {
+                    const place: Place = switch (pair.place) {
+                        .data => if (pair.from == from_root) .root_function else .nested_function,
+                        .root_function => .root_function,
+                        .signature_data, .nested_function => .nested_function,
+                    };
+                    for (store.span(function.args), store.span(to.function.args)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = place });
+                    try pending.append(self.allocator, .{ .from = function.ret, .to = to.function.ret, .place = place });
+                },
+                .primitive, .empty_record, .variable => {},
+            }
+        }
+        return result;
+    }
+
+    /// Whether one of two nodes is the backing of a padded nominal of no named
+    /// fields and the other the empty record, which has no storage.
+    pub fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
+        return a == .empty_record and b == .record and b.record.declared != null or
+            b == .empty_record and a == .record and a.record.declared != null;
+    }
+
+    /// Whether `ty` is a tag union, through the backing of a nominal.
+    fn isTagRow(self: *Program, ty: TypeId) Allocator.Error!bool {
+        return switch (self.store.get(ty)) {
+            .tag_union => true,
+            .nominal => |nominal| nominal.has_backing and try self.isTagRow(try self.converter().backing(ty)),
+            .primitive, .empty_record, .record, .tuple, .list, .box, .function, .variable => false,
+        };
+    }
+
+    /// Lower every queued worker, and fill every reserved type table, each
+    /// once its worker's needs are known; filling a table reserves the
+    /// tables its words name, so the two alternate until neither has work.
     fn drain(self: *Program) Allocator.Error!void {
-        while (self.worklist.pop()) |id| {
-            if (self.worker(id).lowered) continue;
-            self.worker(id).lowered = true;
-            try Body.lowerWorker(self, id);
+        while (true) {
+            while (self.worklist.pop()) |id| {
+                if (self.worker(id).lowered) continue;
+                self.worker(id).lowered = true;
+                try Body.lowerWorker(self, id);
+            }
+            const unfilled = self.static_descs.nextUnfilledTable() orelse return;
+            try self.fillTable(unfilled);
         }
     }
+
+    /// Fill the reserved table `unfilled`: its worker's inputs, then each
+    /// slot's recipe evaluated at them.
+    fn fillTable(self: *Program, unfilled: StaticDescs.UnfilledTable) Allocator.Error!void {
+        // Tables are filled once the worklist is empty, so every worker
+        // something called is lowered or imported.
+        const target = self.worker(unfilled.worker);
+        if (!target.lowered) invariant("a type table names a worker nothing lowers");
+        // Another object's worker is filled from the needs its object
+        // exports.
+        if (target.imported and target.needs == null) {
+            const unit = self.moduleUnit() orelse invariant("an imported worker outside a module unit");
+            const interface = unit.imports.get(self.result.store.getProcSpec(target.proc).identity) orelse
+                invariant("a type table names a worker of an imported module whose object exports no such worker");
+            if (interface.table_needs.len == 0) invariant("an imported worker with inputs exports no needs");
+            const decoded = try StoredFn.decodeNeeds(self, interface.table_needs);
+            self.worker(unfilled.worker).needs = decoded;
+        }
+        const needs = self.worker(unfilled.worker).needs orelse invariant("a type table names a worker without needs");
+        if (unfilled.inputs.len != needs.input_count) invariant("a type table's inputs differ from its worker's");
+        const words = try self.allocator.alloc(StaticDescs.CaptureWord, needs.wordCount());
+        defer self.allocator.free(words);
+        @memcpy(words[0..needs.input_count], unfilled.inputs);
+        var evaluation = Tables.Evaluation.init(self, .{ .needs = &needs }, unfilled.inputs, needs.desc_count);
+        defer evaluation.deinit();
+        for (words[needs.input_count..], needs.slots) |*slot_word, recipe| slot_word.* = try evaluation.word(recipe);
+        try self.static_descs.fillTable(unfilled, words);
+    }
+
+    /// How many input words lead worker `id`'s tables: its variables'
+    /// descriptors, its dictionaries, then its literal arguments, the hidden
+    /// words its callers supply. A worker with inputs takes the address of
+    /// its type table as its one hidden argument (`tables.zig`).
+    pub fn inputCount(self: *Program, id: WorkerId) u32 {
+        const target = self.worker(id).*;
+        return switch (target.key) {
+            .template => @intCast(target.scheme_vars.len + target.dictionary_params.len + target.literal_params),
+            .lambda => blk: {
+                var count: u32 = @intCast(target.scheme_vars.len);
+                for (target.dict_scopes) |scope| count += @intCast(scope.len);
+                for (target.literal_scopes) |scope| count += @intCast(scope.len);
+                break :blk count;
+            },
+            .adapter, .codec => @intCast(target.scheme_vars.len),
+            .method_entry => |entry_target| self.inputCount(entry_target),
+            .structural, .structural_map => target.structural_descs,
+            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert => 0,
+        };
+    }
+
+    /// Whether worker `id` is a generalized local procedure whose calls
+    /// pass its own scheme's instantiation, and with it its type table, in
+    /// its argument record; its function value captures no table.
+    pub fn perCall(self: *Program, id: WorkerId) bool {
+        const target = self.worker(id).*;
+        return target.key == .lambda and target.own_descs + target.own_dicts + target.own_literals != 0;
+    }
+
+    /// How many of worker `id`'s inputs are its variables' descriptors.
+    pub fn descCount(self: *Program, id: WorkerId) u32 {
+        const target = self.worker(id).*;
+        return switch (target.key) {
+            .template, .lambda, .adapter, .codec => @intCast(target.scheme_vars.len),
+            .method_entry => |entry_target| self.descCount(entry_target),
+            .structural, .structural_map => target.structural_descs,
+            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert => 0,
+        };
+    }
 };
+
+/// Record the readable name of every worker of `program` under its
+/// procedure's symbol, for the perf map (`base.dev_diagnostics.perf_map`).
+fn recordPerfNames(program: *Program) Allocator.Error!void {
+    var arena = std.heap.ArenaAllocator.init(program.allocator);
+    defer arena.deinit();
+    const names = try arena.allocator().alloc(?[]const u8, program.workers.items.len);
+    @memset(names, null);
+    var symbol: [LIR.ProcIdentity.symbol_name_len]u8 = undefined;
+    for (program.workers.items, 0..) |worker, index| {
+        const name = try perfNameOf(program, arena.allocator(), names, @fromBackingInt(@intCast(index)));
+        const identity = program.result.store.getProcSpec(worker.proc).identity;
+        base.dev_diagnostics.notePerfName(identity.writeSymbolName(&symbol), name);
+    }
+}
+
+/// The readable name of worker `id`: a template's `<Module>.<def>`, and
+/// every other worker named by what it is and, where it has one, the
+/// worker it belongs to (`perfNameLabel`). `names` memoizes each worker's.
+fn perfNameOf(program: *Program, a: Allocator, names: []?[]const u8, id: WorkerId) Allocator.Error![]const u8 {
+    if (names[@backingInt(id)]) |known| return known;
+    const worker = program.worker(id).*;
+    const view = program.module(worker.module);
+    const module_name = view.nameStore().moduleNameText(view.view.module_identity.module_name);
+    const label: PerfNameLabel = switch (worker.key) {
+        .template => |key| blk: {
+            const template = view.view.checked_procedure_templates.templates.items[@backingInt(key.template)];
+            const name_store = view.nameStore();
+            break :blk if (name_store.procBase(template.proc_base).export_name) |export_name|
+                .{ .module = moduleUnlessPrefixed(module_name, name_store.exportNameText(export_name)), .text = name_store.exportNameText(export_name) }
+            else
+                .{ .module = module_name, .text = "template", .number = @backingInt(key.template) };
+        },
+        .lambda => |key| .{ .owner = try perfNameOf(program, a, names, key.outer), .text = "lambda@", .number = @backingInt(key.expr) },
+        .method_entry => |target| .{ .owner = try perfNameOf(program, a, names, target), .text = "entry" },
+        .default => |key| .{ .module = module_name, .text = "default@", .number = @backingInt(key.expr) },
+        .adapter => |key| .{ .owner = try perfNameOf(program, a, names, key.outer), .text = "adapter" },
+        .literal_thunk => |key| .{ .owner = try perfNameOf(program, a, names, key.target), .text = "literal_thunk", .number = key.literal_requirement },
+        .structural => |method| .{ .text = "structural.", .suffix = @tagName(method) },
+        .structural_map => |map| .{ .text = "structural_map.", .suffix = program.store.nameText(map.name) },
+        .crash_dictionary => |kind| .{ .text = "crash_dictionary.", .suffix = @tagName(kind) },
+        .codec => |index| .{ .module = module_name, .text = "codec.", .suffix = @tagName(program.codec.pieces.items[index].kind) },
+        .convert => .{ .module = module_name, .text = "convert" },
+        .root => |index| .{ .text = "root", .number = index },
+        .static_data => |index| .{ .text = "static_data", .number = index },
+        .root_slot => |key| .{ .module = module_name, .text = "root_slot", .number = @backingInt(key.root) },
+    };
+    const name = try perfNameLabel(a, label);
+    names[@backingInt(id)] = name;
+    return name;
+}
+
+/// The parts of a worker's readable name: `<owner or module>.<text><suffix
+/// or number>`, the owner or module omitted where a worker has neither.
+const PerfNameLabel = struct {
+    owner: ?[]const u8 = null,
+    module: ?[]const u8 = null,
+    text: []const u8,
+    suffix: []const u8 = "",
+    number: ?u32 = null,
+};
+
+/// `module`, to prefix the export name `text` with, or null when `text`
+/// already begins with `<module>.`.
+fn moduleUnlessPrefixed(module: []const u8, text: []const u8) ?[]const u8 {
+    const prefixed = text.len > module.len and std.mem.startsWith(u8, text, module) and text[module.len] == '.';
+    return if (prefixed) null else module;
+}
+
+fn perfNameLabel(a: Allocator, label: PerfNameLabel) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    if (label.owner orelse label.module) |prefix| {
+        try out.appendSlice(a, prefix);
+        try out.append(a, '.');
+    }
+    try out.appendSlice(a, label.text);
+    try out.appendSlice(a, label.suffix);
+    if (label.number) |number| try out.print(a, "{d}", .{number});
+    return out.items;
+}
+
+test "a worker's readable name is its owner or module, then what it is" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try std.testing.expectEqualStrings("Pdf.render", try perfNameLabel(a, .{ .module = "Pdf", .text = "render" }));
+    try std.testing.expectEqualStrings("Pdf.render.lambda@42", try perfNameLabel(a, .{ .owner = "Pdf.render", .text = "lambda@", .number = 42 }));
+    try std.testing.expectEqualStrings("Pdf.render.entry", try perfNameLabel(a, .{ .owner = "Pdf.render", .text = "entry" }));
+    try std.testing.expectEqualStrings("structural.is_eq", try perfNameLabel(a, .{ .text = "structural.", .suffix = "is_eq" }));
+    try std.testing.expectEqualStrings("Pdf.codec.record_body", try perfNameLabel(a, .{ .module = "Pdf", .text = "codec.", .suffix = "record_body" }));
+}
+
+test "an export name that already begins with its module is not prefixed again" {
+    try std.testing.expect(moduleUnlessPrefixed("Builtin", "Builtin.Num.U8.plus") == null);
+    try std.testing.expectEqualStrings("Pdf", moduleUnlessPrefixed("Pdf", "render").?);
+    try std.testing.expectEqualStrings("Pdf", moduleUnlessPrefixed("Pdf", "Pdfs.render").?);
+}
 
 /// The items of `pool` that `span` names.
 pub fn poolSlice(comptime T: type, pool: []const T, span: anytype) []const T {
@@ -2644,6 +3080,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         .layouts = &program.result.layouts,
     };
     program.static_descs = StaticDescs.init(allocator, &program.store, &program.layouts, &program.result, input.target_usize);
+    program.static_descs.table_identities = input.stored_functions;
+    program.static_descs.table_owner = input.function_unit orelse @splat(0);
 
     _ = try program.modules.add(checked.importedView(input.modules.root.module));
     for (input.modules.imports) |view| _ = try program.modules.add(view);
@@ -2672,7 +3110,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     // workers other objects reach by symbol (design.md "Per-Module Output").
     // A compile-time program's unit lowers only what its roots reach: nothing
     // links against it.
-    if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
+    if (program.moduleUnit() != null) try seedUnitWorkers(program);
 
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
@@ -2752,6 +3190,21 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
             });
         }
     }
+
+    if (program.moduleUnit() != null) {
+        for (program.workers.items) |worker| {
+            if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
+            // An importer fills the worker's tables from its needs.
+            if (worker.needs) |needs| {
+                const result_allocator = program.result.store.allocator;
+                const bytes = try StoredFn.encodeNeeds(result_allocator, program, needs);
+                errdefer result_allocator.free(bytes);
+                try program.result.boxy_table_needs.put(result_allocator, program.result.store.getProcSpec(worker.proc).identity, bytes);
+            }
+        }
+    }
+
+    if (base.dev_diagnostics.isSet(.perf_map)) try recordPerfNames(program);
 
     if (input.proc_debug_names) {
         for (program.workers.items) |worker| {
@@ -3056,3 +3509,59 @@ const HostBoundaryGraph = struct {
         try out.append(program.allocator, .{ .node = ret, .position = @intCast(args.len), .layout = try program.layouts.layoutOf(ret) });
     }
 };
+
+test "a generated worker's identity is its content, whatever lowering reaches it" {
+    const allocator = std.testing.allocator;
+    const unit: Unit = .{ .module = .{ .imports = undefined, .root = false, .names = undefined } };
+    var identities: [2][4]LIR.ProcIdentity = undefined;
+    var record_ids: [2]TypeId = undefined;
+    for (0..2) |round| {
+        // An identity reads the program's input, store, result and workers;
+        // every other field stays unread.
+        var program: Program = undefined;
+        program.allocator = allocator;
+        program.input = .{ .modules = undefined, .roots = undefined, .target_usize = .u64, .unit = unit };
+        program.store = types.Store.init(allocator);
+        defer program.store.deinit();
+        program.result = try LirProgram.Result.init(allocator, .u64);
+        defer program.result.deinit();
+        program.workers = .empty;
+        defer program.workers.deinit(allocator);
+        program.type_contents = .empty;
+        defer program.type_contents.deinit(allocator);
+        const store = &program.store;
+        const number = try store.primitive(.u64);
+        // The second lowering interns another type first, so the same
+        // types get other ids there.
+        if (round == 1) _ = try store.intern(.{ .tuple = &.{ number, number } });
+        const name_x = try store.internName("x");
+        const record = try store.intern(.{ .record = .{ .fields = &.{.{ .name = name_x, .ty = number, .kind = .inline_slot }}, .ext = null } });
+        record_ids[round] = record;
+        const function = try store.intern(.{ .function = .{ .args = &.{record}, .ret = number, .effectful = false } });
+        // The adapter's and literal thunk's target, a template every unit
+        // names alike.
+        const ret = try program.result.store.addCFStmt(.{ .ret = .{ .value = try program.result.store.addLocal(.{ .layout_idx = .u8 }) } }, .test_fixture);
+        const proc = try program.result.store.addProcSpec(.{ .name = .fromRaw(0), .identity = LIR.ProcIdentity.forTest(7), .args = .empty(), .body = ret, .ret_layout = .u8 }, .none);
+        var target: Worker = undefined;
+        target.proc = proc;
+        try program.workers.append(allocator, target);
+        const target_id: WorkerId = @fromBackingInt(0);
+        const module_index: ModuleIndex = @fromBackingInt(0);
+        identities[round] = .{
+            try program.generatedWorkerIdentity(.{ .structural = .is_eq }, module_index, round, &.{}),
+            try program.generatedWorkerIdentity(.{ .structural = .to_hash }, module_index, round + 1, &.{}),
+            try program.generatedWorkerIdentity(.{ .adapter = .{ .outer = target_id, .from = function, .to = function } }, module_index, round + 2, &.{}),
+            try program.generatedWorkerIdentity(.{ .literal_thunk = .{ .target = target_id, .bound = record, .literal_requirement = 1 } }, module_index, round + 3, &.{}),
+        };
+        // A program's own worker is local to the program.
+        program.input.unit = .program;
+        const local = try program.generatedWorkerIdentity(.{ .structural = .is_eq }, module_index, round, &.{});
+        try std.testing.expect(!std.meta.eql(identities[round][0], local));
+    }
+    try std.testing.expect(record_ids[0] != record_ids[1]);
+    for (identities[0], identities[1]) |first, second| try std.testing.expectEqual(first, second);
+    // Workers of different content have different identities.
+    for (identities[0], 0..) |identity, index| {
+        for (identities[0][index + 1 ..]) |other| try std.testing.expect(!std.meta.eql(identity, other));
+    }
+}

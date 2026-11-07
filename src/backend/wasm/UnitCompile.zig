@@ -142,7 +142,7 @@ fn contentNamedStaticData(gpa: Allocator, arena: Allocator, static_data: []const
     var defined: std.StringHashMapUnmanaged(void) = .empty;
     for (static_data) |data_export| {
         const content_name = names.of(data_export.symbol_name);
-        const shared = data_export.value_id == null and !data_export.is_mutable and !data_export.is_exported and content_name.ptr != data_export.symbol_name.ptr;
+        const shared = data_export.value_id == null and !data_export.is_exported and content_name.ptr != data_export.symbol_name.ptr;
         if (shared and (try defined.getOrPut(arena, content_name)).found_existing) continue;
         const relocations = try arena.alloc(@import("../dev/StaticDataExport.zig").StaticDataRelocation, data_export.relocations.len);
         for (data_export.relocations, relocations) |relocation, *out| {

@@ -37,11 +37,8 @@ pub const StaticDataExport = struct {
     /// Named by the digest of its content and defined weak: every unit of a
     /// program that carries this constant defines the same symbol, and a
     /// link keeps one definition for all of them. Never set with
-    /// `is_exported`, and never set on a mutable constant.
+    /// `is_exported`.
     content_named: bool = false,
-    /// Zero-initialized program-owned state, never pooled or named by content.
-    /// Its producer supplies a stable site identity in `symbol_name`.
-    is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
 };
@@ -429,6 +426,10 @@ pub const Result = struct {
     /// (`LIR.LirProcSpec.exported`), roots of reachability and ARC beside
     /// `root_procs` (design.md "Per-Module Output").
     exported_procs: std.ArrayList(LIR.LirProcSpecId) = .empty,
+    /// The encoded needs list of each exported `.boxy` worker that takes a
+    /// type table, by its procedure's identity: what an importer fills the
+    /// worker's tables from (`postcheck.Boxy.Tables`).
+    boxy_table_needs: std.AutoHashMapUnmanaged(LIR.ProcIdentity, []const u8) = .empty,
     root_metadata: std.ArrayList(root.RootMetadata) = .empty,
     requested_layouts: std.ArrayList(RequestedLayout) = .empty,
     const_types: const_store.ConstTypeStore,
@@ -486,6 +487,9 @@ pub const Result = struct {
         self.root_metadata.deinit(allocator);
         self.root_procs.deinit(allocator);
         self.exported_procs.deinit(allocator);
+        var needs = self.boxy_table_needs.valueIterator();
+        while (needs.next()) |bytes| allocator.free(bytes.*);
+        self.boxy_table_needs.deinit(allocator);
         self.layouts.deinit();
         self.store.deinit();
     }
