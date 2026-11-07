@@ -8152,6 +8152,68 @@ test "a candidate read carried into a callee's unchecked in-place write takes it
     try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
 }
 
+test "a candidate record passed to a callee that checks one of its fields takes its fresh form" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    // reverser(r) = list_reverse(r.1): the read is the record's last
+    // observation of that field, so it carries the field's unit and the
+    // reverser's fresh demand names the field's place.
+    const record = try f.local(f.pair);
+    const second = try f.local(f.list);
+    const reversed = try f.local(f.list);
+    const check = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = reversed,
+        .op = .list_reverse,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
+        .args = try f.store.addLocalSpan(&.{second}),
+        .next = try f.ret(reversed),
+    } }, .test_fixture);
+    const read_field = try f.store.addCFStmt(.{ .assign_ref = .{ .target = second, .op = .field(record, 1), .next = check } }, .test_fixture);
+    const reverser = try f.proc(&.{record}, read_field, f.list);
+    // reader(r) = r.1: nothing writes the field.
+    const read_record = try f.local(f.pair);
+    const read_second = try f.local(f.list);
+    const reader = try f.proc(&.{read_record}, try f.store.addCFStmt(.{ .assign_ref = .{ .target = read_second, .op = .field(read_record, 1), .next = try f.ret(read_second) } }, .test_fixture), f.list);
+    const fresh_form = try f.proc(&.{}, null, f.pair);
+    const static_pair = try f.staticData(fresh_form, f.pair);
+    const readOf = struct {
+        fn stmt(fixture: anytype, target: LIR.LocalId, id: LIR.StaticDataId, form: LIR.LirProcSpecId, next: LIR.CFStmtId) SolveError!LIR.CFStmtId {
+            return fixture.store.addCFStmt(.{ .assign_literal = .{
+                .target = target,
+                .value = .{ .static_data = .{
+                    .id = id,
+                    .copies = try fixture.store.addOptionalStmtRow(LIR.LiteralExtra, .{ .fresh_alternative = form }),
+                } },
+                .next = next,
+            } }, .test_fixture);
+        }
+    }.stmt;
+    const written = try f.local(f.pair);
+    const written_result = try f.local(f.list);
+    const read = try readOf(&f, written, static_pair, fresh_form, try f.call(written_result, reverser, &.{written}, try f.ret(written_result)));
+    _ = try f.proc(&.{}, read, f.list);
+    const idle = try f.local(f.pair);
+    const idle_result = try f.local(f.list);
+    const idle_read = try readOf(&f, idle, static_pair, fresh_form, try f.call(idle_result, reader, &.{idle}, try f.ret(idle_result)));
+    _ = try f.proc(&.{}, idle_read, f.list);
+
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
+    defer solution.deinit();
+    try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
+    try std.testing.expect(solution.fresh_demands.demands(@backingInt(reverser), 0, &.{arc_fresh.fieldStep(1)}));
+    try std.testing.expectEqual(@as(usize, 0), solution.fresh_demands.of(@backingInt(reader)).len);
+    try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
+    try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
+    try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
+}
+
 test "a read's possible fresh form joins every read of that form in host visibility" {
     const allocator = std.testing.allocator;
     var f = try UniquenessTest.init();
