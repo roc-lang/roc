@@ -35487,6 +35487,23 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     root_requests.* = .{};
     std.debug.assert(analyses[0].root_requests.acquire(std.testing.io) == .claimed);
     analyses[0].root_requests.publish(std.testing.io, root_requests);
+    // The owner's checked tables are empty.
+    const tables = try gpa.create(CheckedTables);
+    tables.* = .{
+        .method_registry = .{},
+        .static_dispatch_plans = .{},
+        .resolved_value_refs = .{},
+        .checked_procedure_templates = .{},
+        .entry_wrappers = .{},
+        .top_level_procedure_bindings = .{},
+        .callable_eval_templates = .{},
+        .compile_time_roots = .{},
+        .top_level_values = .{},
+        .hoisted_constants = .{},
+        .const_templates = .{},
+    };
+    std.debug.assert(analyses[0].checked_tables.acquire(std.testing.io) == .claimed);
+    analyses[0].checked_tables.publish(std.testing.io, tables);
     // The owner exports nothing.
     const export_rows = try gpa.create(ExportRows);
     export_rows.* = .{};
@@ -35954,8 +35971,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xBF, 0xD4, 0xC9, 0x0A, 0xE2, 0x30, 0x22, 0x65, 0xE0, 0xDF, 0x4F, 0x26, 0x61, 0x73, 0x87, 0x20,
-        0xA2, 0x78, 0xD0, 0x8B, 0xC6, 0xB1, 0x1C, 0x0A, 0xD9, 0xAB, 0x28, 0x76, 0x54, 0xBB, 0x8C, 0x33,
+        0x34, 0xB2, 0xC9, 0x7E, 0x1B, 0x09, 0x87, 0x23, 0x8C, 0xF9, 0xD6, 0x63, 0xCF, 0xE2, 0x30, 0xE4,
+        0xA1, 0x57, 0x68, 0xE1, 0x8C, 0xED, 0x1A, 0x8C, 0x7E, 0x0E, 0x10, 0xC7, 0x73, 0xAD, 0x3F, 0x73,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
