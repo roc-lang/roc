@@ -7996,8 +7996,8 @@ pub const CheckedTypeKeys = struct {
 
 /// The key slots of one store's synthesized types. Each synthesized root
 /// owns a write-once key slot claimed by the first consumer that needs the
-/// root's key; computations share one key writer, held only while a
-/// claimant computes. The store appends a slot for every root it appends,
+/// root's key, with a key writer it borrows from the store's keys, so
+/// claimants on different threads compute at once. The store appends a slot for every root it appends,
 /// which happens only while the store is built, before any other thread
 /// reads it. Keys are never serialized: a store loaded from a cache entry
 /// starts with every slot empty.
@@ -8020,8 +8020,14 @@ pub const SynthesizedTypeKeys = struct {
     index: KeyIndex = .empty,
     indexed: std.atomic.Value(usize) = .init(0),
     index_mutex: std.Io.Mutex = .init,
-    writer_mutex: std.Io.Mutex = .init,
-    writer: ?CheckedTypeKeyDigester = null,
+    /// The key writers no claimant has borrowed, with capacity for every
+    /// writer the store's keys have, and how many they have. Claimants on
+    /// different threads compute with writers of their own.
+    idle_writers: std.ArrayListUnmanaged(*CheckedTypeKeyDigester) = .empty,
+    writer_count: usize = 0,
+    /// Guards `idle_writers` and `writer_count`; held around a borrow's or a
+    /// return's list update only.
+    writers_mutex: std.Io.Mutex = .init,
 
     const KeySlot = collections.OnceSlot(canonical_type_keys.TypeKeyInfo, .synthesized_type_key);
     const KeyIndex = std.AutoHashMapUnmanaged([32]u8, CheckedTypeId);
@@ -8039,7 +8045,12 @@ pub const SynthesizedTypeKeys = struct {
     pub fn destroy(self: *SynthesizedTypeKeys) void {
         const allocator = self.allocator;
         self.index.deinit(allocator);
-        if (self.writer) |*writer| writer.deinit();
+        std.debug.assert(self.idle_writers.items.len == self.writer_count);
+        for (self.idle_writers.items) |writer| {
+            writer.deinit();
+            allocator.destroy(writer);
+        }
+        self.idle_writers.deinit(allocator);
         self.slots.deinit(allocator);
         self.identity.deinit(allocator);
         self.canonical.deinit(allocator);
@@ -8099,8 +8110,7 @@ pub const SynthesizedTypeKeys = struct {
             const view = request.view;
             const names = view.names orelse checkedModuleInvariant("a synthesized checked type key was requested from a view without its name store", .{});
             // A synthesized function's source children are keyed through
-            // their own slots before the writer is taken, so the writer is
-            // never held while waiting on a slot.
+            // their own slots first.
             if (view.rootRows()[type_ids.synthesizedIndex(request.root)].recipe == .synthetic_function) {
                 const function = syntheticFunctionPayload(view, request.root);
                 for (function.args) |arg| if (!type_ids.isSynthesized(arg)) {
@@ -8108,38 +8118,62 @@ pub const SynthesizedTypeKeys = struct {
                 };
                 if (!type_ids.isSynthesized(function.ret)) _ = try view.rootInfo(function.ret);
             }
-            keys.writer_mutex.lockUncancelable(keys.io);
-            defer keys.writer_mutex.unlock(keys.io);
-            if (keys.writer == null) keys.writer = CheckedTypeKeyDigester.init(keys.allocator, names, view);
-            keys.writer.?.adapter.view = view;
-            keys.writer.?.adapter.names = names;
-            return try keys.computeLocked(view, request.root);
+            const writer = try keys.borrowWriter(names, view);
+            defer keys.returnWriter(writer);
+            writer.adapter.view = view;
+            writer.adapter.names = names;
+            return try keys.computeWith(writer, view, request.root);
         }
     };
 
-    /// `root`'s key, computed by the held writer. A synthesized function's
-    /// synthesized children are computed here too, never waited on.
-    fn computeLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    /// An idle key writer, or a new one when every writer is borrowed.
+    fn borrowWriter(self: *SynthesizedTypeKeys, names: *const canonical.CanonicalNameStore, view: CheckedTypeStoreView) Allocator.Error!*CheckedTypeKeyDigester {
+        {
+            self.writers_mutex.lockUncancelable(self.io);
+            defer self.writers_mutex.unlock(self.io);
+            if (self.idle_writers.pop()) |writer| return writer;
+        }
+        const writer = try self.allocator.create(CheckedTypeKeyDigester);
+        errdefer self.allocator.destroy(writer);
+        writer.* = CheckedTypeKeyDigester.init(self.allocator, names, view);
+        errdefer writer.deinit();
+        self.writers_mutex.lockUncancelable(self.io);
+        defer self.writers_mutex.unlock(self.io);
+        try self.idle_writers.ensureTotalCapacity(self.allocator, self.writer_count + 1);
+        self.writer_count += 1;
+        return writer;
+    }
+
+    fn returnWriter(self: *SynthesizedTypeKeys, writer: *CheckedTypeKeyDigester) void {
+        self.writers_mutex.lockUncancelable(self.io);
+        defer self.writers_mutex.unlock(self.io);
+        self.idle_writers.appendAssumeCapacity(writer);
+    }
+
+    /// `root`'s key, computed by the borrowed `writer`. A synthesized
+    /// function's synthesized children are computed here too, never waited
+    /// on.
+    fn computeWith(self: *SynthesizedTypeKeys, writer: *CheckedTypeKeyDigester, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const index = type_ids.synthesizedIndex(root);
         if (self.slots.at(index).peek()) |known| return known;
         return switch (view.rootRows()[index].recipe) {
-            .payload => try self.writer.?.keyInfo(root),
-            .synthetic_function => try self.syntheticFunctionInfo(view, root),
+            .payload => try writer.keyInfo(root),
+            .synthetic_function => try self.syntheticFunctionInfo(writer, view, root),
         };
     }
 
-    fn childInfoLocked(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, child: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn childInfoWith(self: *SynthesizedTypeKeys, writer: *CheckedTypeKeyDigester, view: CheckedTypeStoreView, child: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         if (!type_ids.isSynthesized(child)) return try view.rootInfo(child);
-        return try self.computeLocked(view, child);
+        return try self.computeWith(writer, view, child);
     }
 
-    fn syntheticFunctionInfo(self: *SynthesizedTypeKeys, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    fn syntheticFunctionInfo(self: *SynthesizedTypeKeys, writer: *CheckedTypeKeyDigester, view: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         const function = syntheticFunctionPayload(view, root);
         const allocator = self.allocator;
         const arg_infos = try allocator.alloc(canonical_type_keys.TypeKeyInfo, function.args.len);
         defer allocator.free(arg_infos);
-        for (function.args, arg_infos) |arg, *arg_info| arg_info.* = try self.childInfoLocked(view, arg);
-        const ret_info = try self.childInfoLocked(view, function.ret);
+        for (function.args, arg_infos) |arg, *arg_info| arg_info.* = try self.childInfoWith(writer, view, arg);
+        const ret_info = try self.childInfoWith(writer, view, function.ret);
         var contains_identity_variables = ret_info.contains_identity_variables;
         var composable = ret_info.composable;
         for (arg_infos) |arg_info| {
