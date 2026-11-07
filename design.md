@@ -15818,7 +15818,9 @@ it too. Each consumer reads its own representation into the shared
   longer than a small string. `Str.inspect(value)` itself is the helper
   applied to the empty string, except that a value whose shape renders as one
   expression (a literal, a primitive, an override, an uninhabited type) is
-  that expression and no accumulator exists. The LIR string-append fusion
+  that expression and no accumulator exists; a literal rendering still
+  evaluates the inspected value, whose effects (a nested `dbg`) are part of
+  the program. The LIR string-append fusion
   needs no re-rooting for these helpers, since they already append onto the
   accumulator they are given; it still fuses `str_append(acc, call)` where a
   rendering appends an override's result, and a fused source that starts its

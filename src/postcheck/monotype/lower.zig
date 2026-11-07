@@ -24919,7 +24919,10 @@ const BodyContext = struct {
                 continue;
             }
             switch (try self.inspectLeaf(value, value_ty, shape_ty, str_ty, action)) {
-                .expr, .uninhabited => |expr| return expr,
+                // A literal rendering reads nothing of the value, which is
+                // still evaluated for its effects, such as a nested `dbg`.
+                .expr => |expr| return if (action == .literal) try self.wrapWildcardLet(value_ty, value, expr, str_ty) else expr,
+                .uninhabited => |expr| return expr,
                 .structural => break,
             }
         }
