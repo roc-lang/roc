@@ -2378,6 +2378,7 @@ pub const Coordinator = struct {
         }
         // Stop workers
         self.shutdown();
+        self.traceTypeKeyMemory("teardown");
         self.inline_worker_allocs.deinit();
 
         if (comptime trace_build) {
@@ -2923,6 +2924,23 @@ pub const Coordinator = struct {
         return false;
     }
 
+    /// Diagnostic source-key owner sweep. Individual owners are locked; this
+    /// is a sequential snapshot, not a process-wide allocation high-water mark.
+    pub fn traceTypeKeyMemory(self: *Coordinator, phase: []const u8) void {
+        if (!base.dev_diagnostics.isSet(.trace_boxy_work)) return;
+        if (self.builtin_modules.checked_artifact.checked_types.sealed_keys) |keys| keys.traceMemory(phase);
+        var packages = self.packages.iterator();
+        while (packages.next()) |entry| {
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (artifact.checked_types.sealed_keys) |keys| keys.traceMemory(phase);
+            }
+        }
+        for (self.retired_checked_artifacts.items) |retired| {
+            if (retired.artifact.checked_types.sealed_keys) |keys| keys.traceMemory(phase);
+        }
+    }
+
     /// Finish the immutable platform's independent compile-time work, then
     /// compose its checked metadata with the app's recorded requirement solutions.
     /// App evaluation and the pairing's dependent roots share runtime lowering.
@@ -2964,6 +2982,7 @@ pub const Coordinator = struct {
             const program_root = if (self.checked_program) self.executableRootCheckedArtifact() else null;
             try self.evaluateProgram(null, program_root);
         }
+        self.traceTypeKeyMemory("postcheck");
     }
 
     /// Evaluate the checked program and its compile-time demands.
@@ -3570,6 +3589,7 @@ pub const Coordinator = struct {
             }
         }
         self.frontend_complete = true;
+        self.traceTypeKeyMemory("frontend");
     }
 
     /// Run only after all frontend tasks have released the worker pool. Imported

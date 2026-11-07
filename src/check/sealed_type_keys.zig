@@ -14,6 +14,8 @@
 //! first demand, through the module's index slot.
 
 const std = @import("std");
+const base = @import("base");
+const type_key_engine = @import("type_key_engine.zig");
 const can = @import("can");
 const collections = @import("collections");
 const types = @import("types");
@@ -63,6 +65,31 @@ pub const SealedTypeKeys = struct {
         if (self.writer) |*writer| writer.deinit();
         allocator.free(self.identity);
         allocator.destroy(self);
+    }
+
+    /// A diagnostic snapshot of this unique source-key owner. No allocations,
+    /// slot claims, key computations or memo changes. Shared views print the
+    /// same owner address: consumers deduplicate by (phase, owner).
+    pub fn traceMemory(self: *SealedTypeKeys, phase: []const u8) void {
+        if (!base.dev_diagnostics.isSet(.trace_boxy_work)) return;
+        self.writer_mutex.lockUncancelable(self.io);
+        defer self.writer_mutex.unlock(self.io);
+        const table = self.table.peek() orelse &.{};
+        var done: usize = 0;
+        for (table) |*slot| done += @intFromBool(slot.peek() != null);
+        const memory: canonical_type_keys.TypeWriter.KeyMemory = if (self.writer) |*writer| writer.retainedKeyMemory() else .{};
+        const slot_bytes = table.len * @sizeOf(KeySlot);
+        const identity_bytes = self.identity.len * @sizeOf(std.atomic.Value(u8));
+        const index_bytes = if (self.index.peek()) |index| @sizeOf(KeyIndex) + type_key_engine.hashRetainedBytes([32]u8, Var, index.*) else @as(usize, 0);
+        const persistent = memory.engine.persistent();
+        const scratch = memory.engine.scratch + memory.adapter_scratch;
+        const total = @sizeOf(SealedTypeKeys) + slot_bytes + identity_bytes + index_bytes + persistent + scratch + memory.owned_ranks;
+        std.debug.print("boxy-work: type-key-memory phase={s} owner={x} vars={d} slots={d} done={d} owner_bytes={d} slot_bytes={d} identity_bytes={d} index_bytes={d} writer_present={d} descriptions_bytes={d} class_index_bytes={d} summaries_bytes={d} identity_maps_bytes={d} persistent_bytes={d} engine_scratch_bytes={d} adapter_scratch_bytes={d} scratch_bytes={d} owned_rank_bytes={d} total_bytes={d} nodes={d} classes={d} summaries={d} map_nodes={d} module={s}\n", .{
+            phase,          @intFromPtr(self),     self.env.types.len(),              table.len,                  done,                      @sizeOf(SealedTypeKeys), slot_bytes,
+            identity_bytes, index_bytes,           @intFromBool(self.writer != null), memory.engine.descriptions, memory.engine.class_index, memory.engine.summaries, memory.engine.identity_maps,
+            persistent,     memory.engine.scratch, memory.adapter_scratch,            scratch,                    memory.owned_ranks,        total,                   memory.nodes,
+            memory.classes, memory.summaries,      memory.map_nodes,                  self.env.module_name,
+        });
     }
 
     fn slots(self: *SealedTypeKeys) Allocator.Error![]KeySlot {
