@@ -13,8 +13,8 @@ test "issue 10571: repeated failed dispatch on the same receiver reports type mi
     // Repro for https://github.com/roc-lang/roc/issues/10571.
     // Both `plus` sites share one constraint callable, so rejecting the
     // obligation once must reject it for every site sharing it. Otherwise the
-    // second site's plan reaches publication classified as resolved while its
-    // callable is the error type, and publication panics instead of reporting.
+    // second site's plan reaches the checked tables classified as resolved while its
+    // callable is the error type, and their computation panics instead of reporting.
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 

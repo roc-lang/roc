@@ -50,7 +50,7 @@ pub fn moduleView(
         module_name,
     ) catch return error.CorruptEmbeddedBuiltins;
 
-    // Checked publication can request many keys from this frozen source view.
+    // The checked module's analyses can request many keys from this frozen source view.
     // Share its lazy rank generation across those walks without touching the
     // embedded interner or adding anything to the serialized representation.
     try env.common.idents.enableTextRanks(gpa);

@@ -18,7 +18,7 @@ const CacheData = @import("cache_module.zig").CacheModule.CacheData;
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
-const Artifact = check.Checked.CheckedModule;
+const CheckedModule = check.Checked.CheckedModule;
 const ImportedView = check.Checked.ImportedModuleView;
 const ExportInterfaces = eval.CompileTimeFinalization.ExportInterfaces;
 const dev_diagnostics = base.dev_diagnostics;
@@ -26,7 +26,7 @@ const dev_diagnostics = base.dev_diagnostics;
 /// Everything one unit's object is built from.
 pub const Unit = struct {
     gpa: Allocator,
-    artifact: *const Artifact,
+    module: *const CheckedModule,
     /// The platform module whose hosted section binds the hosted functions
     /// the module declares, when it declares any.
     platform: ?ImportedView,
@@ -140,7 +140,7 @@ pub const Built = struct {
     }
 };
 
-/// The key of `artifact`'s object. A module declaring hosted functions is
+/// The key of `checked`'s object. A module declaring hosted functions is
 /// lowered against the platform header's hosted section, which binds them to
 /// their host symbols, so its key covers a digest of that section too.
 /// `paired_platforms` are the code-generation keys of the root program's
@@ -152,7 +152,7 @@ pub const Built = struct {
 /// (`object_cache.KeyInput.run_image`), and `expect_sites` a test unit
 /// (`object_cache.KeyInput.expect_sites`).
 /// `wasm_stack_checks` is the platform's stack-check mode on a wasm target.
-pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *const Artifact, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
+pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, checked: *const CheckedModule, platform: ?ImportedView, opt: []const u8, inline_expects: bool, target: roc_target.RocTarget, paired_platforms: []const [32]u8, run_image: bool, expect_sites: bool, wasm_stack_checks: bool) Allocator.Error!object_cache.Key {
     std.debug.assert(!wasm_stack_checks or imageKind(target) == .wasm);
     const hosted_bindings: ?[32]u8 = if (platform) |platform_view| blk: {
         const bindings = (try platform_view.hostedBindings()).bindings;
@@ -166,7 +166,7 @@ pub fn objectKey(gpa: Allocator, digests: *boxy_interface.Digests, artifact: *co
         break :blk object_cache.hostedBindingsDigest(inputs);
     } else null;
     var input = base.Sha256.init(.{});
-    input.update(&try digests.objectInput(artifact));
+    input.update(&try digests.objectInput(checked));
     for (paired_platforms) |*paired| input.update(paired);
     return object_cache.key(.{
         .object_input = input.finalResult(),
@@ -354,7 +354,7 @@ pub const BuildError = eval.CompileTimeFinalization.RuntimeMaterializationError 
 /// `unit`'s object, from the cache or built and filed there.
 pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     const gpa = unit.gpa;
-    const module_name = unit.artifact.nameStore().moduleNameText(unit.artifact.module_identity.module_name);
+    const module_name = unit.module.nameStore().moduleNameText(unit.module.module_identity.module_name);
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
     if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces)) |restored| {
@@ -451,18 +451,18 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         if (!present) try views.append(gpa, platform_view);
     }
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = try check.Checked.loweringViewWithRelations(unit.artifact, &.{}),
+        .root = try check.Checked.loweringViewWithRelations(unit.module, &.{}),
         .imports = views.items,
     };
     std.debug.assert(unit.test_unit == (if (unit.config.boxy_unit) |module_unit| module_unit.expect_sites else false));
     // A test unit lowers its module's top-level expects as roots too.
-    const test_requests = if (unit.test_unit) try testRootRequests(gpa, unit.artifact) else &.{};
+    const test_requests = if (unit.test_unit) try testRootRequests(gpa, unit.module) else &.{};
     defer gpa.free(test_requests);
     const test_metadata = try testPlanMetadata(gpa, test_requests);
     defer gpa.free(test_metadata);
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
-    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.Checked.importedView(unit.artifact)) else @as([32]u8, @splat(0));
+    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.Checked.importedView(unit.module)) else @as([32]u8, @splat(0));
     const test_modules = try gpa.alloc([32]u8, test_requests.len);
     defer gpa.free(test_modules);
     @memset(test_modules, module_digest);
@@ -585,10 +585,10 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
 /// A module's top-level expects, in source order: the roots a test unit
 /// exports wrappers for, and the roots `roc test` plans for the module.
-pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.Checked.RootRequest {
+pub fn testRootRequests(gpa: Allocator, checked: *const CheckedModule) Allocator.Error![]check.Checked.RootRequest {
     var roots = std.ArrayList(check.Checked.RootRequest).empty;
     errdefer roots.deinit(gpa);
-    for ((try artifact.rootRequests()).requests) |root| {
+    for ((try checked.rootRequests()).requests) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(gpa, root);
     }

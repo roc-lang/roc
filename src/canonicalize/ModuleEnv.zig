@@ -657,7 +657,7 @@ pub const DispatchRelationMerge = extern struct {
 };
 
 /// One compiler-generated parser or encoder derivation validated by checking.
-/// The referenced vars remain checker-owned here; checked publication converts
+/// The referenced vars remain checker-owned here; the checked module converts
 /// them to stable checked type ids before post-check compilation.
 pub const GeneratedCodecDerivation = extern struct {
     kind: u32,
@@ -726,7 +726,7 @@ pub const GeneratedCodecRenaming = extern struct {
 
 /// One static-dispatch obligation checking rejected. The raw constraint
 /// function variable is the obligation identity used by dispatch expressions,
-/// instantiated scheme evidence, and checked-module publication.
+/// instantiated scheme evidence, and the checked module's analyses.
 pub const RejectedStaticDispatch = extern struct {
     constraint_fn_var: u32,
 
@@ -1188,7 +1188,7 @@ store: NodeStore,
 
 /// Exact strict-demand edges between top-level definitions, which checking
 /// produces once it has resolved dispatch; serialization preserves them for
-/// checked-module publication. It is not a transient traversal aid.
+/// the checked module's analyses. It is not a transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
 /// The top-level definitions whose calls can invoke a function value they do
@@ -1234,13 +1234,13 @@ numeral_literals: NumeralLiteral.SafeList,
 /// Scope-resolved explicit numeric suffix targets attached by canonicalization.
 numeric_suffix_targets: NumericSuffixTarget.SafeList,
 /// Constrained-scheme uses recorded by checking for static-dispatch evidence;
-/// consumed at checked-module publication.
+/// consumed by the checked module's analyses.
 scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (source scheme var → fresh var) pairs backing
 /// `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
 /// Static-dispatch relations folded into a relation whose target checking
-/// selected; consumed at checked-module publication.
+/// selected; consumed by the checked module's analyses.
 dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
@@ -1284,15 +1284,15 @@ exhaustiveness_obligations: ExhaustivenessObligation.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
-/// Generated codec derivations validated by checking and consumed by checked
-/// module publication.
+/// Generated codec derivations validated by checking and consumed by the
+/// checked module's analyses.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 /// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
 generated_codec_calls: GeneratedCodecCall.SafeList,
 /// Flat pool backing `generated_codec_derivations.renamings_start/renamings_len`.
 generated_codec_renamings: GeneratedCodecRenaming.SafeList,
-/// Static-dispatch obligations explicitly rejected by checking. Publication
-/// consumes these records instead of inferring rejection from erroneous types.
+/// Static-dispatch obligations explicitly rejected by checking. The checked module's analyses
+/// consume these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
 /// Exact default identities selected at record-literal omission sites.
 record_omitted_defaults: RecordOmittedDefault.SafeList,
@@ -4260,8 +4260,8 @@ pub const Serialized = extern struct {
         collections.serde_validation.assertSerializedRelocatable(Serialized);
     }
 
-    pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
-        if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
+    pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptSerializedData}!void {
+        if (backing_len < @sizeOf(Serialized)) return error.CorruptSerializedData;
         try collections.validateSerializedRelocations(Serialized, self, backing_len);
     }
 

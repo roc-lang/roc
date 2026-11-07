@@ -493,7 +493,7 @@ validation: can.Can.Validation = .checking,
 platform_required_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, PlatformRequiredDef) = .empty,
 /// One row per platform requirement that resolved to an exported app def, in
 /// requires-clause order. The solved correspondence (requirement type and its
-/// identity bindings, as vars in this module's store) that publication
+/// identity bindings, as vars in this module's store) that the checked module's analyses
 /// materializes into the app module's `PlatformRequirementSolutionTable`.
 /// Each row's `identity_vars` slice is checker-owned.
 platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.SolutionInput) = .empty,
@@ -519,7 +519,7 @@ local_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, LocalDefP
 /// whose RHS is currently being type-checked. Canonicalization rejects an eager
 /// self-reference, so a lookup that reaches one of these binders is delayed
 /// through a function in the value's own RHS. Checking records each such
-/// lookup as a recursive value reference, which publication turns into the
+/// lookup as a recursive value reference, which the checked module's analyses turn into the
 /// declaration's explicit recursive-binding fact.
 local_value_processing_ptrns: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void) = .{},
 
@@ -591,7 +591,7 @@ pending_predeclared_scheme_uses: std.ArrayListUnmanaged(PendingPredeclaredScheme
 /// requirements not structurally reachable from the type root. Requirements
 /// are copied under the same substitution as the root at every use.
 type_schemes: std.ArrayListUnmanaged(TypeScheme) = .empty,
-/// Local schemes leave the solver's active scope before module publication.
+/// Local schemes leave the solver's active scope before the module is sealed.
 /// Preserve their codec contracts for checked local-procedure bodies.
 retired_binding_scheme_codec_requirements: std.ArrayListUnmanaged(ModuleEnv.BindingSchemeCodecRequirement) = .empty,
 /// Active scheme lookup by stable source vars. Union-find representatives are
@@ -661,7 +661,7 @@ active_scheme_root: ?Var = null,
 /// like a reference to an imported scheme copy—and never requires the body.
 /// The def itself is checked entirely on the ordinary path (its annotation is
 /// generated again, in the body's frame, sharing vars with the body so
-/// dispatch-evidence publication sees one coherent scheme); references after
+/// the dispatch-evidence pass sees one coherent scheme); references after
 /// that use the def's own pattern var as always.
 predeclared_scheme_vars: std.ArrayListUnmanaged(?Var) = .empty,
 /// Identity slots of every predeclared annotation (top-level and block-local),
@@ -1018,7 +1018,7 @@ hoist_selected_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, u32) = .{},
 hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u32) = .{},
 /// Expressions whose original subtrees were replaced with explicit runtime
 /// errors after hoist selection had already seen them. Selected roots and
-/// dependencies inside these subtrees must be pruned before publication.
+/// dependencies inside these subtrees must be pruned before the checked module's analyses.
 hoist_invalidated_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, void) = .empty,
 /// Binder patterns of statements replaced with explicit runtime errors after
 /// hoist selection had already seen them. Publication has no checked pattern
@@ -1082,7 +1082,7 @@ contextual_local_dispatch_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, voi
 executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
 /// Executable roots whose zero-arg body is also an explicit compile-time root.
 /// This is producer metadata: checking uses it to reject effects before
-/// checked-module publication can schedule the body for evaluation.
+/// the checked module's analyses can schedule the body for evaluation.
 compile_time_executable_roots: std.ArrayListUnmanaged(struct {
     def: CIR.Def.Idx,
     lambda: CIR.Expr.Idx,
@@ -6204,7 +6204,7 @@ fn invalidateExprSubtreeMetadataWithScratch(
 fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
     // Replacing the root makes every construction in its old subtree
     // unreachable. Retire the omission plans attached to those constructions
-    // before checked-module publication consumes the surviving source tree.
+    // before the checked module's analyses consume the surviving source tree.
     var retained: usize = 0;
     for (self.cir.record_omitted_defaults.items.items) |omitted| {
         if (omitted.expr == root or self.hoist_invalidated_exprs.contains(omitted.expr)) continue;
@@ -6228,7 +6228,7 @@ fn markHoistInvalidatedExpr(
 }
 
 /// Pattern trees are finite source trees. Retire their literal evidence along
-/// with the expression or statement that discards them, before publication.
+/// with the expression or statement that discards them, before the checked module's analyses.
 fn retirePatternSubtreeMetadata(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
     return self.retirePatternMetadata(pattern_idx, null);
 }
@@ -8265,7 +8265,7 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
 
     // Every type the checked module can publish, so no published row escapes
     // normalization: expression and pattern types, definition types, and the
-    // inferred roots publication enumerates through `output_type_roots`.
+    // inferred roots the checked module's analyses enumerate through `output_type_roots`.
     const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
     // Seeding reads the node store without changing it, so the tag column
     // stays valid throughout.
@@ -11211,7 +11211,7 @@ fn instantiateVarWithSubsPolarizedFromScheme(
 /// the substitution leaves shared keeps its original attached fn var, so the
 /// origin fn var must stay original too. Mapping the fn var alone would point
 /// the origin at this use's independent callable copy—a relation never
-/// attached to the shared receiver—and publication could then never match the
+/// attached to the shared receiver—and the checked module's analyses could then never match the
 /// origin against the receiver's constraint list to retire the copy.
 fn substitutedStructuralOrigin(
     self: *Self,
@@ -11553,7 +11553,7 @@ inline fn registerInstantiatedVar(
         // included alongside flex copies. The scheme-side constraints' fn
         // vars are paired too: nested evidence (a chosen method target that
         // is itself constrained) is keyed by the instantiated constraint fn
-        // var at discharge time, and publication reaches that key through
+        // var at discharge time, and type-root enumeration reaches that key through
         // these pairs.
         // Every copied quantified variable is paired, constrained or not:
         // the pairs are the instantiation's substitution, and a
@@ -11572,7 +11572,7 @@ inline fn registerInstantiatedVar(
         // checker defaulted closed copies as a structural `[]`. That
         // copy IS this instantiation's substitution for the variable,
         // so `appendSiteSubstitution` must find it among the pairs;
-        // publication reaches only the recorded fresh copies.
+        // type-root enumeration reaches only the recorded fresh copies.
         // Structural nodes that are not identities stay unpaired, so a
         // substitution's length stays the scheme's identity count.
         const old_resolved = self.types.resolveVar(old);
@@ -13809,7 +13809,7 @@ fn withdrawSupersededLiteralDefaultWarnings(self: *Self) Allocator.Error!void {
 
 /// Turn every provisional platform-requirement row into the explicit
 /// successful-binding or checked-error outcome consumed by module
-/// publication. This runs after all checker error poisoning, while the checker
+/// the checked module's analyses. This runs after all checker error poisoning, while the checker
 /// still owns the exact source def and solved vars.
 fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
     for (self.platform_requirement_solutions.items) |*solution| {
@@ -14092,7 +14092,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
             try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
-        // enter constant/callable publication even when runtime-body hoisting
+        // enter the checked module's constant/callable tables even when runtime-body hoisting
         // would reject an expect, dbg, loop, or mutable intermediate.
         const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
             root.body == .pattern_error or
@@ -17077,9 +17077,9 @@ fn judgeAmbiguityCandidate(
 
     // An unpinned scheme instantiation with a default is not ambiguous. Its
     // classification instead schedules exact validation against the one owner
-    // publication will materialize. Creation candidates retain the ordinary
+    // the checked module's analyses will materialize. Creation candidates retain the ordinary
     // literal-defaulting/ambiguity paths; this fact is specifically for copied
-    // scheme edges whose eventual chain-free resolution publication performs.
+    // scheme edges whose eventual chain-free resolution the checked module's analyses perform.
     // Keep the raw var: final compatibility re-resolves and deduplicates after
     // the remaining solver work settles.
     if (default_target != null and candidate.source == .instantiation) {
@@ -17468,7 +17468,7 @@ fn checkInstantiatedStaticDispatchConstraints(
 
         // Residual candidates are now at their settled pinning frontier. Judge
         // them before compatibility so default-materialization facts are
-        // checker input, never reconstructed by publication. Successful
+        // checker input, never reconstructed by the checked module's analyses. Successful
         // target validation can append transitive candidates, so drive the
         // judgment/materialization pair to quiescence before latching any new
         // dispatcher as compatibility-checked.
@@ -18299,7 +18299,7 @@ const UnresolvedInspectScan = struct {
         if (visit.value_ptr.* & position_bit != 0) return .{ .value = false };
         visit.value_ptr.* |= position_bit;
 
-        // Checked-type publication attaches an explicit close-to-empty default to
+        // Checked-type construction attaches an explicit close-to-empty default to
         // each unconstrained row-tail occurrence, and to a flexible one whose
         // constraints the empty row discharges. Ordinary value occurrences have
         // no such default.
@@ -19808,7 +19808,7 @@ fn predeclareHoledAnnotationSchemes(
 /// to pristine unbound slots so the body-pass generation starts fresh. The
 /// def itself therefore checks byte-for-byte as before this pre-pass existed—
 /// in particular its body shares vars with its own scheme, which
-/// dispatch-evidence publication relies on—while early references hold a
+/// the dispatch-evidence pass relies on—while early references hold a
 /// disjoint copy, exactly like references to an imported scheme.
 fn predeclareAnnotationScheme(
     self: *Self,
@@ -20907,7 +20907,7 @@ fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Er
                     // Every recursive member's top-level RHS lives in the group
                     // frame and generalizes at the shared boundary. Annotated
                     // in-group references still instantiate their predeclared
-                    // schemes (polymorphic recursion), but deferring publication
+                    // schemes (polymorphic recursion), but deferring scheme creation
                     // lets forward members contribute their complete inferred
                     // requirements before any member freezes.
                     self.suppress_generalize_expr = member_def.expr;
@@ -21034,7 +21034,7 @@ fn beginGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.E
 /// generalize, and retire the members' schemes together.
 fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_roots: []const BoundaryRoot, env: *Env) std.mem.Allocator.Error!void {
     // Recursive members create their schemes together at the shared group
-    // boundary, after `DefActivity`'s ordinary binding publication already
+    // boundary, after `DefActivity`'s ordinary binding step already
     // ran. Publish the stable pattern/def aliases now that the schemes
     // exist, before any use can instantiate a member through those vars.
     for (defs) |member_def_idx| {
@@ -28350,7 +28350,7 @@ const ExprCheckFrame = struct {
             checker.var_set.clearRetainingCapacity();
             if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
                 // A method's callable wrapper is explicit input to method-template
-                // publication, so keep that wrapper around its already-erroneous
+                // the checked module's analyses, so keep that wrapper around its already-erroneous
                 // child. The kept wrapper's checked type is the annotation's, so
                 // this requires an annotation that itself declares a function; a
                 // wrapper whose function shape came only from a `_` hole filled by
@@ -29599,7 +29599,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         .region = annotation_region,
                     } }),
                 }
-                // e_anno_only is its own non-executable artifact state; preserve the declared graph.
+                // e_anno_only is its own non-executable checked state; preserve the declared graph.
                 if (expected.annotation == null) {
                     try self.markErroneous(expr_var);
                 }
@@ -38912,7 +38912,7 @@ fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) st
 /// ever pinned it to either kind—to `required`, the zero-cost kind, by
 /// ordinary unification. After this sweep a MONOMORPHIC module-level type can
 /// no longer carry a literal-minted flex kind, so the read boundaries
-/// (TypeWriter rendering, checked-module publication, canonical-key
+/// (TypeWriter rendering, the checked module's analyses, canonical-key
 /// writing) read one committed fact instead of each re-applying a
 /// flex-means-required convention.
 ///
@@ -42675,7 +42675,7 @@ fn captureSchemeDispatchRequirements(
                         break :created @backingInt(receiver.desc.rank) < @backingInt(rank);
                     },
                     // A copied relation is detached from its receiver descriptor.
-                    // Its structural origin is retained separately so publication
+                    // Its structural origin is retained separately so the checked module's analyses
                     // can prove when checked evidence makes this copy redundant.
                     .scheme_copy => true,
                 };
@@ -43158,7 +43158,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
 /// receiver belongs to an outer scope and grounds only during module literal
 /// defaulting. The TypeScheme is the durable owner of that exact relation.
 /// Enqueue every newly concrete stored relation and drive both ordinary and
-/// instantiated dispatch work to a fixpoint before checked-module publication.
+/// instantiated dispatch work to a fixpoint before the checked module's analyses.
 /// Retirement still depends on `recordSettledDeferredDispatchRelation`; a
 /// concrete receiver alone never counts as discharge.
 ///
@@ -53388,7 +53388,7 @@ fn literalTargetIsBuiltinDirect(
 /// once, because a deferred copy of a constraint keeps it in another
 /// constraint list; every relation it reaches is unified with it and must
 /// have selected the same method. Such a relation's dispatch shares that
-/// relation's instantiation, and checked publication keys it by these exact
+/// relation's instantiation, and the checked module's analyses key it by these exact
 /// raw vars rather than by union-find roots, which unrelated dispatches can
 /// come to share. A relation folded into a rejected relation is rejected
 /// instead of published.
@@ -56418,7 +56418,7 @@ fn hasReusableGeneratedCodecCall(
 /// Instantiate a generated codec's selected method scheme while publishing the
 /// same explicit target-evidence edge that a source-level dispatch call would
 /// produce. `evidence_var` is the exact generated callable relation and is the
-/// durable key consumed by checked-module publication.
+/// durable key consumed by the checked module's analyses.
 fn instantiateGeneratedCodecMethodTarget(
     self: *Self,
     method_lookup: StaticDispatchMethodBinding,
@@ -59351,7 +59351,7 @@ fn checkFlexVarConstraintCompatibility(
     const default_constraints = self.types.sliceStaticDispatchConstraints(default_constraints_range);
     const default_target = options.default_target orelse if (options.allow_arithmetic_default) blk: {
         // Instantiated, unpinned where-clause receivers are materialized by
-        // publication using this exact specialization rule, including its
+        // the checked module's analyses using this exact specialization rule, including its
         // arithmetic-only Dec default. Validate the same explicit target here.
         break :blk self.specializationDefaultTargetForConstraints(default_constraints) orelse return false;
     } else blk: {
@@ -59506,7 +59506,7 @@ fn checkFlexVarConstraintCompatibility(
 
             // Checking owns both the diagnostic and the executable failure.
             // The source expression becomes a runtime error, while the exact
-            // rejected obligation tells publication to emit `checked_error`.
+            // rejected obligation tells the checked module's analyses to emit `checked_error`.
             try self.poisonConstraintFailureSource(var_, constraint, options.error_expr);
             try self.markStaticDispatchRejected(constraint);
             had_error = true;

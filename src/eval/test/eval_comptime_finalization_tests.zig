@@ -1,7 +1,7 @@
 //! Compile-time finalization coverage ported from the deleted comptime evaluator tests.
 //!
 //! These cases intentionally run through the current eval harness, which
-//! publishes checked modules, finalizes compile-time roots, lowers through the
+//! opens checked modules, finalizes compile-time roots, lowers through the
 //! post-check IRs to LIR, and then evaluates the ARC-inserted LIR image. They
 //! keep the old test names so coverage audits can map the replacement suite
 //! back to the deleted `comptime_eval_test.zig` tests without restoring the old

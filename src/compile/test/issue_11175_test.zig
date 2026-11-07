@@ -1,4 +1,4 @@
-//! Regression tests for issue #11175: rejected literal patterns must publish
+//! Regression tests for issue #11175: rejected literal patterns must record
 //! checked errors instead of reaching the literal conversion invariant.
 
 const std = @import("std");
@@ -13,7 +13,7 @@ const PatternTestError = compile_build.InitError ||
     std.Io.Dir.RealPathFileAllocError ||
     error{ TestUnexpectedResult, TestExpectedEqual };
 
-test "issue 11175: a numeral parameter pattern typed as a nominal reports rather than aborting publication" {
+test "issue 11175: a numeral parameter pattern typed as a nominal reports rather than aborting" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -56,7 +56,7 @@ test "issue 11175: a numeral parameter pattern typed as a nominal reports rather
     try std.testing.expect(found_name_not_in_scope);
 }
 
-fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) PatternTestError!void {
+fn expectCheckedPatterns(body: []const u8, expected_error: ?[]const u8) PatternTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     const source = try std.fmt.allocPrint(gpa,
@@ -93,10 +93,10 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     try std.testing.expectEqual(expected_error != null, found_error);
 
     // A failed pattern cannot discard an independent definition's checked body.
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
+    const checked = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_good = false;
-    const bodies = try artifact.bodies();
-    const store = &artifact.moduleEnvConst().store;
+    const bodies = try checked.bodies();
+    const store = &checked.moduleEnvConst().store;
     for (0..bodies.nodeCount()) |i| {
         if (bodies.index().nodeKind(@intCast(i)) != .expr) continue;
         const expr: check.CheckedBodies.ExprId = @fromBackingInt(@intCast(i));
@@ -110,22 +110,22 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     try std.testing.expect(found_good);
 }
 
-test "issue 11175: quoted parameter failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: quoted parameter failure checks" {
+    try expectCheckedPatterns(
         \\f : Pt -> U8
         \\f = |"bad"| 0
     , "Type Mismatch");
 }
 
-test "issue 11175: nested parameter failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: nested parameter failure checks" {
+    try expectCheckedPatterns(
         \\f : { value : Pt }, U8 -> U8
         \\f = |{ value: 3 }, x| x
     , "Type Mismatch");
 }
 
-test "issue 11175: captured parameter failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: captured parameter failure checks" {
+    try expectCheckedPatterns(
         \\f = |n| {
         \\    inner : Pt -> U8
         \\    inner = |3| n
@@ -134,15 +134,15 @@ test "issue 11175: captured parameter failure publishes" {
     , "Type Mismatch");
 }
 
-test "issue 11175: merged parameter failures publish" {
-    try expectPublishedPatterns(
+test "issue 11175: merged parameter failures check" {
+    try expectCheckedPatterns(
         \\f : List(Pt) -> U8
         \\f = |[3, 4]| 0
     , "Type Mismatch");
 }
 
-test "issue 11175: local destructure failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: local destructure failure checks" {
+    try expectCheckedPatterns(
         \\f = || {
         \\    (3, n) = (Pt({ depth: 0, n: 0 }), 1)
         \\    n
@@ -150,14 +150,14 @@ test "issue 11175: local destructure failure publishes" {
     , "Type Mismatch");
 }
 
-test "issue 11175: top-level destructure failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: top-level destructure failure checks" {
+    try expectCheckedPatterns(
         \\(3, f) = (Pt({ depth: 0, n: 0 }), 1)
     , "Type Mismatch");
 }
 
-test "issue 11175: loop pattern failure publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: loop pattern failure checks" {
+    try expectCheckedPatterns(
         \\f = || {
         \\    for 3 in [Pt({ depth: 0, n: 0 })] {
         \\        {}
@@ -168,7 +168,7 @@ test "issue 11175: loop pattern failure publishes" {
 }
 
 test "issue 11175: builtin literal patterns remain valid" {
-    try expectPublishedPatterns(
+    try expectCheckedPatterns(
         \\f : U8 -> U8
         \\f = |x| match x {
         \\    3 => 1
@@ -177,8 +177,8 @@ test "issue 11175: builtin literal patterns remain valid" {
     , null);
 }
 
-test "issue 11175: successful custom conversion with rejected equality publishes" {
-    try expectPublishedPatterns(
+test "issue 11175: successful custom conversion with rejected equality checks" {
+    try expectCheckedPatterns(
         \\MyNum := [Wrap(U8)].{
         \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Ok(Wrap(3))
@@ -189,7 +189,7 @@ test "issue 11175: successful custom conversion with rejected equality publishes
 }
 
 test "issue 11175: custom literal pattern remains valid" {
-    try expectPublishedPatterns(
+    try expectCheckedPatterns(
         \\MyNum := [Wrap(U8)].{
         \\    from_numeral : Numeral -> Try(MyNum, [InvalidNumeral(Str)])
         \\    from_numeral = |_| Ok(Wrap(3))

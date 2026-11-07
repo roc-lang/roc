@@ -244,25 +244,25 @@ test "hoisted local constants are finalized and restored during runtime lowering
     }
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
-    const app_artifact = coord.appRootCheckedModule();
-    const app_view = check.Checked.importedView(app_artifact);
+    const app_module = coord.appRootCheckedModule();
+    const app_view = check.Checked.importedView(app_module);
     const imports = try coord.collectImportedModuleViews(arena, root);
     const relations = try coord.collectRelationModuleViews(arena, root);
     const root_view = check.Checked.importedView(root);
     const app = if ((try root_view.checkedTables()).hoisted_constants.entries.len >= 2)
         root_view
     else
-        try findHoistedArtifact(imports, 2) orelse
-            try findHoistedArtifact(relations, 2) orelse
+        try findHoistedModule(imports, 2) orelse
+            try findHoistedModule(relations, 2) orelse
             return error.AppHoistedConstantsNotFound;
 
     try expectCompileTimeRootKindsPresent(app);
     try expectCompileTimeRootKindsPresent(app_view);
-    try expectExportedRuntimeEntrypoint(app_artifact);
+    try expectExportedRuntimeEntrypoint(app_module);
     try expectPendingProcedureAliasRoot(root, "main_alias!");
 
     const top_a = try findStoredCompileTimeRootI64(app_view, .constant, 40) orelse return error.TopLevelFortyNotFound;
@@ -280,22 +280,22 @@ test "hoisted local constants are finalized and restored during runtime lowering
     const indirect_local = try findStoredI64(app_view, 123) orelse return error.IndirectHoistedLocalNotFound;
     _ = try findStoredI64(app_view, 91) orelse return error.HoistedStaticDispatchCallNotFound;
     try std.testing.expect(try countStoredHoistedI64(app_view, 42) >= 2);
-    try std.testing.expect(try countCompileTimeRootKind(app_artifact, .callable_binding) >= 1);
-    try expectPendingProcedureAliasRoot(app_artifact, "top_add_five_alias");
-    try std.testing.expect(try countHoistedMatchRoots(app_artifact) >= 1);
+    try std.testing.expect(try countCompileTimeRootKind(app_module, .callable_binding) >= 1);
+    try expectPendingProcedureAliasRoot(app_module, "top_add_five_alias");
+    try std.testing.expect(try countHoistedMatchRoots(app_module) >= 1);
 
-    try expectRootRequestBefore(app_artifact, top_a.id, top_b.id);
-    try expectRootRequestBefore(app_artifact, top_b.id, tuple_left.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, tuple_right.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, record_extraction.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, tag_extraction.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_left.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, match_tuple_right.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, match_alias.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
-    try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
-    try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
-    try expectPatternExtractionRoots(app_artifact);
+    try expectRootRequestBefore(app_module, top_a.id, top_b.id);
+    try expectRootRequestBefore(app_module, top_b.id, tuple_left.root);
+    try expectRootRequestBefore(app_module, top_b.id, tuple_right.root);
+    try expectRootRequestBefore(app_module, top_b.id, record_extraction.root);
+    try expectRootRequestBefore(app_module, top_b.id, tag_extraction.root);
+    try expectRootRequestBefore(app_module, top_b.id, match_tuple_left.root);
+    try expectRootRequestBefore(app_module, top_b.id, match_tuple_right.root);
+    try expectRootRequestBefore(app_module, top_b.id, match_alias.root);
+    try expectRootRequestBefore(app_module, top_b.id, ordinary_call.root);
+    try expectRootRequestBefore(app_module, top_b.id, block_value.root);
+    try expectRootRequestBefore(app_module, indirect_local.root, indirect_top.id);
+    try expectPatternExtractionRoots(app_module);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root.rootRequests()).runtime_requests);
     defer gpa.free(lir_roots);
@@ -411,22 +411,22 @@ test "imported checked bodies restore their module's hoisted constants" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
-    const app_artifact = coord.appRootCheckedModule();
-    const app_view = check.Checked.importedView(app_artifact);
+    const app_module = coord.appRootCheckedModule();
+    const app_view = check.Checked.importedView(app_module);
     const imports = try coord.collectImportedModuleViews(arena, root);
     const relations = try coord.collectRelationModuleViews(arena, root);
-    const helper = try findHoistedArtifact(imports, 2) orelse return error.ImportedHoistedConstantsNotFound;
+    const helper = try findHoistedModule(imports, 2) orelse return error.ImportedHoistedConstantsNotFound;
 
     const app_imported_const_use = try findStoredI64(app_view, 42) orelse return error.AppHoistedImportedConstUseNotFound;
     const forty_one = try findStoredI64(helper, 41) orelse return error.ImportedHoistedFortyOneNotFound;
     const forty_two = try findStoredI64(helper, 42) orelse return error.ImportedHoistedFortyTwoNotFound;
     try std.testing.expectEqual(
         check.Checked.CompileTimeRootKind.hoisted_constant,
-        (try app_artifact.compileTimeRoot(app_imported_const_use.root)).kind,
+        (try app_module.compileTimeRoot(app_imported_const_use.root)).kind,
     );
     try std.testing.expect(@backingInt(forty_one.root) < @backingInt(forty_two.root));
 
@@ -503,7 +503,7 @@ test "hoisted list constants lower to internal static data in request order" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
@@ -634,7 +634,7 @@ test "hoisted Dec and I128 list constants keep their elements 16-aligned in stat
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
@@ -773,7 +773,7 @@ fn expectInlineListStaticDataLiteral(gpa: std.mem.Allocator, source: []const u8)
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
@@ -1055,7 +1055,7 @@ test "an empty list with capacity in a record frozen into static data is the emp
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
@@ -1158,7 +1158,7 @@ fn lowerEchoApp(source: []const u8, comptime inspect: fn (*lir.Program.Result) H
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
     const root = (try coord.executableRootCheckedModule());
@@ -1229,7 +1229,7 @@ test "callable binding with alias annotation is const-evaluated" {
     // mentions a type alias (here `MyErr`) must still be scheduled for
     // compile-time evaluation when the alias expands to a fully concrete
     // type. The internal type store conservatively marks any type that
-    // mentions an alias as needing instantiation; if the published checked
+    // mentions an alias as needing instantiation; if the checked
     // type inherits that flag, the def is kept template-only and silently
     // degrades to runtime construction (observed with Json.parser_camel()).
     const gpa = std.testing.allocator;
@@ -1324,15 +1324,15 @@ test "callable binding with alias annotation is const-evaluated" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const app_artifact = coord.appRootCheckedModule();
+    const app_module = coord.appRootCheckedModule();
     var saw_callable_binding = false;
-    for ((try app_artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try app_module.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .callable_binding) continue;
         saw_callable_binding = true;
-        if (app_artifact.evaluation.rootPayload(root.id) != .fn_value) return error.CallableBindingConstFnNotStored;
+        if (app_module.evaluation.rootPayload(root.id) != .fn_value) return error.CallableBindingConstFnNotStored;
     }
     try std.testing.expect(saw_callable_binding);
 }
@@ -1887,13 +1887,13 @@ test "hoisted roots admit non-concrete transient locals without losing validatio
     try coord.finishCheckedProgram(.none);
 
     try std.testing.expect(!coord.hasUserErrors());
-    const artifact = coord.appRootCheckedModule();
+    const checked = coord.appRootCheckedModule();
     var found = false;
     var found_validation = false;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_validation) found_validation = true;
         if (root.kind != .hoisted_constant or root.source != .hoisted) continue;
-        if (artifact.evaluation.rootPayload(root.id) != .const_node) continue;
+        if (checked.evaluation.rootPayload(root.id) != .const_node) continue;
         found = true;
     }
     try std.testing.expect(found);
@@ -1968,9 +1968,9 @@ test "issue 10721: compile-time known destructure of a match-returned closure re
     try std.testing.expect(!found_non_exhaustive);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const artifact = coord.appRootCheckedModule();
+    const checked = coord.appRootCheckedModule();
     var found_maximal_data_root = false;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.source != .hoisted) continue;
         if (root.kind == .hoisted_constant) found_maximal_data_root = true;
         try std.testing.expect(root.kind != .callable_binding);
@@ -2036,11 +2036,11 @@ test "issue 10721: compile-time known destructure inside an effectful body resol
     try std.testing.expect(!found_non_exhaustive);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const artifact = coord.appRootCheckedModule();
+    const checked = coord.appRootCheckedModule();
     var found_validation_root = false;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_validation) continue;
-        try std.testing.expectEqual(check.Checked.CompileTimeRootPayload.discarded, artifact.evaluation.rootPayload(root.id));
+        try std.testing.expectEqual(check.Checked.CompileTimeRootPayload.discarded, checked.evaluation.rootPayload(root.id));
         const body = root.hoisted_body orelse return error.ExpectedHoistedValidationBody;
         try std.testing.expect(body == .pattern_validation);
         try std.testing.expect(body.pattern_validation.erase_runtime);
@@ -2331,15 +2331,15 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
 
     try std.testing.expect(!coord.hasUserErrors());
 
-    const artifact = coord.appRootCheckedModule();
+    const checked = coord.appRootCheckedModule();
     var validating_extraction_roots: usize = 0;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.source != .hoisted) continue;
         if (root.kind == .hoisted_validation) return error.DuplicateValidationRoot;
         if (root.kind != .callable_binding) continue;
         const body = root.hoisted_body orelse return error.ExpectedHoistedCallableBody;
         if (body != .pattern_extraction) continue;
-        try std.testing.expect(artifact.evaluation.rootPayload(root.id) == .fn_value);
+        try std.testing.expect(checked.evaluation.rootPayload(root.id) == .fn_value);
         validating_extraction_roots += 1;
     }
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
@@ -2398,9 +2398,9 @@ test "a match on a constant with a guard selects a hoisted root" {
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const artifact = coord.appRootCheckedModule();
+    const checked = coord.appRootCheckedModule();
     var found_hoisted_root = false;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind == .hoisted_constant) found_hoisted_root = true;
     }
     try std.testing.expect(found_hoisted_root);
@@ -2551,7 +2551,7 @@ test "hoisted failing call into runtime reachable helper reports static diagnost
     try std.testing.expect(found);
 }
 
-fn findHoistedArtifact(
+fn findHoistedModule(
     views: []const check.Checked.ImportedModuleView,
     min_count: usize,
 ) std.mem.Allocator.Error!?check.Checked.ImportedModuleView {
@@ -2565,13 +2565,13 @@ fn findHoistedArtifact(
 }
 
 fn expectCompileTimeRootKindsPresent(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
 ) HoistedConstantsTestError!void {
     var saw_top_level_constant = false;
     var saw_top_level_callable = false;
     var saw_hoisted_constant = false;
 
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         switch (root.kind) {
             .constant => {
                 saw_top_level_constant = true;
@@ -2598,28 +2598,28 @@ fn expectCompileTimeRootKindsPresent(
 }
 
 fn expectPendingProcedureAliasRoot(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
     source_name: []const u8,
 ) HoistedConstantsTestError!void {
-    for ((try artifact.checkedTables()).top_level_values.entries) |entry| {
-        if (!std.mem.eql(u8, artifact.nameStore().exportNameText(entry.source_name), source_name)) continue;
-        const root_id = (try artifact.checkedTables()).compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
+    for ((try checked.checkedTables()).top_level_values.entries) |entry| {
+        if (!std.mem.eql(u8, checked.nameStore().exportNameText(entry.source_name), source_name)) continue;
+        const root_id = (try checked.checkedTables()).compile_time_roots.lookupIdByPattern(entry.pattern) orelse {
             try std.testing.expect(false);
             return;
         };
-        const root = (try artifact.compileTimeRoot(root_id));
+        const root = (try checked.compileTimeRoot(root_id));
         try std.testing.expectEqual(check.Checked.CompileTimeRootKind.callable_binding, root.kind);
-        try std.testing.expectEqual(check.Checked.CompileTimeRootPayload.pending, artifact.evaluation.rootPayload(root.id));
-        try std.testing.expect(try compileTimeRequestIndexForRoot(artifact, root.id) == null);
+        try std.testing.expectEqual(check.Checked.CompileTimeRootPayload.pending, checked.evaluation.rootPayload(root.id));
+        try std.testing.expect(try compileTimeRequestIndexForRoot(checked, root.id) == null);
         return;
     }
     try std.testing.expect(false);
 }
 
 fn expectExportedRuntimeEntrypoint(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
 ) HoistedConstantsTestError!void {
-    for ((try artifact.rootRequests()).runtime_requests) |root| {
+    for ((try checked.rootRequests()).runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint and
             root.abi == .roc and
             root.exposure == .exported and
@@ -2632,21 +2632,21 @@ fn expectExportedRuntimeEntrypoint(
 }
 
 fn expectRootRequestBefore(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
     before: check.Checked.ComptimeRootKey,
     after: check.Checked.ComptimeRootKey,
 ) HoistedConstantsTestError!void {
-    const before_index = (try compileTimeRequestIndexForRoot(artifact, before)) orelse return error.BeforeRootHadNoRequest;
-    const after_index = (try compileTimeRequestIndexForRoot(artifact, after)) orelse return error.AfterRootHadNoRequest;
+    const before_index = (try compileTimeRequestIndexForRoot(checked, before)) orelse return error.BeforeRootHadNoRequest;
+    const after_index = (try compileTimeRequestIndexForRoot(checked, after)) orelse return error.AfterRootHadNoRequest;
     try std.testing.expect(before_index < after_index);
 }
 
 fn compileTimeRequestIndexForRoot(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
     root_id: check.Checked.ComptimeRootKey,
 ) std.mem.Allocator.Error!?usize {
-    const root = (try artifact.compileTimeRoot(root_id));
-    for ((try artifact.rootRequests()).compile_time_requests, 0..) |request, i| {
+    const root = (try checked.compileTimeRoot(root_id));
+    for ((try checked.rootRequests()).compile_time_requests, 0..) |request, i| {
         if (rootRequestMatchesCompileTimeRoot(root, request)) return i;
     }
     return null;
@@ -2690,11 +2690,11 @@ fn rootSourceMatches(
 }
 
 fn expectPatternExtractionRoots(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
 ) HoistedConstantsTestError!void {
     var extraction_count: usize = 0;
 
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
         const body = root.hoisted_body orelse continue;
         const extraction = switch (body) {
@@ -2717,7 +2717,7 @@ fn expectPatternExtractionRoots(
         try std.testing.expectEqual(@as(?can.CIR.Pattern.Idx, extraction.scrutinee_pattern), parts.pattern);
 
         // The extracted value is the hoisted constant of the result pattern.
-        const result_const = (try artifact.checkedTables()).hoisted_constants.lookupByPattern(extraction.result_pattern) orelse
+        const result_const = (try checked.checkedTables()).hoisted_constants.lookupByPattern(extraction.result_pattern) orelse
             return error.PatternExtractionResultWasNotHoisted;
         try std.testing.expectEqual(root.id, result_const.root);
     }
@@ -2793,13 +2793,13 @@ fn reportContains(
 }
 
 fn findStoredCompileTimeRootI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     kind: check.Checked.CompileTimeRootKind,
     expected: i64,
 ) std.mem.Allocator.Error!?check.Checked.CompileTimeRoot {
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != kind) continue;
-        if (rootStoredI64(artifact, root)) |actual| {
+        if (rootStoredI64(checked, root)) |actual| {
             if (actual == expected) return root;
         } else |_| {}
     }
@@ -2807,11 +2807,11 @@ fn findStoredCompileTimeRootI64(
 }
 
 fn findStoredI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     expected: i64,
 ) std.mem.Allocator.Error!?check.Checked.HoistedConstEntry {
-    for ((try artifact.checkedTables()).hoisted_constants.entries) |entry| {
-        if (storedI64(artifact, entry)) |actual| {
+    for ((try checked.checkedTables()).hoisted_constants.entries) |entry| {
+        if (storedI64(checked, entry)) |actual| {
             if (actual == expected) return entry;
         } else |_| {}
     }
@@ -2819,12 +2819,12 @@ fn findStoredI64(
 }
 
 fn countStoredHoistedI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     expected: i64,
 ) std.mem.Allocator.Error!usize {
     var count: usize = 0;
-    for ((try artifact.checkedTables()).hoisted_constants.entries) |entry| {
-        if (storedI64(artifact, entry)) |actual| {
+    for ((try checked.checkedTables()).hoisted_constants.entries) |entry| {
+        if (storedI64(checked, entry)) |actual| {
             if (actual == expected) count += 1;
         } else |_| {}
     }
@@ -2834,11 +2834,11 @@ fn countStoredHoistedI64(
 /// The hoisted constant roots that evaluate a match: a source `match`
 /// expression, or the match of a pattern extraction.
 fn countHoistedMatchRoots(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
 ) std.mem.Allocator.Error!usize {
-    const store = &artifact.moduleEnvConst().store;
+    const store = &checked.moduleEnvConst().store;
     var count: usize = 0;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
         const evaluates_match = if (root.evaluatedExpr()) |evaluated| store.getExpr(evaluated) == .e_match else root.hoisted_body.? == .pattern_extraction;
         if (evaluates_match) count += 1;
@@ -2847,11 +2847,11 @@ fn countHoistedMatchRoots(
 }
 
 fn countCompileTimeRootKind(
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
     kind: check.Checked.CompileTimeRootKind,
 ) std.mem.Allocator.Error!usize {
     var count: usize = 0;
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |root| {
+    for ((try checked.checkedTables()).compile_time_roots.roots) |root| {
         if (root.kind == kind) count += 1;
     }
     return count;
@@ -2915,13 +2915,13 @@ fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result
 }
 
 fn storedI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     entry: check.Checked.HoistedConstEntry,
 ) HoistedConstantsTestError!i64 {
-    const root = (try artifact.compileTimeRoot(entry.root));
+    const root = (try checked.compileTimeRoot(entry.root));
     if (root.kind != .hoisted_constant) return error.HoistedRootKindMismatch;
 
-    const node_from_root = switch (artifact.evaluation.rootPayload(root.id)) {
+    const node_from_root = switch (checked.evaluation.rootPayload(root.id)) {
         .const_node => |node| node,
         .pending,
         .unevaluated,
@@ -2931,7 +2931,7 @@ fn storedI64(
         .runtime,
         => return error.HoistedRootDidNotStoreConstNode,
     };
-    const node_from_template = switch (try artifact.constValue(entry.const_ref)) {
+    const node_from_template = switch (try checked.constValue(entry.const_ref)) {
         .stored_const => |stored| stored.node,
         .reserved,
         .eval_template,
@@ -2940,14 +2940,14 @@ fn storedI64(
     };
     try std.testing.expectEqual(node_from_root, node_from_template);
 
-    return scalarConstNodeI64(artifact, node_from_root);
+    return scalarConstNodeI64(checked, node_from_root);
 }
 
 fn rootStoredI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     root: check.Checked.CompileTimeRoot,
 ) HoistedConstantsTestError!i64 {
-    const node = switch (artifact.evaluation.rootPayload(root.id)) {
+    const node = switch (checked.evaluation.rootPayload(root.id)) {
         .const_node => |const_node| const_node,
         .pending,
         .unevaluated,
@@ -2957,14 +2957,14 @@ fn rootStoredI64(
         .runtime,
         => return error.RootDidNotStoreConstNode,
     };
-    return scalarConstNodeI64(artifact, node);
+    return scalarConstNodeI64(checked, node);
 }
 
 fn scalarConstNodeI64(
-    artifact: check.Checked.ImportedModuleView,
+    checked: check.Checked.ImportedModuleView,
     node: check.Checked.ConstNodeId,
 ) HoistedConstantsTestError!i64 {
-    const value = artifact.evaluation.const_store.get(node);
+    const value = checked.evaluation.const_store.get(node);
     const actual = switch (value) {
         .scalar => |scalar| switch (scalar) {
             .i64 => |i| i,
@@ -3052,14 +3052,14 @@ test "issue 9733: nested expect statements remain inline" {
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
 
-    const app_artifact = coord.appRootCheckedModule();
+    const app_module = coord.appRootCheckedModule();
 
     try std.testing.expectEqual(
         @as(usize, 1),
-        try countCompileTimeRootKind(app_artifact, .expect),
+        try countCompileTimeRootKind(app_module, .expect),
     );
 }
 

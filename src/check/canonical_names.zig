@@ -12,7 +12,7 @@ const Ident = base.Ident;
 
 const collections = @import("collections");
 const CompactWriter = collections.CompactWriter;
-const artifact_serialize = @import("artifact_serialize.zig");
+const store_serialize = @import("store_serialize.zig");
 
 /// Relocatable, serial-id string interner used to back the name stores so the
 /// opened module can be serialized and deserialized with a constant number
@@ -154,13 +154,13 @@ pub const CheckedModuleDigest = CheckedModuleRef;
 
 /// Public `ProcedureValueRef` declaration.
 pub const ProcedureValueRef = struct {
-    artifact: CheckedModuleRef = .{},
+    module: CheckedModuleRef = .{},
     proc_base: ProcBase,
 };
 
 /// Public `ProcedureTemplateRef` declaration.
 pub const ProcedureTemplateRef = struct {
-    artifact: CheckedModuleRef = .{},
+    module: CheckedModuleRef = .{},
     proc_base: ProcBase,
     template: CheckedProcedureTemplateId,
 };
@@ -170,12 +170,12 @@ pub const ProcTemplate = ProcedureTemplateRef;
 
 /// Return the checked module digest that owns a procedure value.
 pub fn procedureValueModuleDigest(procedure: ProcedureValueRef) CheckedModuleDigest {
-    return procedure.artifact;
+    return procedure.module;
 }
 
 /// Return the checked module digest that owns a procedure template.
 pub fn procTemplateModuleDigest(template: ProcTemplate) CheckedModuleDigest {
-    return template.artifact;
+    return template.module;
 }
 
 /// Public `MonoSpecializationKey` declaration.
@@ -199,13 +199,13 @@ pub const CallableProcTemplate = CallableProcedureTemplateRef;
 
 /// Public `procedureValueRefEql` function.
 pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
-    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
+    return std.meta.eql(a.module.bytes, b.module.bytes) and
         a.proc_base == b.proc_base;
 }
 
 /// Public `procedureTemplateRefEql` function.
 pub fn procedureTemplateRefEql(a: ProcedureTemplateRef, b: ProcedureTemplateRef) bool {
-    return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
+    return std.meta.eql(a.module.bytes, b.module.bytes) and
         a.proc_base == b.proc_base and
         a.template == b.template;
 }
@@ -496,7 +496,7 @@ pub const CanonicalNameStore = struct {
         export_names: NameInterner.Serialized,
         external_symbol_names: NameInterner.Serialized,
 
-        const Serde = artifact_serialize.SliceStoreSerde(CanonicalNameStore, @This());
+        const Serde = store_serialize.SliceStoreSerde(CanonicalNameStore, @This());
 
         /// Serialize the names interned before the store was published: a
         /// published interner keeps them apart from the names interned since

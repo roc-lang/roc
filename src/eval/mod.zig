@@ -32,7 +32,7 @@ pub const builtin_static = @import("can").BuiltinStatic;
 /// Centralized loading and management of builtin modules
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 pub const bakedBuiltinModule = @import("BuiltinModules.zig").bakedBuiltin;
-/// Checked-artifact compile-time evaluation finalizer
+/// Checked-module compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 pub const checked_root_graph = @import("checked_root_graph.zig");
 /// Compiler-owned RocOps environment for compile-time evaluation

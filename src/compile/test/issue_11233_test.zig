@@ -1,6 +1,6 @@
 //! Regression test for issue #11233: a chained range under a unary operator must
 //! report the chained-range error instead of leaving an unresolved associated
-//! lookup for checked module publication.
+//! lookup for the checked module's analyses.
 //! repro for https://github.com/roc-lang/roc/issues/11233
 
 const std = @import("std");
@@ -8,7 +8,7 @@ const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
-test "issue 11233: negated chained range reports rather than aborting publication" {
+test "issue 11233: negated chained range reports rather than aborting" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});

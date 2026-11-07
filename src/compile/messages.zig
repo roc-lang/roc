@@ -182,10 +182,10 @@ pub const TypeCheckTask = struct {
     /// For a package or platform root, the public names its header exposes
     /// whose selected nested type the selected module does not define.
     missing_public_types: []const []const u8 = &.{},
-    /// Published checked module keys for direct imports, keyed by typed-CIR module index
-    imported_artifacts: []const Checked.CheckedImport,
-    /// Published checked modules currently available for exact-key lookup during checking finalization
-    available_artifacts: []const Checked.ImportedModuleView,
+    /// Checked module keys for direct imports, keyed by typed-CIR module index
+    imported_modules: []const Checked.CheckedImport,
+    /// Checked modules currently available for exact-key lookup during checking finalization
+    available_modules: []const Checked.ImportedModuleView,
     /// Platform requirement surface for app-root checking, carrying both the
     /// checker's input and the cache-identity component so the two can never
     /// be set independently.

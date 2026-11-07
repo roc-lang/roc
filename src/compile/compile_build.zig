@@ -186,13 +186,14 @@ const PathUtils = struct {
     }
 };
 
-/// Controls which post-check publication work runs after ordinary checking has completed.
-pub const PostCheckPublicationMode = enum {
+/// Controls whether checked-program finalization prepares the executable
+/// program after ordinary checking has completed.
+pub const CheckedProgramMode = enum {
     /// Evaluate checked roots without preparing executable platform relations.
     none,
-    /// Publish the relation-bearing platform root once at finalization,
+    /// Pair the relation-bearing platform root once at finalization,
     /// including when checked source contains explicit runtime-error nodes.
-    executable_artifacts,
+    executable_program,
 };
 
 // BuildEnv: workspace-level orchestrator for multi-package builds with local-only shorthands.
@@ -268,23 +269,23 @@ pub const BuildEnv = struct {
     /// Collect fine-grained compile-time lowering timings and counters.
     detailed_lowering_timing: bool = false,
 
-    /// Controls which checked-module publication work runs after ordinary
-    /// checking has completed.
+    /// Controls whether checked-program finalization prepares the executable
+    /// program after ordinary checking has completed.
     ///
     /// Checking is not complete until the platform/app relation output completes,
     /// so `roc check` and `roc build` both finalize the relation-bearing platform
-    /// root once (`.executable_artifacts`): finalization builds the platform/app
-    /// relation and publishes the platform root, which also resolves the platform
+    /// root once (`.executable_program`): finalization builds the platform/app
+    /// relation and pairs the platform root, which also resolves the platform
     /// target config constants both flows depend on. `.none` still evaluates compile-time roots
     /// for diagnostic-only embeddings, but does not prepare executable relations.
-    post_check_publication_mode: PostCheckPublicationMode = .executable_artifacts,
+    checked_program_mode: CheckedProgramMode = .executable_program,
 
-    /// Whether executable artifacts were published for this build. User
+    /// Whether this build prepared its checked program. User
     /// diagnostics do not change this: checked recovery nodes remain valid
     /// lowering input and crash only if execution reaches them. A build whose
     /// app root never finished checking (for example because it depends on a
-    /// module whose source was rejected) has no program to publish.
-    executable_artifacts_finalized: bool = false,
+    /// module whose source was rejected) has no program to prepare.
+    checked_program_ready: bool = false,
 
     /// Post-canonicalization validation of the module this build was pointed
     /// at when that module is the package root. `roc test` sets
@@ -576,12 +577,12 @@ pub const BuildEnv = struct {
         self.detailed_lowering_timing = enabled;
     }
 
-    pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
-        self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
+    pub fn setPrepareCheckedProgram(self: *BuildEnv, enabled: bool) void {
+        self.checked_program_mode = if (enabled) .executable_program else .none;
     }
 
-    pub fn setPostCheckPublicationMode(self: *BuildEnv, mode: PostCheckPublicationMode) void {
-        self.post_check_publication_mode = mode;
+    pub fn setCheckedProgramMode(self: *BuildEnv, mode: CheckedProgramMode) void {
+        self.checked_program_mode = mode;
     }
 
     pub fn setEntryValidation(self: *BuildEnv, validation: Can.Validation) void {
@@ -1327,7 +1328,7 @@ pub const BuildEnv = struct {
         // Run coordinator loop. On failure, still move whatever reports have
         // accumulated into the ordered sink so callers can drain and render
         // them before propagating the error.
-        self.executable_artifacts_finalized = false;
+        self.checked_program_ready = false;
         coord.coordinatorLoop() catch |err| {
             self.emitAccumulatedReportsForError();
             return err;
@@ -1343,11 +1344,11 @@ pub const BuildEnv = struct {
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
         defer coord.program_test_modules = &.{};
-        coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
+        coord.finishCheckedProgram(self.checked_program_mode) catch |err| {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        self.executable_artifacts_finalized = coord.hasCheckedProgram();
+        self.checked_program_ready = coord.hasCheckedProgram();
 
         try self.resolvePlatformTargetConfigConstants();
 
@@ -2543,7 +2544,7 @@ pub const BuildEnv = struct {
 
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
-        /// Hits that restored inference and published current implementation modules.
+        /// Hits that restored inference and opened current implementation modules.
         inference_cache_hits: u32 = 0,
         /// Producer interface constructions, with no inference hidden in hashing.
         checking_interfaces_built: u32 = 0,
@@ -2569,22 +2570,22 @@ pub const BuildEnv = struct {
         return stats;
     }
 
-    /// `artifact`'s object with the cache key `key`, when this compilation's
+    /// `checked`'s object with the cache key `key`, when this compilation's
     /// compile-time evaluation built or restored it: its bytes, its hosted
     /// symbols, and whether it was restored.
-    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.Checked.CheckedModule, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+    pub fn boxyObjectWithKey(self: *BuildEnv, checked: *const check.Checked.CheckedModule, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
         const coordinator = self.coordinator orelse return null;
         const objects = &(coordinator.boxy_objects orelse return null);
-        const known = objects.objectWithKey(artifact, key) orelse return null;
-        return .{ .pieces = objects.piecesOf(artifact), .image = objects.imageOf(artifact), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+        const known = objects.objectWithKey(checked, key) orelse return null;
+        return .{ .pieces = objects.piecesOf(checked), .image = objects.imageOf(checked), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
     }
 
-    /// Record in `digests` the exports of `artifact`'s object, which this
+    /// Record in `digests` the exports of `checked`'s object, which this
     /// compilation's compile-time evaluation built or restored.
-    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.Checked.CheckedModule) Allocator.Error!void {
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, checked: *const check.Checked.CheckedModule) Allocator.Error!void {
         const coordinator = self.coordinator orelse return;
         const objects = &(coordinator.boxy_objects orelse return);
-        try digests.adoptExports(&objects.digests, artifact);
+        try digests.adoptExports(&objects.digests, checked);
     }
 
     pub const BoxyKnownObject = struct {
@@ -3025,8 +3026,8 @@ pub const BuildEnv = struct {
         while (pkg_it.next()) |entry| {
             if (!test_owned_packages.contains(entry.key_ptr.*)) continue;
             for (entry.value_ptr.*.modules.items) |*mod| {
-                const artifact = mod.checkedModule() orelse continue;
-                try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = artifact.key });
+                const checked = mod.checkedModule() orelse continue;
+                try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = checked.key });
             }
         }
         std.mem.sort(Entry, entries.items, {}, struct {
@@ -3435,10 +3436,10 @@ pub const BuildEnv = struct {
 
     pub fn getExecutableRootSemanticData(self: *BuildEnv) std.mem.Allocator.Error!?SemanticModuleData {
         if (self.getPlatformSemanticData()) |platform| {
-            if (platform.checked_module) |artifact| {
-                if (artifact.checking_context_identity.platform_app_relation != null or
-                    (try artifact.rootRequests()).requests.len > 0 or
-                    (try artifact.providedExports()).exports.len > 0)
+            if (platform.checked_module) |checked| {
+                if (checked.checking_context_identity.platform_app_relation != null or
+                    (try checked.rootRequests()).requests.len > 0 or
+                    (try checked.providedExports()).exports.len > 0)
                 {
                     return platform;
                 }
@@ -3454,25 +3455,25 @@ pub const BuildEnv = struct {
             base.invariant("build env invariant violated: executable root has no checked module", .{});
     }
 
-    /// Every checked module `root_artifact` can lower against, other than
+    /// Every checked module `root_module` can lower against, other than
     /// itself and the builtin module: its lowering-visible modules in order.
     pub fn collectVisibleModules(
         self: *const BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.Checked.CheckedModule,
+        root_module: *const check.Checked.CheckedModule,
     ) Allocator.Error![]const *const check.Checked.CheckedModule {
-        var artifacts = std.ArrayList(*const check.Checked.CheckedModule).empty;
-        errdefer artifacts.deinit(allocator);
-        const builtin_artifact = &self.builtin_modules.checked_module;
+        var checked_modules = std.ArrayList(*const check.Checked.CheckedModule).empty;
+        errdefer checked_modules.deinit(allocator);
+        const builtin_checked = &self.builtin_modules.checked_module;
         const coord = self.coordinator orelse
-            base.invariant("build env invariant violated: visible artifacts requested before a build", .{});
-        for ((try root_artifact.loweringVisibility(coord.moduleResolver())).module_ids) |key| {
-            if (checkedModuleKeysEqual(key, root_artifact.key.digest())) continue;
-            if (checkedModuleKeysEqual(key, builtin_artifact.key.digest())) continue;
-            const artifact = self.artifactByKey(key) orelse continue;
-            try artifacts.append(allocator, artifact);
+            base.invariant("build env invariant violated: visible modules requested before a build", .{});
+        for ((try root_module.loweringVisibility(coord.moduleResolver())).module_ids) |key| {
+            if (checkedModuleKeysEqual(key, root_module.key.digest())) continue;
+            if (checkedModuleKeysEqual(key, builtin_checked.key.digest())) continue;
+            const checked = self.moduleByKey(key) orelse continue;
+            try checked_modules.append(allocator, checked);
         }
-        return artifacts.toOwnedSlice(allocator);
+        return checked_modules.toOwnedSlice(allocator);
     }
 
     /// The digests of every checked module of this build, its link.
@@ -3480,22 +3481,22 @@ pub const BuildEnv = struct {
         return self.builtCoordinator().boxyLinkDigests();
     }
 
-    /// Collect published checked modules available to post-check lowering.
+    /// Collect the checked modules available to post-check lowering.
     pub fn collectImportedModuleViews(
         self: *BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.Checked.CheckedModule,
+        root_module: *const check.Checked.CheckedModule,
     ) Allocator.Error![]check.Checked.ImportedModuleView {
-        return self.builtCoordinator().collectImportedModuleViews(allocator, root_artifact);
+        return self.builtCoordinator().collectImportedModuleViews(allocator, root_module);
     }
 
     /// Collect the app modules a platform root's required bindings name.
     pub fn collectRelationModuleViews(
         self: *BuildEnv,
         allocator: Allocator,
-        root_artifact: *const check.Checked.CheckedModule,
+        root_module: *const check.Checked.CheckedModule,
     ) Allocator.Error![]check.Checked.ImportedModuleView {
-        return self.builtCoordinator().collectRelationModuleViews(allocator, root_artifact);
+        return self.builtCoordinator().collectRelationModuleViews(allocator, root_module);
     }
 
     /// A resolver over every checked module of the build.
@@ -3505,7 +3506,7 @@ pub const BuildEnv = struct {
 
     fn builtCoordinator(self: *BuildEnv) *Coordinator {
         return self.coordinator orelse
-            base.invariant("build env invariant violated: artifact views requested before a build", .{});
+            base.invariant("build env invariant violated: module views requested before a build", .{});
     }
 
     fn checkedModuleKeysEqual(
@@ -3515,7 +3516,7 @@ pub const BuildEnv = struct {
         return a.eql(b);
     }
 
-    fn artifactByKey(
+    fn moduleByKey(
         self: *const BuildEnv,
         key: check.Checked.ModuleId,
     ) ?*const check.Checked.CheckedModule {

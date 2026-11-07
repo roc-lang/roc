@@ -20,16 +20,16 @@ fn checkLen(new_len: usize) Allocator.Error!void {
 /// outside the `backing_len`-byte relocated buffer (truncated/corrupt blob), with
 /// overflow-safe arithmetic. An empty span is always valid. The single primitive
 /// behind every relocatable marker's `validateRelocations`—`SafeList.Serialized`/
-/// `SafeMultiList.Serialized` call it directly, and `artifact_serialize`'s
+/// `SafeMultiList.Serialized` call it directly, and `store_serialize`'s
 /// element-count-based `validateOffsetLen` delegates here after computing the byte
 /// extent (it lives in `collections`, the shared lower layer both can reach).
-pub fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, backing_len: u64) error{CorruptArtifact}!void {
+pub fn validateRelocatedSpan(elem_align: u64, offset: i64, span_bytes: u64, backing_len: u64) error{CorruptSerializedData}!void {
     if (span_bytes == 0) return;
-    if (offset < 0) return error.CorruptArtifact;
+    if (offset < 0) return error.CorruptSerializedData;
     const off: u64 = @intCast(offset);
-    if (elem_align != 0 and off % elem_align != 0) return error.CorruptArtifact;
-    const end = std.math.add(u64, off, span_bytes) catch return error.CorruptArtifact;
-    if (end > backing_len) return error.CorruptArtifact;
+    if (elem_align != 0 and off % elem_align != 0) return error.CorruptSerializedData;
+    const end = std.math.add(u64, off, span_bytes) catch return error.CorruptSerializedData;
+    if (end > backing_len) return error.CorruptSerializedData;
 }
 
 /// An iterator over consecutive indices of type `Idx` in `[current, end)`.
@@ -162,7 +162,7 @@ pub fn SafeList(comptime T: type) type {
 
             /// One relocatable base pointer (`offset`) is fixed up per `deserializeInto`,
             /// regardless of `len`. Counted by
-            /// `artifact_serialize.relocatablePointerCount` so a composing store's total
+            /// `store_serialize.relocatablePointerCount` so a composing store's total
             /// fixup count includes its `SafeList`-backed (e.g. interner) fields.
             pub const serialized_relocatable_pointers: usize = 1;
 
@@ -172,8 +172,8 @@ pub fn SafeList(comptime T: type) type {
 
             /// L-10: reject an `(offset, len)` whose `len` elements reach outside the
             /// `backing_len`-byte buffer before `deserializeInto` dereferences it.
-            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-                const span_bytes = std.math.mul(u64, self.len, @sizeOf(T)) catch return error.CorruptArtifact;
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptSerializedData}!void {
+                const span_bytes = std.math.mul(u64, self.len, @sizeOf(T)) catch return error.CorruptSerializedData;
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);
             }
 
@@ -705,7 +705,7 @@ pub fn SafeMultiList(comptime T: type) type {
             capacity: u64,
 
             /// One relocatable base pointer (`offset`) fixed up per `deserializeInto`, counted by
-            /// `artifact_serialize.relocatablePointerCount`.
+            /// `store_serialize.relocatablePointerCount`.
             pub const serialized_relocatable_pointers: usize = 1;
 
             /// The element type whose bytes are serialized (see `SafeList.Serialized`).
@@ -713,7 +713,7 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// L-10: reject an `(offset, capacity)` whose `capacityInBytes` extent (the
             /// region `serialize` writes) reaches outside the `backing_len`-byte buffer.
-            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptSerializedData}!void {
                 if (self.len == 0) return;
                 const span_bytes = std.MultiArrayList(T).capacityInBytes(@intCast(self.capacity));
                 try validateRelocatedSpan(@alignOf(T), self.offset, span_bytes, backing_len);

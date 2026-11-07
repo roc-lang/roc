@@ -106,7 +106,7 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
     };
 
     build_env.setTarget(selected_target);
-    build_env.setPostCheckPublicationMode(.executable_artifacts);
+    build_env.setCheckedProgramMode(.executable_program);
     build_env.compileDiscovered() catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM during generated app checking"),
         else => {},
@@ -123,7 +123,7 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
 
     // Every rejection, import cycles included, leaves the app checked, so the
     // program must exist and lower.
-    if (!build_env.executable_artifacts_finalized) {
+    if (!build_env.checked_program_ready) {
         if (!debug) FuzzHarness.printGeneratedFiles(generated_files);
         @panic("generated build fuzz app finished checking without a program");
     }

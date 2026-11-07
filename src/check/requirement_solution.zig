@@ -2,8 +2,8 @@
 //! requirement an app was checked against, the exported app def that satisfies
 //! it and the solver vars holding the solved requirement type and its identity
 //! bindings. `Check` produces these when requirement unification succeeds;
-//! checked-artifact publication materializes successful vars as checked type
-//! roots (`PlatformRequirementSolutionTable`), so finalization can publish an
+//! the checked module's type-root enumeration materializes successful vars as
+//! checked type roots (`PlatformRequirementSolutionTable`), so finalization can record an
 //! exact binding or an explicit checked-error outcome for every requirement.
 
 const types_mod = @import("types");
@@ -31,7 +31,7 @@ pub const SolutionInput = struct {
     is_function: bool,
     /// Explicit checker verdict for this requirement. Rows are created before
     /// their app definitions are checked, then finalized after all checker
-    /// error poisoning has completed. Artifact publication only consumes the
+    /// error poisoning has completed. The checked module only consumes the
     /// two final states.
     outcome: Outcome = .pending,
     /// The requirement type's identity variables (flex/rigid), instantiated

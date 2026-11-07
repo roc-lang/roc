@@ -4,7 +4,7 @@ const expectLowersToLir = @import("lower_to_lir_harness.zig").expectLowersToLir;
 
 test "issue 11621: mutually recursive functions using ? lower to LIR" {
     // Each function's error row includes the other's, so instantiating their
-    // schemes copies rows that repeat a tag. Every published type root, not
+    // schemes copies rows that repeat a tag. Every checked type root, not
     // only the rows reachable from expression types, must be normalized
     // before the checked module is built.
     try expectLowersToLir(

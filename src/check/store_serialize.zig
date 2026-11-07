@@ -168,7 +168,7 @@ fn touchAllDefined(comptime T: type, comptime value: T) void {
 /// already validated by `assertRelocatablePod` where the marker was built.
 ///
 /// Recurses through nested non-marker aggregates, so one call on the top-level
-/// artifact `Serialized` validates the entire sub-store tree at compile time.
+/// `CheckedModule.Serialized` validates the entire sub-store tree at compile time.
 pub fn assertSerializedRelocatable(comptime T: type) void {
     comptime {
         @setEvalBranchQuota(1_000_000);
@@ -240,7 +240,7 @@ pub fn SerializedSlice(comptime T: type) type {
 
         /// L-10: reject an `(offset, len)` that would `deserialize` into a slice
         /// reaching outside the `backing_len`-byte buffer (truncated/corrupt blob).
-        pub fn validateRelocations(self: *const Self, backing_len: u64) error{CorruptArtifact}!void {
+        pub fn validateRelocations(self: *const Self, backing_len: u64) error{CorruptSerializedData}!void {
             try validateOffsetLen(@sizeOf(T), @alignOf(T), self.offset, self.len, backing_len);
         }
     };
@@ -250,19 +250,19 @@ pub fn SerializedSlice(comptime T: type) type {
 /// computes the byte extent overflow-safe (so a corrupt huge `len` can't wrap) and
 /// delegates to the shared `collections.validateRelocatedSpan` primitive, which the
 /// `SafeList`-backed markers also use directly.
-pub fn validateOffsetLen(elem_size: u64, elem_align: u64, offset: i64, len: u64, backing_len: u64) error{CorruptArtifact}!void {
-    const bytes = std.math.mul(u64, len, elem_size) catch return error.CorruptArtifact;
+pub fn validateOffsetLen(elem_size: u64, elem_align: u64, offset: i64, len: u64, backing_len: u64) error{CorruptSerializedData}!void {
+    const bytes = std.math.mul(u64, len, elem_size) catch return error.CorruptSerializedData;
     return collections.validateRelocatedSpan(elem_align, offset, bytes, backing_len);
 }
 
-/// L-10 whole-artifact validation pass: walk a relocated `Serialized` value and
+/// L-10 whole-module validation pass: walk a relocated `Serialized` value and
 /// bounds-check every relocatable marker's `(offset, len)` against `backing_len`
 /// BEFORE any consumer dereferences it, so a truncated or corrupt blob produces a
-/// clean `error.CorruptArtifact` rather than an out-of-bounds read. A marker (a type
+/// clean `error.CorruptSerializedData` rather than an out-of-bounds read. A marker (a type
 /// declaring `serialized_relocatable_pointers`) self-validates via
 /// `validateRelocations`; everything else is recursed into. Pure structural walk
 /// driven by the type, mirroring `relocatablePointerCount`/`assertSerializedRelocatable`.
-pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) error{CorruptArtifact}!void {
+pub fn validateSerialized(comptime T: type, self: *const T, backing_len: u64) error{CorruptSerializedData}!void {
     try collections.validateSerializedRelocations(T, self, backing_len);
 }
 
@@ -406,7 +406,7 @@ pub fn serializedLayoutFingerprint(comptime T: type, hasher: anytype) void {
 
 /// Comptime FNV-1a accumulator. Cheap enough to fold a large recursive layout
 /// fingerprint at compile time without exhausting the eval branch quota (a full
-/// SHA-256 over the whole artifact layout does—and cryptographic strength is
+/// SHA-256 over the whole checked module layout does—and cryptographic strength is
 /// unnecessary for detecting *accidental* layout drift).
 const LayoutHasher = struct {
     state: u64 = 0xcbf29ce484222325,
@@ -593,7 +593,7 @@ fn isTransientField(comptime Store: type, comptime name: []const u8) bool {
 ///     pub const Serialized = extern struct {
 ///         foo: SerializedSlice(Foo) = .{},
 ///         bar: SerializedOptional(Bar) = .{},
-///         const Serde = artifact_serialize.SliceStoreSerde(Store, @This());
+///         const Serde = store_serialize.SliceStoreSerde(Store, @This());
 ///         pub const serialize = Serde.serialize;
 ///         pub const deserialize = Serde.deserialize;
 ///     };
@@ -945,7 +945,7 @@ test "relocatablePointerCount: counts SafeList.Serialized base pointers and sums
     try testing.expectEqual(@as(usize, 3), relocatablePointerCount(InternerLike));
 
     // A store composed of slices + a nested interner sums to the true total—the
-    // invariant that lets the artifact assert its full constant fixup count.
+    // invariant that lets the checked module assert its full constant fixup count.
     const Composed = extern struct {
         a: SerializedSlice(Elem),
         interner: InternerLike,
@@ -961,12 +961,12 @@ test "validateOffsetLen: bounds, alignment, and overflow (L-10)" {
     try validateOffsetLen(4, 4, 0, 4, 16);
     try validateOffsetLen(4, 4, 8, 2, 16);
     // One element past the edge.
-    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, 8, 3, 16));
+    try testing.expectError(error.CorruptSerializedData, validateOffsetLen(4, 4, 8, 3, 16));
     // Negative offset, misaligned offset.
-    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, -1, 1, 16));
-    try testing.expectError(error.CorruptArtifact, validateOffsetLen(4, 4, 2, 1, 16));
+    try testing.expectError(error.CorruptSerializedData, validateOffsetLen(4, 4, -1, 1, 16));
+    try testing.expectError(error.CorruptSerializedData, validateOffsetLen(4, 4, 2, 1, 16));
     // len * elem_size overflows u64.
-    try testing.expectError(error.CorruptArtifact, validateOffsetLen(8, 1, 0, std.math.maxInt(u64), 64));
+    try testing.expectError(error.CorruptSerializedData, validateOffsetLen(8, 1, 0, std.math.maxInt(u64), 64));
 }
 
 test "validateSerialized: walks markers and rejects out-of-bounds ranges (L-10)" {
@@ -982,10 +982,10 @@ test "validateSerialized: walks markers and rejects out-of-bounds ranges (L-10)"
     };
     try validateSerialized(Composed, &c, 16);
     // Truncating the buffer pushes b's extent past the bound.
-    try testing.expectError(error.CorruptArtifact, validateSerialized(Composed, &c, 12));
+    try testing.expectError(error.CorruptSerializedData, validateSerialized(Composed, &c, 12));
     // A corrupt, impossibly-large len is rejected.
     c.b.len = std.math.maxInt(u64);
-    try testing.expectError(error.CorruptArtifact, validateSerialized(Composed, &c, 16));
+    try testing.expectError(error.CorruptSerializedData, validateSerialized(Composed, &c, 16));
 }
 
 fn versionHashesEqual(a: [32]u8, b: [32]u8) bool {

@@ -145,20 +145,20 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
     }
 }
 
-fn expectRejectedBinding(artifact: *const check.Checked.CheckedModule) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+fn expectRejectedBinding(checked: *const check.Checked.CheckedModule) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     var rejected: usize = 0;
-    for ((try artifact.checkedTables()).top_level_procedure_bindings.bindings.items) |binding| {
+    for ((try checked.checkedTables()).top_level_procedure_bindings.bindings.items) |binding| {
         if (binding.body != .checked_error) continue;
         rejected += 1;
         const expr = binding.body.checked_error;
-        try std.testing.expect((try artifact.bodies()).exprData(expr) == .runtime_error);
-        for ((try artifact.checkedTables()).compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
+        try std.testing.expect((try checked.bodies()).exprData(expr) == .runtime_error);
+        for ((try checked.checkedTables()).compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
-    try std.testing.expectEqual(@as(usize, 0), (try artifact.checkedTables()).callable_eval_templates.templates.items.len);
+    try std.testing.expectEqual(@as(usize, 0), (try checked.checkedTables()).callable_eval_templates.templates.items.len);
     var exported_rejected: usize = 0;
     var exported_valid: usize = 0;
-    for ((try artifact.exportRows()).procedure_bindings) |binding| {
+    for ((try checked.exportRows()).procedure_bindings) |binding| {
         switch (binding.body) {
             .checked_error => exported_rejected += 1,
             .direct_template => exported_valid += 1,
@@ -211,8 +211,8 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
         if (std.mem.eql(u8, report.title, "Type Mismatch")) mismatch = true;
     };
     try std.testing.expect(mismatch);
-    const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_module.?;
-    try expectRejectedBinding(artifact);
+    const checked = build.findModuleByPath(bad_path).?.semanticData().?.checked_module.?;
+    try expectRejectedBinding(checked);
     const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_module.?;
     try std.testing.expectEqual(@as(usize, 1), (try alias.exportRows()).procedure_bindings.len);
     try std.testing.expect((try alias.exportRows()).procedure_bindings[0].body == .checked_error);
@@ -246,20 +246,20 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
     var writer = CompactWriter.init();
     const Serialized = check.Checked.CheckedModule.Serialized;
     const header = try writer.appendAlloc(arena.allocator(), Serialized);
-    try header.serialize(artifact, arena.allocator(), &writer);
+    try header.serialize(checked, arena.allocator(), &writer);
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
     _ = try writer.writeToBuffer(buffer);
     // `Bad` imports only Builtin, which its module set holds first.
-    std.debug.assert(artifact.direct_import_module_keys.len == 1);
-    const builtin_key = artifact.direct_import_module_keys[0];
+    std.debug.assert(checked.direct_import_module_keys.len == 1);
+    const builtin_key = checked.direct_import_module_keys[0];
     const imports = [_]check.Checked.CheckedImport{.{
         .module_idx = 0,
         .key = builtin_key,
         .view = build.moduleResolver().resolve(builtin_key.digest()).?,
     }};
     var loaded = try check.Checked.openCheckedModule(gpa, .{
-        .module_env_storage = artifact.module_env,
-        .module_idx = artifact.module_identity.module_idx,
+        .module_env_storage = checked.module_env,
+        .module_idx = checked.module_identity.module_idx,
         .io = io,
         .imports = &imports,
         .resolver = build.moduleResolver(),

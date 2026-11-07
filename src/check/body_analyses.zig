@@ -864,9 +864,9 @@ pub const BodyAnalyses = struct {
     single_source_templates: collections.OnceSlot(*SingleSourceTemplates, .body_single_source_calls) = .empty,
     single_source_sites: collections.OnceSlot(*SingleSourceSites, .body_single_source_sites) = .empty,
     exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
-    /// Set once the module is published (`CheckedModule.openToAnalyses`):
+    /// Set once the module is opened (`CheckedModule.openToAnalyses`):
     /// no slot of the module runs before it.
-    published: std.atomic.Value(bool) = .init(false),
+    opened: std.atomic.Value(bool) = .init(false),
 
     /// The analyses of `env`'s bodies. `promoted` lists the module's
     /// promoted local procedures, each with its binding `pattern`.
@@ -892,13 +892,13 @@ pub const BodyAnalyses = struct {
         return analyses;
     }
 
-    /// Record that the module is published.
-    pub fn markPublished(self: *BodyAnalyses) void {
-        self.published.store(true, .release);
+    /// Record that the module is opened.
+    pub fn markOpened(self: *BodyAnalyses) void {
+        self.opened.store(true, .release);
     }
 
-    fn assertPublished(self: *const BodyAnalyses) void {
-        if (std.debug.runtime_safety and !self.published.load(.acquire)) invariant("a body analysis of a module was claimed before the module was published");
+    fn assertOpened(self: *const BodyAnalyses) void {
+        if (std.debug.runtime_safety and !self.opened.load(.acquire)) invariant("a body analysis of a module was claimed before the module was opened");
     }
 
     pub fn destroy(self: *BodyAnalyses) void {
@@ -938,45 +938,45 @@ pub const BodyAnalyses = struct {
     };
 
     pub fn exprDiverges(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId, mode: InlineExpectMode) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
     pub fn statementDiverges(self: *BodyAnalyses, bodies: CheckedBodies, statement: StatementId, mode: InlineExpectMode) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const facts, const position = try self.unitFacts(bodies, @backingInt(statement));
         return facts.flags[position] & divergenceFlag(mode) != 0;
     }
 
     pub fn exprEvaluationMayBeElidedForInspect(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const facts, const position = try self.unitFacts(bodies, @backingInt(expr));
         return facts.flags[position] & UnitFacts.inspect_elidable != 0;
     }
 
     pub fn stateMergeBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
-        self.assertPublished();
+        self.assertOpened();
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.state_merges[position] orelse invariant("a state merge was requested for a node that owns none");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn loopMutationBinders(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error![]const BinderId {
-        self.assertPublished();
+        self.assertOpened();
         const facts, const position = try self.unitFacts(bodies, raw_node);
         const span = facts.loop_mutations[position] orelse invariant("loop mutations were requested for a node that is not a loop");
         return facts.binders[span.start..][0..span.len];
     }
 
     pub fn exprContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, expr: ExprId) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(expr));
     }
 
     pub fn patternContainsDiagnosticError(self: *BodyAnalyses, bodies: CheckedBodies, pattern: PatternId) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const bits = try self.diagnostic_errors.getOrCompute(self.io, Allocator.Error, DiagnosticRequest{ .analyses = self, .bodies = bodies }, DiagnosticRequest.compute);
         return bits.isSet(@backingInt(pattern));
     }
@@ -995,7 +995,7 @@ pub const BodyAnalyses = struct {
     };
 
     pub fn templateHasSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const facts = try self.single_source_templates.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.templates);
         return std.sort.binarySearch(canonical.CheckedProcedureTemplateId, facts.templates, template, struct {
             fn order(key: canonical.CheckedProcedureTemplateId, item: canonical.CheckedProcedureTemplateId) std.math.Order {
@@ -1005,7 +1005,7 @@ pub const BodyAnalyses = struct {
     }
 
     pub fn nestedProcSiteIsSingleSourceCall(self: *BodyAnalyses, bodies: CheckedBodies, site: canonical.NestedProcSiteId) Allocator.Error!bool {
-        self.assertPublished();
+        self.assertOpened();
         const facts = try self.single_source_sites.getOrCompute(self.io, Allocator.Error, SingleSourceRequest{ .analyses = self, .bodies = bodies }, SingleSourceRequest.sites);
         return std.sort.binarySearch(u32, facts.sites, @backingInt(site), orderU32) != null;
     }
@@ -2065,7 +2065,7 @@ const ReassignmentPublisher = struct {
 /// Which diagnostic-error facts to compute.
 pub const DiagnosticMode = enum {
     /// Errors checking recorded in the bodies, propagated through their
-    /// children: the facts publication reads before total dispatch
+    /// children: the facts the checked tables read before total dispatch
     /// resolution.
     ordinary,
     /// The ordinary facts plus every rejected total dispatch resolution, and,
@@ -2179,7 +2179,7 @@ const ConstantGraph = struct {
                 .promoted_top_level_proc,
                 => continue,
             };
-            if (!ref.artifact.eql(module)) continue;
+            if (!ref.module.eql(module)) continue;
             if (const_templates.get(ref).state == .unimplemented) continue;
             try graph.lookup_values.put(@backingInt(record.expr), switch (ref.owner) {
                 .top_level_binding => |owner| by_pattern.get(@backingInt(owner.pattern)) orelse
@@ -2547,7 +2547,7 @@ fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) All
         module: canonical.CheckedModuleDigest,
 
         fn template(self: @This(), ref: canonical.ProcedureTemplateRef) ?canonical.CheckedProcedureTemplateId {
-            if (!ref.artifact.eql(self.module)) return null;
+            if (!ref.module.eql(self.module)) return null;
             return ref.template;
         }
     };
@@ -2557,7 +2557,7 @@ fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) All
     // neither exposed nor methods.
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
-    const exported_defs = try checked_module.collectPublishedExportDefs(allocator, env);
+    const exported_defs = try checked_module.collectExportDefs(allocator, env);
     defer allocator.free(exported_defs);
     for (exported_defs) |def| try public_defs.put(def, {});
     for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
@@ -2637,10 +2637,10 @@ fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) All
         };
         const binding = switch (procedure.binding) {
             .top_level => |binding| binding,
-            .platform_required => |required| checked_module.ModuleTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
+            .platform_required => |required| checked_module.ModuleTopLevelProcedureBindingRef{ .module = required.module, .binding = required.procedure_binding },
             .imported, .hosted => continue,
         };
-        if (!binding.artifact.eql(module)) continue;
+        if (!binding.module.eql(module)) continue;
         const id = switch (bindings.get(binding.binding).body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| local.template(template),

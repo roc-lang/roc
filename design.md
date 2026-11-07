@@ -4493,7 +4493,11 @@ Checked-module cache writes stream the header and the relocatable bodies (the
 output) to a private staging file, then atomically rename it. They never gather
 another full-entry heap buffer. Each body starts at a 16-byte-aligned entry
 offset, so a cache hit relocates every body in place inside the entry's
-private mapping, which the installed module's environment storage owns. A failed write or rename removes the staging file
+private mapping, which the installed module's environment storage owns. The
+module's type-check task probes the entry and, on a hit, relocates and opens
+the module in place of checking it, so a warm build opens modules in parallel
+exactly as a cold build checks them; the coordinator only installs the opened
+module. A failed write or rename removes the staging file
 and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
@@ -5386,10 +5390,12 @@ A reference into another module reads that module's own recorded
 declares a type reached through the imports, and it is checked first. Its
 binding resolutions are part of its checking interface (what an importer's
 inference cache entry is keyed by), so the recorded resolution is a function
-of the module and of what its imports fix, and of nothing a command, a
-workspace or a module it does not import decides. Lowering reads the
-resolution through the module's resolved value references
-(`ResolvedValueRefTable`), the callable-eval templates' `forwarded_lookup` and
+of the module and of what its imports fix, and of nothing a workspace or a
+module it does not import decides. The one input a command chooses is the
+module's validation mode, part of its checking context: `roc test` checks its
+root module under `explicit_roots` ("Cache Boundary"). Lowering reads the
+resolution through the module's resolved value references (`valueRefs`),
+the callable-eval templates' `forwarded_lookup` and
 the checked-error procedure bindings. The resolved value references are part
 of the module's checked tables slot, computed on demand from the recorded
 `value_references`, `retired_exprs` and `direct_procedure_calls` and naming

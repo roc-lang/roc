@@ -8295,7 +8295,7 @@ const Builder = struct {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.static-data-request.v1");
         hasher.update(&view.key.bytes);
-        hasher.update(&request.const_locator.artifact.bytes);
+        hasher.update(&request.const_locator.module.bytes);
         switch (request.const_locator.owner) {
             .top_level_binding => |owner| {
                 hasher.update("top-level-binding");
@@ -12050,7 +12050,7 @@ const Builder = struct {
         for (self.moduleViews()) |*view| {
             for (view.platform_required_bindings.bindings) |binding| {
                 const this: Common.PlatformRequirementFilling = .{
-                    .app_module = binding.app_value.artifact.bytes,
+                    .app_module = binding.app_value.module.bytes,
                     .relation = binding.relation.bytes,
                 };
                 if (filling) |existing| {
@@ -54974,7 +54974,7 @@ const BodyContext = struct {
         // declaration names the procedure template whose body declares it.
         const template = try lookup.view.bodies.localProcedureTemplate(local.expr);
         return .{
-            .artifact = moduleDigestFromId(lookup.view.key),
+            .module = moduleDigestFromId(lookup.view.key),
             .proc_base = (try lookup.view.template(template)).proc_base,
             .template = template,
         };
@@ -66050,7 +66050,7 @@ const BodyContext = struct {
         const owner: names.ProcTemplate = if (self.in_default_expr) self.owner_template else blk: {
             const template = try view.bodies.localProcedureTemplate(expr);
             break :blk .{
-                .artifact = moduleDigestFromId(view.key),
+                .module = moduleDigestFromId(view.key),
                 .proc_base = (try view.template(template)).proc_base,
                 .template = template,
             };
@@ -67891,7 +67891,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     defer program.deinit();
     const ty = try program.types.internZst(&program.names);
     const template_ref = names.ProcTemplate{
-        .artifact = .{},
+        .module = .{},
         // Both fields are only carried by jobs that are skipped below.
         .proc_base = undefined,
         .template = undefined,
@@ -71838,7 +71838,7 @@ test "body draft comptime roots relocate independent shards and survive source d
             .module = .{ .bytes = @splat(0x31) },
             .root = .{ .checked = @fromBackingInt(@intCast(7)) },
             .const_locator = .{
-                .artifact = .{ .bytes = @splat(0x41) },
+                .module = .{ .bytes = @splat(0x41) },
                 .owner = .{ .hoisted_root = .{ .module_idx = 19, .root = @fromBackingInt(@intCast(23)) } },
                 .template = @fromBackingInt(@intCast(29)),
                 .source_scheme = @fromBackingInt(0x51),

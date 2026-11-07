@@ -21,7 +21,7 @@ fn sharedPreOpenedBuiltin() SharedMemorySystemTestError!test_helpers.PreOpenedBu
     return .{
         .env = shared_test_builtins.?.builtin_module.env,
         .indices = shared_test_builtins.?.builtin_indices,
-        .artifact = &shared_test_builtins.?.checked_module,
+        .module = &shared_test_builtins.?.checked_module,
     };
 }
 
@@ -68,8 +68,8 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
 }
 
 fn expectOpenedImportModuleCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) SharedMemorySystemTestError!void {
-    const borrowed_builtin_count: usize = if (compiled.resources.borrowed_builtin_artifact != null) 1 else 0;
-    try testing.expectEqual(expected, compiled.resources.import_artifacts.len + borrowed_builtin_count);
+    const borrowed_builtin_count: usize = if (compiled.resources.borrowed_builtin_checked != null) 1 else 0;
+    try testing.expectEqual(expected, compiled.resources.import_modules.len + borrowed_builtin_count);
 }
 
 test "integration - shared memory setup and parsing" {

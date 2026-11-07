@@ -11,13 +11,13 @@
 //! a time.
 //!
 //! What a payload needs besides the store lives in four columns of the
-//! module's checked type store, filled when the module is published: the
+//! module's checked type store, filled when the module is opened: the
 //! canonical names its identifiers stand for, the checked identity and owning
 //! module of every module its named types come from, the checked facts of
-//! every nominal declaration it holds, and per variable whether publication
+//! every nominal declaration it holds, and per variable whether type-root enumeration
 //! reached it and through which row-tail positions. A variable's row default
 //! is the one rendering decision that depends on more than the variable: it
-//! comes from the row-tail positions publication reached it through
+//! comes from the row-tail positions type-root enumeration reached it through
 //! (`reach`).
 
 const std = @import("std");
@@ -79,7 +79,7 @@ pub const SealedNominalRow = struct {
     representation: ?CheckedNominalRepresentationRef = null,
 };
 
-/// Per solver variable: whether publication reached it, and through which
+/// Per solver variable: whether type-root enumeration reached it, and through which
 /// row-tail positions.
 pub const SealedVarFacts = packed struct(u8) {
     reached: bool = false,
@@ -152,13 +152,13 @@ pub const SealedTypeView = struct {
         return self.typeStore().resolveVar(var_).var_;
     }
 
-    /// Whether publication reached `var_`'s class.
+    /// Whether type-root enumeration reached `var_`'s class.
     pub fn reaches(self: SealedTypeView, var_: Var) bool {
         return self.facts(self.representative(var_)).reached;
     }
 
     /// `var_`'s checked type. `var_` is its class's checked representative,
-    /// and publication reached it.
+    /// and type-root enumeration reached it.
     pub fn payload(self: SealedTypeView, var_: Var) CheckedTypePayload {
         const env = self.env;
         const type_store = self.typeStore();
@@ -257,7 +257,7 @@ pub const SealedTypeView = struct {
     }
 
     /// The row default of the variable `var_` whose content is `content`,
-    /// from the row-tail positions publication reached it through.
+    /// from the row-tail positions type-root enumeration reached it through.
     fn rowDefault(self: SealedTypeView, var_: Var, content: types.Content) ?RowDefault {
         const var_facts = self.facts(var_);
         const candidate: ?RowDefault = if (var_facts.record_tail) .empty_record else if (var_facts.tag_tail) .empty_tag_union else null;
@@ -346,7 +346,7 @@ pub const SealedTypeColumns = struct {
 /// Fill `columns` for `env`, whose solver store checking sealed: intern the
 /// canonical name of every identifier the store's types use, resolve every
 /// module identity they name and every nominal declaration the store holds,
-/// and mark no variable reached. `reach` marks the variables publication
+/// and mark no variable reached. `reach` marks the variables type-root enumeration
 /// reaches.
 pub fn buildColumns(
     allocator: Allocator,
@@ -584,9 +584,9 @@ const ReachWalker = struct {
 /// Check `source` against the builtin module, publish it, and render every
 /// source type-root enumeration reached through the sealed type view, asserting
 /// that each child is a reached checked representative and each row is flat.
-const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch };
+const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptSerializedData, CorruptBuiltinOutputs, BuiltinOutputsVersionMismatch };
 
-fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
+fn expectViewRendersCheckedTypes(source: []const u8) ViewTestError!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const allocator = std.testing.allocator;
@@ -596,8 +596,8 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     try test_env.assertNoErrors();
     try std.testing.expect(test_env.module_env.types.isSealed());
 
-    var builtin_artifact = try checked_module.openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
-    defer builtin_artifact.deinitRetainingModuleEnv(allocator);
+    var builtin_checked = try checked_module.openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
+    defer builtin_checked.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.builtin_module.env },
@@ -608,17 +608,17 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     const module = modules.module(1);
     const imports = [_]checked_module.CheckedImport{.{
         .module_idx = 0,
-        .key = builtin_artifact.key,
-        .view = checked_module.importedView(&builtin_artifact),
+        .key = builtin_checked.key,
+        .view = checked_module.importedView(&builtin_checked),
     }};
 
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
     var module_index = try checked_module.ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
     defer module_index.deinit(allocator);
-    const publication_keys = try checked_module.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
-    defer publication_keys.destroy();
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &module_index, &.{}, &.{}, publication_keys);
+    const checked_keys = try checked_module.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    defer checked_keys.destroy();
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &module_index, &.{}, &.{}, checked_keys);
     defer publication.deinit(allocator);
 
     const view = publication.sealedView(module.moduleEnvConst());
@@ -673,7 +673,7 @@ fn expectRenders(view: SealedTypeView, var_: Var) error{ TestUnexpectedResult, T
 }
 
 test "sealed type view renders published types: open and closed records" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\get_x : { x : I64, ..rest } -> I64
         \\get_x = |rec| rec.x
         \\
@@ -688,7 +688,7 @@ test "sealed type view renders published types: open and closed records" {
 }
 
 test "sealed type view renders published types: open tag unions" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\describe : [Red, Green, ..others] -> Str
         \\describe = |color| match color {
         \\    Red => "red"
@@ -703,7 +703,7 @@ test "sealed type view renders published types: open tag unions" {
 }
 
 test "sealed type view renders published types: row tails constrained only by equality" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\same = |a, b| a == b
         \\
         \\same_records = same({ x: 1.I64 }, { x: 2.I64 })
@@ -715,7 +715,7 @@ test "sealed type view renders published types: row tails constrained only by eq
 }
 
 test "sealed type view renders published types: numeric literal defaulting" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\n = 42
         \\
         \\fraction = 1.5
@@ -727,7 +727,7 @@ test "sealed type view renders published types: numeric literal defaulting" {
 }
 
 test "sealed type view renders published types: aliases" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\Point : { x : I64, y : I64 }
         \\
         \\Pair(a) : (a, a)
@@ -743,7 +743,7 @@ test "sealed type view renders published types: aliases" {
 }
 
 test "sealed type view renders published types: local nominal types" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\Color := [Red, Green, Blue]
         \\
         \\Wrapper(a) := { inner : a }
@@ -762,7 +762,7 @@ test "sealed type view renders published types: local nominal types" {
 }
 
 test "sealed type view renders published types: builtin nominals" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\words : List(Str)
         \\words = ["a", "b"]
         \\
@@ -776,7 +776,7 @@ test "sealed type view renders published types: builtin nominals" {
 }
 
 test "sealed type view renders published types: pure, effectful and unbound functions" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\double : I64 -> I64
         \\double = |x| x * 2
         \\
@@ -790,7 +790,7 @@ test "sealed type view renders published types: pure, effectful and unbound func
 }
 
 test "sealed type view renders published types: tuples" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\pair = (1.I64, "a")
         \\
         \\first = |(a, _)| a
@@ -800,7 +800,7 @@ test "sealed type view renders published types: tuples" {
 }
 
 test "sealed type view renders published types: recursive types" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\Tree := [Leaf, Node(Tree, I64, Tree)]
         \\
         \\tree : Tree
@@ -820,7 +820,7 @@ test "sealed type view renders published types: recursive types" {
 }
 
 test "sealed type view renders published types: bounded row extensions" {
-    try expectViewRendersPublishedTypes(
+    try expectViewRendersCheckedTypes(
         \\classify : I64 -> [Negative, Zero, Positive]
         \\classify = |n| if n < 0 Negative else if n == 0 Zero else Positive
         \\

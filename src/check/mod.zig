@@ -44,9 +44,9 @@ pub const InferenceOutput = @import("inference_output.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
-pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
+pub const rootLayoutVersionHash = @import("store_serialize.zig").rootLayoutVersionHash;
 /// Bounds-check every relocatable marker of a serialized store.
-pub const validateSerialized = @import("artifact_serialize.zig").validateSerialized;
+pub const validateSerialized = @import("store_serialize.zig").validateSerialized;
 
 pub const Check = @import("Check.zig");
 pub const TestEnv = @import("test/TestEnv.zig");
@@ -74,7 +74,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("canonical_type_keys.zig"));
     std.testing.refAllDecls(@import("codec_identity.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
-    std.testing.refAllDecls(@import("artifact_serialize.zig"));
+    std.testing.refAllDecls(@import("store_serialize.zig"));
     std.testing.refAllDecls(@import("checked_module.zig"));
     std.testing.refAllDecls(@import("checked_bodies.zig"));
     std.testing.refAllDecls(@import("body_analyses.zig"));

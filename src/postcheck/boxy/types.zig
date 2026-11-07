@@ -1542,7 +1542,7 @@ pub const Converter = struct {
         return switch (nominal.representation) {
             .opaque_without_backing => null,
             .local_declaration => |decl| .{ .module = view.index, .decl = decl },
-            .imported_declaration => |imported| .{ .module = self.modules.byKey(imported.artifact).index, .decl = imported.declaration },
+            .imported_declaration => |imported| .{ .module = self.modules.byKey(imported.module).index, .decl = imported.declaration },
             .builtin => |builtin_nominal| blk: {
                 if (!checked.builtinNominalHasDeclarationBacking(builtin_nominal)) {
                     invariantFmt("builtin nominal {s} has no declaration backing yet reached nominal conversion", .{@tagName(builtin_nominal)});

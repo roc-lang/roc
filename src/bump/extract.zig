@@ -4,7 +4,7 @@
 //! declaration statements carry dotted names like "Taxonomy.Domain.Kingdom"),
 //! applying the type-module visibility rule: in a type module only the type
 //! matching the module name and its associated items are public. Every item's
-//! type comes from the checked module—the canonical scheme/root published
+//! type comes from the checked module—the canonical scheme/root it records
 //! at check time—never from source annotations or rendered strings.
 //!
 //! Extraction has no fallbacks: missing checked data for a public item, an
@@ -33,7 +33,7 @@ pub const ModuleInput = struct {
     /// The public namespace name, e.g. "Parser" or a platform root's name.
     exposed_name: []const u8,
     module_env: *const ModuleEnv,
-    artifact: *const CheckedModule,
+    module: *const CheckedModule,
     /// Restrict a non-type root module to these names and their children.
     exposed_names: ?[]const []const u8 = null,
     /// Exact source type represented by this public namespace.
@@ -55,7 +55,7 @@ pub const OriginMap = struct {
         /// Checked module for this compilation, used only while extracting a
         /// default literal from the identity that owns it. PackageApi copies
         /// canonical source into its arena and never retains this pointer.
-        artifact: ?*const CheckedModule = null,
+        module: ?*const CheckedModule = null,
 
         pub const Kind = union(enum) {
             /// A module of the package being extracted.
@@ -191,7 +191,7 @@ const Extractor = struct {
     const Rename = struct {
         nominal: Checked.CheckedNominalType,
         /// The checked module recorded for the nominal's declaring module.
-        artifact: ?*const CheckedModule,
+        module: ?*const CheckedModule,
         alias: RenamingAlias,
         path: []const u8,
     };
@@ -212,7 +212,7 @@ const Extractor = struct {
             fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
                 const a = all_inputs[a_index];
                 const b = all_inputs[b_index];
-                const owner_order = std.mem.order(u8, &a.artifact.key.bytes, &b.artifact.key.bytes);
+                const owner_order = std.mem.order(u8, &a.module.key.bytes, &b.module.key.bytes);
                 if (owner_order != .eq) return owner_order == .lt;
                 return a_index < b_index;
             }
@@ -241,16 +241,16 @@ const Extractor = struct {
                 try self.collectRenames(input_index, &renames);
             }
             for (renames.values()) |rename| {
-                const artifact = rename.artifact orelse {
+                const checked = rename.module orelse {
                     self.current_item = rename.path;
                     return self.fail(.unpublished_public_type, "renamed nominal type's declaring module has no checked module");
                 };
-                std.debug.assert(std.mem.eql(u8, &artifact.key.bytes, &rename.nominal.owner_module.bytes));
+                std.debug.assert(std.mem.eql(u8, &checked.key.bytes, &rename.nominal.owner_module.bytes));
                 try self.renaming_aliases.put(self.gpa, rename.alias, {});
                 try self.inputs.append(self.gpa, .{
                     .exposed_name = rename.path,
-                    .module_env = artifact.moduleEnvConst(),
-                    .artifact = artifact,
+                    .module_env = checked.moduleEnvConst(),
+                    .module = checked,
                     .public_type_decl = @fromBackingInt(@intCast(rename.nominal.source_decl)),
                 });
                 try self.input_modules.append(self.gpa, self.input_modules.items[rename.alias.input]);
@@ -268,8 +268,8 @@ const Extractor = struct {
     ) ExtractError!void {
         const input = self.inputs.items[input_index];
         const module_env = input.module_env;
-        const view = input.artifact.typesView();
-        const names = input.artifact.nameStore();
+        const view = input.module.typesView();
+        const names = input.module.nameStore();
         self.current_input = input_index;
         self.current_module = input.exposed_name;
 
@@ -293,7 +293,7 @@ const Extractor = struct {
                 ModuleEnv.varFrom(stmt_idx),
             );
             const root = (try view.rootForKey(key)) orelse
-                return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
+                return self.fail(.unpublished_public_type, "exposed type declaration has no checked root");
             const payload = view.payload(root);
             if (payload != .alias) continue;
             const alias = payload.alias;
@@ -308,7 +308,7 @@ const Extractor = struct {
             const origin_hash = names.moduleIdentityBytes(nominal.origin_module);
             gop.value_ptr.* = .{
                 .nominal = nominal,
-                .artifact = self.origins.identity_map.get(origin_hash.*).?.artifact,
+                .module = self.origins.identity_map.get(origin_hash.*).?.module,
                 .alias = .{ .input = input_index, .statement = stmt_idx },
                 .path = path,
             };
@@ -379,8 +379,8 @@ const Extractor = struct {
         self.current_module = self.api.modules.items[module_index].name;
         self.current_item = "";
 
-        const view = input.artifact.typesView();
-        const names = input.artifact.nameStore();
+        const view = input.module.typesView();
+        const names = input.module.nameStore();
 
         var exposed_names = try exposedNameSet(self.gpa, input);
         defer exposed_names.deinit(self.gpa);
@@ -417,7 +417,7 @@ const Extractor = struct {
                 decl_var,
             );
             const root = (try view.rootForKey(key)) orelse
-                return self.fail(.unpublished_public_type, "exposed type declaration has no published checked root");
+                return self.fail(.unpublished_public_type, "exposed type declaration has no checked root");
 
             const kind = try self.itemKindForTypeDecl(view, names, root);
             try self.api.addItem(module_index, .{ .path = path, .kind = kind });
@@ -442,7 +442,7 @@ const Extractor = struct {
             if (gop.found_existing) continue;
 
             const root = view.sourceTypeRoot(ModuleEnv.varFrom(def_idx)) orelse
-                return self.fail(.unpublished_public_type, "public value has no published checked type");
+                return self.fail(.unpublished_public_type, "public value has no checked type");
 
             var memo = ConvertMemo.empty;
             defer memo.deinit(self.gpa);
@@ -451,7 +451,7 @@ const Extractor = struct {
         }
     }
 
-    /// Build the item kind for an exposed type declaration from its published
+    /// Build the item kind for an exposed type declaration from its checked
     /// checked root, which must be an alias or nominal payload.
     fn itemKindForTypeDecl(
         self: *Extractor,
@@ -672,9 +672,9 @@ const Extractor = struct {
             defer self.gpa.free(detail);
             return self.fail(.unknown_origin_module, detail);
         };
-        const artifact = origin.artifact orelse
+        const checked = origin.module orelse
             return self.fail(.unpublished_public_type, "default literal's declaring module has no checked module");
-        const module_env = artifact.moduleEnvConst();
+        const module_env = checked.moduleEnvConst();
         if (default.expr_node >= module_env.store.nodes.len()) {
             return self.fail(.unpublished_public_type, "default literal's source node is outside its declaring module");
         }
@@ -800,14 +800,14 @@ const Extractor = struct {
         while (low < high) {
             const mid = low + (high - low) / 2;
             const input = self.inputs.items[self.public_input_order.items[mid]];
-            if (std.mem.order(u8, &input.artifact.key.bytes, &owner_module.bytes) == .lt)
+            if (std.mem.order(u8, &input.module.key.bytes, &owner_module.bytes) == .lt)
                 low = mid + 1
             else
                 high = mid;
         }
         for (self.public_input_order.items[low..]) |input_index| {
             const input = self.inputs.items[input_index];
-            if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
+            if (!std.mem.eql(u8, &input.module.key.bytes, &owner_module.bytes)) break;
             if (!publicInputOwnsType(input, owner_module, statement)) continue;
             const root_len = if (input.public_type_decl) |root_statement|
                 publicTypeDeclName(input, root_statement).len
@@ -881,7 +881,7 @@ fn publicInputOwnsType(
     owner_module: Checked.ModuleId,
     statement: can.CIR.Statement.Idx,
 ) bool {
-    if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) return false;
+    if (!std.mem.eql(u8, &input.module.key.bytes, &owner_module.bytes)) return false;
     const type_name = typeDeclName(input.module_env, statement) orelse return false;
     if (input.exposed_names) |exposed_names| {
         const root_name = exposedRootName(type_name);

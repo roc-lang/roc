@@ -3198,7 +3198,7 @@ fn testFnSource(mono_fn_ty: Type.TypeId) FnTemplate {
 
 fn testProcTemplate(template_id: u32) names.ProcTemplate {
     return .{
-        .artifact = .{},
+        .module = .{},
         .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
@@ -3392,7 +3392,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     var root_b = root_a;
     root_b.module.bytes[0] = 1;
     root_b.const_locator = .{
-        .artifact = root_b.module,
+        .module = root_b.module,
         .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
         .source_scheme = std.mem.zeroes(@FieldType(check.Checked.ConstLocator, "source_scheme")),

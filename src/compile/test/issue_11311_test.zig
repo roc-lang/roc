@@ -1,6 +1,6 @@
 //! Regression tests for issue #11311: a generic annotated value whose body is a
 //! bare reference to another generic function must check like its eta-expanded
-//! form, instead of failing checked-artifact publication while resolving the
+//! form, instead of failing in the checked module's analyses while resolving the
 //! forwarding site's dispatch plan.
 //! repro for https://github.com/roc-lang/roc/issues/11311
 

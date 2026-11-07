@@ -14,7 +14,7 @@
 //!
 //! These tests drive finalization the way a build does, so a regression that
 //! turns a rejected import back into a failed module reappears here as the
-//! missing-artifact panic rather than in a released compiler.
+//! missing-module panic rather than in a released compiler.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -88,9 +88,9 @@ const platform_files = [_]File{
 /// What finalization produced for one fixture.
 const Outcome = struct {
     gpa: std.mem.Allocator,
-    /// True when the app root published a complete checked module, which is
+    /// True when the app root produced a complete checked module, which is
     /// exactly what the panic in this issue reported as missing.
-    app_root_published: bool,
+    app_root_checked: bool,
     report_titles: std.ArrayList([]const u8),
 
     fn deinit(self: *Outcome) void {
@@ -118,10 +118,10 @@ const Outcome = struct {
     }
 };
 
-/// Whether the app package's root module published a checked module. This is
+/// Whether the app package's root module produced a checked module. This is
 /// the exact fact `Coordinator.rootCheckedModule` panicked over when the app
 /// module had been completed with failure instead of checked.
-fn appRootPublished(coord: *Coordinator) bool {
+fn appRootChecked(coord: *Coordinator) bool {
     const app_package_name = coord.app_package_name orelse return false;
     const pkg = coord.packages.get(app_package_name) orelse return false;
     const root_id = pkg.root_module_id orelse return false;
@@ -130,7 +130,7 @@ fn appRootPublished(coord: *Coordinator) bool {
 }
 
 /// Stage `files` alongside the shared platform, compile `entry_rel` as an app,
-/// and finalize its executable artifacts the way `roc build` does.
+/// and prepare its checked program the way `roc build` does.
 fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8) HarnessError!Outcome {
     const io = std.testing.io;
 
@@ -172,9 +172,9 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    // `.executable_artifacts` is the mode a build uses. It reaches the app
+    // `.executable_program` is the mode a build uses. It reaches the app
     // root's checked module, which a failed app module would not have.
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
 
     var report_titles = std.ArrayList([]const u8).empty;
     errdefer {
@@ -189,12 +189,12 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
 
     return .{
         .gpa = gpa,
-        .app_root_published = appRootPublished(&coord),
+        .app_root_checked = appRootChecked(&coord),
         .report_titles = report_titles,
     };
 }
 
-test "issue 11392: a private package import leaves the app root published" {
+test "issue 11392: a private package import leaves the app root checked" {
     const gpa = std.testing.allocator;
     var outcome = try compileApp(gpa, &.{
         .{
@@ -217,11 +217,11 @@ test "issue 11392: a private package import leaves the app root published" {
     }, "app.roc");
     defer outcome.deinit();
 
-    if (!outcome.app_root_published) {
+    if (!outcome.app_root_checked) {
         std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
-    try std.testing.expect(outcome.app_root_published);
+    try std.testing.expect(outcome.app_root_checked);
 
     // The rejection is reported exactly once, at the boundary that owns it.
     try std.testing.expectEqual(@as(usize, 1), outcome.countTitle("Package Module Is Private"));
@@ -233,7 +233,7 @@ test "issue 11392: a private package import leaves the app root published" {
     try std.testing.expect(!outcome.hasTitle("Undeclared Type"));
 }
 
-test "issue 11392: a relative import escaping the package root leaves the app root published" {
+test "issue 11392: a relative import escaping the package root leaves the app root checked" {
     const gpa = std.testing.allocator;
     var outcome = try compileApp(gpa, &.{
         .{
@@ -256,11 +256,11 @@ test "issue 11392: a relative import escaping the package root leaves the app ro
     }, "app.roc");
     defer outcome.deinit();
 
-    if (!outcome.app_root_published) {
+    if (!outcome.app_root_checked) {
         std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
-    try std.testing.expect(outcome.app_root_published);
+    try std.testing.expect(outcome.app_root_checked);
     try std.testing.expectEqual(@as(usize, 1), outcome.countTitle("Import Escapes Package Root"));
     try std.testing.expect(outcome.hasTitle("Does Not Exist"));
 }
@@ -288,11 +288,11 @@ test "issue 11392: a rejected import does not reject its own exposed items' type
     }, "app.roc");
     defer outcome.deinit();
 
-    if (!outcome.app_root_published) {
+    if (!outcome.app_root_checked) {
         std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
-    try std.testing.expect(outcome.app_root_published);
+    try std.testing.expect(outcome.app_root_checked);
     try std.testing.expectEqual(@as(usize, 1), outcome.countTitle("Package Module Is Private"));
 
     // The exposed type binds to the rejected import, so the annotation reports

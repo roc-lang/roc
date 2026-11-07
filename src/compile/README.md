@@ -64,9 +64,9 @@ try coord.start();
 try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
 try coord.coordinatorLoop();
 
-// 3. Finalize executable artifacts. User diagnostics are represented by
-//    explicit checked-error/crash facts and never prevent publication.
-try coord.finishCheckedProgram(.executable_artifacts);
+// 3. Prepare the checked program. User diagnostics are represented by
+//    explicit checked-error/crash facts and never prevent it.
+try coord.finishCheckedProgram(.executable_program);
 
 // 4. Render or collect diagnostics. Embedders may use these to choose a
 //    command status or presentation, but must not use them to gate lowering.
@@ -78,8 +78,8 @@ while (it.next()) |entry| {
 // 5. Lower to LIR. The allocator must own a single contiguous buffer—
 //    see "Runtime arena" below.
 const root = try coord.executableRootCheckedModule();
-const imports = try coord.collectImportedArtifactViews(arena, root);
-const relations = try coord.collectRelationArtifactViews(arena, root);
+const imports = try coord.collectImportedModuleViews(arena, root);
+const relations = try coord.collectRelationModuleViews(arena, root);
 const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(arena, (try root.rootRequests()).runtime_requests);
 
 const lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -153,7 +153,7 @@ while (it.next()) |entry| {
 const had_errors = coord.hasUserErrors();
 ```
 
-Skip `finalizeExecutableArtifacts`, LIR lowering, and execution entirely.
+Skip checked-program preparation (`.none`), LIR lowering, and execution entirely.
 
 ### Runtime arena
 

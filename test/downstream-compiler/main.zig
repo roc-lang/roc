@@ -80,9 +80,9 @@ pub fn main(init: std.process.Init) SmokeError!void {
     }
     try expect(!coord.hasUserErrors());
 
-    // 4. Finalization always publishes executable artifacts; diagnostics do
+    // 4. Finalization always prepares the checked program; diagnostics do
     // not form a separate failure outcome.
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try expect(!coord.hasUserErrors());
 
     // 5. Lower to LIR in a contiguous FixedBufferAllocator (the runtime

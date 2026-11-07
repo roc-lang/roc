@@ -9,7 +9,7 @@ const check = @import("check");
 const compile_build = @import("../compile_build.zig");
 const BuildEnv = compile_build.BuildEnv;
 
-test "issue 11259: typed string literal with an ill-typed from_quote reports rather than aborting publication" {
+test "issue 11259: typed string literal with an ill-typed from_quote reports rather than aborting" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -197,12 +197,12 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     }
     try std.testing.expectEqual(@as(usize, if (expected_rejections == 0) 0 else 1), mismatches);
 
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
-    const bodies = try artifact.bodies();
-    const store = &artifact.moduleEnvConst().store;
+    const checked = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
+    const bodies = try checked.bodies();
+    const store = &checked.moduleEnvConst().store;
     var rejected: usize = 0;
-    for (0..(try artifact.checkedTables()).static_dispatch_plans.plans.len) |raw| {
-        const plan = try (try artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
+    for (0..(try checked.checkedTables()).static_dispatch_plans.plans.len) |raw| {
+        const plan = try (try checked.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (plan.resolution != .checked_error) continue;
         rejected += 1;
         try std.testing.expect(switch (bodies.index().nodeKind(plan.node)) {
@@ -219,10 +219,10 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     // Every compile-time root: the root table's rows, then the literal roots.
     var root_ids: std.ArrayList(check.Checked.ComptimeRootKey) = .empty;
     defer root_ids.deinit(std.testing.allocator);
-    for ((try artifact.checkedTables()).compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
-    try (try artifact.dispatch()).appendLiteralRoots(std.testing.allocator, &root_ids);
+    for ((try checked.checkedTables()).compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
+    try (try checked.dispatch()).appendLiteralRoots(std.testing.allocator, &root_ids);
     for (root_ids.items) |root_id| {
-        const root = try artifact.compileTimeRoot(root_id);
+        const root = try checked.compileTimeRoot(root_id);
         const root_node = if (root.literalNode()) |literal| literal.node() else @backingInt(root.rootExpr());
         const region = store.getNodeRegion(@fromBackingInt(root_node));
         // A root evaluated at compile time whose own body contains the
@@ -231,24 +231,24 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
         if (try bodies.rootContainsDiagnosticError(root) and root.kind != .expect and
             root.request_eligibility == .eligible)
         {
-            try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
-            try std.testing.expect(artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root_id).const_node) == .checked_error);
+            try std.testing.expect(checked.evaluation.rootPayload(root_id) == .const_node);
+            try std.testing.expect(checked.evaluation.const_store.get(checked.evaluation.rootPayload(root_id).const_node) == .checked_error);
         }
         const expr_source = module_source[region.start.offset..region.end.offset];
         if (expected.independent_expr) |independent| {
             if (std.mem.eql(u8, expr_source, independent)) {
                 try std.testing.expect(!try bodies.rootContainsDiagnosticError(root));
-                try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
+                try std.testing.expect(checked.evaluation.rootPayload(root_id) == .const_node);
                 found_independent = true;
             }
         }
         if (std.mem.eql(u8, expr_source, "123.U64")) {
             try std.testing.expectEqual(.eligible, root.request_eligibility);
-            try std.testing.expect(artifact.evaluation.rootPayload(root_id) == .const_node);
+            try std.testing.expect(checked.evaluation.rootPayload(root_id) == .const_node);
             found_good = true;
         }
-        if (root.kind == .quote_conversion and artifact.evaluation.rootPayload(root_id) == .const_node and
-            artifact.evaluation.const_store.get(artifact.evaluation.rootPayload(root_id).const_node) != .checked_error) completed_conversions += 1;
+        if (root.kind == .quote_conversion and checked.evaluation.rootPayload(root_id) == .const_node and
+            checked.evaluation.const_store.get(checked.evaluation.rootPayload(root_id).const_node) != .checked_error) completed_conversions += 1;
     }
     try std.testing.expect(found_good);
     try std.testing.expect(found_independent);

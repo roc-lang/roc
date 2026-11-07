@@ -109,7 +109,7 @@ test "an optimized runtime program reads a generic function's custom literal con
         .proc_debug_names = true,
     };
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     try std.testing.expect(session.runtime_prepared != null);

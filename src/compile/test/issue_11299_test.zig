@@ -48,7 +48,7 @@ fn expectChecksWithNameNotInScope(source: []const u8) Issue11299TestError!void {
 
 // A poisoned enclosing expression must not remove the type root of a retained
 // body-free method declaration. Both original cases reproduced the registry panic.
-test "issue 11299: a block-local derived encoder publishes when the block tail is out of scope" {
+test "issue 11299: a block-local derived encoder checks when the block tail is out of scope" {
     try expectChecksWithNameNotInScope(
         \\f = || {
         \\    Flag := Bool.{ encoder_for : _ }
@@ -60,7 +60,7 @@ test "issue 11299: a block-local derived encoder publishes when the block tail i
     );
 }
 
-test "issue 11299: a block-local derived encoder publishes when an out-of-scope name is called" {
+test "issue 11299: a block-local derived encoder checks when an out-of-scope name is called" {
     try expectChecksWithNameNotInScope(
         \\f = || {
         \\    Flag := Bool.{ encoder_for : _ }
@@ -72,7 +72,7 @@ test "issue 11299: a block-local derived encoder publishes when an out-of-scope 
     );
 }
 
-test "issue 11299: a derived parser publishes through nested rejected bodies" {
+test "issue 11299: a derived parser checks through nested rejected bodies" {
     try expectChecksWithNameNotInScope(
         \\f = || {
         \\    inner = || {

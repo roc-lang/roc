@@ -85,7 +85,7 @@ test "ModuleEnv.Serialized roundtrip" {
     try deserialized_ptr.validate(buffer.len);
     var corrupt_serialized = deserialized_ptr.*;
     corrupt_serialized.common.idents.interner.bytes.len = std.math.maxInt(u64);
-    try std.testing.expectError(error.CorruptArtifact, corrupt_serialized.validate(buffer.len));
+    try std.testing.expectError(error.CorruptSerializedData, corrupt_serialized.validate(buffer.len));
 
     const env = try deserialized_ptr.deserializeWithMutableTypes(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
     defer {

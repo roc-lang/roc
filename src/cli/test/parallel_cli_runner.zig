@@ -5019,8 +5019,8 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/11392: this fixture has an
     // imported type error and a rejected private import of pf.Stdout. The latter
     // leaves the executable root without a checked module. `build` must report
-    // the diagnostics and exit 1 instead of demanding that missing artifact.
-    .{ .id = 0, .suite = .subcommands, .name = "issue 11392: build reports an imported module's type error instead of demanding the root artifact", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .{ .code = 1 }, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "missing checked module" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    // the diagnostics and exit 1 instead of demanding that missing checked module.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 11392: build reports an imported module's type error instead of demanding the root checked module", .backend = .dev, .body = .{ .command = .{ .args = &.{ "build", "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .{ .code = 1 }, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "missing checked module" }, .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // Companion to the case above: a rejected import is a user diagnostic, not
     // a module outcome. The importing module still checks, the use of the
     // rejected import is checked-error data, and the entrypoint, which never
@@ -15041,7 +15041,7 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         /// program-producing pipeline reuses exactly what `check` already
         /// wrote, so they add nothing. `roc test` links no program: it checks
         /// the root under explicitly requested roots rather than its app
-        /// entrypoint contract, and publishes no executable artifacts, so its
+        /// entrypoint contract, and prepares no checked program, so its
         /// app root has a distinct checking context. Its parametric platform
         /// root is shared by every pipeline, so only the app entry is added.
         added_entries: usize,

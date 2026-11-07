@@ -200,7 +200,7 @@ pub const PlatformRequirementsCheckOutput = struct {
 /// What opening a module right after checking it reads beside its
 /// environment and imports.
 pub const OpenAfterCheckingInputs = struct {
-    available_artifacts: []const Checked.ImportedModuleView = &.{},
+    available_modules: []const Checked.ImportedModuleView = &.{},
     platform_requirement_context: ?Checked.PlatformRequirementContextKey = null,
     explicit_roots: []const Checked.ExplicitRootRequestInput = &.{},
     /// Waits on the module's key slots.
@@ -214,12 +214,12 @@ pub const OpenAfterCheckingInputs = struct {
 
 fn importedModulesCoverImportedEnvs(
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const Checked.CheckedImport,
+    imported_modules: []const Checked.CheckedImport,
 ) bool {
     for (imported_envs, 0..) |_, module_idx| {
         var found = false;
-        for (imported_artifacts) |artifact| {
-            if (artifact.module_idx == module_idx) {
+        for (imported_modules) |checked| {
+            if (checked.module_idx == module_idx) {
                 found = true;
                 break;
             }
@@ -233,8 +233,8 @@ fn importedModulesCoverImportedEnvs(
 pub fn buildCheckOwnerEnvs(
     allocator: Allocator,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const Checked.CheckedImport,
-    available_artifacts: []const Checked.ImportedModuleView,
+    imported_modules: []const Checked.CheckedImport,
+    available_modules: []const Checked.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
 ) Allocator.Error![]const *const ModuleEnv {
     var owner_envs = std.ArrayList(*const ModuleEnv).empty;
@@ -254,13 +254,13 @@ pub fn buildCheckOwnerEnvs(
     var seen_public_dependencies = std.AutoHashMap(Checked.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
-    for (imported_artifacts) |imported_artifact| {
+    for (imported_modules) |imported_module| {
         try appendCheckOwnerEnvPublicDependencies(
             allocator,
             &owner_envs,
-            available_artifacts,
+            available_modules,
             &seen_public_dependencies,
-            imported_artifact.view,
+            imported_module.view,
         );
     }
 
@@ -270,24 +270,24 @@ pub fn buildCheckOwnerEnvs(
 fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
-    available_artifacts: []const Checked.ImportedModuleView,
+    available_modules: []const Checked.ImportedModuleView,
     seen_public_dependencies: *std.AutoHashMap(Checked.CheckedModuleDigest, void),
     view: Checked.ImportedModuleView,
 ) Allocator.Error!void {
-    const resolver_views = Checked.CheckedImportViews{ .current_owner = view.key.digest(), .direct = &.{}, .available = available_artifacts };
-    for ((try view.publicApiDependencies(resolver_views.resolver())).type_owner_artifacts) |dependency_key| {
+    const resolver_views = Checked.CheckedImportViews{ .current_owner = view.key.digest(), .direct = &.{}, .available = available_modules };
+    for ((try view.publicApiDependencies(resolver_views.resolver())).type_owner_modules) |dependency_key| {
         const entry = try seen_public_dependencies.getOrPut(dependency_key);
         if (entry.found_existing) continue;
         entry.value_ptr.* = {};
 
-        const dependency = availableModuleByKey(available_artifacts, dependency_key) orelse {
-            base.invariant("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+        const dependency = availableModuleByKey(available_modules, dependency_key) orelse {
+            base.invariant("compile.typeCheckModule missing public API dependency module for imported module", .{});
         };
         try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
         try appendCheckOwnerEnvPublicDependencies(
             allocator,
             owner_envs,
-            available_artifacts,
+            available_modules,
             seen_public_dependencies,
             dependency,
         );
@@ -316,11 +316,11 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
 }
 
 fn availableModuleByKey(
-    available_artifacts: []const Checked.ImportedModuleView,
+    available_modules: []const Checked.ImportedModuleView,
     key: Checked.ModuleId,
 ) ?Checked.ImportedModuleView {
-    for (available_artifacts) |artifact| {
-        if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
+    for (available_modules) |checked| {
+        if (std.mem.eql(u8, &checked.key.bytes, &key.bytes)) return checked;
     }
     return null;
 }
@@ -481,15 +481,15 @@ pub fn canonicalizeModuleWithSiblings(
 /// This ensures all tools use the exact same type checking logic as production builds
 ///
 /// `check_alloc` owns checker/session data that dies with `TypeCheckOutput.deinit`.
-/// `artifact_alloc` owns any published checked module returned in `TypeCheckOutput`.
+/// `checked_alloc` owns any checked module returned in `TypeCheckOutput`.
 pub fn typeCheckModule(
     check_alloc: Allocator,
-    artifact_alloc: Allocator,
+    checked_alloc: Allocator,
     env: *ModuleEnv,
     builtin_module_env: *const ModuleEnv,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const Checked.CheckedImport,
-    available_artifacts: []const Checked.ImportedModuleView,
+    imported_modules: []const Checked.CheckedImport,
+    available_modules: []const Checked.ImportedModuleView,
     platform_requirements: ?Check.PlatformRequirementInput,
     platform_requirement_context: ?Checked.PlatformRequirementContextKey,
     explicit_roots: []const Checked.ExplicitRootRequestInput,
@@ -517,8 +517,8 @@ pub fn typeCheckModule(
     const owner_envs = try buildCheckOwnerEnvs(
         check_alloc,
         imported_envs,
-        imported_artifacts,
-        available_artifacts,
+        imported_modules,
+        available_modules,
         platform_requirements,
     );
     defer check_alloc.free(owner_envs);
@@ -580,25 +580,25 @@ pub fn typeCheckModule(
 
     module_envs_map.deinit();
 
-    if (!importedModulesCoverImportedEnvs(imported_envs, imported_artifacts)) {
+    if (!importedModulesCoverImportedEnvs(imported_envs, imported_modules)) {
         base.invariant("compile.typeCheckModule received an imported module environment without its checked module", .{});
     }
 
     var checked_module = try openCheckedModuleAfterChecking(
-        artifact_alloc,
+        checked_alloc,
         env,
         imported_envs,
-        imported_artifacts,
+        imported_modules,
         .{
             .platform_requirement_context = platform_requirement_context,
             .explicit_roots = explicit_roots,
-            .available_artifacts = available_artifacts,
+            .available_modules = available_modules,
             .io = io,
             .validation = validation,
             .inference = inference,
         },
     );
-    errdefer checked_module.deinit(artifact_alloc);
+    errdefer checked_module.deinit(checked_alloc);
 
     return .{
         .checker = checker,
@@ -616,7 +616,7 @@ pub fn openCheckedModuleAfterChecking(
     gpa: Allocator,
     env: *ModuleEnv,
     imported_envs: []const *ModuleEnv,
-    imported_artifacts: []const Checked.CheckedImport,
+    imported_modules: []const Checked.CheckedImport,
     inputs: OpenAfterCheckingInputs,
 ) Allocator.Error!Checked.CheckedModule {
     // The module set prepares every environment for the module's readers.
@@ -626,8 +626,8 @@ pub fn openCheckedModuleAfterChecking(
         .module_idx = typed.module_idx,
         .module_env_storage = .{ .checked_source = env },
         .io = inputs.io,
-        .imports = imported_artifacts,
-        .available_artifacts = inputs.available_artifacts,
+        .imports = imported_modules,
+        .available_modules = inputs.available_modules,
         .platform_requirement_context = inputs.platform_requirement_context,
         .explicit_roots = inputs.explicit_roots,
         .validation = inputs.validation,

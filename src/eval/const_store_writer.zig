@@ -1375,9 +1375,9 @@ fn initTestModule(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Er
     };
 }
 
-fn deinitTestModule(artifact: *checked.CheckedModule, allocator: Allocator) void {
-    artifact.evaluation.deinit(allocator);
-    artifact.canonical_names.deinit();
+fn deinitTestModule(checked_module: *checked.CheckedModule, allocator: Allocator) void {
+    checked_module.evaluation.deinit(allocator);
+    checked_module.canonical_names.deinit();
 }
 
 fn testConstRoot(plan: LirProgram.ConstPlanId, ret_layout: layout.Idx) LirProgram.ConstRootPlan {
@@ -1406,15 +1406,15 @@ test "const store writer pointer memoization is scoped to one root" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestModule(testing.allocator, &module_env);
-    defer deinitTestModule(&artifact, testing.allocator);
+    var checked_module = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&checked_module, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
     const str_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .str);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &checked_module, &program);
     defer writer.deinit();
 
     const root = testConstRoot(str_plan, .str);
@@ -1438,12 +1438,12 @@ test "const store writer pointer memoization is scoped to one root" {
 
     try testing.expect(first.const_node != second.const_node);
 
-    const first_value = artifact.evaluation.const_store.get(first.const_node);
-    const second_value = artifact.evaluation.const_store.get(second.const_node);
+    const first_value = checked_module.evaluation.const_store.get(first.const_node);
+    const second_value = checked_module.evaluation.const_store.get(second.const_node);
     try testing.expect(first_value == .str);
     try testing.expect(second_value == .str);
-    try testing.expectEqualStrings(first_bytes, artifact.evaluation.const_store.strBytes(first_value.str));
-    try testing.expectEqualStrings(second_bytes, artifact.evaluation.const_store.strBytes(second_value.str));
+    try testing.expectEqualStrings(first_bytes, checked_module.evaluation.const_store.strBytes(first_value.str));
+    try testing.expectEqualStrings(second_bytes, checked_module.evaluation.const_store.strBytes(second_value.str));
 }
 
 test "const store writer stores every NaN as Roc's one NaN" {
@@ -1452,32 +1452,32 @@ test "const store writer stores every NaN as Roc's one NaN" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestModule(testing.allocator, &module_env);
-    defer deinitTestModule(&artifact, testing.allocator);
+    var checked_module = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&checked_module, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
     const scalar_plan: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(testing.allocator, .scalar);
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &checked_module, &program);
     defer writer.deinit();
 
     var f64_payload: u64 = 0xfff9_2345_6789_abcd;
     const stored_f64 = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&f64_payload) });
-    const f64_value = artifact.evaluation.const_store.get(stored_f64.const_node);
+    const f64_value = checked_module.evaluation.const_store.get(stored_f64.const_node);
     try testing.expect(f64_value == .scalar and f64_value.scalar == .f64_bits);
     try testing.expectEqual(builtins.float_bits.normalized_f64_nan_bits, f64_value.scalar.f64_bits);
 
     var f32_payload: u32 = 0xffc1_2345;
     const stored_f32 = try writer.storeRoot(testConstRoot(scalar_plan, .f32), .{ .ptr = @ptrCast(&f32_payload) });
-    const f32_value = artifact.evaluation.const_store.get(stored_f32.const_node);
+    const f32_value = checked_module.evaluation.const_store.get(stored_f32.const_node);
     try testing.expect(f32_value == .scalar and f32_value.scalar == .f32_bits);
     try testing.expectEqual(builtins.float_bits.normalized_f32_nan_bits, f32_value.scalar.f32_bits);
 
     var finite: u64 = @bitCast(@as(f64, -2.5));
     const stored_finite = try writer.storeRoot(testConstRoot(scalar_plan, .f64), .{ .ptr = @ptrCast(&finite) });
-    try testing.expectEqual(finite, artifact.evaluation.const_store.get(stored_finite.const_node).scalar.f64_bits);
+    try testing.expectEqual(finite, checked_module.evaluation.const_store.get(stored_finite.const_node).scalar.f64_bits);
 }
 
 test "const store writer keeps the capacity a list and a heap string were evaluated with beyond their contents" {
@@ -1486,8 +1486,8 @@ test "const store writer keeps the capacity a list and a heap string were evalua
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestModule(testing.allocator, &module_env);
-    defer deinitTestModule(&artifact, testing.allocator);
+    var checked_module = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&checked_module, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1499,7 +1499,7 @@ test "const store writer keeps the capacity a list and a heap string were evalua
     try program.const_plans.append(testing.allocator, .{ .list = scalar_plan });
     const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &checked_module, &program);
     defer writer.deinit();
 
     var backing: [64]u8 = undefined;
@@ -1511,7 +1511,7 @@ test "const store writer keeps the capacity a list and a heap string were evalua
     var roomy_list = RocList{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocList.encodeCapacity(backing.len) };
     var full_list = RocList{ .bytes = &backing, .length = 3, .capacity_or_alloc_ptr = RocList.encodeCapacity(3) };
 
-    const store = &artifact.evaluation.const_store;
+    const store = &checked_module.evaluation.const_store;
     const roomy_str_node = (try writer.storeRoot(testConstRoot(str_plan, .str), .{ .ptr = @ptrCast(&roomy_str) })).const_node;
     try testing.expectEqual(@as(?u64, 64), store.spareCapacity(roomy_str_node));
     const full_str_node = (try writer.storeRoot(testConstRoot(str_plan, .str), .{ .ptr = @ptrCast(&full_str) })).const_node;
@@ -1529,8 +1529,8 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestModule(testing.allocator, &module_env);
-    defer deinitTestModule(&artifact, testing.allocator);
+    var checked_module = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&checked_module, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1544,7 +1544,7 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const u8_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u8));
     const u16_list_layout = try program.layouts.insertLayout(layout.Layout.list(.u16));
 
-    var writer = Writer.init(testing.allocator, &artifact, &program);
+    var writer = Writer.init(testing.allocator, &checked_module, &program);
     defer writer.deinit();
 
     const bytes = try testing.allocator.alloc(u8, 20 * 1024);
@@ -1572,18 +1572,18 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     };
     const stored_u16_list = try writer.storeRoot(testConstRoot(list_plan, u16_list_layout), .{ .ptr = @ptrCast(&roc_u16_list) });
 
-    const str_value = artifact.evaluation.const_store.get(stored_str.const_node);
+    const str_value = checked_module.evaluation.const_store.get(stored_str.const_node);
     try testing.expect(str_value == .str);
-    const list_value = artifact.evaluation.const_store.get(stored_list.const_node);
+    const list_value = checked_module.evaluation.const_store.get(stored_list.const_node);
     try testing.expect(list_value == .list);
     try testing.expect(list_value.list == .packed_bytes);
     const scalar_bytes = list_value.list.packed_bytes;
     try testing.expectEqual(@as(u32, 20 * 1024), scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u8, scalar_bytes.element);
     try testing.expectEqual(str_value.str.data, scalar_bytes.bytes.data);
-    try testing.expectEqualSlices(u8, bytes, artifact.evaluation.const_store.blobBytes(scalar_bytes.bytes));
+    try testing.expectEqualSlices(u8, bytes, checked_module.evaluation.const_store.blobBytes(scalar_bytes.bytes));
 
-    const u16_scalar_bytes = artifact.evaluation.const_store.get(stored_u16_list.const_node).list.packed_bytes;
+    const u16_scalar_bytes = checked_module.evaluation.const_store.get(stored_u16_list.const_node).list.packed_bytes;
     try testing.expectEqual(@as(u32, 10 * 1024), u16_scalar_bytes.len);
     try testing.expectEqual(const_store.ConstPackedScalar.u16, u16_scalar_bytes.element);
 
@@ -1594,6 +1594,6 @@ test "const store writer stores 20KB scalar lists as shared blob" {
         .capacity_or_alloc_ptr = RocList.encodeCapacity(bytes.len),
     };
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
-    try testing.expectEqual(@as(u64, bytes.len), artifact.evaluation.const_store.get(stored_empty_list.const_node).list.empty);
+    try testing.expectEqual(@as(u64, bytes.len), checked_module.evaluation.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str.data, u16_scalar_bytes.bytes.data);
 }

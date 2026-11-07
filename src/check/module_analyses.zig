@@ -260,9 +260,9 @@ pub const ModuleAnalyses = struct {
     /// Guards `idle_evidence_traversals` and `evidence_traversal_count`; held
     /// around a borrow's or a return's list update only.
     evidence_traversal_mutex: std.Io.Mutex = .init,
-    /// Set once the module is published (`CheckedModule.openToAnalyses`):
+    /// Set once the module is opened (`CheckedModule.openToAnalyses`):
     /// no slot of the module runs before it.
-    published: std.atomic.Value(bool) = .init(false),
+    opened: std.atomic.Value(bool) = .init(false),
 
     pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModule) Allocator.Error!*ModuleAnalyses {
         const analyses = try allocator.create(ModuleAnalyses);
@@ -318,7 +318,7 @@ pub const ModuleAnalyses = struct {
         direct_imports: []const checked_module.CheckedModuleKey,
         store: *const CheckedTypeStore,
     ) Allocator.Error![]const ImportedModuleView {
-        self.assertPublished();
+        self.assertOpened();
         const result = try self.dispatch_imports.getOrCompute(self.io, Allocator.Error, DispatchImportsRequest{
             .analyses = self,
             .module = module,
@@ -328,15 +328,15 @@ pub const ModuleAnalyses = struct {
         return result.views;
     }
 
-    /// Record that the module is published: its type store and name store
+    /// Record that the module is opened: its type store and name store
     /// are, and its interface capabilities have their source.
-    pub fn markPublished(self: *ModuleAnalyses) void {
-        self.published.store(true, .release);
+    pub fn markOpened(self: *ModuleAnalyses) void {
+        self.opened.store(true, .release);
     }
 
-    fn assertPublished(self: *const ModuleAnalyses) void {
-        if (std.debug.runtime_safety and !self.published.load(.acquire)) {
-            checked_module.checkedModuleInvariant("a slot of a module was claimed before the module was published", .{});
+    fn assertOpened(self: *const ModuleAnalyses) void {
+        if (std.debug.runtime_safety and !self.opened.load(.acquire)) {
+            checked_module.checkedModuleInvariant("a slot of a module was claimed before the module was opened", .{});
         }
     }
 
@@ -438,7 +438,7 @@ pub const ModuleAnalyses = struct {
     /// The export rows of `owner`, this module. A platform/app pairing's are
     /// its platform's.
     pub fn exportRows(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ExportRows {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_module.importedView(platform));
         if (self.export_rows.peek()) |rows| return rows;
         // The rows read the module's checked tables, which read other
@@ -451,7 +451,7 @@ pub const ModuleAnalyses = struct {
     /// The provided exports of `owner`, this module. A platform/app pairing's
     /// are its pairing's own slot, read at their types under the pairing.
     pub fn providedExports(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ProvidedExportTable {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform != null) checked_module.checkedModuleInvariant("a pairing's provided exports were read from its module analyses", .{});
         return self.provided_exports.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.providedExports);
     }
@@ -459,7 +459,7 @@ pub const ModuleAnalyses = struct {
     /// The requirement identity variables of `owner`, this module. A
     /// platform/app pairing's are its platform's.
     pub fn platformTypeInputs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformTypeInputs {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).platformTypeInputs(checked_module.importedView(platform));
         return self.platform_type_inputs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformTypeInputs);
     }
@@ -467,7 +467,7 @@ pub const ModuleAnalyses = struct {
     /// The solutions of its platform's requirements `owner`, this module,
     /// recorded. A platform/app pairing's are its platform's.
     pub fn platformRequirementSolutions(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformRequirementSolutionTable {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).platformRequirementSolutions(checked_module.importedView(platform));
         return self.platform_requirement_solutions.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformRequirementSolutions);
     }
@@ -475,7 +475,7 @@ pub const ModuleAnalyses = struct {
     /// The hosted procedures of `owner`, this module. A platform/app
     /// pairing's are its platform's.
     pub fn hostedProcs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedProcTable {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).hostedProcs(checked_module.importedView(platform));
         return self.hosted_procs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedProcs);
     }
@@ -483,7 +483,7 @@ pub const ModuleAnalyses = struct {
     /// The hosted bindings of `owner`, this module, a platform's hosted
     /// section. A platform/app pairing's are its platform's.
     pub fn hostedBindings(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedBindingTable {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).hostedBindings(checked_module.importedView(platform));
         return self.hosted_bindings.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedBindings);
     }
@@ -491,7 +491,7 @@ pub const ModuleAnalyses = struct {
     /// The checked tables of `owner`, this module. A platform/app pairing's
     /// are its platform's.
     pub fn checkedTables(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const CheckedTables {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).checkedTables(checked_module.importedView(platform));
         if (self.checked_tables.peek()) |tables| return tables;
         // A thread never waits on a slot of a kind it holds a claim of, so
@@ -543,21 +543,21 @@ pub const ModuleAnalyses = struct {
 
     /// The template closure of every row of `owner`'s export rows.
     pub fn exportClosures(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const ExportClosures {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).exportClosures(checked_module.importedView(platform), resolver);
         return self.export_closures.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.exportClosures);
     }
 
     /// The checked modules a consumer of `owner`'s public API reads.
     pub fn publicApiDependencies(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const PublicApiDependencies {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).publicApiDependencies(checked_module.importedView(platform), resolver);
         return self.public_api_dependencies.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.publicApiDependencies);
     }
 
     /// The checked modules lowering `owner`'s roots reads.
     pub fn loweringVisibility(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const LoweringVisibility {
-        self.assertPublished();
+        self.assertOpened();
         return self.lowering_visibility.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.loweringVisibility);
     }
 
@@ -568,7 +568,7 @@ pub const ModuleAnalyses = struct {
         store: *CheckedTypeStore,
         current_module: canonical.ModuleIdentityId,
     ) Allocator.Error!*const ModuleInterfaceCapabilities {
-        self.assertPublished();
+        self.assertOpened();
         return self.interface_capabilities.getOrCompute(self.io, Allocator.Error, CapabilityRequest{
             .analyses = self,
             .store = store,
@@ -612,7 +612,7 @@ pub const ModuleAnalyses = struct {
     /// The nested procedure sites of `owner`'s body. `bodies` are this
     /// module's; a platform/app pairing reads its platform's sites.
     pub fn nestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies, owner: NestedProcSiteOwner) Allocator.Error!*const OwnerNestedProcSites {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).nestedProcSites(try platform.bodies(), owner);
         const slots = try self.ownerSlots(bodies);
         const slot = switch (owner) {
@@ -629,7 +629,7 @@ pub const ModuleAnalyses = struct {
     /// The module's nested procedure sites by expression, with their runtime
     /// captures. A platform/app pairing reads its platform's.
     pub fn moduleNestedProcSites(self: *ModuleAnalyses, bodies: CheckedBodies) Allocator.Error!*const ModuleNestedProcSites {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).moduleNestedProcSites(try platform.bodies());
         return self.nested_proc_sites.getOrCompute(self.io, Allocator.Error, BodiesRequest{ .analyses = self, .bodies = bodies }, BodiesRequest.moduleNestedProcSites);
     }
@@ -637,7 +637,7 @@ pub const ModuleAnalyses = struct {
     /// The exhaustiveness sites procedure template `template`'s body
     /// reaches. A platform/app pairing reads its platform's.
     pub fn templateExhaustivenessSites(self: *ModuleAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateExhaustivenessSites {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform) |platform| return platformAnalyses(platform).templateExhaustivenessSites(try platform.bodies(), template);
         const raw = template.rowIndex() orelse return &checked_module.empty_template_exhaustiveness_sites;
         const slots = try self.ownerSlots(bodies);
@@ -649,7 +649,7 @@ pub const ModuleAnalyses = struct {
     /// it. A platform/app pairing decides its platform's checks by its own
     /// root requests.
     pub fn exhaustivenessSites(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const CheckedExhaustivenessSiteTable {
-        self.assertPublished();
+        self.assertOpened();
         if (self.exhaustiveness_sites.peek()) |done| return done;
         const platform_sites: ?*const CheckedExhaustivenessSiteTable = if (self.platform) |platform|
             try platformAnalyses(platform).exhaustivenessSites(checked_module.importedView(platform))
@@ -719,7 +719,7 @@ pub const ModuleAnalyses = struct {
 
     /// The schema of procedure template `template`.
     pub fn templateSchema(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const SchemeAnalysis {
-        self.assertPublished();
+        self.assertOpened();
         const all = try self.dispatchSlots(dispatch);
         const raw = template.rowIndex() orelse return &checked_module.empty_scheme_analysis;
         if (raw >= all.template_schemas.len) return &checked_module.empty_scheme_analysis;
@@ -728,14 +728,14 @@ pub const ModuleAnalyses = struct {
 
     /// The schema of generalized local scope `scope`.
     pub fn scopeSchema(self: *ModuleAnalyses, dispatch: CheckedDispatch, scope: DispatchScopeId) Allocator.Error!*const SchemeAnalysis {
-        self.assertPublished();
+        self.assertOpened();
         const all = try self.dispatchSlots(dispatch);
         return all.scope_schemas[@backingInt(scope)].getOrCompute(self.io, Allocator.Error, ScopeRequest{ .analyses = self, .dispatch = dispatch, .scope = scope }, ScopeRequest.schema);
     }
 
     /// The dispatch resolution of procedure template `template`.
     pub fn templateDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatch {
-        self.assertPublished();
+        self.assertOpened();
         const all = try self.dispatchSlots(dispatch);
         const raw = template.rowIndex() orelse return &checked_module.empty_template_dispatch;
         if (raw >= all.template_dispatch.len) return &checked_module.empty_template_dispatch;
@@ -745,7 +745,7 @@ pub const ModuleAnalyses = struct {
     /// How procedure template `template`'s plans relate to its
     /// specialization.
     pub fn templateDispatchRelations(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatchRelations {
-        self.assertPublished();
+        self.assertOpened();
         const all = try self.dispatchSlots(dispatch);
         const raw = template.rowIndex() orelse return &checked_module.empty_template_relations;
         if (raw >= all.template_relations.len) return &checked_module.empty_template_relations;
@@ -754,14 +754,14 @@ pub const ModuleAnalyses = struct {
 
     /// The module-wide indexes dispatch resolution reads.
     pub fn dispatchIndex(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const DispatchIndex {
-        self.assertPublished();
+        self.assertOpened();
         if (self.dispatch_index.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.dispatch_index.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.index);
     }
 
     /// The module's dispatch resolution of what no template resolves.
     pub fn moduleDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const ModuleDispatch {
-        self.assertPublished();
+        self.assertOpened();
         if (self.module_dispatch.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.module_dispatch.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.moduleResolution);
     }
@@ -769,7 +769,7 @@ pub const ModuleAnalyses = struct {
     /// An app's root evidence for each of its platform requirement
     /// solutions.
     pub fn platformRequirementRootEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const PlatformRequirementRootEvidence {
-        self.assertPublished();
+        self.assertOpened();
         if (self.platform_root_evidence.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.platform_root_evidence.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.platformRootEvidence);
     }
@@ -777,7 +777,7 @@ pub const ModuleAnalyses = struct {
     /// The resolution of plan `plan`: the first template in template order
     /// whose chain binds it, otherwise the module's.
     pub fn planResolution(self: *ModuleAnalyses, dispatch: CheckedDispatch, plan: static_dispatch.StaticDispatchPlanId) Allocator.Error!static_dispatch.PlanResolution {
-        self.assertPublished();
+        self.assertOpened();
         const index = try self.dispatchIndex(dispatch);
         for (index.planSites(plan)) |reach| {
             const template = reach.template orelse continue;
@@ -790,7 +790,7 @@ pub const ModuleAnalyses = struct {
     /// The resolution of iterator plan `plan`, found as `planResolution`
     /// finds a plan's.
     pub fn iteratorPlanResolution(self: *ModuleAnalyses, dispatch: CheckedDispatch, plan: static_dispatch.IteratorForPlanId) Allocator.Error!static_dispatch.IteratorPlanResolution {
-        self.assertPublished();
+        self.assertOpened();
         const index = try self.dispatchIndex(dispatch);
         for (index.iteratorSites(plan)) |reach| {
             const template = reach.template orelse continue;
@@ -803,7 +803,7 @@ pub const ModuleAnalyses = struct {
     /// The template whose resolution resolves plan `plan` (`planResolution`),
     /// or null when the module's does.
     pub fn planResolver(self: *ModuleAnalyses, dispatch: CheckedDispatch, plan: static_dispatch.StaticDispatchPlanId) Allocator.Error!?u32 {
-        self.assertPublished();
+        self.assertOpened();
         const index = try self.dispatchIndex(dispatch);
         for (index.planSites(plan)) |reach| {
             const template = reach.template orelse continue;
@@ -815,7 +815,7 @@ pub const ModuleAnalyses = struct {
     /// The template whose resolution holds use site `site`'s evidence
     /// (`siteEvidence`), or null when no template's does.
     pub fn siteResolver(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?u32 {
-        self.assertPublished();
+        self.assertOpened();
         const index = try self.dispatchIndex(dispatch);
         for (index.siteTemplates(site)) |reach| {
             if ((try self.templateDispatch(dispatch, @fromBackingInt(reach.template))).site(site) != null) return reach.template;
@@ -830,7 +830,7 @@ pub const ModuleAnalyses = struct {
     /// template's chain deferred, so a site of templates that deferred none
     /// of it has none there.
     pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_module.SiteEvidenceLookup {
-        self.assertPublished();
+        self.assertOpened();
         const index = try self.dispatchIndex(dispatch);
         const reaches = index.siteTemplates(site);
         var deferred = false;
@@ -848,7 +848,7 @@ pub const ModuleAnalyses = struct {
     /// The module's demand call graph: the slots of its templates' own
     /// demand vectors and edges and of their components.
     pub fn templateDemandGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
-        self.assertPublished();
+        self.assertOpened();
         if (self.template_demand_graph.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.template_demand_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.demandGraph);
     }
@@ -871,7 +871,7 @@ pub const ModuleAnalyses = struct {
 
     /// The demand vector of procedure template `template`.
     pub fn templateDemands(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error![]const SchemeVarDemand {
-        self.assertPublished();
+        self.assertOpened();
         const raw = template.rowIndex() orelse return &.{};
         const graph = try self.templateDemandGraph(dispatch);
         const component = try self.templateDemandComponent(dispatch, graph, raw);
@@ -953,7 +953,7 @@ pub const ModuleAnalyses = struct {
     /// The module's literal call graph (`LiteralGraph`): what of it needs no
     /// dispatch resolution, and the slots of the rest.
     pub fn literalGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
-        self.assertPublished();
+        self.assertOpened();
         if (self.literal_graph.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.literal_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.literalGraph);
     }
@@ -961,7 +961,7 @@ pub const ModuleAnalyses = struct {
     /// Node `node`'s edges, its own open literals and the local schemes its
     /// edges instantiate.
     pub fn literalNode(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!*const LiteralNodeEdges {
-        self.assertPublished();
+        self.assertOpened();
         return graph.node_slots[node].getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = node }, LiteralNodeRequest.compute);
     }
 
@@ -991,7 +991,7 @@ pub const ModuleAnalyses = struct {
     /// The first node, in node order, whose body reaches evidence node `id`;
     /// null when no literal walk reaches it.
     pub fn literalEvidenceHolder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, id: static_dispatch.EvidenceNodeId) Allocator.Error!?u32 {
-        self.assertPublished();
+        self.assertOpened();
         const holders = if (id.owner.template()) |template| blk: {
             const raw = template.rowIndex() orelse return null;
             break :blk try graph.pool_slots[raw].getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = raw }, LiteralNodeRequest.pool);
@@ -1010,7 +1010,7 @@ pub const ModuleAnalyses = struct {
 
     /// Every component of the literal graph, by leader, callees first.
     pub fn literalComponentOrder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph) Allocator.Error!*const LiteralComponentOrder {
-        self.assertPublished();
+        self.assertOpened();
         return graph.order_slot.getOrCompute(self.io, Allocator.Error, LiteralNodeRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .node = graph.defaultsNode() }, LiteralNodeRequest.order);
     }
 
@@ -1049,7 +1049,7 @@ pub const ModuleAnalyses = struct {
     /// computation only reads finished requirements and never waits on a
     /// slot of its own kind.
     pub fn literalComponent(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, node: u32) Allocator.Error!*const LiteralComponent {
-        self.assertPublished();
+        self.assertOpened();
         const component = try self.literalLeader(dispatch, graph, node);
         if (graph.component_slots[component].peek()) |done| return done;
         const allocator = self.allocator;
@@ -1079,8 +1079,8 @@ pub const ModuleAnalyses = struct {
         const owner = dispatch.source.key.digest();
         for (order.items) |next| {
             for (graph.componentInfo(next).members) |member| for (graph.finishedNode(member).edges) |edge| switch (edge.callee) {
-                .template => |template| if (!template.artifact.eql(owner)) {
-                    if (try dispatch.importedView(template.artifact)) |view| _ = try (try view.dispatch()).templateLiteralRequirements(template.template);
+                .template => |template| if (!template.module.eql(owner)) {
+                    if (try dispatch.importedView(template.module)) |view| _ = try (try view.dispatch()).templateLiteralRequirements(template.template);
                 },
                 .scope => {},
             };
@@ -1104,7 +1104,7 @@ pub const ModuleAnalyses = struct {
     /// ascending. Demands, holding no claim, the component of every edge the
     /// template reaches before claiming.
     pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_module.ComptimeRootKey {
-        self.assertPublished();
+        self.assertOpened();
         const graph = try self.literalGraph(dispatch);
         if (graph.demand_slots[template].peek()) |done| return done.roots;
         for ((try self.literalNode(dispatch, graph, template)).reached) |reached| {
@@ -1125,7 +1125,7 @@ pub const ModuleAnalyses = struct {
 
     /// The literal conversion roots of unit `unit`'s literals.
     pub fn unitLiteralConversions(self: *ModuleAnalyses, dispatch: CheckedDispatch, unit: UnitId) Allocator.Error!*const UnitLiteralConversions {
-        self.assertPublished();
+        self.assertOpened();
         const slots = try self.unit_conversion_slots.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.unitConversionSlots);
         return slots.slots[@backingInt(unit)].getOrCompute(self.io, Allocator.Error, UnitConversionRequest{ .analyses = self, .dispatch = dispatch, .unit = unit }, UnitConversionRequest.compute);
     }
@@ -1143,7 +1143,7 @@ pub const ModuleAnalyses = struct {
     /// The root requests of `owner`, this module. A platform/app pairing's
     /// are its own, built from its platform's.
     pub fn rootRequests(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const RootRequestTable {
-        self.assertPublished();
+        self.assertOpened();
         const platform_requests: ?*const RootRequestTable = if (self.platform) |platform|
             try platformAnalyses(platform).rootRequests(checked_module.importedView(platform))
         else

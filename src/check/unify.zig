@@ -4759,7 +4759,7 @@ pub const Scratch = struct {
 // Identity equality is two integer comparisons with no ident-store access:
 // `origin_module` is an env-local index of the declaring module's deep
 // CONTENT identity (see `base.module_identity`), so the answer never depends
-// on which pipeline built an artifact, what the coordinator named a package,
+// on which pipeline built a module, what the coordinator named a package,
 // or what directory the build ran in. The within-module discriminator is the
 // declaration: the packed source-decl statement when present (statement
 // indices are stable across checked modules because equal content identities

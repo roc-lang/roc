@@ -1,5 +1,5 @@
 //! Content-addressed inference capsules. Each holds solved source plus the
-//! checker's publication inputs, never evaluated values or a finalized artifact.
+//! checker's publication inputs, never evaluated values or a finalized module.
 
 const std = @import("std");
 const base = @import("base");
@@ -107,20 +107,20 @@ fn encode(allocator: Allocator, key: [32]u8, env: *const ModuleEnv, output: *con
 
 const Bodies = struct { env: []const u8, metadata: check.InferenceOutput };
 
-fn decode(key: [32]u8, bytes: []const u8) error{CorruptArtifact}!Bodies {
-    if (@intFromPtr(bytes.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return error.CorruptArtifact;
+fn decode(key: [32]u8, bytes: []const u8) error{CorruptSerializedData}!Bodies {
+    if (@intFromPtr(bytes.ptr) % CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits() != 0) return error.CorruptSerializedData;
     if (bytes.len < header_len or !std.mem.eql(u8, bytes[0..8], magic) or
         !std.mem.eql(u8, bytes[8..40], &versioning.entryVersionHash(.inference)) or
-        !std.mem.eql(u8, bytes[40..72], &key)) return error.CorruptArtifact;
+        !std.mem.eql(u8, bytes[40..72], &key)) return error.CorruptSerializedData;
     var hash = base.Sha256.init(.{});
     hash.update(bytes[104..]);
-    if (!std.mem.eql(u8, bytes[72..104], &hash.finalResult())) return error.CorruptArtifact;
-    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[104..112], .little)) orelse return error.CorruptArtifact;
-    const output_len = std.math.cast(usize, std.mem.readInt(u64, bytes[112..120], .little)) orelse return error.CorruptArtifact;
-    if (env_len > bytes.len - header_len or env_len < @sizeOf(ModuleEnv.Serialized)) return error.CorruptArtifact;
+    if (!std.mem.eql(u8, bytes[72..104], &hash.finalResult())) return error.CorruptSerializedData;
+    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[104..112], .little)) orelse return error.CorruptSerializedData;
+    const output_len = std.math.cast(usize, std.mem.readInt(u64, bytes[112..120], .little)) orelse return error.CorruptSerializedData;
+    if (env_len > bytes.len - header_len or env_len < @sizeOf(ModuleEnv.Serialized)) return error.CorruptSerializedData;
     const output_start = header_len + std.mem.alignForward(usize, env_len, 16);
     if (output_start > bytes.len or output_len != bytes.len - output_start or output_len < @sizeOf(check.InferenceOutput.Serialized))
-        return error.CorruptArtifact;
+        return error.CorruptSerializedData;
     const env = bytes[header_len..][0..env_len];
     const serialized: *const ModuleEnv.Serialized = @ptrCast(@alignCast(env.ptr));
     try serialized.validate(env.len);
@@ -142,12 +142,12 @@ test "inference capsule rejects truncation corruption incompatible versions and 
     const bytes = try encode(arena.allocator(), key, &env, &.{});
     const bodies = try decode(key, bytes);
     try std.testing.expectEqual(@as(usize, 0), bodies.metadata.foreign_references.len);
-    try std.testing.expectError(error.CorruptArtifact, decode(@splat(8), bytes));
+    try std.testing.expectError(error.CorruptSerializedData, decode(@splat(8), bytes));
     for ([_]usize{ 0, header_len - 1, header_len, bytes.len - 1 }) |len|
-        try std.testing.expectError(error.CorruptArtifact, decode(key, bytes[0..len]));
+        try std.testing.expectError(error.CorruptSerializedData, decode(key, bytes[0..len]));
     for ([_]usize{ 0, 8, 40, 72, 104, 112, header_len, bytes.len - 1 }) |offset| {
         bytes[offset] ^= 1;
-        try std.testing.expectError(error.CorruptArtifact, decode(key, bytes));
+        try std.testing.expectError(error.CorruptSerializedData, decode(key, bytes));
         bytes[offset] ^= 1;
     }
     _ = try decode(key, bytes);

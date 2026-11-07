@@ -799,7 +799,7 @@ pub const Program = struct {
         if (root.isLiteral()) {
             const view = self.module(index);
             return .{
-                .artifact = view.view.key.digest(),
+                .module = view.view.key.digest(),
                 .proc_base = checked_names.ProcBase.entry_wrapper,
                 .template = checked.literalRootWrapperTemplate(root),
             };
@@ -997,7 +997,7 @@ pub const Program = struct {
     }
 
     pub fn templateRefScope(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        const view = self.moduleByKey(.{ .bytes = ref.module.bytes });
         return try self.templateScope(view.index, ref.template);
     }
 
@@ -2358,17 +2358,17 @@ pub const Program = struct {
     pub fn procedureBinding(self: *const Program, binding: checked.ProcedureBindingRef) struct { module: ModuleIndex, body: checked.ProcedureBindingBody } {
         return switch (binding) {
             .top_level => |top| blk: {
-                const owner = self.moduleByKey(top.artifact);
+                const owner = self.moduleByKey(top.module);
                 break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(top.binding)].body };
             },
             .imported => |imported| blk: {
-                const owner = self.moduleByKey(imported.artifact);
+                const owner = self.moduleByKey(imported.module);
                 const exported = self.exported_bindings.get(.{ .module = owner.index, .def = imported.def, .pattern = imported.pattern }) orelse
                     invariant("an imported procedure binding is not exported by its module");
                 break :blk .{ .module = owner.index, .body = exported.body };
             },
             .platform_required => |required| blk: {
-                const owner = self.moduleByKey(required.artifact);
+                const owner = self.moduleByKey(required.module);
                 break :blk .{ .module = owner.index, .body = owner.tables().top_level_procedure_bindings.bindings.items[@backingInt(required.procedure_binding)].body };
             },
             .hosted => |hosted| .{ .module = self.moduleByIdx(hosted.module_idx).index, .body = .{ .direct_template = .{ .proc_value = hosted.proc, .template = .{ .checked = hosted.template } } } },
@@ -2456,7 +2456,7 @@ pub const Program = struct {
     }
 
     pub fn templateRefWorker(self: *Program, ref: checked_names.ProcedureTemplateRef) Allocator.Error!WorkerId {
-        const view = self.moduleByKey(.{ .bytes = ref.artifact.bytes });
+        const view = self.moduleByKey(.{ .bytes = ref.module.bytes });
         return try self.templateWorker(view.index, ref.template);
     }
 
@@ -2732,7 +2732,7 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
                 .procedure => |procedure| procedure.template,
                 .local_proc, .structural => continue,
             };
-            const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
+            const owner = program.moduleByKey(.{ .bytes = template.module.bytes });
             if (try templateRejected(program, owner, owner.tables().checked_procedure_templates.get(template.template))) continue;
             const worker = try program.templateRefWorker(template);
             if (program.worker(worker).imported) continue;
@@ -2818,7 +2818,7 @@ fn initHosted(program: *Program) Allocator.Error!void {
         if (view.view.module_identity.kind == .platform) platform = view;
         const hosted_procs = try view.view.hostedProcs();
         for (hosted_procs.procs) |proc| {
-            const owner = program.moduleByKey(.{ .bytes = proc.template.artifact.bytes });
+            const owner = program.moduleByKey(.{ .bytes = proc.template.module.bytes });
             const key: TemplateKey = .{ .module = owner.index, .template = proc.template.template };
             try program.hosted.put(allocator, key, .{
                 .symbol = view.view.canonical_names.externalSymbolNameText(proc.external_symbol_name),

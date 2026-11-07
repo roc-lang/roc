@@ -66,7 +66,7 @@ pub const PathStep = extern struct {
     }
 
     pub fn stepKind(self: PathStep) Kind {
-        return self.kindOrNull() orelse unreachable; // PathStep construction writes only Kind values, and artifact validation rejects any other discriminant
+        return self.kindOrNull() orelse unreachable; // PathStep construction writes only Kind values, and cache validation rejects any other discriminant
     }
 };
 

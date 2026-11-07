@@ -1391,7 +1391,7 @@ pub const Program = struct {
             .local_hosted, .imported_hosted => |hosted_fn| hosted_fn.template,
             inline .parser_runtime, .encoder_for_runtime => |runtime| runtime.owner,
         };
-        return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
+        return std.mem.eql(u8, &proc_template.module.bytes, &filling.app_module);
     }
 
     /// Whether the procedure of the app function `callee` is determined by
@@ -2373,7 +2373,7 @@ fn testLiftedProgram(allocator: std.mem.Allocator) Program {
 
 fn testSourceDigestTemplate(template_id: u32) names.ProcTemplate {
     return .{
-        .artifact = .{},
+        .module = .{},
         .proc_base = names.ProcBase.of(.checked_source, 0),
         .template = @fromBackingInt(@intCast(template_id)),
     };
@@ -2504,7 +2504,7 @@ test "code reaching the app digests what it reaches there and names its app call
     const ret_ty = try program.types.add(.zst);
     const fn_ty = try program.types.add(.{ .func = .{ .args = Type.Span.empty(), .ret = ret_ty } });
     var app_template = testSourceDigestTemplate(1);
-    app_template.artifact.bytes = app_identity;
+    app_template.module.bytes = app_identity;
     const app_source: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = app_template },
         .source_fn_key = .{},
@@ -2694,7 +2694,7 @@ fn writeTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate, 
 }
 
 fn writeProcTemplateDigest(hasher: *TypeDigestHasher, template: names.ProcTemplate) void {
-    hasher.update(&template.artifact.bytes);
+    hasher.update(&template.module.bytes);
     writeIdentityU64(hasher, @backingInt(template.proc_base));
     template.template.digestInto(hasher);
 }

@@ -1149,10 +1149,10 @@ fn materializedComptimeFloatBitsMatch(
         .checked_type = compile_time_root.checked_type,
     };
 
-    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_artifacts.len);
+    const import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_modules.len);
     defer allocator.free(import_views);
-    for (resources.import_artifacts, 0..) |*artifact, index| {
-        import_views[index] = check.Checked.importedView(artifact);
+    for (resources.import_modules, 0..) |*checked, index| {
+        import_views[index] = check.Checked.importedView(checked);
     }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
@@ -1556,7 +1556,7 @@ fn runTestProblem(
 
     // Checking found nothing; publish so compile-time evaluation can report
     // problems (e.g. a custom from_numeral rejecting a literal).
-    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, io, source_kind, src, imports, null);
+    const comptime_outcome = try helpers.checkProgramForComptimeProblems(allocator, io, source_kind, src, imports, null);
     if (comptime_outcome == .comptime_problems) {
         return .{
             .status = .pass,

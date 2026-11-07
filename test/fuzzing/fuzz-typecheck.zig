@@ -63,7 +63,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     var build_env = BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, fuzz_io) catch @panic("OOM during BuildEnv init");
     defer build_env.deinit();
-    build_env.setPostCheckPublicationMode(.none);
+    build_env.setCheckedProgramMode(.none);
 
     build_env.build(abs_paths[generator.mainModule()]) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM during generated source typecheck"),

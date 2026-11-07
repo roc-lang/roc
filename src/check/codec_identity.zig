@@ -353,9 +353,9 @@ const ContentDigester = struct {
         self.writeU8(@backingInt(std.meta.activeTag(target.kind)));
         switch (target.kind) {
             .procedure => |procedure| {
-                self.hasher.update(&procedure.proc.artifact.bytes);
+                self.hasher.update(&procedure.proc.module.bytes);
                 self.writeU64(@backingInt(procedure.proc.proc_base));
-                self.hasher.update(&procedure.template.artifact.bytes);
+                self.hasher.update(&procedure.template.module.bytes);
                 self.writeU64(@backingInt(procedure.template.proc_base));
                 self.writeU32(procedure.template.template.index());
             },

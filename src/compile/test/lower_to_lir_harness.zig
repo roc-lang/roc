@@ -1220,7 +1220,7 @@ fn lowerAppPathToLir(
         try std.testing.expect(!coord.hasUserErrors());
     }
 
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
     }

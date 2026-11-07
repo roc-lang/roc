@@ -1,5 +1,5 @@
 //! Output type roots that inference produced (design.md "Row Union
-//! Normalization"). Checked-module publication and the checker's settled row
+//! Normalization"). The checked module's analyses and the checker's settled row
 //! walk both enumerate them through these functions, so every row the checked
 //! module publishes is one the checker normalized. A visitor provides
 //! `visit(Var) Allocator.Error!void` and

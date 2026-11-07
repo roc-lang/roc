@@ -18,7 +18,7 @@ LIR interpreter.
 Parent responsibilities:
 
 1. Parse and canonicalize source.
-2. Type check and publish checked modules.
+2. Type check and open checked modules.
 3. Resolve roots, platform entrypoints, hosted procedures, static dispatch, and
    compile-time constants before post-check lowering.
 4. Lower through the post-check IRs to LIR and insert ARC statements.

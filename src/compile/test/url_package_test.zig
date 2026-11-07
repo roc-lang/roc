@@ -194,7 +194,7 @@ test "transitive URL dependency compiles through the orchestration core from a w
     }
 
     // Executable finalization succeeded, so a run back half may lower this.
-    try std.testing.expect(build_env.executable_artifacts_finalized);
+    try std.testing.expect(build_env.checked_program_ready);
 
     // The transitive URL package is registered under its URL identity.
     try std.testing.expect(build_env.packages.getPtr(util_url) != null);

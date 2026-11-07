@@ -232,7 +232,7 @@ const Walker = struct {
     }
 
     fn pushTemplate(self: *Walker, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
-        const module = self.moduleOf(ref.artifact) orelse return;
+        const module = self.moduleOf(ref.module) orelse return;
         try self.pending.append(self.allocator, .{ .module = module, .template = ref.template });
     }
 
@@ -381,16 +381,16 @@ const Walker = struct {
     /// Walk the scheme a literal argument root's edge instantiates: the
     /// root's body converts the literal in that scheme's frames.
     fn walkLiteralEdge(self: *Walker, module: u32, edge: checked.LiteralEdge) Allocator.Error!void {
-        const artifact = self.modules[module];
+        const checked_module = self.modules[module];
         switch (edge) {
             .literal => {},
-            .node => |id| switch ((try (try artifact.dispatch()).evidenceNode(id)).target.kind) {
+            .node => |id| switch ((try (try checked_module.dispatch()).evidenceNode(id)).target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
                 .local_proc, .structural => {},
             },
             .use => |expr| {
-                const ref_id = (try artifact.valueRefs()).lookupIdByExpr(expr) orelse return;
-                try self.walkRef((try artifact.valueRefs()).records[@backingInt(ref_id)].ref);
+                const ref_id = (try checked_module.valueRefs()).lookupIdByExpr(expr) orelse return;
+                try self.walkRef((try checked_module.valueRefs()).records[@backingInt(ref_id)].ref);
             },
         }
     }
@@ -415,9 +415,9 @@ const Walker = struct {
 
     fn constUse(self: *Walker, const_use: checked.ConstUseTemplate) Allocator.Error!void {
         const const_ref = const_use.const_ref;
-        const module = self.moduleOf(const_ref.artifact) orelse return;
-        const artifact = self.modules[module];
-        switch (checked.ConstTemplateValue.of((try artifact.checkedTables()).const_templates.get(const_ref), &artifact.evaluation)) {
+        const module = self.moduleOf(const_ref.module) orelse return;
+        const checked_module = self.modules[module];
+        switch (checked.ConstTemplateValue.of((try checked_module.checkedTables()).const_templates.get(const_ref), &checked_module.evaluation)) {
             // A declaration with no implementation evaluates nothing.
             .unimplemented => return,
             // A value holding function values is restored by lowering its
@@ -427,17 +427,17 @@ const Walker = struct {
             .stored_const, .reserved => {},
         }
         const root: checked.ComptimeRootKey = switch (const_ref.owner) {
-            .top_level_binding => |top_level| (try artifact.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
-            .hoisted_root => |hoisted| ((try artifact.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
+            .top_level_binding => |top_level| (try checked_module.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse return,
+            .hoisted_root => |hoisted| ((try checked_module.checkedTables()).hoisted_constants.lookupByRoot(hoisted.root) orelse return).root,
         };
         try self.readRoot(module, root);
     }
 
     fn procedureUse(self: *Walker, proc_use: checked.ProcedureUseTemplate) Allocator.Error!void {
         switch (proc_use.binding) {
-            .top_level => |top_level| try self.topLevelBinding(self.moduleOf(top_level.artifact) orelse return, top_level.binding),
+            .top_level => |top_level| try self.topLevelBinding(self.moduleOf(top_level.module) orelse return, top_level.binding),
             .imported => |imported| {
-                const module = self.moduleOf(imported.artifact) orelse return;
+                const module = self.moduleOf(imported.module) orelse return;
                 const entry = (try self.modules[module].checkedTables()).top_level_values.lookupByDef(imported.def) orelse return;
                 switch (entry.value) {
                     .procedure_binding => |procedure_binding| try self.topLevelBinding(module, procedure_binding),
@@ -448,18 +448,18 @@ const Walker = struct {
             // The app's top-level procedure binding the requirement is
             // bound to, in the app module the reference names: what the
             // lowering calls for the requirement.
-            .platform_required => |required| try self.topLevelBinding(self.moduleOf(required.artifact) orelse return, required.procedure_binding),
+            .platform_required => |required| try self.topLevelBinding(self.moduleOf(required.module) orelse return, required.procedure_binding),
         }
     }
 
     fn topLevelBinding(self: *Walker, module: u32, binding: checked.TopLevelProcedureBindingRef) Allocator.Error!void {
-        const artifact = self.modules[module];
-        switch ((try artifact.checkedTables()).top_level_procedure_bindings.get(binding).body) {
+        const checked_module = self.modules[module];
+        switch ((try checked_module.checkedTables()).top_level_procedure_bindings.get(binding).body) {
             .direct_template => |direct| switch (direct.template) {
                 .checked => |template| try self.pushTemplate(template),
                 .lifted, .synthetic => base.invariant("compile-time finalization invariant violated: a checked procedure dependency named a post-check template", .{}),
             },
-            .callable_eval_template => |template_id| try self.readRoot(module, (try artifact.checkedTables()).callable_eval_templates.get(template_id).root),
+            .callable_eval_template => |template_id| try self.readRoot(module, (try checked_module.checkedTables()).callable_eval_templates.get(template_id).root),
             .checked_error => {},
         }
     }
@@ -470,8 +470,8 @@ const Walker = struct {
     /// value completes, or, when the two read each other, in one group with
     /// it.
     fn readRoot(self: *Walker, module: u32, root: checked.ComptimeRootKey) Allocator.Error!void {
-        const artifact = self.modules[module];
-        const ordinal = self.root_ordinals.get(.{ .module = artifact.key.digest().bytes, .root = root }) orelse return;
+        const checked_module = self.modules[module];
+        const ordinal = self.root_ordinals.get(.{ .module = checked_module.key.digest().bytes, .root = root }) orelse return;
         try self.reads.append(self.allocator, ordinal);
     }
 };
@@ -487,18 +487,18 @@ pub fn rootHoldsFunction(
     allocator: Allocator,
     program_root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView,
-    artifact: *const checked.CheckedModule,
+    checked_module: *const checked.CheckedModule,
     request: checked.RootRequest,
 ) Allocator.Error!bool {
-    if ((try artifact.compileTimeRoot(request.compile_time_root.?)).kind == .callable_binding) return true;
+    if ((try checked_module.compileTimeRoot(request.compile_time_root.?)).kind == .callable_binding) return true;
     const Pending = struct { key: [32]u8, types: checked.CheckedTypeStoreView, ty: checked.CheckedTypeId };
     const Seen = struct { key: [32]u8, ty: checked.CheckedTypeId };
     var seen = std.AutoHashMapUnmanaged(Seen, void).empty;
     defer seen.deinit(allocator);
     var pending = std.ArrayList(Pending).empty;
     defer pending.deinit(allocator);
-    const own_types = artifact.typesView();
-    const own_key = artifact.key.digest().bytes;
+    const own_types = checked_module.typesView();
+    const own_key = checked_module.key.digest().bytes;
     // The root's checked type is its wrapper's function type; its value is
     // the wrapper's result.
     switch (own_types.payload(request.checked_type)) {
@@ -551,9 +551,9 @@ pub fn rootHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring = typesOf(program_root, imports, imported.artifact) orelse
+                        const declaring = typesOf(program_root, imports, imported.module) orelse
                             base.invariant("compile-time finalization invariant violated: a nominal type's declaring module is not in the program", .{});
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
+                        try pending.append(allocator, .{ .key = imported.module.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
                     // A nominal read with a box payload capability is
                     // declared in its module like any other: its value is
@@ -603,14 +603,14 @@ test "CTFE root classification resolves nominal backings throughout the checked 
             \\import Holder
             \\value : Holder
             \\value = Holder.make(7)
-        , &.{.{ .name = "Holder", .source = case.source }}, .{ .io = std.testing.io, .roots = .published_only });
+        , &.{.{ .name = "Holder", .source = case.source }}, .{ .io = std.testing.io, .roots = .checker_selected });
         defer parsed.deinit(allocator);
         try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
         const consumer = &parsed.checked_module;
         // The import modules list the builtin module, then the program's
         // imports in order; `Holder` is the program's only import.
-        try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
-        const holder = &parsed.import_artifacts[1];
+        try std.testing.expectEqual(@as(usize, 2), parsed.import_modules.len);
+        const holder = &parsed.import_modules[1];
         const compile_time_requests = (try consumer.rootRequests()).compile_time_requests;
         try std.testing.expectEqual(@as(usize, 1), compile_time_requests.len);
         const request = compile_time_requests[0];
@@ -624,13 +624,13 @@ test "CTFE root classification resolves nominal backings throughout the checked 
 
 fn expectSharedDependencies(source: []const u8, imports: []const @import("inspected.zig").ModuleSource) (@import("inspected.zig").Error || Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const allocator = std.testing.allocator;
-    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .published_only });
+    var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .checker_selected });
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
     var modules = std.ArrayList(*checked.CheckedModule).empty;
     defer modules.deinit(allocator);
     try modules.append(allocator, &parsed.checked_module);
-    for (parsed.import_artifacts) |*artifact| try modules.append(allocator, artifact);
+    for (parsed.import_modules) |*checked_module| try modules.append(allocator, checked_module);
     var roots = std.ArrayList(Root).empty;
     defer roots.deinit(allocator);
     for (modules.items, 0..) |module, index| {
@@ -649,7 +649,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
         for (0..(try module.checkedTables()).checked_procedure_templates.templates.items.len) |raw_template| {
             const owner = static_dispatch.EvidenceOwner.forTemplate(@fromBackingInt(@intCast(raw_template)));
             for ((try (try module.dispatch()).pool(owner)).nodes, 0..) |node, node_index| {
-                if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.artifact) == null) continue;
+                if (node.target.kind != .procedure or evidence_probe.moduleOf(node.target.kind.procedure.template.module) == null) continue;
                 const id: static_dispatch.EvidenceNodeId = .{ .index = @intCast(node_index), .owner = owner };
                 evidence_probe.evidence_visit = 1;
                 try evidence_probe.nodes.append(allocator, id);

@@ -31,8 +31,8 @@ checked modules → post-check IRs → LIR → TRMC/TCE → ARC → Interpret
 
 ## Evaluation Flow
 
-1. **Published inputs**—Consumers (REPL, tests, CLI) type check source and
-   publish checked modules plus explicit roots.
+1. **Checked inputs**—Consumers (REPL, tests, CLI) type check source and
+   open checked modules plus explicit roots.
 2. **Lowering**—The checked-module pipeline lowers through post-check IRs
    and LIR, rewrites tail recursion via TRMC/TCE (`src/lir/trmc.zig`), and
    inserts ARC, producing a `LirStore`, committed layouts, and explicit root

@@ -8,7 +8,7 @@ const collections = @import("collections");
 const checked_ids = @import("checked_ids.zig");
 const checked_type_ids = @import("checked_type_ids.zig");
 const names = @import("canonical_names.zig");
-const artifact_serialize = @import("artifact_serialize.zig");
+const store_serialize = @import("store_serialize.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
 const Allocator = std.mem.Allocator;
@@ -96,7 +96,7 @@ pub const ConstPackedScalar = enum(u8) {
 pub const CaptureId = checked_ids.CaptureId;
 
 /// Primitive type stored at the ConstStore boundary. Aliased to the checked
-/// artifact's `CheckedPrimitive` so the two cannot drift; Zig permits the
+/// module's `CheckedPrimitive` so the two cannot drift; Zig permits the
 /// circular file import (`checked_module.zig` itself imports this file).
 pub const Primitive = @import("checked_module.zig").CheckedPrimitive;
 
@@ -530,7 +530,7 @@ pub fn freeVector(allocator: Allocator, vector: ConstFnEvidenceVector) void {
 }
 
 /// Stable checked dispatch scope identity stored without depending on checked
-/// artifact implementation types.
+/// module implementation types.
 pub const ConstFnEvidenceScope = union(enum(u8)) {
     root,
     generalized: u32,
@@ -807,19 +807,19 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn appendTypeSpan(self: *ConstTypeStore, ids: []const ConstTypeId) Allocator.Error!ConstRange {
-        return artifact_serialize.appendSpan(ConstRange, ConstTypeId, &self.type_pool, self.allocator, ids);
+        return store_serialize.appendSpan(ConstRange, ConstTypeId, &self.type_pool, self.allocator, ids);
     }
 
     pub fn appendFieldSpan(self: *ConstTypeStore, fields: []const TypeField) Allocator.Error!ConstRange {
-        return artifact_serialize.appendSpan(ConstRange, TypeField, &self.field_pool, self.allocator, fields);
+        return store_serialize.appendSpan(ConstRange, TypeField, &self.field_pool, self.allocator, fields);
     }
 
     pub fn appendTagSpan(self: *ConstTypeStore, tags: []const TypeTag) Allocator.Error!ConstRange {
-        return artifact_serialize.appendSpan(ConstRange, TypeTag, &self.tag_pool, self.allocator, tags);
+        return store_serialize.appendSpan(ConstRange, TypeTag, &self.tag_pool, self.allocator, tags);
     }
 
     pub fn appendDeclaredFieldSpan(self: *ConstTypeStore, fields: []const TypeDeclaredField) Allocator.Error!ConstRange {
-        return artifact_serialize.appendSpan(ConstRange, TypeDeclaredField, &self.declared_field_pool, self.allocator, fields);
+        return store_serialize.appendSpan(ConstRange, TypeDeclaredField, &self.declared_field_pool, self.allocator, fields);
     }
 
     pub fn get(self: *const ConstTypeStore, id: ConstTypeId) ConstType {
@@ -1138,19 +1138,19 @@ pub const ConstTypeStore = struct {
     }
 
     pub const Serialized = extern struct {
-        types: artifact_serialize.SerializedSlice(StoredConstType) = .{},
-        named_pool: artifact_serialize.SerializedSlice(ConstNamedType) = .{},
-        erased_pool: artifact_serialize.SerializedSlice(names.TypeDigest) = .{},
-        type_pool: artifact_serialize.SerializedSlice(ConstTypeId) = .{},
-        field_pool: artifact_serialize.SerializedSlice(TypeField) = .{},
-        tag_pool: artifact_serialize.SerializedSlice(TypeTag) = .{},
-        declared_field_pool: artifact_serialize.SerializedSlice(TypeDeclaredField) = .{},
+        types: store_serialize.SerializedSlice(StoredConstType) = .{},
+        named_pool: store_serialize.SerializedSlice(ConstNamedType) = .{},
+        erased_pool: store_serialize.SerializedSlice(names.TypeDigest) = .{},
+        type_pool: store_serialize.SerializedSlice(ConstTypeId) = .{},
+        field_pool: store_serialize.SerializedSlice(TypeField) = .{},
+        tag_pool: store_serialize.SerializedSlice(TypeTag) = .{},
+        declared_field_pool: store_serialize.SerializedSlice(TypeDeclaredField) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
+            std.debug.assert(store_serialize.relocatablePointerCount(Serialized) == 7);
         }
 
-        const Serde = artifact_serialize.SliceStoreSerde(ConstTypeStore, @This());
+        const Serde = store_serialize.SliceStoreSerde(ConstTypeStore, @This());
         pub const serialize = Serde.serialize;
         pub const deserializeWithAllocator = Serde.deserializeWithAllocator;
         pub const deserialize = Serde.deserializeWithAllocator;
@@ -1261,7 +1261,7 @@ pub const ConstStore = struct {
     }
 
     fn appendNodes(self: *ConstStore, nodes: []const ConstNodeId) Allocator.Error!ConstRange {
-        return artifact_serialize.appendSpan(ConstRange, ConstNodeId, &self.node_pool, self.allocator, nodes);
+        return store_serialize.appendSpan(ConstRange, ConstNodeId, &self.node_pool, self.allocator, nodes);
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
@@ -1300,7 +1300,7 @@ pub const ConstStore = struct {
             .tuple => |items| .{ .tuple = try self.appendNodes(items) },
             .record => |items| .{ .record = try self.appendNodes(items) },
             .tag => |tag| blk: {
-                const name_range = try artifact_serialize.appendSpan(ConstRange, u8, &self.tag_name_pool, self.allocator, tag.tag_name);
+                const name_range = try store_serialize.appendSpan(ConstRange, u8, &self.tag_name_pool, self.allocator, tag.tag_name);
                 const payloads_range = try self.appendNodes(tag.payloads);
                 break :blk .{ .tag = .{ .tag_name = name_range, .payloads = payloads_range } };
             },
@@ -1359,14 +1359,14 @@ pub const ConstStore = struct {
         try validateEvidenceFrames(self.allocator, fn_value);
         assertEvidenceNamesSourceTypes(fn_value.evidence);
         const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
-        const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
-        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
-        const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
+        const captures_range = try store_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
+        const evidence_range = try store_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
+        const evidence_targets = try store_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
         const stored_structurals = try self.allocator.alloc(ConstFnStructuralEvidence, fn_value.evidence.structurals.len);
         defer self.allocator.free(stored_structurals);
         for (stored_structurals, fn_value.evidence.structurals) |*stored, structural| stored.* = structural.storedForm();
-        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
-        const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
+        const evidence_structurals = try store_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
+        const evidence_frames = try store_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_key = fn_value.source_fn_key,
@@ -1549,7 +1549,7 @@ pub const ConstStore = struct {
         errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
         const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
-        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
+        // An empty blob owns no backing, as `store_serialize.appendSpan`
         // records it.
         const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
             .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
@@ -1573,7 +1573,7 @@ pub const ConstStore = struct {
 
         const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
         const backing_len = self.blob_backing.items.len;
-        const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        const view = try store_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
         errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         try self.blob_views.append(self.allocator, view);
         entry.key_ptr.* = raw_id;
@@ -1639,27 +1639,27 @@ pub const ConstStore = struct {
     /// Relocatable serialized form. Every field is a `SafeList`-equivalent POD
     /// slice, so the store relocates with a fixed number of base-pointer fixups.
     pub const Serialized = extern struct {
-        values: artifact_serialize.SerializedSlice(StoredValue) = .{},
-        fns: artifact_serialize.SerializedSlice(StoredFn) = .{},
-        node_pool: artifact_serialize.SerializedSlice(ConstNodeId) = .{},
-        tag_name_pool: artifact_serialize.SerializedSlice(u8) = .{},
+        values: store_serialize.SerializedSlice(StoredValue) = .{},
+        fns: store_serialize.SerializedSlice(StoredFn) = .{},
+        node_pool: store_serialize.SerializedSlice(ConstNodeId) = .{},
+        tag_name_pool: store_serialize.SerializedSlice(u8) = .{},
         type_store: ConstTypeStore.Serialized = .{},
         type_names: names.NameStore.Serialized,
-        capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
-        evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
-        evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
-        evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
-        evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
-        blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
-        blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
+        capture_pool: store_serialize.SerializedSlice(ConstCapture) = .{},
+        evidence_pool: store_serialize.SerializedSlice(ConstFnEvidence) = .{},
+        evidence_target_pool: store_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
+        evidence_structural_pool: store_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
+        evidence_frame_pool: store_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
+        blob_backing: store_serialize.SerializedSlice(u8) = .{},
+        blob_views: store_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
             // 11 value/function side lists, 7 nested type-store lists and the
             // type names' 24.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 42);
+            std.debug.assert(store_serialize.relocatablePointerCount(Serialized) == 42);
         }
 
-        const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
+        const Serde = store_serialize.SliceStoreSerde(ConstStore, @This());
         pub const serialize = Serde.serialize;
         pub const deserializeWithAllocator = Serde.deserializeWithAllocator;
         pub const deserialize = Serde.deserializeWithAllocator;

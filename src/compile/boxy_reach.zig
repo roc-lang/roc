@@ -12,14 +12,14 @@ const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const Allocator = std.mem.Allocator;
-const Artifact = check.Checked.CheckedModule;
+const CheckedModule = check.Checked.CheckedModule;
 const TemplateKey = eval.checked_root_graph.TemplateKey;
 
 /// The modules of one link, each with the name its workers are digested
 /// under, as the walk reads them.
 pub const Modules = struct {
-    artifacts: []const *const Artifact,
-    /// Parallel to `artifacts`.
+    modules: []const *const CheckedModule,
+    /// Parallel to `modules`.
     link_names: []const [32]u8,
 };
 
@@ -45,10 +45,10 @@ pub const Reach = struct {
 };
 
 /// Walk from `root`'s provided exports over `modules`, which include `root`.
-pub fn compute(gpa: Allocator, root: *const Artifact, modules: Modules) Allocator.Error!Reach {
-    std.debug.assert(modules.artifacts.len == modules.link_names.len);
-    const root_at: u32 = for (modules.artifacts, 0..) |artifact, i| {
-        if (artifact == root) break @intCast(i);
+pub fn compute(gpa: Allocator, root: *const CheckedModule, modules: Modules) Allocator.Error!Reach {
+    std.debug.assert(modules.modules.len == modules.link_names.len);
+    const root_at: u32 = for (modules.modules, 0..) |checked, i| {
+        if (checked == root) break @intCast(i);
     } else base.invariant("the root module is no module of its own link", .{});
     var starts = std.ArrayList(eval.checked_root_graph.Start).empty;
     defer starts.deinit(gpa);
@@ -60,7 +60,7 @@ pub fn compute(gpa: Allocator, root: *const Artifact, modules: Modules) Allocato
             try starts.append(gpa, .{ .binding = .{ .module = root_at, .binding = binding } });
         }
     }
-    const templates = try eval.checked_root_graph.reachTemplates(gpa, modules.artifacts, starts.items);
+    const templates = try eval.checked_root_graph.reachTemplates(gpa, modules.modules, starts.items);
     defer gpa.free(templates);
     std.mem.sort(TemplateKey, templates, {}, struct {
         fn lessThan(_: void, lhs: TemplateKey, rhs: TemplateKey) bool {
@@ -77,7 +77,7 @@ pub fn compute(gpa: Allocator, root: *const Artifact, modules: Modules) Allocato
         while (i < templates.len and templates[i].module == module) : (i += 1) {
             reach.identities[i] = lir.CheckedPipeline.boxyTemplateWorkerIdentity(modules.link_names[module], templates[i].template);
         }
-        try reach.modules.put(gpa, modules.artifacts[module].key.bytes, .{ .start = @intCast(start), .len = @intCast(i - start) });
+        try reach.modules.put(gpa, modules.modules[module].key.bytes, .{ .start = @intCast(start), .len = @intCast(i - start) });
     }
     return reach;
 }

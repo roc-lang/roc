@@ -13,9 +13,9 @@ test "issue 10724: dispatch whose argument is a canonicalization error reports i
     // Repro for https://github.com/roc-lang/roc/issues/10724.
     // `()` is not a valid expression, so the right operand of `>` canonicalizes
     // to a runtime error. The receiver is an ownerless structural shape with no
-    // `is_gt`, so checking must not publish the dispatch unless its operand
+    // `is_gt`, so checking must not resolve the dispatch unless its operand
     // relation was actually established. Otherwise the plan reaches
-    // publication unrejected and publication panics instead of letting the
+    // the checked tables unrejected and their computation panics instead of letting the
     // compiler report the program's errors.
     const gpa = std.testing.allocator;
     const io = std.testing.io;

@@ -1,7 +1,7 @@
 //! Regression tests for issues #12022 and #12023 (the same program): a method
 //! dispatched on a receiver whose type is a transparent alias of a
-//! where-constrained type variable resolves through the alias's backing at
-//! checked-artifact publication.
+//! where-constrained type variable resolves through the alias's backing in
+//! the checked module's analyses.
 //! repro for https://github.com/roc-lang/roc/issues/12022
 //! repro for https://github.com/roc-lang/roc/issues/12023
 
@@ -70,7 +70,7 @@ const item_and_wrapper =
     \\
 ;
 
-test "issue 12022: method dispatch on a transparent alias of a where-constrained variable publishes" {
+test "issue 12022: method dispatch on a transparent alias of a where-constrained variable checks" {
     try expectNoErrors(item_and_wrapper ++
         \\score_wrapped : Wrapper(a) -> U64 where [a.score : a -> U64]
         \\score_wrapped = |value| value.score()
@@ -80,7 +80,7 @@ test "issue 12022: method dispatch on a transparent alias of a where-constrained
     );
 }
 
-test "issue 12022: dispatch through nested transparent aliases and forwarded evidence publishes" {
+test "issue 12022: dispatch through nested transparent aliases and forwarded evidence checks" {
     try expectNoErrors(item_and_wrapper ++
         \\score_twice : Twice(a) -> U64 where [a.score : a -> U64]
         \\score_twice = |value| value.score()
@@ -93,7 +93,7 @@ test "issue 12022: dispatch through nested transparent aliases and forwarded evi
     );
 }
 
-test "issue 12022: equality on a transparent alias of a where-constrained variable publishes" {
+test "issue 12022: equality on a transparent alias of a where-constrained variable checks" {
     try expectNoErrors(item_and_wrapper ++
         \\same : Wrapper(a), Wrapper(a) -> Bool where [a.is_eq : a, a -> Bool]
         \\same = |x, y| x == y

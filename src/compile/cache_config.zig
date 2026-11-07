@@ -349,7 +349,7 @@ pub const Constants = struct {
     /// 164: sorted array builders serialize zeroed entry padding and an
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
-    pub const CACHE_VERSION = 186;
+    pub const CACHE_VERSION = 187;
 };
 
 /// Configuration for the Roc cache system.
@@ -435,7 +435,7 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Logical checked-artifact scope within this compiler compatibility identity.
+    /// Logical checked-module scope within this compiler compatibility identity.
     pub fn getCheckedModuleCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
@@ -459,7 +459,7 @@ pub const CacheConfig = struct {
 
     /// Logical canonicalized-module scope.
     ///
-    /// Separate from the checked-artifact directory because the two caches key
+    /// Separate from the checked-module directory because the two caches key
     /// their entries on different inputs: a canonicalized entry names one
     /// module's source alone, while a checked entry names a module together
     /// with its imports' checked keys.
@@ -490,7 +490,7 @@ pub const CacheConfig = struct {
 /// displayed with the --verbose flag.
 pub const CacheStats = struct {
     /// Checked-module cache counters. These keep their original meaning: they
-    /// count only checked-artifact entries.
+    /// count only checked-module entries.
     hits: u64 = 0,
     misses: u64 = 0,
     invalidations: u64 = 0,

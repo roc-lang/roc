@@ -1,4 +1,4 @@
-//! Deterministic allocation-work guard for checked procedure publication.
+//! Deterministic allocation-work guard for checked procedure template computation.
 const std = @import("std");
 const Checked = @import("../checked_module.zig");
 const type_ids = @import("../checked_type_ids.zig");

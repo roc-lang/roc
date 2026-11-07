@@ -1336,8 +1336,8 @@ const Config = struct {
     // Compiled Builtin module (contains nested Bool, Try, Str, Dict, Set)
     builtin_module: ?*const ModuleEnv = null,
     builtin_indices: CIR.BuiltinIndices,
-    // Borrowed pre-published Builtin artifact; lets REPL snapshots skip
-    // re-publishing the stdlib on every line.
+    // Borrowed pre-opened Builtin module; lets REPL snapshots skip
+    // re-opening the stdlib on every line.
     builtin_modules_ref: ?*eval_mod.BuiltinModules = null,
     cwd: []const u8,
 };
@@ -3416,7 +3416,7 @@ fn processDocsSnapshot(
         return false;
     };
     defer build_env.deinit();
-    build_env.setFinalizeExecutableArtifacts(false);
+    build_env.setPrepareCheckedProgram(false);
     build_env.setSyntheticRootPackageIdentity();
     build_env.setSyntheticRootPlatformPackageIdentity();
 
@@ -3717,17 +3717,17 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
 }
 
 fn snapshotRootRequestByOrder(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     order: u32,
 ) std.mem.Allocator.Error!check.Checked.RootRequest {
-    for ((try root_artifact.rootRequests()).requests) |request| {
+    for ((try root_module.rootRequests()).requests) |request| {
         if (request.order == order) return request;
     }
     base.invariant("snapshot invariant violated: missing root request order {d}", .{order});
 }
 
 fn snapshotProvidedEntrypointName(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     root: check.Checked.RootRequest,
 ) Allocator.Error![]const u8 {
     const def_idx = switch (root.source) {
@@ -3736,27 +3736,27 @@ fn snapshotProvidedEntrypointName(
             base.invariant("snapshot invariant violated: exported platform root is not a definition", .{});
         },
     };
-    const top_level = (try root_artifact.checkedTables()).top_level_values.lookupByDef(def_idx) orelse {
-        base.invariant("snapshot invariant violated: exported platform root has no published top-level value", .{});
+    const top_level = (try root_module.checkedTables()).top_level_values.lookupByDef(def_idx) orelse {
+        base.invariant("snapshot invariant violated: exported platform root has no top-level value", .{});
     };
 
-    for ((try root_artifact.providedExports()).exports) |provided| {
+    for ((try root_module.providedExports()).exports) |provided| {
         switch (provided) {
             inline .procedure, .data, .checked_error => |entry| if (entry.source_name == top_level.source_name) {
-                return root_artifact.nameStore().externalSymbolNameText(entry.ffi_symbol);
+                return root_module.nameStore().externalSymbolNameText(entry.ffi_symbol);
             },
         }
     }
 
     base.invariant(
-        "snapshot invariant violated: exported platform root has no published FFI symbol",
+        "snapshot invariant violated: exported platform root has no FFI symbol",
         .{},
     );
 }
 
 fn snapshotNativeEntrypoints(
     allocator: Allocator,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
@@ -3779,7 +3779,7 @@ fn snapshotNativeEntrypoints(
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.abi != .platform or metadata.exposure != .exported) continue;
-        const root = try snapshotRootRequestByOrder(root_artifact, metadata.order);
+        const root = try snapshotRootRequestByOrder(root_module, metadata.order);
         if (root.kind != .provided_export) continue;
 
         const proc_spec = lowered.lir_result.store.getProcSpec(root_proc);
@@ -3793,7 +3793,7 @@ fn snapshotNativeEntrypoints(
             arg_layouts[i] = lowered.lir_result.store.getLocal(local_id).layout_idx;
         }
 
-        const entrypoint_name = try snapshotProvidedEntrypointName(root_artifact, root);
+        const entrypoint_name = try snapshotProvidedEntrypointName(root_module, root);
         const symbol_name = try allocator.dupe(u8, entrypoint_name);
         var symbol_name_owned = true;
         errdefer if (symbol_name_owned) allocator.free(symbol_name);
@@ -3812,9 +3812,9 @@ fn snapshotNativeEntrypoints(
 }
 
 fn snapshotHasProvidedProcedureExports(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
 ) Allocator.Error!bool {
-    for ((try root_artifact.providedExports()).exports) |provided| {
+    for ((try root_module.providedExports()).exports) |provided| {
         switch (provided) {
             .procedure => return true,
             .data, .checked_error => {},
@@ -3824,9 +3824,9 @@ fn snapshotHasProvidedProcedureExports(
 }
 
 fn snapshotHasProvidedDataExports(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
 ) Allocator.Error!bool {
-    for ((try root_artifact.providedExports()).exports) |provided| {
+    for ((try root_module.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,
             .procedure, .checked_error => {},
@@ -3865,8 +3865,8 @@ fn processDevObjectSnapshot(
         std.log.err("BuildEnv.build failed for {s}: {}", .{ app_path, err });
         return false;
     };
-    if (!build_env.executable_artifacts_finalized) {
-        std.log.err("Compilation did not produce executable artifacts", .{});
+    if (!build_env.checked_program_ready) {
+        std.log.err("Compilation did not prepare a checked program", .{});
         return false;
     }
 
@@ -3881,14 +3881,14 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const root_artifact = (try build_env.executableRootCheckedModule());
-    const imported_artifacts = try build_env.collectImportedModuleViews(allocator, root_artifact);
-    defer allocator.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(allocator, root_artifact);
-    defer allocator.free(relation_artifacts);
+    const root_module = (try build_env.executableRootCheckedModule());
+    const imported_modules = try build_env.collectImportedModuleViews(allocator, root_module);
+    defer allocator.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(allocator, root_module);
+    defer allocator.free(relation_modules);
 
-    const has_procedure_exports = try snapshotHasProvidedProcedureExports(root_artifact);
-    const has_data_exports = try snapshotHasProvidedDataExports(root_artifact);
+    const has_procedure_exports = try snapshotHasProvidedProcedureExports(root_module);
+    const has_data_exports = try snapshotHasProvidedDataExports(root_module);
     if (!has_procedure_exports and !has_data_exports) {
         std.log.err("Failed to produce any exported platform entrypoints or data symbols", .{});
         return false;
@@ -3913,14 +3913,14 @@ fn processDevObjectSnapshot(
             }
 
             const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, (try root_artifact.rootRequests()).runtime_requests);
+            const build_roots = try lir.CheckedPipeline.selectPlatformExportRoots(allocator, (try root_module.rootRequests()).runtime_requests);
             defer allocator.free(build_roots);
 
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
-                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-                    .imports = imported_artifacts,
+                    .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+                    .imports = imported_modules,
                 },
                 .{
                     .requests = build_roots,
@@ -3933,7 +3933,7 @@ fn processDevObjectSnapshot(
             );
             defer lowered.deinit();
 
-            const entrypoints = try snapshotNativeEntrypoints(allocator, root_artifact, &lowered);
+            const entrypoints = try snapshotNativeEntrypoints(allocator, root_module, &lowered);
             defer {
                 for (entrypoints) |entrypoint| {
                     allocator.free(entrypoint.symbol_name);
@@ -3944,8 +3944,8 @@ fn processDevObjectSnapshot(
             const static_data_exports = compile.static_data_exports.buildStaticData(
                 allocator,
                 .{
-                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-                    .imports = imported_artifacts,
+                    .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+                    .imports = imported_modules,
                 },
                 &lowered,
                 target,
@@ -4406,7 +4406,7 @@ fn compileSnapshotReplInspectedModule(
             .{
                 .env = bm.builtin_module.env,
                 .indices = bm.builtin_indices,
-                .artifact = &bm.checked_module,
+                .module = &bm.checked_module,
             },
             null,
         )
@@ -4469,7 +4469,7 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.BitcodeParseError,
         error.BrokenPipe,
         error.BufferTooSmall,
-        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinOutputsVersionMismatch,
         error.BuiltinLowLevelAnnotationMustBeFunction,
         error.BuiltinModuleLeakedInSnapshots,
         error.CacheRoundTripValidationFailed,
@@ -4477,8 +4477,8 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.Canceled,
         error.CompilationFailed,
         error.ConnectionResetByPeer,
-        error.CorruptArtifact,
-        error.CorruptBuiltinArtifact,
+        error.CorruptSerializedData,
+        error.CorruptBuiltinOutputs,
         error.CorruptEmbeddedBuiltins,
         error.CorruptSerializedModuleEnv,
         error.Crash,

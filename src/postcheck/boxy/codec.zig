@@ -833,7 +833,7 @@ fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge
 pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.ConstStore.ConstFnId, owner: check.CheckedNames.ProcTemplate, expr: ExprId, fn_ty: TypeId) Allocator.Error!void {
     const program = b.program;
     const stored = program.constStore(source).getFn(fn_id);
-    const owner_view = program.moduleByKey(.{ .bytes = owner.artifact.bytes });
+    const owner_view = program.moduleByKey(.{ .bytes = owner.module.bytes });
     const plan_id = switch (owner_view.bodies().exprData(expr)) {
         .dispatch_call, .type_dispatch_call => owner_view.bodies().dispatchPlan(@backingInt(expr)) orelse invariant("a stored generated codec runtime's dispatch has no plan"),
         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => invariant("a stored generated codec runtime does not name a dispatch"),

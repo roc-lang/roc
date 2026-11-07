@@ -53,7 +53,7 @@ const MethodRegistryTestModuleIndex = struct {
 };
 
 /// The source's only associated value is a record, which is not a
-/// reference, so publication resolves it to no method target.
+/// reference, so the checked tables resolve it to no method target.
 const MethodRegistryTestReferencedTargets = struct {
     pub fn methodBindingTarget(_: *@This(), _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
         return null;

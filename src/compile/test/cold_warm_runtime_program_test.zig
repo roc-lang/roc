@@ -89,7 +89,7 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     try coord.coordinatorLoop();
     if (coord.hasUserErrors()) return reportErrors(&coord);
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     if (coord.hasUserErrors()) return reportErrors(&coord);
     const session = &coord.program_session.?;
     const respecialized = session.runtime_stages == .respecialized;

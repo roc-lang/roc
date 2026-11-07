@@ -11,18 +11,18 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
     );
 
     const source_modules = [_]TypedCIR.Modules.SourceModule{
-        test_env.takePublishedSourceModule(),
+        test_env.takeCheckedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
     var modules = TypedCIR.Modules.init(std.testing.allocator, &source_modules) catch |err| {
         // Ownership transfers only after Modules.init succeeds.
-        test_env.published_owns_module_env = false;
+        test_env.checked_owns_module_env = false;
         test_env.owned_source = source_modules[0].owned_checked.owned_source;
         test_env.deinit();
         return err;
     };
     defer modules.deinit();
-    // The published module owns ModuleEnv, while the fixture's checker and
+    // The checked module owns ModuleEnv, while the fixture's checker and
     // canonicalizer still borrow it during teardown.
     defer test_env.deinit();
     const module = modules.module(0);
@@ -46,14 +46,14 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
     }
 }
 
-test "published typed CIR survives checker teardown" {
+test "checked typed CIR survives checker teardown" {
     var test_env = try TestEnv.init("Test",
         \\a = 1
         \\b = a
     );
 
     const source_modules = [_]TypedCIR.Modules.SourceModule{
-        test_env.takePublishedSourceModule(),
+        test_env.takeCheckedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
     var modules = try TypedCIR.Modules.init(std.testing.allocator, &source_modules);

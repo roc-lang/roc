@@ -173,7 +173,7 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
             .proc_debug_names = true,
         },
     };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     var evaluated = try session.completed.?.combinedExcerpts(allocator);
@@ -209,20 +209,20 @@ test "every procedure compile-time evaluation shares with a dev build is the bui
     defer built_names.deinit();
     var built_by_identity = std.AutoHashMap(lir.ProcIdentity, usize).init(allocator);
     defer built_by_identity.deinit();
-    for (built.excerpts, 0..) |artifact, index| switch (artifact.kind) {
+    for (built.excerpts, 0..) |checked, index| switch (checked.kind) {
         .proc => |identity| try built_by_identity.put(identity, index),
         .rc_helper, .entrypoint, .message_pool_run, .branch_island => {},
     };
     var shared: usize = 0;
     var differing: usize = 0;
-    for (evaluated.excerpts) |artifact| {
-        const identity = switch (artifact.kind) {
+    for (evaluated.excerpts) |checked| {
+        const identity = switch (checked.kind) {
             .proc => |identity| identity,
             .rc_helper, .entrypoint, .message_pool_run, .branch_island => continue,
         };
         const index = built_by_identity.get(identity) orelse continue;
         shared += 1;
-        if (excerptDifference(built.excerpts[index], &built_names, artifact)) |difference| {
+        if (excerptDifference(built.excerpts[index], &built_names, checked)) |difference| {
             differing += 1;
             var name: []const u8 = "";
             for (runtime.lir_result.store.getProcSpecs(), 0..) |proc, proc_index| {

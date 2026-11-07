@@ -30,7 +30,7 @@ fn appendf(buf: *Buf, alloc: std.mem.Allocator, comptime fmt: []const u8, args: 
 /// Compile `source` (a module whose `main` is inspect-wrapped) and run it
 /// through the LIR interpreter, capturing compile problems and crashes as
 /// strings. A rare checker diagnostic (e.g. a generated incompatible partial
-/// record pattern) is an acceptable outcome after checked-artifact publication;
+/// record pattern) is an acceptable outcome of checking;
 /// diagnostic-free programs must run because every generated match ends in a
 /// wildcard branch and its bodies cannot crash.
 fn runProgram(alloc: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error![]u8 {

@@ -28,7 +28,7 @@ pub const SourceFile = struct {
 };
 
 /// Check the app at `main.roc` among `files`, finalize it with executable
-/// artifacts, and require an import-cycle report and a checked program.
+/// modules, and require an import-cycle report and a checked program.
 pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -85,7 +85,7 @@ pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!v
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
 
     try std.testing.expect(coord.hasUserErrors());
     try std.testing.expect(coord.hasCheckedProgram());

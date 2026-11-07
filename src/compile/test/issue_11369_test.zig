@@ -1,6 +1,6 @@
 //! Regression tests for issue #11369: a where-clause method whose signature is
-//! an erroneous annotation must publish as a checked error at every concrete
-//! use instead of aborting publication with an unresolvable dispatch target.
+//! an erroneous annotation must record a checked error at every concrete
+//! use instead of aborting with an unresolvable dispatch target.
 
 const std = @import("std");
 const roc_target = @import("roc_target");
@@ -13,7 +13,7 @@ const RejectedSignatureTestError = compile_build.InitError ||
     std.Io.Dir.RealPathFileAllocError ||
     error{ TestUnexpectedResult, TestExpectedEqual };
 
-fn expectReportsAndPublication(source: []const u8, expected_titles: []const []const u8) RejectedSignatureTestError!void {
+fn expectReportsAndCheckedModule(source: []const u8, expected_titles: []const []const u8) RejectedSignatureTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -45,12 +45,12 @@ fn expectReportsAndPublication(source: []const u8, expected_titles: []const []co
     try std.testing.expect(build.findModuleByPath(path).?.semanticData().?.checked_module != null);
 }
 
-test "issue 11369: erroneous where-method signature used at a concrete type publishes" {
+test "issue 11369: erroneous where-method signature used at a concrete type checks" {
     // `y`'s annotation instantiates `b` at its use, where `b` meets `I64`.
     // The where-method `n` has an undeclared type as its whole signature, so
     // the obligation `I64.n` can never be discharged; checking reports the
-    // undeclared type and the `{}` mismatch, and publication must finish.
-    try expectReportsAndPublication(
+    // undeclared type and the `{}` mismatch, and opening the checked module must finish.
+    try expectReportsAndCheckedModule(
         \\module [f]
         \\
         \\f : b -> I64 where [b.n : Missing]
@@ -63,8 +63,8 @@ test "issue 11369: erroneous where-method signature used at a concrete type publ
     , &.{ "Undeclared Type", "Type Mismatch" });
 }
 
-test "issue 11369: original reproduction publishes" {
-    try expectReportsAndPublication(
+test "issue 11369: original reproduction checks" {
+    try expectReportsAndCheckedModule(
         \\module [f, t]
         \\
         \\f : (a -> b) -> (I64 -> I64) where [a.d : a, b.n : I]

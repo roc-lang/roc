@@ -122,7 +122,7 @@ test "cross-module - settled weak-receiver scheme remains polymorphic" {
     defer test_env_a.deinit();
     try test_env_a.assertDefType("main!", "(Str -> b) -> List(b)");
 
-    // Module publication happens after A's weak receiver has settled. Its
+    // Opening the module happens after A's weak receiver has settled. Its
     // discharged root scheme must retain the same independent quantified
     // result variable even though checker-local pending requirements are gone.
     const source_b =

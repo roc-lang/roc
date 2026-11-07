@@ -51,8 +51,8 @@ fn expectChecksWithNameNotInScope(source: []const u8) Issue10765TestError!void {
 // repro for https://github.com/roc-lang/roc/issues/10765
 //
 // Two calls to the same function, where one argument's numeric binop operand is
-// an out-of-scope name and the other's is a literal, must publish as a checked
-// artifact carrying the name-not-in-scope error.
+// an out-of-scope name and the other's is a literal, must produce a checked
+// module carrying the name-not-in-scope error.
 test "issue 10765: numeric dispatch on an out-of-scope operand reports the name" {
     try expectChecksWithNameNotInScope(
         \\f = |n| f(n - d) + f(n - 2)

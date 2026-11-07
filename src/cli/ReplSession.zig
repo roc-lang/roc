@@ -75,7 +75,7 @@ import_policy: ImportPolicy,
 last_events: []eval.InspectedRun.Event = &.{},
 builtin_modules: *eval.BuiltinModules,
 /// Whether this session owns `builtin_modules` (and must deinit it). Tests can
-/// borrow a shared, already-published instance to avoid re-publishing the
+/// borrow a shared, already-opened instance to avoid re-opening the
 /// Builtin module for every session; see `initBorrowingBuiltins`.
 owns_builtin_modules: bool,
 /// Directory that imported sibling modules are resolved against. Defaults to the
@@ -181,9 +181,9 @@ pub fn initVirtual(
     return session;
 }
 
-/// Construct a session that borrows a caller-owned, already-published
-/// `BuiltinModules`. The session never deinits it, so one published Builtin can
-/// back many sessions. Intended for tests that would otherwise re-publish the
+/// Construct a session that borrows a caller-owned, already-opened
+/// `BuiltinModules`. The session never deinits it, so one opened Builtin can
+/// back many sessions. Intended for tests that would otherwise re-open the
 /// Builtin module on every assertion.
 fn initBorrowingBuiltins(
     allocator: Allocator,
@@ -259,7 +259,7 @@ fn preOpenedBuiltin(self: *ReplSession) eval.Inspected.PreOpenedBuiltin {
     return .{
         .env = self.builtin_modules.builtin_module.env,
         .indices = self.builtin_modules.builtin_indices,
-        .artifact = &self.builtin_modules.checked_module,
+        .module = &self.builtin_modules.checked_module,
     };
 }
 
@@ -895,7 +895,7 @@ pub fn inspectExpressionType(
     };
     defer self.freeModuleSources(import_sources);
 
-    var parsed = eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    var parsed = eval.Inspected.parseAndCanonicalizeProgramCheckerRootsWithBuiltin(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1147,7 +1147,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
     };
     defer self.freeModuleSources(import_sources);
 
-    return try eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    return try eval.Inspected.parseAndCanonicalizeProgramCheckerRootsWithBuiltin(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1366,7 +1366,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
     };
     defer self.freeModuleSources(import_sources);
 
-    if (eval.Inspected.parseAndCanonicalizeProgramPublishedRootsWithBuiltin(
+    if (eval.Inspected.parseAndCanonicalizeProgramCheckerRootsWithBuiltin(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1403,7 +1403,7 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     defer self.allocator.free(definitions);
 
     // Checking preserves the REPL semantics of this zero-argument expression
-    // root, while checked publication selects its body for compile-time
+    // root, while the checked module selects its body for compile-time
     // evaluation and archives the resulting Str directly in ConstStore.
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect((\n{s}\n))\n", .{ definitions, expr });
     defer self.allocator.free(source);
@@ -1431,7 +1431,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
     var event_collector: ComptimeEventCollector = .{ .allocator = self.allocator };
     defer event_collector.deinit();
 
-    var resources = eval.Inspected.publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
+    var resources = eval.Inspected.checkProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
         self.allocator,
         self.roc_ctx.std_io,
         .module,
@@ -1451,7 +1451,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
     defer resources.deinit(self.allocator);
     self.last_events = try event_collector.events.toOwnedSlice(self.allocator);
 
-    // Checked publication deliberately succeeds in the presence of user
+    // Opening the checked module deliberately succeeds in the presence of user
     // errors so build/run/test can execute independent roots. A REPL
     // expression is a single interactive transaction: report its errors and
     // leave the session definitions intact instead of executing the explicit
@@ -2028,8 +2028,8 @@ pub const DefinitionStore = struct {
 
 const testing = std.testing;
 
-/// One Builtin module, published once and shared (read-only) by every test
-/// session. Publishing the Builtin via `BuiltinModules.init` is the dominant
+/// One Builtin module, opened once and shared (read-only) by every test
+/// session. Opening the Builtin via `BuiltinModules.init` is the dominant
 /// per-session cost, so reusing a single instance across the ~100 sessions in
 /// this file is the largest win. Allocated with `page_allocator` (not
 /// `testing.allocator`) so the never-freed singleton isn't flagged as a leak.
@@ -2044,7 +2044,7 @@ fn sharedTestBuiltins() ReplInitError!*eval.BuiltinModules {
 }
 
 /// Build a test session that borrows the shared Builtin (see
-/// `shared_test_builtins`) instead of publishing its own.
+/// `shared_test_builtins`) instead of opening its own.
 fn testRepl(backend_kind: eval.EvalBackend) ReplInitError!ReplSession {
     return ReplSession.initBorrowingBuiltins(
         testing.allocator,
@@ -2849,7 +2849,7 @@ test "Repl - issue 10576 generalized record update rejects an optional field" {
     try testing.expect(std.mem.find(u8, result, "type mismatch") != null);
 }
 
-test "Repl - top-level destructure definitions publish their binders" {
+test "Repl - top-level destructure definitions expose their binders" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
 

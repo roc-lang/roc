@@ -3,7 +3,7 @@
 //!
 //! A constrained scheme used at a value or dispatch-target edge leaves a
 //! record. Instantiated uses carry scheme-var-to-fresh-var pairs; shared uses
-//! carry the exact monomorphic root and no pairs. Checked-artifact construction
+//! carry the exact monomorphic root and no pairs. Checked-module construction
 //! resolves those records after checking settles.
 
 const std = @import("std");
@@ -127,17 +127,17 @@ test "concrete recursive dispatch records a shared method instance without copyi
 }
 
 fn assertBuiltinIterExtremum(
-    artifact: *const checked_module.CheckedModule,
+    checked: *const checked_module.CheckedModule,
     method_name: []const u8,
 ) (std.mem.Allocator.Error || error{ NoSpaceLeft, TestUnexpectedResult })!void {
-    const env = artifact.moduleEnvConst();
+    const env = checked.moduleEnvConst();
     const source = env.getSourceAll();
     var needle_buffer: [64]u8 = undefined;
     const needle = try std.fmt.bufPrint(&needle_buffer, "best_so_far.{s}(item)", .{method_name});
     const wanted_offset = std.mem.find(u8, source, needle) orelse return error.TestUnexpectedResult;
     var found_plan = false;
 
-    for ((try artifact.checkedTables()).static_dispatch_plans.by_node) |entry| {
+    for ((try checked.checkedTables()).static_dispatch_plans.by_node) |entry| {
         const expr_idx: can.CIR.Expr.Idx = @fromBackingInt(@intCast(entry.key));
         const expr = env.store.getExpr(expr_idx);
         if (expr != .e_dispatch_call) continue;
@@ -179,7 +179,7 @@ fn assertBuiltinIterExtremum(
         // branch exists to establish.
         try std.testing.expect(body_use_count >= 2);
 
-        const plan = try (try artifact.dispatch()).plan(@fromBackingInt(entry.val));
+        const plan = try (try checked.dispatch()).plan(@fromBackingInt(entry.val));
         switch (plan.resolution) {
             .evidence_dependent => |resolution| {
                 try std.testing.expect(resolution.independent_callable);
@@ -205,15 +205,15 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
         "Builtin",
         compiled_builtins.builtin_source,
     );
-    var artifact_owns_module = false;
-    errdefer if (!artifact_owns_module) builtin_module.deinit();
+    var checked_owns_module = false;
+    errdefer if (!checked_owns_module) builtin_module.deinit();
 
-    var artifact = try checked_module.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
-    artifact_owns_module = true;
-    defer artifact.deinit(gpa);
+    var checked = try checked_module.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
+    checked_owns_module = true;
+    defer checked.deinit(gpa);
 
-    try assertBuiltinIterExtremum(&artifact, "min");
-    try assertBuiltinIterExtremum(&artifact, "max");
+    try assertBuiltinIterExtremum(&checked, "min");
+    try assertBuiltinIterExtremum(&checked, "max");
 }
 test "value use of a where-clause generic records instantiation evidence" {
     const source =
@@ -299,7 +299,7 @@ test "annotated recursive self use whose body forwards a closed row records the 
     // parameter through a widening copy (design.md "Row Subsumption"), so the
     // completed scheme quantifies that row as the annotation does. The
     // in-flight self-use must name the body's scheme, not the standalone
-    // annotation, so artifact construction substitutes that scheme's row.
+    // annotation, so module construction substitutes that scheme's row.
     const source =
         \\walk : [Open, Close] -> [Open, Close]
         \\walk = |token|

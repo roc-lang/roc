@@ -13,7 +13,7 @@
 //! - See: `buildLirImageWithBuildEnv`
 //!
 //! ### Embedded Interpreter Mode (`roc build --opt=interpreter path/to/app.roc`)
-//! - Compiles Roc source through the same checked-artifact to LIR path as IPC mode
+//! - Compiles Roc source through the same checked-module to LIR path as IPC mode
 //! - Embeds the viewable LIR image directly in the output binary
 //! - The interpreter shim receives only the LIR image pointer and length
 //!
@@ -240,7 +240,7 @@ fn resolveThreadDefaults(max_threads: ?usize) struct { usize, Mode } {
 /// Options for constructing the orchestration core (`BuildEnv`) for a CLI
 /// command. Every entry path—check, build, run, test, docs, bundle—wires
 /// the core through `initCliBuildEnv`, so thread defaults, the working
-/// directory, cache attachment, and the publication mode are configured in
+/// directory, cache attachment, and the checked-program mode are configured in
 /// exactly one place.
 const CliBuildEnvOptions = struct {
     max_threads: ?usize = null,
@@ -253,7 +253,7 @@ const CliBuildEnvOptions = struct {
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
     source_dir_override: ?[]const u8 = null,
-    post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
+    checked_program_mode: compile.build.CheckedProgramMode = .executable_program,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots, part of each checked module's cache identity.
@@ -288,7 +288,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
-    build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
+    build_env.setCheckedProgramMode(opts.checked_program_mode);
     build_env.setSpecializationStrategy(opts.specialization_strategy);
     const object_target = roc_target.host_cpu.nativeTarget();
     build_env.boxy_object_lowering = .{
@@ -1615,19 +1615,19 @@ fn appendHostedCacheEntriesFromView(
 }
 
 fn findHostedBindingView(
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
 ) Allocator.Error!?HostedBindingView {
-    if (root_artifact.module_identity.kind == .platform) {
-        return .{ .table = try root_artifact.hostedBindings(), .names = root_artifact.nameStore() };
+    if (root_module.module_identity.kind == .platform) {
+        return .{ .table = try root_module.hostedBindings(), .names = root_module.nameStore() };
     }
-    for (imported_artifacts) |view| {
+    for (imported_modules) |view| {
         if (view.module_identity.kind == .platform) {
             return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
     }
-    for (relation_artifacts) |view| {
+    for (relation_modules) |view| {
         if (view.module_identity.kind == .platform) {
             return .{ .table = try view.hostedBindings(), .names = view.canonical_names };
         }
@@ -1683,9 +1683,9 @@ fn applyHostedBindings(
 
 fn checkedHostedTable(
     allocator: Allocator,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
 ) Allocator.Error!CheckedHostedTable {
     var hosted_entries = std.ArrayList(HostedCacheEntry).empty;
     defer hosted_entries.deinit(allocator);
@@ -1696,16 +1696,16 @@ fn checkedHostedTable(
         allocator,
         &hosted_entries,
         &seen_keys,
-        check.Checked.importedView(root_artifact),
+        check.Checked.importedView(root_module),
     );
-    for (imported_artifacts) |view| {
+    for (imported_modules) |view| {
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
-    for (relation_artifacts) |view| {
+    for (relation_modules) |view| {
         try appendHostedCacheEntriesFromView(allocator, &hosted_entries, &seen_keys, view);
     }
 
-    if (try findHostedBindingView(root_artifact, imported_artifacts, relation_artifacts)) |binding_view| {
+    if (try findHostedBindingView(root_module, imported_modules, relation_modules)) |binding_view| {
         try applyHostedBindings(allocator, &hosted_entries, binding_view);
     } else {
         const SortContext = struct {
@@ -1748,7 +1748,7 @@ fn checkedHostedTable(
 
 fn updatePlatformAppRelationIdentity(
     hasher: *base.Sha256,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
 ) void {
     // Host-boundary fingerprint: hash the relation/binding SHAPE only, never
     // checked type keys. Type keys are deep content digests (they embed the
@@ -1759,7 +1759,7 @@ fn updatePlatformAppRelationIdentity(
     // identity hashed alongside this.
     updateHashBytes(hasher, "platform-app-relations-v2");
 
-    const relations = root_artifact.platformRequirementRelations().relations;
+    const relations = root_module.platformRequirementRelations().relations;
     updateHashU32(hasher, @intCast(relations.len));
     for (relations) |relation| {
         updateHashU32(hasher, @backingInt(relation.declaration));
@@ -1767,7 +1767,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(relation.value_kind));
     }
 
-    const bindings = root_artifact.platformRequiredBindings().bindings;
+    const bindings = root_module.platformRequiredBindings().bindings;
     updateHashU32(hasher, @intCast(bindings.len));
     for (bindings) |binding| {
         updateHashU32(hasher, @backingInt(binding.declaration));
@@ -1776,7 +1776,7 @@ fn updatePlatformAppRelationIdentity(
         updateHashU32(hasher, @backingInt(std.meta.activeTag(binding.value_use)));
     }
 
-    const checked_error_requires = root_artifact.platformRequiredBindings().checked_error_requires;
+    const checked_error_requires = root_module.platformRequiredBindings().checked_error_requires;
     updateHashU32(hasher, @intCast(checked_error_requires.len));
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
@@ -1798,7 +1798,7 @@ fn updateHostBoundaryIdentity(
 }
 
 fn checkedInterpreterHostIdentity(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     root_metadata: []const lir.RootMetadata.RootMetadata,
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
@@ -1808,9 +1808,9 @@ fn checkedInterpreterHostIdentity(
     updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = try root_artifact.platformRequiredDeclarations().identityHash(root_artifact.typesView());
+    const declarations_hash = try root_module.platformRequiredDeclarations().identityHash(root_module.typesView());
     hasher.update(&declarations_hash);
-    updatePlatformAppRelationIdentity(&hasher, root_artifact);
+    updatePlatformAppRelationIdentity(&hasher, root_module);
     updateHostBoundaryIdentity(&hasher, root_metadata);
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
@@ -2467,7 +2467,7 @@ const RunShimHost = struct {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
-        // Generate platform host shim using the published checked-artifact entrypoints
+        // Generate platform host shim using the checked module entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
         const platform_shim_path = switch (platform_shim_source) {
@@ -5323,15 +5323,15 @@ fn checkedModuleForBuild(
 ) CliMainError!*const check.Checked.CheckedModule {
     // An app root that never finished checking has no program; its
     // diagnostics have already been rendered.
-    if (!build_env.executable_artifacts_finalized) return error.TypeCheckingFailed;
-    const artifact = (try build_env.executableRootCheckedModule());
-    if (artifact.hasUnboundPlatformRequirements()) {
+    if (!build_env.checked_program_ready) return error.TypeCheckingFailed;
+    const checked = (try build_env.executableRootCheckedModule());
+    if (checked.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to link; the error was rendered with the diagnostics.
-    if (try artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
-    return artifact;
+    if (try checked.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
+    return checked;
 }
 
 /// Result of setting up shared memory with type checking information.
@@ -6415,7 +6415,7 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .resolution_config = opts.resolution_config,
         .track_watch_inputs = true,
         .source_dir_override = opts.source_dir_override,
-        .post_check_publication_mode = .executable_artifacts,
+        .checked_program_mode = .executable_program,
         .specialization_strategy = opts.specialization_strategy,
     });
     applySyntheticDefaultAppMapping(&build_env, opts.synthetic_default_app);
@@ -6475,7 +6475,7 @@ fn discoverRunDependencies(
     };
 
     // `roc run` executes apps. Reject other roots before compiling so the
-    // executable-artifact machinery below never sees an app-less workspace.
+    // checked-program machinery below never sees an app-less workspace.
     {
         const pkg_name = build_env.discovered_pkg_name orelse return error.CliError;
         const root_pkg = build_env.packages.get(pkg_name) orelse return error.CliError;
@@ -6540,17 +6540,17 @@ fn lowerDiscoveredLir(
 
     // An app root that never finished checking has no program; its
     // diagnostics have already been rendered.
-    if (!build_env.executable_artifacts_finalized) {
+    if (!build_env.checked_program_ready) {
         if (reporter) |r| r.fail();
         return error.TypeCheckingFailed;
     }
     if (reporter) |r| try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), r, build_env.getTimingInfo());
 
-    const root_artifact = (try build_env.executableRootCheckedModule());
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const root_module = (try build_env.executableRootCheckedModule());
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
     // A run whose post-check work writes no cache leaves what `roc check`
     // leaves (design.md "Caching Under `.boxy`").
 
@@ -6560,9 +6560,9 @@ fn lowerDiscoveredLir(
     var lowered = try lowerCheckedSourceToLir(
         lir_allocator,
         ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
+        root_module,
+        imported_modules,
+        relation_modules,
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
@@ -6579,7 +6579,7 @@ fn lowerDiscoveredLir(
 
     const internal_static_data: ?[]backend.StaticDataExport = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
-        .{ .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        .{ .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules), .imports = imported_modules },
         &lowered,
         switch (artifact) {
             .lir_image => roc_target.RocTarget.detectNative(),
@@ -6591,15 +6591,15 @@ fn lowerDiscoveredLir(
         compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     };
 
-    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
+    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_module);
     const hosted_table = try checkedHostedTable(
         ctx.arena,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
+        root_module,
+        imported_modules,
+        relation_modules,
     );
     const interface_identity = try checkedInterpreterHostIdentity(
-        root_artifact,
+        root_module,
         lowered.lir_result.root_metadata.items,
         entrypoint_names,
         lowered.target_usize,
@@ -6681,7 +6681,7 @@ const RunUnitTables = struct {
 const RunUnits = struct {
     target: RocTarget,
     hot_reload: bool,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     /// The platform entrypoint symbols, by ordinal; the root image exports a
     /// wrapper under each. Allocated from the CLI arena.
     entrypoint_names: []const []const u8,
@@ -6757,35 +6757,35 @@ fn lowerRunUnits(
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
     // An app root that never finished checking has no program; its
     // diagnostics have already been rendered.
-    if (!build_env.executable_artifacts_finalized) {
+    if (!build_env.checked_program_ready) {
         reporter.fail();
         return error.TypeCheckingFailed;
     }
     try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
 
-    const root_artifact = try build_env.executableRootCheckedModule();
+    const root_module = try build_env.executableRootCheckedModule();
     // A `provides` entry whose type is erroneous declares no host ABI, so no
     // program exists to run; the error was rendered with the diagnostics.
-    if (try root_artifact.hasProvidedExportWithoutAbi()) {
+    if (try root_module.hasProvidedExportWithoutAbi()) {
         reporter.fail();
         return error.TypeCheckingFailed;
     }
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
     // A run files the units it builds.
     tables.digests = try build_env.boxyLinkDigests();
     const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false };
-    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true, null, "Lowering Modules");
+    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_module, target, &tables.interfaces, &tables.digests, true, null, "Lowering Modules");
     errdefer if (library) |owned| owned.deinit(ctx.gpa);
     const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
-    const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
+    const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_module, boxyUnitPlatform(root_module, library.?.platform), policy, target, library.?.paired_platforms, true);
 
-    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, (try root_artifact.rootRequests()).runtime_requests);
+    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, (try root_module.rootRequests()).runtime_requests);
     defer ctx.gpa.free(selected_roots);
     const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
-    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, try nativeEntrypointSymbolName(root_artifact, root));
+    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, try nativeEntrypointSymbolName(root_module, root));
 
     var root_program: ?lir.CheckedPipeline.LoweredProgram = null;
     errdefer if (root_program) |*program| program.deinit();
@@ -6801,12 +6801,12 @@ fn lowerRunUnits(
         root_image = image;
         build_env.recordBoxyObjects(1, 0);
     } else {
-        root_program = try lowerRunRoot(ctx, build_env, tables, target, reporter, root_artifact, imported_artifacts, relation_artifacts, hot_reload);
+        root_program = try lowerRunRoot(ctx, build_env, tables, target, reporter, root_module, imported_modules, relation_modules, hot_reload);
         const lowered = &root_program.?;
         for (lowered.lir_result.root_metadata.items, host_boundary_digests) |metadata, *digest| {
             digest.* = metadata.host_boundary_digest orelse base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
         }
-        root_image = try buildRunRootImage(ctx, reporter, build_env, lowered, root_artifact, imported_artifacts, relation_artifacts, target);
+        root_image = try buildRunRootImage(ctx, reporter, build_env, lowered, root_module, imported_modules, relation_modules, target);
         const records = try compile.boxy_unit.exportRecords(ctx.gpa, lowered, &tables.interfaces);
         defer ctx.gpa.free(records);
         try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
@@ -6820,7 +6820,7 @@ fn lowerRunUnits(
         build_env.recordBoxyObjects(0, 1);
     }
 
-    const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
+    const hosted_table = try checkedHostedTable(ctx.arena, root_module, imported_modules, relation_modules);
     const root_metadata = try ctx.gpa.alloc(lir.RootMetadata.RootMetadata, selected_roots.len);
     defer ctx.gpa.free(root_metadata);
     for (selected_roots, host_boundary_digests, root_metadata) |root, digest, *metadata| {
@@ -6828,7 +6828,7 @@ fn lowerRunUnits(
         metadata.host_boundary_digest = digest;
     }
     const interface_identity = try checkedInterpreterHostIdentity(
-        root_artifact,
+        root_module,
         root_metadata,
         entrypoint_names,
         base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
@@ -6845,7 +6845,7 @@ fn lowerRunUnits(
     return .{
         .target = target,
         .hot_reload = hot_reload,
-        .root_artifact = root_artifact,
+        .root_module = root_module,
         .entrypoint_names = entrypoint_names,
         .hosted_symbols = hosted_table.symbols,
         .checked_host_identity = identity.finalResult(),
@@ -6865,9 +6865,9 @@ fn lowerRunRoot(
     tables: *RunUnitTables,
     target: RocTarget,
     reporter: *progress.Reporter,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     hot_reload: bool,
 ) CliMainError!lir.CheckedPipeline.LoweredProgram {
     reporter.begin(loweringProgressLabel(.boxy));
@@ -6876,9 +6876,9 @@ fn lowerRunRoot(
     const lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
+        root_module,
+        imported_modules,
+        relation_modules,
         .{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } },
         .dev,
         .boxy,
@@ -6902,20 +6902,20 @@ fn buildRunRootImage(
     reporter: *progress.Reporter,
     build_env: *BuildEnv,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     target: RocTarget,
 ) CliMainError![]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 {
     const static_data = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
-        .{ .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        .{ .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules), .imports = imported_modules },
         lowered,
         target,
         .{},
     );
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
-    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_module, lowered);
     defer ctx.gpa.free(entrypoints);
 
     reporter.begin(devBackendPhaseName(target));
@@ -7117,11 +7117,11 @@ fn prepareComposedRunHost(
     reporter.end();
     if (restored) return;
     if (units.root == null) {
-        const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, units.root_artifact);
-        defer ctx.gpa.free(imported_artifacts);
-        const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, units.root_artifact);
-        defer ctx.gpa.free(relation_artifacts);
-        units.root = try lowerRunRoot(ctx, build_env, tables, units.target, reporter, units.root_artifact, imported_artifacts, relation_artifacts, units.hot_reload);
+        const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, units.root_module);
+        defer ctx.gpa.free(imported_modules);
+        const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, units.root_module);
+        defer ctx.gpa.free(relation_modules);
+        units.root = try lowerRunRoot(ctx, build_env, tables, units.target, reporter, units.root_module, imported_modules, relation_modules, units.hot_reload);
     }
     reporter.begin("Host Executable Link");
     try shim_host.link(ctx, units.entrypoint_names, units.hosted_symbols, .{ .lir = &units.root.? }, units.referenced_hosted_symbols, .{});
@@ -7131,8 +7131,8 @@ fn prepareComposedRunHost(
 
 /// Build shared memory containing a viewable ARC-inserted LIR image.
 ///
-/// The parent process owns parse, canonicalization, checking, checked module
-/// publication, post-check lowering, LIR lowering, and ARC insertion. The child
+/// The parent process owns parse, canonicalization, checking, opening checked
+/// modules, post-check lowering, LIR lowering, and ARC insertion. The child
 /// process maps only the LIR image and never sees `ModuleEnv`, CIR, checked
 /// modules, or post-check IRs.
 pub fn buildLirImageWithBuildEnv(
@@ -8365,7 +8365,7 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
 
 fn nativeBuildEntrypoints(
     ctx: *CliCtx,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
@@ -8383,7 +8383,7 @@ fn nativeBuildEntrypoints(
     for (root_procs, root_metadata, entrypoints) |root_proc, metadata, *entrypoint| {
         std.debug.assert(metadata.kind == .provided_export);
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
-        const root = (try root_artifact.lookupRootRequestByOrder(metadata.order)) orelse {
+        const root = (try root_module.lookupRootRequestByOrder(metadata.order)) orelse {
             base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
         };
         std.debug.assert(root.kind == .provided_export);
@@ -8397,7 +8397,7 @@ fn nativeBuildEntrypoints(
         }
 
         entrypoint.* = .{
-            .symbol_name = try nativeEntrypointSymbolName(root_artifact, root),
+            .symbol_name = try nativeEntrypointSymbolName(root_module, root),
             .proc = root_proc,
             .arg_layouts = arg_layouts,
             .ret_layout = proc_spec.ret_layout,
@@ -8408,12 +8408,12 @@ fn nativeBuildEntrypoints(
 }
 
 fn nativeEntrypointSymbolName(
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     root: check.Checked.RootRequest,
 ) Allocator.Error![]const u8 {
-    const entrypoint_name = (try root_artifact.providedEntrypointName(root)) orelse {
+    const entrypoint_name = (try root_module.providedEntrypointName(root)) orelse {
         base.invariant(
-            "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
+            "platform entrypoint invariant violated: exported platform root has no FFI symbol",
             .{},
         );
     };
@@ -10291,7 +10291,7 @@ const BoxyLibraryObjects = struct {
     /// implementations its object holds.
     paired_platforms: []const [32]u8,
     /// Every library unit's module, in unit order.
-    artifacts: []const *const check.Checked.CheckedModule = &.{},
+    modules: []const *const check.Checked.CheckedModule = &.{},
     /// For test units, every unit's tables and image code locations, in
     /// unit order. Arena-allocated, or borrowed from `owned_images`.
     tests: []const BoxyUnitTests = &.{},
@@ -10353,7 +10353,7 @@ fn buildBoxyLibraryObjects(
     policy: BoxyUnitPolicy,
     build_env: *BuildEnv,
     reporter: *progress.Reporter,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
     digests: *compile.boxy_interface.Digests,
@@ -10367,16 +10367,16 @@ fn buildBoxyLibraryObjects(
     phase_name: []const u8,
 ) CliMainError!BoxyLibraryObjects {
     reporter.begin(phase_name);
-    const Artifact = check.Checked.CheckedModule;
-    const visible = try build_env.collectVisibleModules(ctx.gpa, root_artifact);
+    const CheckedModule = check.Checked.CheckedModule;
+    const visible = try build_env.collectVisibleModules(ctx.gpa, root_module);
     defer ctx.gpa.free(visible);
     std.debug.assert(policy.test_units == (test_modules != null));
-    var units: std.ArrayList(*const Artifact) = .empty;
+    var units: std.ArrayList(*const CheckedModule) = .empty;
     defer units.deinit(ctx.gpa);
     try units.append(ctx.gpa, &build_env.builtin_modules.checked_module);
-    for (test_modules orelse visible) |artifact| {
-        if (artifact.hasPlatformRequirements()) continue;
-        try units.append(ctx.gpa, artifact);
+    for (test_modules orelse visible) |checked| {
+        if (checked.hasPlatformRequirements()) continue;
+        try units.append(ctx.gpa, checked);
     }
     // A module's body calls imports its root never sees, and a unit is keyed
     // on its imports' exports, so every import has a unit in the link. The
@@ -10384,9 +10384,9 @@ fn buildBoxyLibraryObjects(
     var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
     defer seen_units.deinit();
     var distinct: usize = 0;
-    for (units.items) |artifact| {
-        if ((try seen_units.getOrPut(artifact.key.bytes)).found_existing) continue;
-        units.items[distinct] = artifact;
+    for (units.items) |checked| {
+        if ((try seen_units.getOrPut(checked.key.bytes)).found_existing) continue;
+        units.items[distinct] = checked;
         distinct += 1;
     }
     units.shrinkRetainingCapacity(distinct);
@@ -10394,27 +10394,27 @@ fn buildBoxyLibraryObjects(
     while (next_unit < units.items.len) : (next_unit += 1) {
         const importer = units.items[next_unit];
         for (importer.direct_import_module_keys) |key| {
-            const imported = digests.artifacts.get(key.bytes) orelse continue;
+            const imported = digests.modules.get(key.bytes) orelse continue;
             if (imported.hasPlatformRequirements()) continue;
             if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
             try units.append(ctx.gpa, imported);
         }
     }
-    const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
+    const platform = try boxyPlatformView(ctx, build_env, root_module, visible);
     // The checked program's reachability runs beside the units: the
     // composition resolves the procedures it names in parallel first
     // (design.md "Unit Pieces And Whole-Program Dead Code").
-    const link_modules = try ctx.arena.alloc(*const Artifact, digests.artifacts.count());
+    const link_modules = try ctx.arena.alloc(*const CheckedModule, digests.modules.count());
     const link_names = try ctx.arena.alloc([32]u8, link_modules.len);
     {
-        var linked = digests.artifacts.valueIterator();
+        var linked = digests.modules.valueIterator();
         var i: usize = 0;
-        while (linked.next()) |artifact| : (i += 1) {
-            link_modules[i] = artifact.*;
-            link_names[i] = digests.module_names.get(artifact.*.key.bytes) orelse base.invariant("roc build invariant violated: a module of the link has no link name", .{});
+        while (linked.next()) |checked| : (i += 1) {
+            link_modules[i] = checked.*;
+            link_names[i] = digests.module_names.get(checked.*.key.bytes) orelse base.invariant("roc build invariant violated: a module of the link has no link name", .{});
         }
     }
-    var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_artifact, .modules = .{ .artifacts = link_modules, .link_names = link_names } };
+    var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_module, .modules = .{ .modules = link_modules, .link_names = link_names } };
     var reach_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
     defer if (reach_session) |*open| {
         while (open.outstanding != 0) _ = open.receive();
@@ -10427,13 +10427,13 @@ fn buildBoxyLibraryObjects(
     };
     if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
     if (dev_diagnostics.isSet(.trace_boxy_work)) {
-        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.nameStore().moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
-        for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.nameStore().moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
+        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_module.nameStore().moduleNameText(root_module.module_identity.module_name), &std.fmt.bytesToHex(root_module.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_module.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_module.module_identity.stable_hash[0..8], .lower) });
+        for (units.items) |checked| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ checked.nameStore().moduleNameText(checked.module_identity.module_name), &std.fmt.bytesToHex(checked.key.bytes[0..8], .lower), &std.fmt.bytesToHex(checked.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(checked.module_identity.stable_hash[0..8], .lower) });
         if (platform) |view| std.debug.print("boxy-work: platform {s} key {s}\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
     }
     var index_by_key = std.AutoHashMap([32]u8, u32).init(ctx.gpa);
     defer index_by_key.deinit();
-    for (units.items, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
+    for (units.items, 0..) |checked, index| try index_by_key.put(checked.key.bytes, @intCast(index));
 
     // Each unit's imports among the units, and the units importing it.
     const remaining = try ctx.gpa.alloc(u32, units.items.len);
@@ -10445,8 +10445,8 @@ fn buildBoxyLibraryObjects(
         ctx.gpa.free(dependents);
     }
     for (dependents) |*list| list.* = .empty;
-    for (units.items, 0..) |artifact, index| {
-        for (artifact.direct_import_module_keys) |import_key| {
+    for (units.items, 0..) |checked, index| {
+        for (checked.direct_import_module_keys) |import_key| {
             const imported = index_by_key.get(import_key.bytes) orelse continue;
             remaining[index] += 1;
             try dependents[imported].append(ctx.gpa, @intCast(index));
@@ -10461,14 +10461,14 @@ fn buildBoxyLibraryObjects(
         for (tasks) |*task| task.deinit(ctx.gpa);
         ctx.gpa.free(tasks);
     }
-    for (tasks, units.items) |*task, artifact| {
+    for (tasks, units.items) |*task, checked| {
         task.* = .{
             .gpa = ctx.gpa,
             .io = ctx.io.std_io,
             .policy = policy,
-            .artifact = artifact,
-            .platform = boxyUnitPlatform(artifact, platform),
-            .views = try build_env.collectImportedModuleViews(ctx.gpa, artifact),
+            .module = checked,
+            .platform = boxyUnitPlatform(checked, platform),
+            .views = try build_env.collectImportedModuleViews(ctx.gpa, checked),
             .target = target,
             .interfaces = interfaces,
             .names = &digests.names,
@@ -10482,7 +10482,7 @@ fn buildBoxyLibraryObjects(
     const Prepare = struct {
         fn run(unit_tasks: []BoxyUnitTask, unit_digests: *compile.boxy_interface.Digests, index: u32) Allocator.Error!void {
             const task = &unit_tasks[index];
-            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.policy, task.target, &.{}, false);
+            task.key = try boxyObjectKey(task.gpa, unit_digests, task.module, task.platform, task.policy, task.target, &.{}, false);
         }
     };
 
@@ -10518,13 +10518,13 @@ fn buildBoxyLibraryObjects(
     while (keyable.pop()) |index| {
         const task = &tasks[index];
         try Prepare.run(tasks, digests, index);
-        const known = build_env.boxyObjectWithKey(task.artifact, task.key) orelse {
+        const known = build_env.boxyObjectWithKey(task.module, task.key) orelse {
             try ready.append(ctx.gpa, index);
             continue;
         };
         // Compile-time evaluation never builds a test unit.
         std.debug.assert(!policy.test_units);
-        try build_env.boxyAdoptExports(digests, task.artifact);
+        try build_env.boxyAdoptExports(digests, task.module);
         if (known.restored) restored += 1 else built += 1;
         if (want_images) {
             const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
@@ -10579,7 +10579,7 @@ fn buildBoxyLibraryObjects(
             .done => |*result| {
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
-                try digests.recordExports(task.artifact, result.exports);
+                try digests.recordExports(task.module, result.exports);
                 keys[index] = task.key.bytes;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
@@ -10634,18 +10634,18 @@ fn buildBoxyLibraryObjects(
     for (images[0..ordered_images.len], ordered_images) |image, *slot| slot.* = image orelse base.invariant("roc build invariant violated: a .boxy unit completed without an image", .{});
     var paired_platforms: std.ArrayList([32]u8) = .empty;
     var root_modules: std.ArrayList([32]u8) = .empty;
-    try root_modules.append(ctx.arena, root_artifact.key.bytes);
+    try root_modules.append(ctx.arena, root_module.key.bytes);
     if (platform) |view| {
         try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
         try root_modules.append(ctx.arena, view.key.bytes);
     }
-    for (visible) |artifact| {
-        if (!artifact.hasPlatformRequirements()) continue;
-        try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
-        try root_modules.append(ctx.arena, artifact.key.bytes);
+    for (visible) |checked| {
+        if (!checked.hasPlatformRequirements()) continue;
+        try paired_platforms.append(ctx.arena, checked.codeGenerationKey().bytes);
+        try root_modules.append(ctx.arena, checked.key.bytes);
     }
     const module_keys = try ctx.arena.alloc([32]u8, units.items.len);
-    for (units.items, module_keys) |artifact, *key| key.* = artifact.key.bytes;
+    for (units.items, module_keys) |checked, *key| key.* = checked.key.bytes;
     return .{
         .pieces = ordered,
         .keys = keys,
@@ -10653,7 +10653,7 @@ fn buildBoxyLibraryObjects(
         .hosted_symbols = hosted_symbols.items,
         .platform = platform,
         .paired_platforms = paired_platforms.items,
-        .artifacts = try ctx.arena.dupe(*const Artifact, units.items),
+        .modules = try ctx.arena.dupe(*const CheckedModule, units.items),
         .tests = unit_tests,
         .images = ordered_images,
         .owned_images = owned_images.items,
@@ -10754,19 +10754,19 @@ fn composeBoxyProgramObject(
 fn boxyPlatformView(
     ctx: *CliCtx,
     build_env: *BuildEnv,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     visible: []const *const check.Checked.CheckedModule,
 ) Allocator.Error!?check.Checked.ImportedModuleView {
-    const relations = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
+    const relations = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
     defer ctx.gpa.free(relations);
     var platform: ?check.Checked.ImportedModuleView = null;
     for (relations) |view| {
         if (view.module_identity.kind == .platform) platform = view;
     }
-    for (visible) |artifact| {
-        if (artifact.module_identity.kind == .platform) platform = check.Checked.importedView(artifact);
+    for (visible) |checked| {
+        if (checked.module_identity.kind == .platform) platform = check.Checked.importedView(checked);
     }
-    if (root_artifact.module_identity.kind == .platform) platform = check.Checked.importedView(root_artifact);
+    if (root_module.module_identity.kind == .platform) platform = check.Checked.importedView(root_module);
     return platform;
 }
 
@@ -10786,17 +10786,17 @@ const BoxyUnitPolicy = struct {
     }
 };
 
-/// The key of `artifact`'s object under this build's target and policy;
+/// The key of `checked`'s object under this build's target and policy;
 /// `run_image` marks the root unit of a dev run image.
-fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.Checked.CheckedModule, platform: ?check.Checked.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
-    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units, policy.wasm_stack_checks);
+fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, checked: *const check.Checked.CheckedModule, platform: ?check.Checked.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
+    return compile.boxy_unit.objectKey(gpa, digests, checked, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units, policy.wasm_stack_checks);
 }
 
-/// The platform module a unit of `artifact` needs in view: the one whose
-/// hosted section binds the hosted functions `artifact` declares to their
+/// The platform module a unit of `checked` needs in view: the one whose
+/// hosted section binds the hosted functions `checked` declares to their
 /// host symbols. Null for a module declaring none.
-fn boxyUnitPlatform(artifact: *const check.Checked.CheckedModule, platform: ?check.Checked.ImportedModuleView) ?check.Checked.ImportedModuleView {
-    if (!artifact.declaresHostedProcedures()) return null;
+fn boxyUnitPlatform(checked: *const check.Checked.CheckedModule, platform: ?check.Checked.ImportedModuleView) ?check.Checked.ImportedModuleView {
+    if (!checked.declaresHostedProcedures()) return null;
     return platform;
 }
 
@@ -10807,7 +10807,7 @@ const BoxyUnitTask = struct {
     gpa: Allocator,
     io: std.Io,
     policy: BoxyUnitPolicy,
-    artifact: *const check.Checked.CheckedModule,
+    module: *const check.Checked.CheckedModule,
     platform: ?check.Checked.ImportedModuleView,
     views: []check.Checked.ImportedModuleView,
     target: RocTarget,
@@ -10839,7 +10839,7 @@ const BoxyUnitTask = struct {
         config.target.timing = self.timing;
         return try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
-            .artifact = self.artifact,
+            .module = self.module,
             .platform = self.platform,
             .views = self.views,
             .target = self.target,
@@ -10874,9 +10874,9 @@ fn lowerBuildCommandToLir(
     args: cli_args.BuildArgs,
     build_env: *BuildEnv,
     reporter: *progress.Reporter,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     roots: CheckedLirRoots,
     target: RocTarget,
     proc_debug_names: bool,
@@ -10889,9 +10889,9 @@ fn lowerBuildCommandToLir(
     const lowered = try lowerCheckedSourceToLir(
         ctx.gpa,
         ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
+        root_module,
+        imported_modules,
+        relation_modules,
         roots,
         args.opt,
         specialization_strategy,
@@ -10912,9 +10912,9 @@ fn lowerBuildCommandToLir(
 fn buildCommandStaticData(
     ctx: *CliCtx,
     reporter: *progress.Reporter,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     target: RocTarget,
 ) CliMainError![]compile.static_data_exports.StaticDataExport {
@@ -10922,8 +10922,8 @@ fn buildCommandStaticData(
     const static_data_exports = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
         .{
-            .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
+            .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+            .imports = imported_modules,
         },
         lowered,
         target,
@@ -11016,19 +11016,19 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     build_env.setDetailedLoweringTiming(args.timings);
     const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
-    const root_artifact = try checkedModuleForBuild(ctx, &build_env, args.path);
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const root_module = try checkedModuleForBuild(ctx, &build_env, args.path);
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_module, imported_modules, relation_modules, .linked_output, target, args.synthetic_default_platform, null);
     defer lowered.deinit();
 
-    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_module, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_module, imported_modules, relation_modules, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
@@ -11594,9 +11594,9 @@ fn buildWasmUnits(
     args: cli_args.BuildArgs,
     build_env: *BuildEnv,
     reporter: *progress.Reporter,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     target: RocTarget,
     targets_config: roc_target.TargetsConfig,
 ) CliMainError!WasmUnits {
@@ -11607,13 +11607,13 @@ fn buildWasmUnits(
     defer interfaces.deinit();
     var digests = try build_env.boxyLinkDigests();
     defer digests.deinit();
-    const library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &interfaces, &digests, true, null, "Lowering Modules (wasm)");
+    const library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_module, target, &interfaces, &digests, true, null, "Lowering Modules (wasm)");
     var library_owned_here = true;
     defer if (library_owned_here) library.deinit(ctx.gpa);
     const dump_dir = dev_diagnostics.get(.dump_wasm_unit_images);
     if (dump_dir) |dir| for (library.images, library.keys) |image, key| dumpWasmUnitImage(ctx, dir, key, image);
 
-    const root_key = try boxyObjectKey(ctx.gpa, &digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    const root_key = try boxyObjectKey(ctx.gpa, &digests, root_module, boxyUnitPlatform(root_module, library.platform), policy, target, library.paired_platforms, false);
     reporter.begin("Wasm Root Unit");
     if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, target, &interfaces)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
@@ -11628,16 +11628,16 @@ fn buildWasmUnits(
         return .{ .library = library, .root_image = root_image, .app_export_symbols = app_export_symbols };
     }
     var lowering_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
+    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_module, imported_modules, relation_modules, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
     defer lowered.deinit();
     const lowering_snapshot = lowering_timing.snapshot();
     reporter.endWithBreakdown(&.{.{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) }});
     reporter.begin("Unit Image");
-    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_module, &lowered);
     defer ctx.gpa.free(entrypoints);
     const static_data_exports = try compile.static_data_exports.buildStaticData(ctx.gpa, .{
-        .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-        .imports = imported_artifacts,
+        .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+        .imports = imported_modules,
     }, &lowered, target, .{ .include_provided_exports = true });
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
     const entries = try ctx.arena.alloc(backend.wasm.UnitCompile.Entry, entrypoints.len);
@@ -12097,7 +12097,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     const boxy_units = runtime_strategy == .boxy and args.opt == .dev and target_arch != .wasm32;
     var boxy_interfaces: ?postcheck.Boxy.Lower.ExportInterfaces = if (boxy_units) postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io) else null;
     defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
-    // Filled once checking has published every module; the root unit reads
+    // Filled once checking has opened every module; the root unit reads
     // its names only when it lowers, after that.
     var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .names = .{} };
     defer boxy_digests.deinit();
@@ -12122,14 +12122,14 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
     const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
-    const root_artifact = try checkedModuleForBuild(ctx, &build_env, args.path);
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const root_module = try checkedModuleForBuild(ctx, &build_env, args.path);
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
 
     if (wasmUnitsApply(target, args)) {
-        const units = try buildWasmUnits(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, target, resolved_targets_config);
+        const units = try buildWasmUnits(ctx, args, &build_env, &reporter, root_module, imported_modules, relation_modules, target, resolved_targets_config);
         defer units.deinit(ctx.gpa);
         if (wasm_fast_link) |fast| {
             try fast.link(ctx, args, &reporter, &build_env, resolved_targets_config, units, build_scratch_dir);
@@ -12141,12 +12141,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     // calls against their export interfaces.
     if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
     const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
-        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null, null, "Lowering Modules")
+        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_module, target, interfaces, &boxy_digests, fast_link != null, null, "Lowering Modules")
     else
         null;
     defer if (boxy_library) |library| library.deinit(ctx.gpa);
     const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
-    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_module, boxyUnitPlatform(root_module, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
     if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
     // The root program's object is cached under its own key too: a build
     // whose every module is cached lowers nothing.
@@ -12179,12 +12179,12 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
         return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     };
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, boxy_root_unit);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_module, imported_modules, relation_modules, .linked_output, target, args.synthetic_default_platform, boxy_root_unit);
     defer lowered.deinit();
-    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_module, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_module, imported_modules, relation_modules, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
@@ -12532,11 +12532,11 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     build_env.setDetailedLoweringTiming(args.timings);
     const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
-    const root_artifact = try checkedModuleForBuild(ctx, &build_env, args.path);
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const root_module = try checkedModuleForBuild(ctx, &build_env, args.path);
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
 
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
     var shm = try createSharedMemory(ctx.io.std_io, page_size);
@@ -12545,7 +12545,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null);
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_module, imported_modules, relation_modules, .{ .platform_entrypoints = .lir_image }, target, false, null);
     defer lowered.deinit();
 
     reporter.begin("LIR Image Generation");
@@ -12553,7 +12553,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer ctx.gpa.free(platform_entrypoints);
     const image_static_data = try compile.static_data_exports.buildStaticData(
         ctx.gpa,
-        .{ .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        .{ .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules), .imports = imported_modules },
         &lowered,
         target,
         .{},
@@ -12577,7 +12577,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     // copy rather than this process's mapping, so every byte here is a
     // function of the program.
     const lir_image = try shm.dupeDetachedImage(ctx.arena);
-    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
+    const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_module);
     if (entrypoint_names.len == 0) {
         base.invariant("embedded build invariant violated: no platform entrypoints", .{});
     }
@@ -12869,7 +12869,7 @@ const CliTestPlanModule = struct {
     /// Index in the complete source module plan, also carried by lowered roots.
     module_index: u32,
     module: BuildEnv.CompiledModuleInfo,
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
     test_roots: []check.Checked.RootRequest,
     /// Complete reporting-plan slot for each source root, independent of the subset.
     result_indices: []u32,
@@ -13001,12 +13001,12 @@ fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
 
 fn collectTestRootRequests(
     allocator: std.mem.Allocator,
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
 ) Allocator.Error![]check.Checked.RootRequest {
     var roots = std.ArrayList(check.Checked.RootRequest).empty;
     errdefer roots.deinit(allocator);
 
-    for ((try artifact.rootRequests()).requests) |root| {
+    for ((try checked.rootRequests()).requests) |root| {
         if (root.kind != .test_expect or root.requires_pairing) continue;
         try roots.append(allocator, root);
     }
@@ -13038,8 +13038,8 @@ fn buildCliTestPlan(
             .root, .local_path_dependency => {},
             .fetched, .compiler_owned => continue,
         }
-        const artifact = module.semantic.checked_module orelse continue;
-        const test_roots = try collectTestRootRequests(ctx.gpa, artifact);
+        const checked = module.semantic.checked_module orelse continue;
+        const test_roots = try collectTestRootRequests(ctx.gpa, checked);
         errdefer ctx.gpa.free(test_roots);
 
         // An expect's condition is a `Bool`, so its root is ineligible only
@@ -13048,9 +13048,9 @@ fn buildCliTestPlan(
         // the checker's diagnostic is its only report.
         var checking_results = std.ArrayList(CliTestResultItem).empty;
         defer checking_results.deinit(ctx.gpa);
-        for ((try artifact.checkedTables()).compile_time_roots.roots, 0..) |root, position| {
+        for ((try checked.checkedTables()).compile_time_roots.roots, 0..) |root, position| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            if (std.debug.runtime_safety) std.debug.assert(try (try artifact.bodies()).exprContainsDiagnosticError(root.rootExpr()));
+            if (std.debug.runtime_safety) std.debug.assert(try (try checked.bodies()).exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @intCast(position),
@@ -13060,7 +13060,7 @@ fn buildCliTestPlan(
         }
         // `roc test` pairs no platform with an app, so an expect that reads a
         // value the platform `requires` has nothing to read and cannot run.
-        for ((try artifact.rootRequests()).requests) |root| {
+        for ((try checked.rootRequests()).requests) |root| {
             if (root.kind != .test_expect or !root.requires_pairing) continue;
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
@@ -13103,7 +13103,7 @@ fn buildCliTestPlan(
         try planned_modules.append(ctx.gpa, .{
             .module_index = @intCast(module_index),
             .module = module,
-            .artifact = artifact,
+            .checked = checked,
             .test_roots = test_roots,
             .result_indices = result_indices,
         });
@@ -13133,7 +13133,7 @@ fn testRootRegion(
     return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted, .literal => {
-            base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
+            base.invariant("CLI test invariant violated: test root does not come from an expect statement", .{});
         },
     };
 }
@@ -13663,9 +13663,9 @@ test "native test generic procedures use the ordinary native dev representation 
 fn lowerCheckedSourceToLir(
     lir_allocator: Allocator,
     gpa: Allocator,
-    root_artifact: *const check.Checked.CheckedModule,
-    imported_artifacts: []const check.Checked.ImportedModuleView,
-    relation_artifacts: []const check.Checked.ImportedModuleView,
+    root_module: *const check.Checked.CheckedModule,
+    imported_modules: []const check.Checked.ImportedModuleView,
+    relation_modules: []const check.Checked.ImportedModuleView,
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
@@ -13678,8 +13678,8 @@ fn lowerCheckedSourceToLir(
     boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.Checked.RootRequest = switch (roots) {
-        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_artifact.rootRequests()).runtime_requests),
-        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_artifact.rootRequests()).runtime_requests),
+        .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_module.rootRequests()).runtime_requests),
+        .linked_output => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, (try root_module.rootRequests()).runtime_requests),
         .test_plan => |plan| plan.requests,
     };
     defer switch (roots) {
@@ -13705,8 +13705,8 @@ fn lowerCheckedSourceToLir(
     return lir.CheckedPipeline.lowerCheckedModulesToLir(
         lir_allocator,
         .{
-            .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
+            .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+            .imports = imported_modules,
         },
         requests,
         config.target,
@@ -15066,52 +15066,52 @@ fn prepareUnitImageTests(
     test_plan: *const CliTestPlan,
 ) CliMainError!UnitImageTestProgram {
     if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
-    const Artifact = check.Checked.CheckedModule;
+    const CheckedModule = check.Checked.CheckedModule;
     const target = RocTarget.detectNative();
     var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };
     errdefer program.deinit();
     program.tables.digests = try build_env.boxyLinkDigests();
     const cache_manager = build_env.cache_manager orelse base.invariant("roc test invariant violated: a test run from unit images has no cache manager", .{});
-    const root_artifact = build_env.rootModuleCheckedModule() orelse base.invariant("roc test invariant violated: a planned test program has no root module", .{});
+    const root_module = build_env.rootModuleCheckedModule() orelse base.invariant("roc test invariant violated: a planned test program has no root module", .{});
 
     // As in a composed run, a program with a platform is rooted at its
     // executable root, the platform module paired with the app, whose
     // hosted section binds every hosted function; the app and every other
     // module without platform requirements is a library unit, and the
     // modules with platform requirements lower together in a root unit.
-    const unit_root = switch (root_artifact.module_identity.kind) {
+    const unit_root = switch (root_module.module_identity.kind) {
         .app => try build_env.executableRootCheckedModule(),
         .default_app => unreachable, // unitImageTestApplies keeps a default app on the shared program
-        .type_module, .package, .platform, .hosted, .module, .malformed => root_artifact,
+        .type_module, .package, .platform, .hosted, .module, .malformed => root_module,
     };
     const visible = try build_env.collectVisibleModules(ctx.gpa, unit_root);
     defer ctx.gpa.free(visible);
-    var paired: std.ArrayList(*const Artifact) = .empty;
+    var paired: std.ArrayList(*const CheckedModule) = .empty;
     defer paired.deinit(ctx.gpa);
     if (unit_root.hasPlatformRequirements()) try paired.append(ctx.gpa, unit_root);
-    for (visible) |artifact| if (artifact.hasPlatformRequirements()) try paired.append(ctx.gpa, artifact);
-    var test_modules: std.ArrayList(*const Artifact) = .empty;
+    for (visible) |checked| if (checked.hasPlatformRequirements()) try paired.append(ctx.gpa, checked);
+    var test_modules: std.ArrayList(*const CheckedModule) = .empty;
     defer test_modules.deinit(ctx.gpa);
     // A root unit exists only to export the paired modules' wrappers.
     var paired_roots = false;
     for (test_plan.modules) |planned| {
-        if (planned.artifact.hasPlatformRequirements()) {
-            const is_paired = for (paired.items) |artifact| {
-                if (artifact == planned.artifact) break true;
+        if (planned.checked.hasPlatformRequirements()) {
+            const is_paired = for (paired.items) |checked| {
+                if (checked == planned.checked) break true;
             } else false;
             if (!is_paired) base.invariant("roc test invariant violated: a planned module with platform requirements pairs with no root", .{});
             paired_roots = true;
             continue;
         }
-        try test_modules.append(ctx.gpa, planned.artifact);
+        try test_modules.append(ctx.gpa, planned.checked);
     }
     // The root unit calls into its modules' imports and the app.
     if (paired_roots) {
-        for (paired.items) |artifact| for (artifact.direct_import_module_keys) |key| {
-            const imported = program.tables.digests.artifacts.get(key.bytes) orelse continue;
+        for (paired.items) |checked| for (checked.direct_import_module_keys) |key| {
+            const imported = program.tables.digests.modules.get(key.bytes) orelse continue;
             try test_modules.append(ctx.gpa, imported);
         };
-        if (unit_root != root_artifact) try test_modules.append(ctx.gpa, root_artifact);
+        if (unit_root != root_module) try test_modules.append(ctx.gpa, root_module);
     }
 
     const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false, .test_units = true };
@@ -15129,7 +15129,7 @@ fn prepareUnitImageTests(
     try program.bindHostedStubs(ctx.arena, hosted_names.items);
     // Every unit's imports are loaded before it: the builtins, then the
     // rest after everything they import, then the root unit.
-    const order = try unitLoadOrder(ctx.gpa, library.artifacts);
+    const order = try unitLoadOrder(ctx.gpa, library.modules);
     defer ctx.gpa.free(order);
     for (order) |index| try program.load(.{ .bytes = library.images[index], .tests = library.tests[index], .hosted_symbols = &.{} });
     if (root_unit) |unit| try program.load(unit);
@@ -15142,15 +15142,15 @@ fn prepareUnitImageTests(
     return program;
 }
 
-/// The order to load `artifacts`' units in: the first (the builtins), then
-/// each other one after every one of `artifacts` it imports.
-fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.Checked.CheckedModule) Allocator.Error![]u32 {
+/// The order to load `checked_modules`' units in: the first (the builtins), then
+/// each other one after every one of `checked_modules` it imports.
+fn unitLoadOrder(gpa: Allocator, checked_modules: []const *const check.Checked.CheckedModule) Allocator.Error![]u32 {
     var index_by_key = std.AutoHashMap([32]u8, u32).init(gpa);
     defer index_by_key.deinit();
-    for (artifacts, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
-    const order = try gpa.alloc(u32, artifacts.len);
+    for (checked_modules, 0..) |checked, index| try index_by_key.put(checked.key.bytes, @intCast(index));
+    const order = try gpa.alloc(u32, checked_modules.len);
     errdefer gpa.free(order);
-    const placed = try gpa.alloc(bool, artifacts.len);
+    const placed = try gpa.alloc(bool, checked_modules.len);
     defer gpa.free(placed);
     @memset(placed, false);
     var count: usize = 0;
@@ -15161,12 +15161,12 @@ fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.Checked.Checked
     const Frame = struct { index: u32, next_import: usize };
     var stack: std.ArrayList(Frame) = .empty;
     defer stack.deinit(gpa);
-    for (1..artifacts.len) |start| {
+    for (1..checked_modules.len) |start| {
         if (placed[start]) continue;
         try stack.append(gpa, .{ .index = @intCast(start), .next_import = 0 });
         while (stack.items.len != 0) {
             const frame = &stack.items[stack.items.len - 1];
-            const imports = artifacts[frame.index].direct_import_module_keys;
+            const imports = checked_modules[frame.index].direct_import_module_keys;
             if (frame.next_import < imports.len) {
                 const key = imports[frame.next_import];
                 frame.next_import += 1;
@@ -15185,7 +15185,7 @@ fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.Checked.Checked
             _ = stack.pop();
         }
     }
-    std.debug.assert(count == artifacts.len);
+    std.debug.assert(count == checked_modules.len);
     return order;
 }
 
@@ -15199,13 +15199,13 @@ fn unitTestRootImage(
     reporter: *progress.Reporter,
     program: *UnitImageTestProgram,
     cache_manager: *CacheManager,
-    root_artifact: *const check.Checked.CheckedModule,
+    root_module: *const check.Checked.CheckedModule,
     paired: []const *const check.Checked.CheckedModule,
     policy: BoxyUnitPolicy,
     target: RocTarget,
 ) CliMainError!UnitTestImage {
     const library = &program.library.?;
-    const key = try boxyObjectKey(ctx.gpa, &program.tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    const key = try boxyObjectKey(ctx.gpa, &program.tables.digests, root_module, boxyUnitPlatform(root_module, library.platform), policy, target, library.paired_platforms, false);
     if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, key, target, &program.tables.interfaces)) |entry| {
         defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
         const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
@@ -15236,26 +15236,26 @@ fn unitTestRootImage(
     defer module_digests.deinit(ctx.gpa);
     var root_indices: std.ArrayList(u32) = .empty;
     defer root_indices.deinit(ctx.gpa);
-    for (paired) |artifact| {
-        const roots = try compile.boxy_unit.testRootRequests(ctx.gpa, artifact);
+    for (paired) |checked| {
+        const roots = try compile.boxy_unit.testRootRequests(ctx.gpa, checked);
         defer ctx.gpa.free(roots);
-        const digest = program.tables.digests.nameOf(artifact.key.bytes);
+        const digest = program.tables.digests.nameOf(checked.key.bytes);
         for (roots, 0..) |root, index| {
             try requests.append(ctx.gpa, root);
-            try source_modules.append(ctx.gpa, artifact.key.digest());
+            try source_modules.append(ctx.gpa, checked.key.digest());
             try module_digests.append(ctx.gpa, digest);
             try root_indices.append(ctx.gpa, @intCast(index));
         }
     }
     const metadata = try compile.boxy_unit.testPlanMetadata(ctx.gpa, requests.items);
     defer ctx.gpa.free(metadata);
-    const imported_artifacts = try build_env.collectImportedModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationModuleViews(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(relation_artifacts);
+    const imported_modules = try build_env.collectImportedModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(imported_modules);
+    const relation_modules = try build_env.collectRelationModuleViews(ctx.gpa, root_module);
+    defer ctx.gpa.free(relation_modules);
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
-        .imports = imported_artifacts,
+        .root = try check.Checked.loweringViewWithRelations(root_module, relation_modules),
+        .imports = imported_modules,
     };
     var config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target, false).target;
     config.boxy_unit = .{ .imports = &program.tables.interfaces, .root = true, .names = &program.tables.digests.names, .expect_sites = true };
@@ -15269,7 +15269,7 @@ fn unitTestRootImage(
     defer lowered.deinit();
     finishPostCheckLowering(reporter, &spec_timing, .boxy);
 
-    const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
+    const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_modules }, &lowered, target, .{});
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
     var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
     defer wrappers.deinit(ctx.gpa);
@@ -15368,7 +15368,7 @@ fn runUnitImageTestPlan(
     var reports: std.ArrayList(CliTestRootReport) = .empty;
     defer reports.deinit(ctx.gpa);
     for (test_plan.modules, 0..) |*planned, planned_index| {
-        const module = program.tables.digests.nameOf(planned.artifact.key.bytes);
+        const module = program.tables.digests.nameOf(planned.checked.key.bytes);
         const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.test_roots.len);
         errdefer ctx.gpa.free(roots);
         var cursor: usize = 0;
@@ -16577,10 +16577,10 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
         .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
-        // `roc test` never links a program, so it publishes no executable
-        // artifacts: the app/platform entrypoint pairing is not part of what
+        // `roc test` never links a program, so it prepares no checked
+        // program: the app/platform entrypoint pairing is not part of what
         // running the root file's `expect`s needs.
-        .post_check_publication_mode = .none,
+        .checked_program_mode = .none,
     });
     defer build_env.deinit();
     build_env.defer_post_check = true;
@@ -16626,15 +16626,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     defer source_modules.deinit(ctx.gpa);
     for (modules) |module| {
         // Failed checking produces diagnostics, but no executable report sites.
-        const artifact = module.semantic.checked_module orelse continue;
+        const checked = module.semantic.checked_module orelse continue;
         const qualified_name = module.semantic.env.qualifiedModuleName();
         const workspace = compile.watch_inputs.hashBytes(qualified_name);
         const entry = try source_modules.modules.getOrPut(ctx.gpa, workspace);
         if (entry.found_existing) {
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
-        const identity = artifact.module_identity.stable_hash;
-        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.Checked.importedView(artifact));
+        const identity = checked.module_identity.stable_hash;
+        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.Checked.importedView(checked));
         entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity };
         try source_modules.bind(ctx.gpa, identity, workspace);
         try source_modules.bind(ctx.gpa, link_identity, workspace);
@@ -16668,7 +16668,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     for (test_plan.modules) |planned| {
         for (planned.test_roots, 0..) |root, root_index| {
             try runtime_requests.append(ctx.gpa, root);
-            try runtime_sources.append(ctx.gpa, planned.artifact.key.digest());
+            try runtime_sources.append(ctx.gpa, planned.checked.key.digest());
             const entry = test_plan.entries[planned.result_indices[root_index]];
             try runtime_metadata.append(ctx.gpa, .{
                 .request_index = @intCast(runtime_metadata.items.len),
@@ -16697,7 +16697,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
         .source_modules = discovery_sources.items,
     };
     if (test_plan.modules.len != 0) {
-        runtime_config.root_module = test_plan.modules[0].artifact;
+        runtime_config.root_module = test_plan.modules[0].checked;
         // Even an all-hit plan explicitly supplies empty execution demand.
         // A file with no test plan instead retains ordinary checking, which
         // also handles modules that have no executable ownership anchor.
@@ -16924,7 +16924,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     try writeCliTestRunSummary(stderr, total, elapsed_ns, report_config.shouldUseColors());
 
     // Diagnostics determine the command status only after every independent
-    // test root has run; they never gate checked-artifact execution.
+    // test root has run; they never gate checked-module execution.
     if (diag.errors > 0) return error.CompilationFailed;
     return error.TestsFailed;
 }
@@ -17859,7 +17859,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var reader = ReplLine.init(ctx.gpa);
     defer reader.deinit();
 
-    // Publishing the Builtin module here is the dominant startup cost (~1s). Do
+    // Opening the Builtin module here is the dominant startup cost (~1s). Do
     // it before printing the greeting so the greeting and the first prompt appear
     // together and the REPL is immediately interactive—otherwise the greeting
     // shows with no prompt until this finishes.
@@ -19251,15 +19251,15 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         error.AntivirusInterference,
         error.BadPathName,
         error.BrokenPipe,
-        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinOutputsVersionMismatch,
         error.BuiltinLowLevelAnnotationMustBeFunction,
         error.Canceled,
         error.CheckFailed,
         error.CliError,
         error.ConcurrencyUnavailable,
         error.ConnectionResetByPeer,
-        error.CorruptArtifact,
-        error.CorruptBuiltinArtifact,
+        error.CorruptSerializedData,
+        error.CorruptBuiltinOutputs,
         error.CorruptEmbeddedBuiltins,
         error.CurrentDirUnlinked,
         error.DeviceBusy,
@@ -19415,11 +19415,11 @@ fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
-        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinOutputsVersionMismatch,
         error.BuiltinLowLevelAnnotationMustBeFunction,
         error.Canceled,
-        error.CorruptArtifact,
-        error.CorruptBuiltinArtifact,
+        error.CorruptSerializedData,
+        error.CorruptBuiltinOutputs,
         error.CorruptEmbeddedBuiltins,
         error.DeviceBusy,
         error.DownloadFailed,
@@ -19626,7 +19626,7 @@ fn checkFileWithBuildEnv(
         // completes, so `roc check` finalizes the relation-bearing platform
         // root once (which also resolves the platform target config constants
         // the check flow depends on).
-        .post_check_publication_mode = .executable_artifacts,
+        .checked_program_mode = .executable_program,
     });
     defer build_env.deinit();
     applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
@@ -20525,7 +20525,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                     const origin = bump.extract.OriginMap.Origin{
                         .kind = origin_kind,
                         .module_name = if (is_platform_root) "" else mod_env.module_name,
-                        .artifact = module_state.checkedModule(),
+                        .module = module_state.checkedModule(),
                     };
                     const identity_hash = mod_env.contentIdentityHash() orelse return error.Internal;
                     try origins.putIdentity(ctx.gpa, identity_hash, origin);
@@ -20546,7 +20546,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
                 .module_env = module.checked.env,
-                .artifact = module.checked.checked_module,
+                .module = module.checked.checked_module,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -20560,7 +20560,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         try inputs.append(ctx.gpa, .{
             .exposed_name = root_module.name,
             .module_env = root_data.env,
-            .artifact = root_data.checked_module,
+            .module = root_data.checked_module,
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
@@ -20575,7 +20575,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
                 .module_env = module.checked.env,
-                .artifact = module.checked.checked_module,
+                .module = module.checked.checked_module,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -20626,7 +20626,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
 }
 
 /// Count the source import graph using the resolver and parser inventories;
-/// no BuildEnv or builtin artifacts are needed for this command.
+/// no BuildEnv or builtin modules are needed for this command.
 fn rocLoc(ctx: *CliCtx, args: cli_args.LocArgs) CliMainError!void {
     const start = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
     const source = try resolveSourceArg(ctx, args.path, false);

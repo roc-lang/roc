@@ -41,7 +41,7 @@ builtin_module: builtin_static.BuiltinModuleView,
 owns_builtin_module: bool,
 /// Heap-allocated source buffer owned by this TestEnv (if any)
 owned_source: ?[]u8 = null,
-published_owns_module_env: bool = false,
+checked_owns_module_env: bool = false,
 /// Every module env reachable through this module's imports (not including
 /// this module itself). A module that imports this one hands these to the
 /// checker as owner modules, the way the build hands a module every checked
@@ -487,7 +487,7 @@ pub fn deinit(self: *TestEnv) void {
 
     // ModuleEnv.deinit calls self.common.deinit() to clean up CommonEnv's internals
     // Since common is now a value field, we don't need to free it separately
-    if (!self.published_owns_module_env) {
+    if (!self.checked_owns_module_env) {
         self.module_env.deinit();
         self.gpa.destroy(self.module_env);
         if (self.owned_source) |buffer| {
@@ -504,9 +504,9 @@ pub fn deinit(self: *TestEnv) void {
     }
 }
 
-/// Transfer ownership of the published checked module into a typed-CIR source module.
-pub fn takePublishedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
-    self.published_owns_module_env = true;
+/// Transfer ownership of the checked module into a typed-CIR source module.
+pub fn takeCheckedSourceModule(self: *TestEnv) TypedCIR.Modules.SourceModule {
+    self.checked_owns_module_env = true;
     const owned_source = self.owned_source;
     self.owned_source = null;
     return .{ .owned_checked = .{

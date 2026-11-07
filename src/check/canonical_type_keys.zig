@@ -2583,7 +2583,7 @@ test "keying every link of a constrained-variable chain takes work linear in its
                 .origin = .method_call,
             }})) });
         }
-        // Key every link, as checked-module publication does.
+        // Key every link, as the checked module's analyses do.
         var writer = TypeWriter.init(gpa, &store, &env);
         defer writer.deinit();
         writer.retainComposedKeys();

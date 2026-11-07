@@ -57,10 +57,10 @@ pub fn queryFailureName(err: SyntaxQueryError) Allocator.Error![]const u8 {
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
-        error.BuiltinArtifactVersionMismatch,
+        error.BuiltinOutputsVersionMismatch,
         error.Canceled,
-        error.CorruptArtifact,
-        error.CorruptBuiltinArtifact,
+        error.CorruptSerializedData,
+        error.CorruptBuiltinOutputs,
         error.CorruptEmbeddedBuiltins,
         error.DeviceBusy,
         error.FileBusy,
@@ -198,7 +198,7 @@ pub const SyntaxChecker = struct {
     previous_build_env: ?*BuildEnvHandle = null,
     /// Snapshot of the most recent successful build per module (kept for completions).
     snapshot_envs: std.StringHashMapUnmanaged(*BuildEnvHandle) = .{},
-    /// Pre-published Builtin module reused by each fresh LSP BuildEnv.
+    /// Pre-opened Builtin module reused by each fresh LSP BuildEnv.
     builtin_modules: ?*eval.BuiltinModules = null,
     /// Content hash of the last text built for each absolute document path,
     /// used to skip rebuilding unchanged documents. Keys are owned.
@@ -881,7 +881,7 @@ pub const SyntaxChecker = struct {
             self.previous_build_env = null;
         }
 
-        // Create a fresh BuildEnv. The LSP reuses one pre-published Builtin
+        // Create a fresh BuildEnv. The LSP reuses one pre-opened Builtin
         // across checks; each BuildEnv borrows it and never deinitializes it.
         const cwd = try std.Io.Dir.cwd().realPathFileAlloc(self.std_io, ".", self.allocator);
         errdefer self.allocator.free(cwd);
@@ -898,7 +898,7 @@ pub const SyntaxChecker = struct {
         errdefer env.deinit();
         env.compiler_version = build_options.compiler_compatibility_id;
         env.source_pin_version = @import("compiler_version").compiler_version;
-        env.setFinalizeExecutableArtifacts(false);
+        env.setPrepareCheckedProgram(false);
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);

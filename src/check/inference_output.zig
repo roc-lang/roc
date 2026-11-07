@@ -9,7 +9,7 @@ const can = @import("can");
 const types = @import("types");
 const dependencies = @import("checking_dependencies.zig");
 const base = @import("base");
-const serde = @import("artifact_serialize.zig");
+const serde = @import("store_serialize.zig");
 
 const Self = @This();
 const Allocator = std.mem.Allocator;
@@ -73,12 +73,12 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
 }
 
 /// Validate side-list ranges before installing untrusted cache metadata.
-pub fn validate(self: Self) error{CorruptArtifact}!void {
+pub fn validate(self: Self) error{CorruptSerializedData}!void {
     try self.outcome.validate();
 }
 
 /// Restore the owning stage's explicit outputs. Initializing the checker only
-/// provides diagnostics/publication services; checkFile is never called on a hit.
+/// provides diagnostics services; checkFile is never called on a hit.
 pub fn install(self: Self, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!void {
     const allocator = checker.gpa;
     try self.outcome.install(checker);

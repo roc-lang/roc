@@ -61,7 +61,7 @@ fn materializedAmong(
     return count;
 }
 
-fn moduleArtifactNamed(coord: *Coordinator, name: []const u8) ?*Checked.CheckedModule {
+fn checkedModuleNamed(coord: *Coordinator, name: []const u8) ?*Checked.CheckedModule {
     var packages = coord.packages.iterator();
     while (packages.next()) |package| {
         for (package.value_ptr.*.modules.items) |*mod| {
@@ -104,7 +104,7 @@ fn valueSlotForRoot(
 }
 
 /// Whether the root's own const-root entry declares the slot its completed
-/// value is published into.
+/// value is stored into.
 fn materializesRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
     module: Checked.ModuleId,
@@ -234,7 +234,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     // it rather than read out of the compile-time consumer's own slots.
     const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
 
@@ -245,7 +245,7 @@ test "a build evaluates every compile-time value and materializes the ones its p
     try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") != null);
 
     const host = &session.completed.?;
-    const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
+    const helper = checkedModuleNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = (try helper.rootRequests()).compile_time_requests;
     try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
     // The value the program reads is materialized and frozen; the other root
@@ -322,11 +322,11 @@ test "one evaluated root has one completed-value slot however many places read i
 
     const target: lir.CheckedPipeline.TargetConfig = .{ .inline_expects = .omit, .proc_debug_names = true };
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     const stages = &session.completed.?;
-    const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
+    const helper = checkedModuleNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = (try helper.rootRequests()).compile_time_requests;
     try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
 
@@ -445,7 +445,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         .work_metrics = &metrics,
     };
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     const stages = &session.completed.?;

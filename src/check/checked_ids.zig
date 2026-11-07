@@ -100,13 +100,13 @@ pub const ComptimeRootKey = enum(u128) {
     }
 };
 /// Stable identity of a generalized-local dispatch scope within a checked
-/// module artifact.
+/// module.
 pub const DispatchScopeId = enum(u32) { _ };
 /// Serial id into a `CheckedTypeStore`'s `var_names` interner (the text of a
 /// stored type-variable name).
 pub const CheckedVarNameId = enum(u32) { _ };
 
-/// The one inline optional-id encoding for checked-artifact data: an
+/// The one inline optional-id encoding for checked-module data: an
 /// `enum(u32)` whose `0` value means "absent" and whose other values are the
 /// wrapped id biased by `+1`. Being a fixed-tag enum it is extern-compatible
 /// and exactly 4 bytes, so it can sit inline in serialized POD rows (unlike a
@@ -123,7 +123,7 @@ pub fn OptionalId(comptime Id: type) type {
         const Self = @This();
 
         /// Wrap a present id. `maxInt(u32)` is unrepresentable (it would bias
-        /// to the `none` sentinel), which no checked-artifact id space reaches.
+        /// to the `none` sentinel), which no checked-module id space reaches.
         pub fn some(id: Id) Self {
             const raw = @backingInt(id);
             std.debug.assert(raw != std.math.maxInt(u32));

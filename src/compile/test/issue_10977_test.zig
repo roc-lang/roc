@@ -5,7 +5,7 @@ const expectAppPathLowersToMonotype = @import("lower_to_lir_harness.zig").expect
 test "issue 10977: nominal lift with derived parser reaches Monotype" {
     // This is the valid counterpart to the missing-parser CLI repro. The
     // nominal opts into structural parser derivation, so finalizing the lifted
-    // receiver must publish the matching generated-codec contract. Monotype
+    // receiver must record the matching generated-codec contract. Monotype
     // lowering used to panic because checking had frozen the contract for the
     // receiver's earlier structural shape.
     try expectAppPathLowersToMonotype(

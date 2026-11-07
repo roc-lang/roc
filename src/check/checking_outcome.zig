@@ -6,7 +6,7 @@ const base = @import("base");
 const collections = @import("collections");
 const problem = @import("problem.zig");
 const snapshot = @import("snapshot.zig");
-const serde = @import("artifact_serialize.zig");
+const serde = @import("store_serialize.zig");
 const dependencies = @import("checking_dependencies.zig");
 const Self = @This();
 const Allocator = std.mem.Allocator;
@@ -134,23 +134,23 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
 }
 
 /// Check diagnostic text ranges before restoring optional cache data.
-pub fn validate(self: Self) error{CorruptArtifact}!void {
+pub fn validate(self: Self) error{CorruptSerializedData}!void {
     for (self.tags) |tag| try self.validateText(tag.text);
     for (self.formatted) |formatted| {
-        if (@backingInt(formatted.snapshot) >= self.contents.len) return error.CorruptArtifact;
+        if (@backingInt(formatted.snapshot) >= self.contents.len) return error.CorruptSerializedData;
         try self.validateText(formatted.text);
     }
     for (self.missing_patterns) |range| {
-        if (range.start > self.extra_strings.len or range.count > self.extra_strings.len - range.start) return error.CorruptArtifact;
+        if (range.start > self.extra_strings.len or range.count > self.extra_strings.len - range.start) return error.CorruptSerializedData;
     }
 }
 
-fn validateText(self: Self, range: Text) error{CorruptArtifact}!void {
-    if (@as(u64, range.start) + range.len > self.text.len) return error.CorruptArtifact;
+fn validateText(self: Self, range: Text) error{CorruptSerializedData}!void {
+    if (@as(u64, range.start) + range.len > self.text.len) return error.CorruptSerializedData;
 }
 
-/// Restore exactly the pre-publication problem store, including deferred
-/// exhaustiveness recipes. Ordinary publication and reporting decide failures.
+/// Restore exactly the pre-check problem store, including deferred
+/// exhaustiveness recipes. Ordinary checking and reporting decide failures.
 pub fn install(self: Self, checker: anytype) Allocator.Error!void {
     const allocator = checker.gpa;
     try checker.problems.problems.appendSlice(allocator, self.problems);

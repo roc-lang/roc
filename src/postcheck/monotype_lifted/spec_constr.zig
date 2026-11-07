@@ -16980,7 +16980,7 @@ test "compile-time root reads remain opaque through specialization and cloning" 
         .module = .{},
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
-            .artifact = .{},
+            .module = .{},
             .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
             .source_scheme = @fromBackingInt(@intCast(1)),
@@ -17027,7 +17027,7 @@ test "a constant read counts as one expression in either form" {
         .module = .{},
         .root = .{ .checked = @fromBackingInt(@intCast(1)) },
         .const_locator = .{
-            .artifact = .{},
+            .module = .{},
             .owner = .{ .hoisted_root = .{ .module_idx = 0, .root = @fromBackingInt(@intCast(1)) } },
             .template = @fromBackingInt(@intCast(1)),
             .source_scheme = @fromBackingInt(@intCast(1)),

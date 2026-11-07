@@ -6269,8 +6269,8 @@ const Lowerer = struct {
         const template = source orelse return null;
         _ = template.site_identity orelse return null;
         const module = switch (template.fn_def) {
-            .local_template, .imported_template => |owner| owner.artifact,
-            .nested => |nested| nested.owner.artifact,
+            .local_template, .imported_template => |owner| owner.module,
+            .nested => |nested| nested.owner.module,
             .local_hosted, .imported_hosted, .checked_generated, .parser_runtime, .encoder_for_runtime => Common.invariant("a function with a site identity had no template"),
         };
         var hasher = base.TypeDigestHasher.init();
@@ -16353,7 +16353,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .module = .{ .bytes = @splat(1) },
             .root = .{ .checked = @fromBackingInt(@intCast(91)) },
             .const_locator = .{
-                .artifact = .{ .bytes = @splat(1) },
+                .module = .{ .bytes = @splat(1) },
                 .owner = .{ .hoisted_root = .{ .module_idx = 7, .root = @fromBackingInt(@intCast(31)) } },
                 .template = @fromBackingInt(@intCast(47)),
                 .source_scheme = @fromBackingInt(3),

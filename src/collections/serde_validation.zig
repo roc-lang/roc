@@ -234,7 +234,7 @@ pub fn assertSerializedRelocatable(comptime T: type) void {
 }
 
 /// Validates every relocatable marker reachable from a serialized value.
-pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_len: u64) error{CorruptArtifact}!void {
+pub fn validateSerializedRelocations(comptime T: type, self: *const T, backing_len: u64) error{CorruptSerializedData}!void {
     switch (@typeInfo(T)) {
         .@"struct" => |s| {
             if (@hasDecl(T, "serialized_relocatable_pointers")) {

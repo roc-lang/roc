@@ -142,7 +142,7 @@ fn lowerBothPathsFor(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: 
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
 
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
     // The build evaluated the app's compile-time roots, so its runtime

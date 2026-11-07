@@ -5205,7 +5205,7 @@ pub fn runValidation(self: *Self) std.mem.Allocator.Error!void {
     }
 }
 
-/// Finalize a module that will be published through explicit checked-artifact
+/// Finalize a module whose compile-time roots are explicit checked-module
 /// root requests instead of Roc's user-facing `roc check` app/type-module
 /// validation.
 pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
@@ -19733,7 +19733,7 @@ fn canonicalizeTypeHeader(
                 // A bare underscore is an inferred annotation, not a binder.
                 // Declaration headers require named rigid variables so every
                 // formal has a stable identity throughout checking and
-                // checked-artifact publication.
+                // the checked module's analyses.
                 const malformed_anno = try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .underscore_in_type_declaration = .{
                     .declared = declaredTypeKind(type_kind),
                     .region = param_region,

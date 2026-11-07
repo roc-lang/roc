@@ -141,7 +141,7 @@ fn checkApp(allocator: std.mem.Allocator, app: []const u8, extra: []const Source
     try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     if (runtime) |target| coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     return .{
         .allocator = allocator,
         .tmp_dir = tmp_dir,

@@ -26,8 +26,8 @@ const hoist_roots = @import("can").HoistRoots;
 const const_store = @import("const_store.zig");
 const problem = @import("problem.zig");
 pub const InferenceOutput = @import("inference_output.zig");
-const artifact_serialize = @import("artifact_serialize.zig");
-const SerializedSlice = artifact_serialize.SerializedSlice;
+const store_serialize = @import("store_serialize.zig");
+const SerializedSlice = store_serialize.SerializedSlice;
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -45,8 +45,8 @@ pub const SealedTypeKeys = sealed_type_keys.SealedTypeKeys;
 pub const ModuleAnalyses = @import("module_analyses.zig").ModuleAnalyses;
 const type_ids = @import("checked_type_ids.zig");
 
-/// Publishes each visited root into a checked type store.
-const CheckedTypeRootPublisher = struct {
+/// Appends each visited root to a checked type store.
+const CheckedTypeRootAppender = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
     names: *canonical.CanonicalNameStore,
@@ -55,24 +55,24 @@ const CheckedTypeRootPublisher = struct {
     active: *CheckedSourceTypeRoots,
     local_type_declarations: *const LocalTypeDeclarationIndex,
 
-    /// Publish one root.
-    pub fn visit(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
+    /// Append one root.
+    pub fn visit(self: *const CheckedTypeRootAppender, var_: Var) Allocator.Error!void {
         _ = try appendCheckedTypeRoot(self.allocator, self.module, self.store, self.active, var_);
     }
 
-    /// Publish a root checking must have recorded.
-    pub fn visitRequired(self: *const CheckedTypeRootPublisher, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
+    /// Append a root checking must have recorded.
+    pub fn visitRequired(self: *const CheckedTypeRootAppender, maybe_var: ?Var, comptime missing: []const u8) Allocator.Error!void {
         try self.visit(maybe_var orelse checkedModuleInvariant(missing, .{}));
     }
 
-    /// Publish a root that owns a source scheme. A source scheme occupies
+    /// Append a root that owns a source scheme. A source scheme occupies
     /// no store entry: its id is its root's (`CheckedSourceTypes.schemeForSourceVar`).
-    pub fn visitScheme(self: *const CheckedTypeRootPublisher, var_: Var) Allocator.Error!void {
+    pub fn visitScheme(self: *const CheckedTypeRootAppender, var_: Var) Allocator.Error!void {
         try self.visit(var_);
     }
 
-    /// Publish a local nominal declaration and the roots its annotation names.
-    pub fn visitNominalDeclaration(self: *const CheckedTypeRootPublisher, statement_idx: CIR.Statement.Idx, nominal: NominalDeclStatement) Allocator.Error!void {
+    /// Append a local nominal declaration and the roots its annotation names.
+    pub fn visitNominalDeclaration(self: *const CheckedTypeRootAppender, statement_idx: CIR.Statement.Idx, nominal: NominalDeclStatement) Allocator.Error!void {
         try appendCheckedNominalDeclarationFromStatement(
             self.allocator,
             self.module,
@@ -272,7 +272,7 @@ pub const ModuleEnvStorage = union(enum) {
     checked_source: *ModuleEnv,
     static_builtin: *ModuleEnv,
     /// An environment relocated in place inside a loaded cache entry, which
-    /// also backs the module's module. The storage owns the entry and the
+    /// also backs the checked module. The storage owns the entry and the
     /// source; `release_entry` releases the entry with the env's allocator.
     cached_entry: struct {
         env: *ModuleEnv,
@@ -427,7 +427,7 @@ pub const ModuleIdentity = struct {
 /// Public `ImportIdentity` declaration.
 pub const ImportIdentity = struct {
     import_name_hash: [32]u8 = @as([32]u8, @splat(0)),
-    artifact_key: ?CheckedModuleKey = null,
+    module_key: ?CheckedModuleKey = null,
 };
 
 fn hashBytes(bytes: []const u8) [32]u8 {
@@ -526,7 +526,7 @@ fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIden
     for (identity.imports) |import_identity| {
         hasher.update(&import_identity.import_name_hash);
         if (!include_keys) continue;
-        if (import_identity.artifact_key) |key| {
+        if (import_identity.module_key) |key| {
             hasher.update(&[_]u8{1});
             hasher.update(&key.bytes);
         } else {
@@ -587,7 +587,7 @@ pub const CheckingContextIdentity = struct {
     pub fn fromModule(
         allocator: Allocator,
         module_env: *const ModuleEnv,
-        publish_imports: []const CheckedImport,
+        checked_imports: []const CheckedImport,
         platform_requirement_context: ?PlatformRequirementContextKey,
         validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
@@ -600,8 +600,8 @@ pub const CheckingContextIdentity = struct {
             const resolved_module_idx = module_env.imports.getResolvedModule(import_idx);
             imports[i] = .{
                 .import_name_hash = hashBytes(module_env.getString(str_idx)),
-                .artifact_key = if (resolved_module_idx) |resolved|
-                    publishImportKeyForModule(publish_imports, resolved)
+                .module_key = if (resolved_module_idx) |resolved|
+                    checkedImportKeyForModule(checked_imports, resolved)
                 else
                     null,
             };
@@ -614,7 +614,7 @@ pub const CheckingContextIdentity = struct {
         };
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `CheckedImport` declaration.
@@ -669,12 +669,12 @@ pub const ModuleResolver = struct {
 /// This is semantic visibility, not lexical import visibility. A per-module
 /// analysis (`ModuleAnalyses.publicApiDependencies`).
 pub const PublicApiDependencies = struct {
-    artifacts: []const ModuleId = &.{},
-    type_owner_artifacts: []const ModuleId = &.{},
+    modules: []const ModuleId = &.{},
+    type_owner_modules: []const ModuleId = &.{},
 
     pub fn deinit(self: *PublicApiDependencies, allocator: Allocator) void {
-        allocator.free(self.artifacts);
-        allocator.free(self.type_owner_artifacts);
+        allocator.free(self.modules);
+        allocator.free(self.type_owner_modules);
         self.* = .{};
     }
 };
@@ -751,7 +751,6 @@ fn appendDispatchImportKeys(
     }
 }
 
-/// Public `PublishInputs` declaration.
 /// What opening a checked module (`openCheckedModule`) reads beside its
 /// `ModuleEnv`.
 pub const OpenInputs = struct {
@@ -761,12 +760,12 @@ pub const OpenInputs = struct {
     /// Waits on the module's key slots when another thread is computing a key.
     io: std.Io,
     imports: []const CheckedImport = &.{},
-    available_artifacts: []const ImportedModuleView = &.{},
+    available_modules: []const ImportedModuleView = &.{},
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
     validation: can.Can.Validation = .checking,
     /// The modules the module's analyses resolve. Null resolves exactly
-    /// `imports` and `available_artifacts`.
+    /// `imports` and `available_modules`.
     resolver: ?ModuleResolver = null,
     outputs: Outputs,
 
@@ -808,23 +807,23 @@ pub const CompileTimeFinalizer = struct {
     finalize: *const fn (
         context: ?*anyopaque,
         allocator: Allocator,
-        artifact: *CheckedModule,
+        module: *CheckedModule,
         imports: []const CheckedImport,
-        available_artifacts: []const ImportedModuleView,
-        relation_artifacts: []const ImportedModuleView,
+        available_modules: []const ImportedModuleView,
+        relation_modules: []const ImportedModuleView,
         problem_store: ?*problem.Store,
     ) Error!void,
 
     pub fn run(
         self: CompileTimeFinalizer,
         allocator: Allocator,
-        artifact: *CheckedModule,
+        checked: *CheckedModule,
         imports: []const CheckedImport,
-        available_artifacts: []const ImportedModuleView,
-        relation_artifacts: []const ImportedModuleView,
+        available_modules: []const ImportedModuleView,
+        relation_modules: []const ImportedModuleView,
         problem_store: ?*problem.Store,
     ) Error!void {
-        try self.finalize(self.context, allocator, artifact, imports, available_artifacts, relation_artifacts, problem_store);
+        try self.finalize(self.context, allocator, checked, imports, available_modules, relation_modules, problem_store);
     }
 };
 
@@ -858,7 +857,7 @@ pub const ExportRows = struct {
 
     /// The exported procedure binding of `def`.
     pub fn procedureBindingByDef(self: *const ExportRows, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
-        const found = artifact_serialize.binarySearchByKey(ImportedProcedureBindingView, CIR.Def.Idx, self.procedure_bindings, def, exportedBindingOrder) orelse return null;
+        const found = store_serialize.binarySearchByKey(ImportedProcedureBindingView, CIR.Def.Idx, self.procedure_bindings, def, exportedBindingOrder) orelse return null;
         return found.*;
     }
 
@@ -879,16 +878,16 @@ fn exportedBindingLessThan(_: void, lhs: ImportedProcedureBindingView, rhs: Impo
     return @backingInt(lhs.binding.def) < @backingInt(rhs.binding.def);
 }
 
-/// The export rows of `owner`, read from its published tables.
+/// The export rows of `owner`, read from its checked tables.
 pub fn computeExportRows(allocator: Allocator, owner: ImportedModuleView) Allocator.Error!*ExportRows {
     const env = owner.module_env;
     const module_idx = owner.module_identity.module_idx;
-    const artifact = owner.key.digest();
+    const checked = owner.key.digest();
     const module_index = (try owner.bodies()).index();
 
-    const defs = try collectPublishedExportDefs(allocator, env);
+    const defs = try collectExportDefs(allocator, env);
     errdefer allocator.free(defs);
-    const binders = try collectPublishedExportBinders(allocator, env);
+    const binders = try collectExportBinders(allocator, env);
     defer allocator.free(binders);
 
     var procedure_templates = std.ArrayList(ExportedProcedureTemplate).empty;
@@ -921,7 +920,7 @@ pub fn computeExportRows(allocator: Allocator, owner: ImportedModuleView) Alloca
             checkedModuleInvariant("an exported callable binder has no recorded resolution", .{});
         try procedure_bindings.append(allocator, .{
             .binding = .{
-                .artifact = artifact,
+                .module = checked,
                 .def = @fromBackingInt(@intCast(@backingInt(binder))),
                 .pattern = binder,
             },
@@ -945,7 +944,7 @@ pub fn computeExportRows(allocator: Allocator, owner: ImportedModuleView) Alloca
         const binding = (try owner.checkedTables()).top_level_procedure_bindings.get(binding_ref);
         try procedure_bindings.append(allocator, .{
             .binding = .{
-                .artifact = artifact,
+                .module = checked,
                 .def = def_idx,
                 .pattern = top_level.pattern,
             },
@@ -1048,7 +1047,7 @@ pub const ProvidedDataExport = struct {
 /// Public `ProvidedCheckedErrorExport` declaration: a `provides` entry whose
 /// checked type contains an error, so the host boundary it declares has no
 /// ABI. It keeps the declaration's identity and nothing to lower: no runtime
-/// root, static data request, or glue signature is published for it, and a
+/// root, static data request, or glue signature exists for it, and a
 /// runtime command stops before linking a program whose host boundary has no
 /// ABI (`CheckedModule.hasProvidedExportWithoutAbi`). The error
 /// itself was reported where the type was checked.
@@ -1073,7 +1072,7 @@ pub const ProvidedExportId = enum(u32) { _ };
 pub const ProvidedExportTable = struct {
     exports: []ProvidedExport = &.{},
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// The provided exports of `owner`: one row per `provides` entry naming a
@@ -1198,7 +1197,7 @@ pub const LiteralNode = union(enum(u8)) {
     }
 };
 
-/// Source location of a checked root that must be published for later compiler stages.
+/// Source location of a checked root later compiler stages request.
 pub const RootSource = union(enum(u8)) {
     def: CIR.Def.Idx,
     expr: CIR.Expr.Idx,
@@ -1250,12 +1249,12 @@ pub const RootRequestTable = struct {
         requests: SerializedSlice(RootRequest) = .{},
         runtime_requests: SerializedSlice(RootRequest) = .{},
         compile_time_requests: SerializedSlice(RootRequest) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(RootRequestTable, @This());
+        const Serde = store_serialize.SliceStoreSerde(RootRequestTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// The root requests of `owner` (`ModuleAnalyses.rootRequests`): its explicit
@@ -1311,7 +1310,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
         });
     }
 
-    try appendPublishedEntrypointRoots(
+    try appendEntrypointRootRequests(
         &requests,
         allocator,
         module_idx,
@@ -1384,7 +1383,7 @@ fn moduleRootRequests(allocator: Allocator, owner: ImportedModuleView) Allocator
         const template_ref = request.procedure_template orelse
             aliasRootWrapperTemplate(request.*, &(try owner.checkedTables()).top_level_procedure_bindings, (try owner.checkedTables()).callable_eval_templates.view(), entry_wrappers) orelse
             continue;
-        if (!template_ref.artifact.eql(owner.key.digest())) {
+        if (!template_ref.module.eql(owner.key.digest())) {
             checkedModuleInvariant("root procedure template belonged to a different checked module", .{});
         }
         request.root_evidence = .{
@@ -1458,7 +1457,7 @@ fn appendLiteralRootRequest(
         .abi = .compile_time,
         .exposure = .private,
         .procedure_template = .{
-            .artifact = owner,
+            .module = owner,
             .proc_base = canonical.ProcBase.entry_wrapper,
             .template = literalRootWrapperTemplate(record.root.id),
         },
@@ -1588,7 +1587,7 @@ fn collectCompileTimeRootRequests(
     requests: []const RootRequest,
     include_expects: bool,
     module_idx: u32,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
@@ -1616,7 +1615,7 @@ fn collectCompileTimeRootRequests(
     var scheduler = try CompileTimeRequestScheduler.init(
         allocator,
         module_idx,
-        artifact_key,
+        module_key,
         top_level_demand_dependencies,
         compile_time_roots,
         procedure_templates,
@@ -1637,7 +1636,7 @@ fn collectCompileTimeRootRequests(
 const CompileTimeRequestScheduler = struct {
     allocator: Allocator,
     module_idx: u32,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     top_level_demand_dependencies: []const TopLevelDemandDependency,
     compile_time_roots: *const CompileTimeRootTable,
     procedure_templates: *const CheckedProcedureTemplateTable,
@@ -1666,7 +1665,7 @@ const CompileTimeRequestScheduler = struct {
     fn init(
         allocator: Allocator,
         module_idx: u32,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         top_level_demand_dependencies: []const TopLevelDemandDependency,
         compile_time_roots: *const CompileTimeRootTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
@@ -1711,7 +1710,7 @@ const CompileTimeRequestScheduler = struct {
         return .{
             .allocator = allocator,
             .module_idx = module_idx,
-            .artifact_key = artifact_key,
+            .module_key = module_key,
             .top_level_demand_dependencies = top_level_demand_dependencies,
             .compile_time_roots = compile_time_roots,
             .procedure_templates = procedure_templates,
@@ -1916,7 +1915,7 @@ const CompileTimeRequestScheduler = struct {
         self: *CompileTimeRequestScheduler,
         template_ref: canonical.ProcedureTemplateRef,
     ) Allocator.Error!?[]const ResolvedValueRefId {
-        if (!template_ref.artifact.eql(self.artifact_key.digest())) return null;
+        if (!template_ref.module.eql(self.module_key.digest())) return null;
         if (templateLiteralRoot(template_ref.template)) |root| {
             const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, root);
             if (stamp.found_existing and stamp.value_ptr.* == self.visit) return null;
@@ -1981,7 +1980,7 @@ const CompileTimeRequestScheduler = struct {
         while (true) {
             switch (procedure.binding) {
                 .top_level => |top_level| {
-                    if (!top_level.artifact.eql(self.artifact_key.digest())) return null;
+                    if (!top_level.module.eql(self.module_key.digest())) return null;
                     const binding = self.top_level_procedure_bindings.get(top_level.binding);
                     const template_id = switch (binding.body) {
                         .callable_eval_template => |id| id,
@@ -2015,7 +2014,7 @@ const CompileTimeRequestScheduler = struct {
                     }
                 },
                 .platform_required => |required| {
-                    if (!required.artifact.eql(self.artifact_key.digest())) return null;
+                    if (!required.module.eql(self.module_key.digest())) return null;
                     const binding = self.platform_required_bindings.lookupByBindingId(@backingInt(required.procedure_binding)) orelse {
                         checkedModuleInvariant("platform-required procedure dependency referenced a missing binding", .{});
                     };
@@ -2077,7 +2076,7 @@ const CompileTimeRequestScheduler = struct {
     }
 
     fn constUseIsUnimplemented(self: *CompileTimeRequestScheduler, const_ref: ConstRef) bool {
-        if (!const_ref.artifact.eql(self.artifact_key.digest())) return false;
+        if (!const_ref.module.eql(self.module_key.digest())) return false;
         return self.const_templates.get(const_ref).state == .unimplemented;
     }
 
@@ -2085,7 +2084,7 @@ const CompileTimeRequestScheduler = struct {
         self: *CompileTimeRequestScheduler,
         const_ref: ConstRef,
     ) ?ComptimeRootKey {
-        if (!const_ref.artifact.eql(self.artifact_key.digest())) return null;
+        if (!const_ref.module.eql(self.module_key.digest())) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| blk: {
                 if (top_level.module_idx != self.module_idx) {
@@ -2517,7 +2516,7 @@ fn rootSourceMatches(a: RootSource, b: RootSource) bool {
     };
 }
 
-fn appendPublishedEntrypointRoots(
+fn appendEntrypointRootRequests(
     requests: *std.ArrayList(RootRequest),
     allocator: Allocator,
     module_idx: u32,
@@ -2637,18 +2636,18 @@ fn procedureTemplateForRootSource(
 /// the ones whose types are closed.
 pub fn exportedProcedureRoots(
     allocator: Allocator,
-    artifact: *const CheckedModule,
+    checked: *const CheckedModule,
 ) Allocator.Error![]RootRequest {
     var requests = std.ArrayList(RootRequest).empty;
     errdefer requests.deinit(allocator);
-    for ((try artifact.exportRows()).defs) |def_idx| {
-        const top_level = (try artifact.checkedTables()).top_level_values.lookupByDef(def_idx) orelse continue;
+    for ((try checked.exportRows()).defs) |def_idx| {
+        const top_level = (try checked.checkedTables()).top_level_values.lookupByDef(def_idx) orelse continue;
         const procedure_binding = switch (top_level.value) {
             .procedure_binding => |binding| binding,
             .const_ref => continue,
         };
-        const template = procedureTemplateForTopLevelBinding(&(try artifact.checkedTables()).top_level_procedure_bindings, procedure_binding) orelse continue;
-        const checked_template = (try artifact.checkedTables()).checked_procedure_templates.get(template.template);
+        const template = procedureTemplateForTopLevelBinding(&(try checked.checkedTables()).top_level_procedure_bindings, procedure_binding) orelse continue;
+        const checked_template = (try checked.checkedTables()).checked_procedure_templates.get(template.template);
         // Intrinsic and entry wrappers lower only at their call sites; a
         // pack root must have a checked body of its own.
         switch (checked_template.body) {
@@ -2664,7 +2663,7 @@ pub fn exportedProcedureRoots(
         }
         const checked_fn_root = checked_template.checked_fn_root;
         try appendRoot(&requests, allocator, .{
-            .module_idx = artifact.module_identity.module_idx,
+            .module_idx = checked.module_identity.module_idx,
             .kind = .runtime_entrypoint,
             .source = .{ .def = def_idx },
             .checked_type = checked_fn_root,
@@ -2939,7 +2938,7 @@ pub const CheckedTypeRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
 /// The key namespace a scheme's canonical key is computed in: a source
 /// scheme quantifies a source definition's type, a synthetic scheme names a
-/// type checked publication made.
+/// type the module's analyses made.
 pub const CheckedTypeSchemeDomain = enum(u8) { source, synthetic };
 
 /// Public `CheckedTypeScheme` declaration. A scheme is identified within its
@@ -3547,7 +3546,7 @@ pub const CheckedNominalDeclarationId = enum(u32) { _ };
 
 /// Public `ImportedNominalDeclarationRef` declaration.
 pub const ImportedNominalDeclarationRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     declaration: CheckedNominalDeclarationId,
 };
 
@@ -3559,7 +3558,7 @@ pub const LocalBoxPayloadCapabilityRef = struct {
 
 /// Return the checked module id that owns an imported nominal declaration.
 pub fn importedNominalDeclarationModuleId(ref: ImportedNominalDeclarationRef) ModuleId {
-    return ref.artifact;
+    return ref.module;
 }
 
 /// How a nominal type is represented, a function of the type alone: a
@@ -3670,8 +3669,8 @@ pub fn nominalDeclarationSite(
             .declaration = reader.nominalDeclarationById(declaration),
         },
         .imported_declaration => |imported| {
-            const module_types = moduleTypesForSite(reader_module, reader, resolver, imported.artifact);
-            return .{ .module = imported.artifact, .types = module_types, .declaration = module_types.nominalDeclarationById(imported.declaration) };
+            const module_types = moduleTypesForSite(reader_module, reader, resolver, imported.module);
+            return .{ .module = imported.module, .types = module_types, .declaration = module_types.nominalDeclarationById(imported.declaration) };
         },
         .local_box_payload_capability => |capability_ref| {
             const capability = reader.demandedInterfaceCapabilities().boxPayloadCapability(capability_ref.capability);
@@ -5410,7 +5409,7 @@ pub const CheckedTypeStore = struct {
         } else {
             inline for (comptime std.enums.values(std.meta.Tag(Build))) |tag| {
                 const name = @tagName(tag);
-                if (comptime !artifact_serialize.comptimeStrEq(name, "tag_union")) {
+                if (comptime !store_serialize.comptimeStrEq(name, "tag_union")) {
                     if (build == tag) return @unionInit(Stored, name, try self.commitTypeData(allocator, @FieldType(Stored, name), @field(build, name)));
                 }
             }
@@ -5444,7 +5443,7 @@ pub const CheckedTypeStore = struct {
         defer active.deinit();
         var local_type_declarations = try LocalTypeDeclarationIndex.init(allocator, module, module_index);
         defer local_type_declarations.deinit();
-        const publisher = CheckedTypeRootPublisher{
+        const publisher = CheckedTypeRootAppender{
             .allocator = allocator,
             .module = module,
             .names = names,
@@ -8913,7 +8912,7 @@ pub const ImportedOriginIndex = struct {
     fn uniqueOwnerView(existing: ?*const ImportedModuleView, next: *const ImportedModuleView) *const ImportedModuleView {
         const found = existing orelse return next;
         if (!CheckedModuleKey.eql(found.key, next.key)) {
-            checkedModuleInvariant("checked named type source origin resolved to multiple owner artifacts", .{});
+            checkedModuleInvariant("checked named type source origin resolved to multiple owner modules", .{});
         }
         return found;
     }
@@ -8928,7 +8927,7 @@ pub const ImportedOriginIndex = struct {
         if (origin_module == module_env.selfModuleIdentity()) return imports.current_owner;
         const origin = try self.resolve(module_env, imports, origin_module);
         const view = origin.view orelse checkedModuleInvariant(
-            "checked named type source origin had no available checked owner artifact {any}",
+            "checked named type source origin had no available checked owner module {any}",
             .{module_env.moduleIdentityHash(origin_module).*},
         );
         return view.key.digest();
@@ -9032,7 +9031,7 @@ pub const ImportedOriginIndex = struct {
             }
         }
         return .{
-            .artifact = view.key.digest(),
+            .module = view.key.digest(),
             .declaration = found orelse return null,
         };
     }
@@ -9206,7 +9205,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
 
     var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, .checking);
     defer checking_context_identity.deinit(allocator);
-    const artifact_key = CheckedModuleKey.computeFromSourceHash(
+    const module_key = CheckedModuleKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
         module_identity,
         checking_context_identity,
@@ -9216,11 +9215,11 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     var module_index = try ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
     defer module_index.deinit(allocator);
 
-    const publication_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    const checked_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
 
-    defer publication_keys.destroy();
+    defer checked_keys.destroy();
 
-    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, artifact_key.digest(), &.{}, &.{}, &module_index, &.{}, &.{}, publication_keys);
+    var publication = try CheckedTypeStore.fromModule(allocator, module, &names, module_key.digest(), &.{}, &.{}, &module_index, &.{}, &.{}, checked_keys);
     defer publication.deinit(allocator);
 
     const nominal_stmt = for (module_env.store.sliceStatements(module_env.all_statements)) |statement_idx| {
@@ -9699,9 +9698,9 @@ test "body analyses read state merges, divergence and inspect elision from the c
 
     const analyses = try BodyAnalyses.create(allocator, std.testing.io, module.moduleEnvConst(), &.{});
     defer analyses.destroy();
-    analyses.markPublished();
-    const publication_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
-    defer publication_keys.destroy();
+    analyses.markOpened();
+    const checked_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    defer checked_keys.destroy();
     var checked_source_types = try CheckedTypeStore.fromModule(
         allocator,
         module,
@@ -9712,7 +9711,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
         &analyses.index,
         &.{},
         &.{},
-        publication_keys,
+        checked_keys,
     );
     defer checked_source_types.deinit(allocator);
     const plans = static_dispatch.StaticDispatchPlanTable{};
@@ -9783,9 +9782,9 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
 
     const analyses = try BodyAnalyses.create(allocator, std.testing.io, module.moduleEnvConst(), &.{});
     defer analyses.destroy();
-    analyses.markPublished();
-    const publication_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
-    defer publication_keys.destroy();
+    analyses.markOpened();
+    const checked_keys = try SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    defer checked_keys.destroy();
     var checked_source_types = try CheckedTypeStore.fromModule(
         allocator,
         module,
@@ -9796,7 +9795,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         &analyses.index,
         &.{},
         &.{},
-        publication_keys,
+        checked_keys,
     );
     defer checked_source_types.deinit(allocator);
     const bodies = CheckedBodies{
@@ -10193,7 +10192,7 @@ test "nominal declaration backing publishes each alias expansion once" {
 }
 
 /// Attach `module`'s sealed types to `store` as opening the module does, for a test
-/// that reads source types without publishing the module. The caller
+/// that reads source types without opening the module. The caller
 /// destroys the returned key slots.
 fn attachTestSealedTypes(
     allocator: Allocator,
@@ -10484,7 +10483,7 @@ const TestImportViewTables = struct {
     ) Allocator.Error!ImportedModuleView {
         const checked_types = store.view();
         const analyses = try BodyAnalyses.create(self.allocator, std.testing.io, module_env, &.{});
-        analyses.markPublished();
+        analyses.markOpened();
         {
             errdefer analyses.destroy();
             try self.analyses.append(self.allocator, analyses);
@@ -10617,7 +10616,7 @@ test "imported origin resolution visits each import view and owner declaration o
     for (0..declaration_count) |statement| {
         try testing.expect(testCheckedModuleKey(owner_view_index).digest().eql(try index.owner(module_env, imports, origin)));
         const found = try index.nominalDeclaration(module_env, imports, origin, @intCast(statement));
-        try testing.expect(testCheckedModuleKey(owner_view_index).digest().eql(found.artifact));
+        try testing.expect(testCheckedModuleKey(owner_view_index).digest().eql(found.module));
         try testing.expectEqual(declarations[statement].id, found.declaration);
     }
     try testing.expectEqual(@as(u64, view_count), index.view_visits);
@@ -10879,7 +10878,7 @@ fn poolField(comptime Owner: type, comptime T: type) []const u8 {
         var found: ?[]const u8 = null;
         const owner = @typeInfo(Owner).@"struct";
         for (owner.field_names, owner.field_types) |name, FT| {
-            if (name.len < 5 or !artifact_serialize.comptimeStrEq(name[name.len - 5 ..], "_pool")) continue;
+            if (name.len < 5 or !store_serialize.comptimeStrEq(name[name.len - 5 ..], "_pool")) continue;
             if (FT != collections.PublishedList(T) and FT != std.ArrayList(T) and FT != []const T) continue;
             if (found != null) @compileError("two pools of " ++ @typeName(Owner) ++ " hold " ++ @typeName(T));
             found = name;
@@ -11108,20 +11107,20 @@ fn procedureUseBody(
 ) Allocator.Error!?ProcedureUseBody {
     const top_level: ModuleTopLevelProcedureBindingRef = switch (proc.binding) {
         .top_level => |top_level| top_level,
-        .platform_required => |required| .{ .artifact = required.artifact, .binding = required.procedure_binding },
+        .platform_required => |required| .{ .module = required.module, .binding = required.procedure_binding },
         .hosted => return null,
         .imported => |imported| {
-            const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
+            const view = dependencyViewByKey(imported.module, imports, available_modules, relation_modules) orelse
                 checkedModuleInvariant("imported direct-call target referenced an unavailable checked module", .{});
             const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse
                 checkedModuleInvariant("imported direct-call target was not exported by its checked module", .{});
             return .{ .view = view.*, .body = binding.body };
         },
     };
-    if (top_level.artifact.eql(local_module.digest())) {
+    if (top_level.module.eql(local_module.digest())) {
         return .{ .view = null, .body = local_procedure_bindings.get(top_level.binding).body };
     }
-    const view = dependencyViewByKey(top_level.artifact, imports, available_modules, relation_modules) orelse
+    const view = dependencyViewByKey(top_level.module, imports, available_modules, relation_modules) orelse
         checkedModuleInvariant("direct-call target referenced an unavailable checked module", .{});
     return .{ .view = view.*, .body = (try view.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body };
 }
@@ -11233,7 +11232,7 @@ pub const EntryWrapperTable = struct {
         return null;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `StaticDispatchPlanTableRef` declaration.
@@ -11268,13 +11267,13 @@ pub const HostedProcRef = struct {
 
 /// Public `TopLevelValueRef` declaration.
 pub const TopLevelValueRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     pattern: CIR.Pattern.Idx,
 };
 
 /// Public `RequiredAppProcedureRef` declaration.
 pub const RequiredAppProcedureRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     app_value: TopLevelValueRef,
     procedure_binding: TopLevelProcedureBindingRef,
 };
@@ -11287,7 +11286,7 @@ pub const ConstUseTemplate = struct {
 
 /// Public `ModuleTopLevelProcedureBindingRef` declaration.
 pub const ModuleTopLevelProcedureBindingRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     binding: TopLevelProcedureBindingRef,
 };
 
@@ -11384,7 +11383,7 @@ pub const TopLevelProcedureBindingTable = struct {
         return self.bindings.items[@backingInt(ref)];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `CallableEvalTemplate` declaration.
@@ -11444,13 +11443,13 @@ pub const CallableEvalTemplateTable = struct {
         return .{ .templates = self.templates.items };
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Give each callable-eval template the lookup checking found it forwards to
 /// (`ModuleEnv.BindingResolution.forwarded_lookup`), and make each
 /// callable-eval binding checking resolved to a checked error one.
-fn publishBindingResolutions(
+fn applyBindingResolutions(
     env: *const ModuleEnv,
     templates: *CallableEvalTemplateTable,
     bindings: *TopLevelProcedureBindingTable,
@@ -11477,7 +11476,7 @@ fn publishBindingResolutions(
 /// extraction roots. The durable identity lives in the compile-time root,
 /// callable-eval template, and top-level procedure binding tables; this index
 /// only connects source lookups to those identities while resolved refs are
-/// being published.
+/// being computed.
 const SelectedHoistedCallableTable = struct {
     by_pattern: []?TopLevelProcedureBindingRef = &.{},
     /// Procedure bindings of promoted local functions, by binding pattern.
@@ -11504,7 +11503,7 @@ const SelectedHoistedCallableTable = struct {
             const binding = try procedure_bindings.appendDirect(
                 allocator,
                 checked_source_types.schemeForSourceVar(module, ModuleEnv.varFrom(promoted.pattern)),
-                .{ .artifact = promoted.template.artifact, .proc_base = promoted.template.proc_base },
+                .{ .module = promoted.template.module, .proc_base = promoted.template.proc_base },
                 promoted.template,
             );
             const slot = &promoted_by_pattern[@backingInt(checked_pattern)];
@@ -11573,7 +11572,7 @@ const SelectedHoistedCallableTable = struct {
 
 /// Public `ImportedProcedureBindingRef` declaration.
 pub const ImportedProcedureBindingRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     def: CIR.Def.Idx,
     pattern: CIR.Pattern.Idx,
 };
@@ -11617,12 +11616,12 @@ pub const LocalProcedureBinding = struct {
 
 /// Return the checked module id that owns a top-level procedure binding.
 pub fn topLevelProcedureModuleId(ref: ModuleTopLevelProcedureBindingRef) ModuleId {
-    return ref.artifact;
+    return ref.module;
 }
 
 /// Return the checked module id that owns an imported procedure binding.
 pub fn importedProcedureModuleId(ref: ImportedProcedureBindingRef) ModuleId {
-    return ref.artifact;
+    return ref.module;
 }
 
 /// Return the checked module id that owns a hosted procedure template.
@@ -11632,7 +11631,7 @@ pub fn hostedProcedureTemplateModuleId(ref: HostedProcRef) ModuleId {
 
 /// Return the checked module id that owns a required application procedure.
 pub fn requiredProcedureModuleId(ref: RequiredAppProcedureRef) ModuleId {
-    return ref.artifact;
+    return ref.module;
 }
 
 /// Public `PlatformRequiredConstResolvedRef` declaration.
@@ -11725,9 +11724,9 @@ pub const ResolvedValueRefTable = struct {
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         imports: []const CheckedImport,
-        available_artifacts: []const ImportedModuleView,
+        available_modules: []const ImportedModuleView,
         templates: *const CheckedProcedureTemplateTable,
         platform_required_declarations: PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -11750,12 +11749,12 @@ pub const ResolvedValueRefTable = struct {
         var table = ResolvedValueRefTable{ .records = records };
         errdefer table.deinit(allocator);
         for (references, records) |reference, *record| {
-            var resolved_ref = try publishedValueRef(
+            var resolved_ref = try resolvedValueRefFor(
                 module,
-                artifact_key,
+                module_key,
                 reference,
                 imports,
-                available_artifacts,
+                available_modules,
                 templates,
                 platform_required_declarations,
                 platform_required_bindings,
@@ -11800,7 +11799,7 @@ pub const ResolvedValueRefTable = struct {
 
     /// The reference of a lookup expression.
     pub fn lookupIdByExpr(self: *const ResolvedValueRefTable, expr: CIR.Expr.Idx) ?ResolvedValueRefId {
-        const index = artifact_serialize.binarySearchIndexByKey(ResolvedValueRefRecord, CIR.Expr.Idx, self.records, expr, struct {
+        const index = store_serialize.binarySearchIndexByKey(ResolvedValueRefRecord, CIR.Expr.Idx, self.records, expr, struct {
             fn order(record: ResolvedValueRefRecord, key: CIR.Expr.Idx) std.math.Order {
                 return std.math.order(@backingInt(record.expr), @backingInt(key));
             }
@@ -11830,7 +11829,7 @@ pub const ResolvedValueRefTable = struct {
 
     /// The direct procedure target of a call, if it has one.
     pub fn callDirectTarget(self: *const ResolvedValueRefTable, call: CIR.Expr.Idx) ?ResolvedValueId {
-        const found = artifact_serialize.binarySearchByKey(CallDirectTarget, CIR.Expr.Idx, self.call_direct_targets, call, CallDirectTarget.order) orelse return null;
+        const found = store_serialize.binarySearchByKey(CallDirectTarget, CIR.Expr.Idx, self.call_direct_targets, call, CallDirectTarget.order) orelse return null;
         return found.target;
     }
 
@@ -11846,18 +11845,18 @@ pub const ResolvedValueRefTable = struct {
         return record;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 /// Short name for the resolved checked value table.
 pub const ResolvedValueTable = ResolvedValueRefTable;
 
-/// A recorded value reference's target in published ids.
-fn publishedValueRef(
+/// A recorded value reference's target in the module's ids.
+fn resolvedValueRefFor(
     module: TypedCIR.Module,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     reference: ModuleEnv.ValueReference,
     imports: []const CheckedImport,
-    available_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
     templates: *const CheckedProcedureTemplateTable,
     platform_required_declarations: PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -11877,13 +11876,13 @@ fn publishedValueRef(
         } },
         .top_level => |def| categorizeTopLevelValueRef(
             module,
-            artifact_key,
+            module_key,
             top_level_values.lookupByDef(def) orelse checkedModuleInvariant("a top-level lookup target is not a top-level value", .{}),
             templates,
         ),
         .hoisted_procedure => |pattern| .{ .top_level_proc = .{
             .binding = .{ .top_level = .{
-                .artifact = artifact_key.digest(),
+                .module = module_key.digest(),
                 .binding = selected_hoisted_callables.lookupByPattern(pattern) orelse
                     checkedModuleInvariant("a hoisted procedure lookup has no published binding", .{}),
             } },
@@ -11891,7 +11890,7 @@ fn publishedValueRef(
         } },
         .promoted_procedure => |pattern| .{ .promoted_top_level_proc = .{
             .binding = .{ .top_level = .{
-                .artifact = artifact_key.digest(),
+                .module = module_key.digest(),
                 .binding = selected_hoisted_callables.lookupPromotedByPattern(pattern) orelse
                     checkedModuleInvariant("a promoted procedure lookup has no published binding", .{}),
             } },
@@ -11911,7 +11910,7 @@ fn publishedValueRef(
             module.expr(reference.expr).data.e_lookup_associated_resolved.module_identity,
             module.expr(reference.expr).data.e_lookup_associated_resolved.target_def_idx,
             imports,
-            available_artifacts,
+            available_modules,
         ),
         .required => |requires_idx| categorizeRequiredValueRef(
             requires_idx,
@@ -11961,7 +11960,7 @@ fn attachUseTypePayload(
 
 fn categorizeTopLevelValueRef(
     module: TypedCIR.Module,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     entry: TopLevelValueEntry,
     templates: *const CheckedProcedureTemplateTable,
 ) ResolvedValueRef {
@@ -11974,7 +11973,7 @@ fn categorizeTopLevelValueRef(
                 .binding = .{ .hosted = .{
                     .module_idx = module.moduleIndex(),
                     .def = entry.def,
-                    .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                    .proc = .{ .module = template.module, .proc_base = template.proc_base },
                     .template = template,
                 } },
                 .intrinsic = null,
@@ -11984,7 +11983,7 @@ fn categorizeTopLevelValueRef(
         else
             .{ .top_level_proc = .{
                 .binding = .{ .top_level = .{
-                    .artifact = artifact_key.digest(),
+                    .module = module_key.digest(),
                     .binding = binding,
                 } },
                 .intrinsic = intrinsicForProcedureDef(module, entry.def),
@@ -12018,15 +12017,15 @@ fn categorizeImportedValueRef(
             .{@backingInt(import_idx)},
         );
     };
-    const import_artifact = publishImportForModule(imports, resolved_module_idx) orelse {
+    const import_module = checkedImportForModule(imports, resolved_module_idx) orelse {
         base.invariant(
-            "checked module invariant violated: external lookup import {d} resolved to module {d} without a published artifact key",
+            "checked module invariant violated: external lookup import {d} resolved to module {d} without a checked module key",
             .{ @backingInt(import_idx), resolved_module_idx },
         );
     };
 
     const target_def: CIR.Def.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(target_node_idx))));
-    if (try importedProcedureBindingForDef(import_artifact.view, target_def)) |binding| {
+    if (try importedProcedureBindingForDef(import_module.view, target_def)) |binding| {
         return .{ .imported_proc = .{
             .binding = .{ .imported = binding.binding },
             .intrinsic = binding.intrinsic,
@@ -12035,7 +12034,7 @@ fn categorizeImportedValueRef(
         } };
     }
 
-    if (try importedConstTemplateForDef(import_artifact.view, target_def)) |const_template| {
+    if (try importedConstTemplateForDef(import_module.view, target_def)) |const_template| {
         return .{ .imported_const = .{
             .const_ref = const_template.const_ref,
         } };
@@ -12052,10 +12051,10 @@ fn categorizeResolvedAssociatedValueRef(
     module_identity: base.ModuleIdentity.Idx,
     target_def: CIR.Def.Idx,
     imports: []const CheckedImport,
-    available_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
 ) Allocator.Error!ResolvedValueRef {
     const origin_hash = module.moduleEnvConst().moduleIdentityHash(module_identity);
-    const target_view = importedViewForOriginHash(imports, available_artifacts, origin_hash) orelse
+    const target_view = importedViewForOriginHash(imports, available_modules, origin_hash) orelse
         checkedModuleInvariant("resolved associated lookup target has no available checked module", .{});
 
     if (try importedProcedureBindingForDef(target_view, target_def)) |binding| {
@@ -12078,7 +12077,7 @@ fn categorizeResolvedAssociatedValueRef(
 
 fn importedViewForOriginHash(
     imports: []const CheckedImport,
-    available_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
     origin_hash: *const base.ModuleIdentity.Hash,
 ) ?ImportedModuleView {
     var found: ?ImportedModuleView = null;
@@ -12086,7 +12085,7 @@ fn importedViewForOriginHash(
         if (!importedViewIdentityMatches(&import.view, origin_hash)) continue;
         found = uniqueImportedView(found, import.view);
     }
-    for (available_artifacts) |*view| {
+    for (available_modules) |*view| {
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
         found = uniqueImportedView(found, view.*);
     }
@@ -12116,7 +12115,7 @@ fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) Alloc
 
 /// The definitions a module exports, in export order: its `exports`, then
 /// each exposed item that names a definition.
-pub fn collectPublishedExportDefs(
+pub fn collectExportDefs(
     allocator: Allocator,
     module_env: *const ModuleEnv,
 ) Allocator.Error![]CIR.Def.Idx {
@@ -12129,7 +12128,7 @@ pub fn collectPublishedExportDefs(
     @memset(seen, false);
 
     for (module_env.store.sliceDefs(module_env.exports)) |def_idx| {
-        try appendPublishedExportDef(allocator, &defs, seen, def_idx);
+        try appendExportDef(allocator, &defs, seen, def_idx);
     }
 
     var exposed_iter = module_env.common.exposed_items.iterator();
@@ -12144,13 +12143,13 @@ pub fn collectPublishedExportDefs(
 
         const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (module_env.store.nodes.get(node_idx).tag != .def) continue;
-        try appendPublishedExportDef(allocator, &defs, seen, @fromBackingInt(@intCast(raw_node_idx)));
+        try appendExportDef(allocator, &defs, seen, @fromBackingInt(@intCast(raw_node_idx)));
     }
 
     return try defs.toOwnedSlice(allocator);
 }
 
-fn appendPublishedExportDef(
+fn appendExportDef(
     allocator: Allocator,
     defs: *std.ArrayList(CIR.Def.Idx),
     seen: []bool,
@@ -12159,7 +12158,7 @@ fn appendPublishedExportDef(
     const raw = @backingInt(def_idx);
     if (raw >= seen.len) {
         base.invariant(
-            "checked module invariant violated: published export def {d} is outside the module node store",
+            "checked module invariant violated: export def {d} is outside the module node store",
             .{raw},
         );
     }
@@ -12171,7 +12170,7 @@ fn appendPublishedExportDef(
 /// The binder patterns of names bound by top-level destructures that the
 /// module exposes. An importer reaches such a name through its binder node
 /// (see `Can.populateExports`), so the export tables key its row by that node.
-fn collectPublishedExportBinders(
+fn collectExportBinders(
     allocator: Allocator,
     module_env: *const ModuleEnv,
 ) Allocator.Error![]CIR.Pattern.Idx {
@@ -12197,9 +12196,9 @@ fn collectPublishedExportBinders(
     return try binders.toOwnedSlice(allocator);
 }
 
-fn publishImportForModule(imports: []const CheckedImport, module_idx: u32) ?CheckedImport {
-    for (imports) |import_artifact| {
-        if (import_artifact.module_idx == module_idx) return import_artifact;
+fn checkedImportForModule(imports: []const CheckedImport, module_idx: u32) ?CheckedImport {
+    for (imports) |import_module| {
+        if (import_module.module_idx == module_idx) return import_module;
     }
     return null;
 }
@@ -12316,7 +12315,7 @@ pub const SpecializationInterfaceRelation = struct {
             callable_ty: CheckedTypeId,
             callee_ty: CheckedTypeId,
             ret_ty: CheckedTypeId,
-            args: artifact_serialize.Span,
+            args: store_serialize.Span,
             direct_target: ?ResolvedValueRefId,
         },
         local_proc_use: ResolvedValueRefId,
@@ -12538,11 +12537,11 @@ fn sealCheckedProcedureTemplateRefs(
     var specialization_type_pool = std.ArrayList(CheckedTypeId).empty;
     errdefer specialization_type_pool.deinit(allocator);
     // One entry per template, then the defaulted-field expressions'.
-    const iterator_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.items.len + 1);
+    const iterator_spans = try allocator.alloc(store_serialize.Span, templates.templates.items.len + 1);
     errdefer allocator.free(iterator_spans);
-    const scheme_use_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.items.len + 1);
+    const scheme_use_spans = try allocator.alloc(store_serialize.Span, templates.templates.items.len + 1);
     errdefer allocator.free(scheme_use_spans);
-    const scope_site_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.items.len + 1);
+    const scope_site_spans = try allocator.alloc(store_serialize.Span, templates.templates.items.len + 1);
     errdefer allocator.free(scope_site_spans);
 
     for (templates.templates.items, 0..) |*template, template_index| {
@@ -12635,8 +12634,8 @@ fn sealCheckedProcedureTemplateRefs(
             });
         }
 
-        template.resolved_value_refs = try artifact_serialize.appendSpan(ResolvedValueRefTableRef, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
-        template.static_dispatch_plans = try artifact_serialize.appendSpan(@TypeOf(template.static_dispatch_plans), static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
+        template.resolved_value_refs = try store_serialize.appendSpan(ResolvedValueRefTableRef, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
+        template.static_dispatch_plans = try store_serialize.appendSpan(@TypeOf(template.static_dispatch_plans), static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
         const specialization_type_base: u32 = @intCast(specialization_type_pool.items.len);
         try specialization_type_pool.appendSlice(allocator, collector.specialization_types.items);
         const specialization_relation_start: u32 = @intCast(specialization_relation_pool.items.len);
@@ -12662,9 +12661,9 @@ fn sealCheckedProcedureTemplateRefs(
             };
             try dispatch_relation_kind_pool.append(allocator, kind);
         }
-        iterator_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
-        scheme_use_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
-        scope_site_spans[template_index] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
+        iterator_spans[template_index] = try store_serialize.appendSpan(store_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
+        scheme_use_spans[template_index] = try store_serialize.appendSpan(store_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
+        scope_site_spans[template_index] = try store_serialize.appendSpan(store_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
         try value_ref_scope_pool.appendSlice(allocator, collector.value_ref_scopes.items);
         try dispatch_ref_scope_pool.appendSlice(allocator, collector.dispatch_ref_scopes.items);
         try iterator_scope_pool.appendSlice(allocator, collector.iterator_ref_scopes.items);
@@ -12678,7 +12677,7 @@ fn sealCheckedProcedureTemplateRefs(
     // evidence for the calls and scheme instantiations inside them—
     // without this, a default calling a generic procedure reaches lowering
     // with no checked evidence vector for the callee's requirements.
-    const default_ref_spans = try allocator.alloc(artifact_serialize.Span, 2);
+    const default_ref_spans = try allocator.alloc(store_serialize.Span, 2);
     errdefer allocator.free(default_ref_spans);
     const defaults = templates.templates.items.len;
     {
@@ -12686,11 +12685,11 @@ fn sealCheckedProcedureTemplateRefs(
         for (default_exprs) |default| {
             try collector.collectExpr(default);
         }
-        default_ref_spans[TemplateDispatchSites.default_plan_refs] = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
-        default_ref_spans[TemplateDispatchSites.default_value_refs] = try artifact_serialize.appendSpan(artifact_serialize.Span, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
-        iterator_spans[defaults] = try artifact_serialize.appendSpan(artifact_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
-        scheme_use_spans[defaults] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
-        scope_site_spans[defaults] = try artifact_serialize.appendSpan(artifact_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
+        default_ref_spans[TemplateDispatchSites.default_plan_refs] = try store_serialize.appendSpan(store_serialize.Span, static_dispatch.StaticDispatchPlanId, &dispatch_ref_pool, allocator, collector.dispatch_refs.items);
+        default_ref_spans[TemplateDispatchSites.default_value_refs] = try store_serialize.appendSpan(store_serialize.Span, ResolvedValueRefId, &value_ref_pool, allocator, collector.value_refs.items);
+        iterator_spans[defaults] = try store_serialize.appendSpan(store_serialize.Span, static_dispatch.IteratorForPlanId, &iterator_ref_pool, allocator, collector.iterator_refs.items);
+        scheme_use_spans[defaults] = try store_serialize.appendSpan(store_serialize.Span, CollectedSchemeUseSite, &scheme_use_pool, allocator, collector.scheme_use_sites.items);
+        scope_site_spans[defaults] = try store_serialize.appendSpan(store_serialize.Span, CollectedScopeConstructionSite, &scope_site_pool, allocator, collector.scope_sites.items);
         // `dispatch_relation_kind_pool` stays parallel to the plan-ref pool.
         for (collector.dispatch_refs.items) |plan_id| {
             const plan = static_dispatch_plans.plans[@backingInt(plan_id)];
@@ -12714,8 +12713,8 @@ fn sealCheckedProcedureTemplateRefs(
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
     templates.specialization_interface_relations = try specialization_relation_pool.toOwnedSlice(allocator);
     templates.specialization_interface_types = try specialization_type_pool.toOwnedSlice(allocator);
-    publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
-    publishLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
+    recordLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
+    recordLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
     templates.dispatch_sites = .{
         .iterator_spans = iterator_spans,
         .iterator_refs = try iterator_ref_pool.toOwnedSlice(allocator),
@@ -12734,7 +12733,7 @@ fn sealCheckedProcedureTemplateRefs(
 /// procedure. A generalized local procedure may own a scope even when its
 /// checker-ordered evidence list is empty, so presence is determined by the checked
 /// scope table rather than by evidence count.
-fn publishLocalProcedureDispatchScopes(
+fn recordLocalProcedureDispatchScopes(
     resolved_value_refs: *ResolvedValueRefTable,
     scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
 ) void {
@@ -12746,7 +12745,7 @@ fn publishLocalProcedureDispatchScopes(
     }
 }
 
-fn publishLocalMethodDispatchScopes(
+fn recordLocalMethodDispatchScopes(
     method_registry: *static_dispatch.MethodRegistry,
     scope_by_checked_expr: *const collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
 ) void {
@@ -12773,29 +12772,29 @@ fn publishLocalMethodDispatchScopes(
 /// reads these sites; they are a pure function of each body.
 pub const TemplateDispatchSites = struct {
     /// Per template, a range of `iterator_refs`.
-    iterator_spans: []artifact_serialize.Span = &.{},
+    iterator_spans: []store_serialize.Span = &.{},
     iterator_refs: []static_dispatch.IteratorForPlanId = &.{},
     /// Scope of each `iterator_refs` entry.
     iterator_scopes: []DispatchScope = &.{},
     /// Scope of each `ResolvedValueRefTable.template_refs` entry.
     value_ref_scopes: []DispatchScope = &.{},
     /// Per template, a range of `scheme_use_sites`.
-    scheme_use_spans: []artifact_serialize.Span = &.{},
+    scheme_use_spans: []store_serialize.Span = &.{},
     scheme_use_sites: []CollectedSchemeUseSite = &.{},
     /// Scope of each `scheme_use_sites` entry.
     scheme_use_scopes: []DispatchScope = &.{},
     /// Per template, a range of `scope_sites`.
-    scope_site_spans: []artifact_serialize.Span = &.{},
+    scope_site_spans: []store_serialize.Span = &.{},
     scope_sites: []CollectedScopeConstructionSite = &.{},
     /// The defaulted-field expressions' ranges of the plan-ref pool
     /// (`CheckedProcedureTemplateTable.dispatch_plan_refs`) and of the
     /// value-ref pool (`ResolvedValueRefTable.template_refs`).
-    default_ref_spans: []artifact_serialize.Span = &.{},
+    default_ref_spans: []store_serialize.Span = &.{},
 
     pub const default_plan_refs = 0;
     pub const default_value_refs = 1;
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// The number of templates the collection walked; templates appended
     /// after it reach no sites.
@@ -12808,19 +12807,19 @@ pub const TemplateDispatchSites = struct {
         return self.walkedTemplateCount();
     }
 
-    pub fn iteratorSpan(self: *const TemplateDispatchSites, index: usize) artifact_serialize.Span {
+    pub fn iteratorSpan(self: *const TemplateDispatchSites, index: usize) store_serialize.Span {
         return if (index < self.iterator_spans.len) self.iterator_spans[index] else .{};
     }
 
-    pub fn schemeUseSpan(self: *const TemplateDispatchSites, index: usize) artifact_serialize.Span {
+    pub fn schemeUseSpan(self: *const TemplateDispatchSites, index: usize) store_serialize.Span {
         return if (index < self.scheme_use_spans.len) self.scheme_use_spans[index] else .{};
     }
 
-    pub fn scopeSiteSpan(self: *const TemplateDispatchSites, index: usize) artifact_serialize.Span {
+    pub fn scopeSiteSpan(self: *const TemplateDispatchSites, index: usize) store_serialize.Span {
         return if (index < self.scope_site_spans.len) self.scope_site_spans[index] else .{};
     }
 
-    pub fn defaultRefs(self: *const TemplateDispatchSites, which: usize) artifact_serialize.Span {
+    pub fn defaultRefs(self: *const TemplateDispatchSites, which: usize) store_serialize.Span {
         return if (self.default_ref_spans.len == 0) .{} else self.default_ref_spans[which];
     }
 };
@@ -12950,17 +12949,17 @@ pub const TemplateDispatch = struct {
 };
 
 fn lookupPlanResolution(entries: []const PlanResolutionEntry, id: static_dispatch.StaticDispatchPlanId) ?static_dispatch.PlanResolution {
-    const found = artifact_serialize.binarySearchByKey(PlanResolutionEntry, u32, entries, @backingInt(id), PlanResolutionEntry.order) orelse return null;
+    const found = store_serialize.binarySearchByKey(PlanResolutionEntry, u32, entries, @backingInt(id), PlanResolutionEntry.order) orelse return null;
     return found.resolution;
 }
 
 fn lookupIteratorPlanResolution(entries: []const IteratorPlanResolutionEntry, id: static_dispatch.IteratorForPlanId) ?static_dispatch.IteratorPlanResolution {
-    const found = artifact_serialize.binarySearchByKey(IteratorPlanResolutionEntry, u32, entries, @backingInt(id), IteratorPlanResolutionEntry.order) orelse return null;
+    const found = store_serialize.binarySearchByKey(IteratorPlanResolutionEntry, u32, entries, @backingInt(id), IteratorPlanResolutionEntry.order) orelse return null;
     return found.resolution;
 }
 
 fn lookupSiteEvidence(entries: []const static_dispatch.SiteEvidenceEntry, key: u32) ?*const static_dispatch.SiteEvidenceEntry {
-    return artifact_serialize.binarySearchByKey(static_dispatch.SiteEvidenceEntry, u32, entries, key, static_dispatch.siteEvidenceOrder);
+    return store_serialize.binarySearchByKey(static_dispatch.SiteEvidenceEntry, u32, entries, key, static_dispatch.siteEvidenceOrder);
 }
 
 /// The evidence of one use site and the analysis whose pool holds it.
@@ -13099,9 +13098,9 @@ pub const DispatchIndex = struct {
     codec_instance_by_template: collections.DenseMap(Var, Var),
     fresh_by_pair_root: std.AutoHashMapUnmanaged(EvidencePass.PairRootKey, Var) = .empty,
     /// Per plan, a range of `plan_sites`.
-    plan_reach: []artifact_serialize.Span = &.{},
+    plan_reach: []store_serialize.Span = &.{},
     /// Per iterator plan, a range of `iterator_sites`.
-    iterator_reach: []artifact_serialize.Span = &.{},
+    iterator_reach: []store_serialize.Span = &.{},
     /// Every reference to a plan from a template's body or a defaulted-field
     /// expression, grouped by plan, in template order with the defaults
     /// last.
@@ -13568,8 +13567,8 @@ const EvidencePass = struct {
         old_root: Var,
     };
     const PublishedScheme = struct {
-        vars: artifact_serialize.Span,
-        params: artifact_serialize.Span,
+        vars: store_serialize.Span,
+        params: store_serialize.Span,
     };
     /// Each dispatcher root's params within one schema, in param order.
     /// Composite scheme requirements are matched by their exact relation
@@ -13845,7 +13844,7 @@ const EvidencePass = struct {
     /// The template-or-scope schema of `scheme_var`, published into this
     /// pass's pools: its quantified variables, and, unless it has none, its
     /// evidence parameters.
-    fn publishTemplateSchema(self: *EvidencePass, template: CheckedProcedureTemplate) Allocator.Error!struct { vars: artifact_serialize.Span, params: artifact_serialize.Span, callable_determines_scheme: bool, chain_root: ?Var } {
+    fn publishTemplateSchema(self: *EvidencePass, template: CheckedProcedureTemplate) Allocator.Error!struct { vars: store_serialize.Span, params: store_serialize.Span, callable_determines_scheme: bool, chain_root: ?Var } {
         if (self.templateEvidenceSchemeVar(template)) |scheme_var| {
             const schema = try self.publishScheme(scheme_var);
             const params = if (self.isCallableBindingWrapper(template))
@@ -14129,7 +14128,7 @@ const EvidencePass = struct {
     /// Append a scheme's quantified variables in identity order and retain
     /// their solver roots in `scheme_var_scratch` for slot lookup by the
     /// params appended next.
-    fn appendSchemeVars(self: *EvidencePass, scheme_var: ?Var) Allocator.Error!artifact_serialize.Span {
+    fn appendSchemeVars(self: *EvidencePass, scheme_var: ?Var) Allocator.Error!store_serialize.Span {
         self.scheme_var_scratch.clearRetainingCapacity();
         const start: u32 = @intCast(self.scheme_vars_pool.items.len);
         const root = scheme_var orelse return .{ .start = start, .len = 0 };
@@ -14295,7 +14294,7 @@ const EvidencePass = struct {
     /// binding's callable, so a dispatcher at a path over that callable is at
     /// the same path below the wrapper's return. The parameters keep the
     /// binding's scheme order, which a use's evidence follows.
-    fn appendReturnedCallableEvidenceParams(self: *EvidencePass, params: artifact_serialize.Span) Allocator.Error!artifact_serialize.Span {
+    fn appendReturnedCallableEvidenceParams(self: *EvidencePass, params: store_serialize.Span) Allocator.Error!store_serialize.Span {
         const start: u32 = @intCast(self.evidence_params_pool.items.len);
         for (params.start..params.start + params.len) |index| {
             var param = self.evidence_params_pool.items[index];
@@ -14495,15 +14494,15 @@ const EvidencePass = struct {
         const module_env = self.module.moduleEnvConst();
         const source_derivations = module_env.generated_codec_derivations.items.items;
         if (source_derivations.len != self.plan_table.recorded_codec_derivations.len) {
-            checkedModuleInvariant("generated codec source and artifact derivation counts differed", .{});
+            checkedModuleInvariant("generated codec source and checked derivation counts differed", .{});
         }
         for (source_derivations, self.plan_table.recorded_codec_derivations) |source_derivation, derivation| {
             const source_calls = module_env.generated_codec_calls.items.items[source_derivation.calls_start..][0..source_derivation.calls_len];
-            const artifact_calls = calls[derivation.calls.start..][0..derivation.calls.len];
-            if (source_calls.len != artifact_calls.len) {
-                checkedModuleInvariant("generated codec source and artifact derivation call counts differed", .{});
+            const module_calls = calls[derivation.calls.start..][0..derivation.calls.len];
+            if (source_calls.len != module_calls.len) {
+                checkedModuleInvariant("generated codec source and checked derivation call counts differed", .{});
             }
-            for (artifact_calls, source_calls) |*call, source_call| {
+            for (module_calls, source_calls) |*call, source_call| {
                 const owner = (try self.methodOwnerForSourceContent(@fromBackingInt(@intCast(source_call.dispatcher_var)))) orelse {
                     call.resolution = .checked_error;
                     continue;
@@ -14778,7 +14777,7 @@ const EvidencePass = struct {
         self: *EvidencePass,
         params: []const EvidenceParam,
         path_nodes: []const static_dispatch.EvidencePathNode,
-    ) Allocator.Error!artifact_serialize.Span {
+    ) Allocator.Error!store_serialize.Span {
         const idents = self.module.identStoreConst();
         const pool_start: u32 = @intCast(self.evidence_params_pool.items.len);
         self.published_path_nodes.clearRetainingCapacity();
@@ -14956,7 +14955,7 @@ const EvidencePass = struct {
         return null;
     }
 
-    /// Exact method-target lookup across every registry this publication can
+    /// Exact method-target lookup across every registry this computation can
     /// see: the local registry, then `method_lookup_views`.
     fn lookupMethodTargetAcrossViews(self: *EvidencePass, owner: static_dispatch.MethodOwner, method: canonical.MethodNameId) Allocator.Error!?static_dispatch.CheckedMethodLookup {
         return try static_dispatch.lookupCheckedMethodTarget(self.names, self.local_method_registry, self.method_lookup_views, owner, method);
@@ -15396,15 +15395,15 @@ const EvidencePass = struct {
                         // registry-visible view declares the method: the checker
                         // discharged the obligation with the derived structural
                         // implementation. Value dispatches cannot discharge
-                        // structurally, so a miss there is a publication bug
+                        // structurally, so a miss there is a compiler bug
                         // (every view the checker resolved against is searched
                         // above).
                         if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
-                        base.invariant("publication could not resolve a checked dispatch target for an owned method", .{});
+                        base.invariant("the checked tables could not resolve a checked dispatch target for an owned method", .{});
                     }
                     // No owner head: a genuinely structural shape.
                     if (structural_kind) |kind| return .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
-                    checkedModuleInvariant("ownerless non-structural dispatch reached publication without an explicit rejection", .{});
+                    checkedModuleInvariant("ownerless non-structural dispatch reached the checked tables without an explicit rejection", .{});
                 },
             }
         }
@@ -15617,7 +15616,7 @@ const EvidencePass = struct {
             .procedure => |procedure| procedure,
             .local_proc, .structural => checkedModuleInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
-        const target_key = procedure.template.artifact;
+        const target_key = procedure.template.module;
         if (target_key.eql(self.import_views.current_owner)) {
             return try self.dispatch.templateSchema(procedure.template.template);
         }
@@ -16833,10 +16832,10 @@ fn fillDispatchReach(allocator: Allocator, source: DispatchSource, index: *Dispa
     const sites = &templates.dispatch_sites;
     const walked = sites.walkedTemplateCount();
 
-    const plan_reach = try allocator.alloc(artifact_serialize.Span, source.plans.plans.len);
+    const plan_reach = try allocator.alloc(store_serialize.Span, source.plans.plans.len);
     index.plan_reach = plan_reach;
     @memset(plan_reach, .{});
-    const iterator_reach = try allocator.alloc(artifact_serialize.Span, source.plans.iterator_for_plans.len);
+    const iterator_reach = try allocator.alloc(store_serialize.Span, source.plans.iterator_for_plans.len);
     index.iterator_reach = iterator_reach;
     @memset(iterator_reach, .{});
 
@@ -16915,13 +16914,13 @@ fn fillDispatchReach(allocator: Allocator, source: DispatchSource, index: *Dispa
     index.default_sites = try default_sites.toOwnedSlice(allocator);
 }
 
-fn dispatchPlanSpan(templates: *const CheckedProcedureTemplateTable, template: usize) artifact_serialize.Span {
+fn dispatchPlanSpan(templates: *const CheckedProcedureTemplateTable, template: usize) store_serialize.Span {
     const span = templates.templates.items[template].static_dispatch_plans;
     return .{ .start = span.start, .len = span.len };
 }
 
 /// Turn per-item counts into consecutive ranges; returns the total.
-fn assignReachStarts(spans: []artifact_serialize.Span) usize {
+fn assignReachStarts(spans: []store_serialize.Span) usize {
     var next: u32 = 0;
     for (spans) |*span| {
         span.start = next;
@@ -16957,8 +16956,8 @@ pub fn computeScopeSchema(allocator: Allocator, dispatch: CheckedDispatch, scope
 fn schemeAnalysisFromPass(
     allocator: Allocator,
     pass: *EvidencePass,
-    vars: artifact_serialize.Span,
-    params: artifact_serialize.Span,
+    vars: store_serialize.Span,
+    params: store_serialize.Span,
     callable_determines_scheme: bool,
     chain_root: ?Var,
 ) Allocator.Error!*SchemeAnalysis {
@@ -17168,7 +17167,7 @@ pub fn computeTemplateDispatchRelations(allocator: Allocator, dispatch: CheckedD
 /// scheme context that references the plan.
 ///
 /// Specialization creates types in the module's store, which other threads
-/// read once the module is published, so it runs under the store's creation
+/// read once the module is opened, so it runs under the store's creation
 /// lock (`CheckedTypeStore.beginCreation`). It reads the nominal
 /// representations of the module's own types and of the types it projects
 /// from each target's module, so their interface capabilities are demanded
@@ -17177,7 +17176,7 @@ pub fn computeTemplateDispatchRelations(allocator: Allocator, dispatch: CheckedD
 fn specializeResolvedPlans(allocator: Allocator, pass: *EvidencePass, index: *const DispatchIndex) Allocator.Error!void {
     const source = pass.dispatch.source;
     const store = source.types.store;
-    // A store gets its capability source when its module is published;
+    // A store gets its capability source when its module is opened;
     // before that, nothing has the module's capabilities to read.
     if (store.capability_source != null) _ = try store.view().interfaceCapabilities();
     const owner = source.key.digest();
@@ -17243,7 +17242,7 @@ fn demandTargetCapabilities(pass: *EvidencePass, owner: ModuleId, node_id: stati
     const target_key = switch (target.kind) {
         .local_proc => return,
         .structural => checkedModuleInvariant("structural method registry result was published as a direct callable target", .{}),
-        .procedure => |procedure| procedure.template.artifact,
+        .procedure => |procedure| procedure.template.module,
     };
     if (target_key.eql(owner)) return;
     const imported = pass.import_views.viewForKey(target_key) orelse
@@ -17577,7 +17576,7 @@ const CheckedTemplateRefCollector = struct {
         if (local_scheme) |scheme_var| {
             const parent = self.currentScopeId();
             const scheme_root = self.checked_types.rootForSourceVar(self.module, scheme_var) orelse
-                checkedModuleInvariant("generalized local dispatch scope had no published checked scheme root", .{});
+                checkedModuleInvariant("generalized local dispatch scope had no checked scheme root", .{});
             const scope_entry = try self.scope_by_checked_expr.getOrPut(expr_id);
             const scope_id = if (scope_entry.found_existing) blk: {
                 const existing = self.scopes.items[@backingInt(scope_entry.value_ptr.*)];
@@ -18111,7 +18110,7 @@ pub const ModuleNestedProcSites = struct {
     /// Per expression: how many owners construct a procedure there.
     owner_counts: []const u32 = &.{},
     /// Per expression: its runtime captures, a range of `captures`.
-    capture_spans: []const artifact_serialize.Span = &.{},
+    capture_spans: []const store_serialize.Span = &.{},
     captures: []const CheckedCapture = &.{},
     /// Each closure site's lambda with its closure's expression, ordered by
     /// lambda: a closure's lambda names the closure's site.
@@ -18189,7 +18188,7 @@ pub const CheckedProcedureTemplate = struct {
     static_dispatch_plans: StaticDispatchPlanTableRef,
     /// Range into
     /// `CheckedProcedureTemplateTable.specialization_interface_relations`.
-    specialization_interface_relations: artifact_serialize.Span = .{},
+    specialization_interface_relations: store_serialize.Span = .{},
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
     target: ProcTarget,
@@ -18314,7 +18313,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         value_binding_defs: []const CIR.Def.Idx,
-        owner_artifact: canonical.CheckedModuleRef,
+        owner_module: canonical.CheckedModuleRef,
         checked_source_types: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
     ) Allocator.Error!CheckedProcedureTemplateTable {
@@ -18337,7 +18336,7 @@ pub const CheckedProcedureTemplateTable = struct {
             );
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
-                .artifact = owner_artifact,
+                .module = owner_module,
                 .proc_base = proc_base,
                 .template = template_id,
             };
@@ -18397,7 +18396,7 @@ pub const CheckedProcedureTemplateTable = struct {
         self: *CheckedProcedureTemplateTable,
         allocator: Allocator,
         module: TypedCIR.Module,
-        owner_artifact: canonical.CheckedModuleRef,
+        owner_module: canonical.CheckedModuleRef,
         checked_source_types: *const CheckedSourceTypes,
         module_index: *const ModuleIndex,
         promoted_local_procedures: []const hoist_roots.PromotedLocalProcedure,
@@ -18419,7 +18418,7 @@ pub const CheckedProcedureTemplateTable = struct {
             const proc_base = canonical.ProcBase.of(.promoted_local, @backingInt(lambda_source));
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
-                .artifact = owner_artifact,
+                .module = owner_module,
                 .proc_base = proc_base,
                 .template = template_id,
             };
@@ -18467,7 +18466,7 @@ pub const CheckedProcedureTemplateTable = struct {
     pub fn appendEntryWrappersForRoots(
         self: *CheckedProcedureTemplateTable,
         allocator: Allocator,
-        owner_artifact: canonical.CheckedModuleRef,
+        owner_module: canonical.CheckedModuleRef,
         checked_types: *CheckedTypeStore,
         entry_wrappers: *EntryWrapperTable,
         roots: []const CompileTimeRoot,
@@ -18487,7 +18486,7 @@ pub const CheckedProcedureTemplateTable = struct {
             const proc_base = canonical.ProcBase.entry_wrapper;
             const template_id: canonical.CheckedProcedureTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
             const template_ref = canonical.ProcedureTemplateRef{
-                .artifact = owner_artifact,
+                .module = owner_module,
                 .proc_base = proc_base,
                 .template = template_id,
             };
@@ -18535,14 +18534,14 @@ pub const CheckedProcedureTemplateTable = struct {
         };
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub fn specializationRelations(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SpecializationInterfaceRelation {
         const span = template.specialization_interface_relations;
         return self.specialization_interface_relations[span.start .. span.start + span.len];
     }
 
-    pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: artifact_serialize.Span) []const CheckedTypeId {
+    pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: store_serialize.Span) []const CheckedTypeId {
         return self.specialization_interface_types[span.start .. span.start + span.len];
     }
 };
@@ -19316,7 +19315,7 @@ pub fn computeModuleNestedProcSites(
 
     var pool = std.ArrayList(CheckedCapture).empty;
     defer pool.deinit(allocator);
-    const capture_spans = try allocator.alloc(artifact_serialize.Span, count);
+    const capture_spans = try allocator.alloc(store_serialize.Span, count);
     errdefer allocator.free(capture_spans);
     for (exprs.items, needs, capture_spans) |expr, need, *span| {
         const start: u32 = @intCast(pool.items.len);
@@ -19510,7 +19509,7 @@ pub fn computeHostedProcs(allocator: Allocator, owner: ImportedModuleView) Alloc
             .deterministic_index = @intCast(index),
             .order_key_start = @intCast(order_key_start),
             .order_key_len = @intCast(candidate.sort_key.len),
-            .proc = .{ .artifact = candidate.template.artifact, .proc_base = candidate.template.proc_base },
+            .proc = .{ .module = candidate.template.module, .proc_base = candidate.template.proc_base },
             .template = candidate.template,
         };
         order_key_start += candidate.sort_key.len;
@@ -19593,11 +19592,11 @@ pub const PlatformAppRelationKey = struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
 
     pub fn compute(
-        app_artifact: ModuleId,
+        app_module: ModuleId,
         requirement_context: PlatformRequirementContextKey,
     ) PlatformAppRelationKey {
         var hasher = base.Sha256.init(.{});
-        hasher.update(&app_artifact.bytes);
+        hasher.update(&app_module.bytes);
         hasher.update(&requirement_context.bytes);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -19778,7 +19777,7 @@ pub const PlatformAppRelation = struct {
     key: PlatformAppRelationKey,
     requirement_context: PlatformRequirementContextKey,
     platform_module_idx: u32,
-    app_artifact: CheckedModuleDigest,
+    app_module: CheckedModuleDigest,
     relations: []const PlatformRequirementRelationInput,
     bindings: []const PlatformRequiredBindingInput,
     /// Requires-clause indices whose app-side requirement check failed. These
@@ -19799,7 +19798,7 @@ pub const PlatformAppRelation = struct {
             .key = .{},
             .requirement_context = .{},
             .platform_module_idx = 0,
-            .app_artifact = .{},
+            .app_module = .{},
             .relations = &.{},
             .bindings = &.{},
             .checked_error_requires = &.{},
@@ -19815,8 +19814,8 @@ pub const PlatformTypeInputs = struct {
     pub const Requirement = struct {
         declaration: PlatformRequiredDeclarationId,
         root: CheckedTypeId,
-        identities: artifact_serialize.Span,
-        aliases: artifact_serialize.Span,
+        identities: store_serialize.Span,
+        aliases: store_serialize.Span,
     };
     pub const Alias = struct {
         root: CheckedTypeId,
@@ -20175,7 +20174,7 @@ pub const PlatformRequirementRelation = struct {
     requires_idx: u32,
     app_value: TopLevelValueRef,
     requested_source_ty_payload: CheckedTypeId,
-    /// Root-call dispatch evidence in `app_value.artifact`.
+    /// Root-call dispatch evidence in `app_value.module`.
     root_evidence: static_dispatch.EvidenceSpan = .{},
     value_kind: PlatformRequiredValueKind,
 };
@@ -20186,7 +20185,7 @@ pub const PlatformRequirementRelationTable = struct {
 
     pub const Serialized = extern struct {
         relations: SerializedSlice(PlatformRequirementRelation) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequirementRelationTable, @This());
+        const Serde = store_serialize.SliceStoreSerde(PlatformRequirementRelationTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
@@ -20201,7 +20200,7 @@ pub const PlatformRequirementRelationTable = struct {
         names: *canonical.CanonicalNameStore,
         checked_types: *CheckedTypeStore,
         declarations: PlatformRequiredDeclarationTable,
-        relation_artifacts: []const ImportedModuleView,
+        relation_modules: []const ImportedModuleView,
         active_relation: PlatformAppRelation,
     ) Allocator.Error!PlatformRequirementRelationTable {
         try validatePlatformAppRelationForModule(
@@ -20226,8 +20225,8 @@ pub const PlatformRequirementRelationTable = struct {
             if (builtin.mode == .debug) allocator.free(seen_declarations);
         }
 
-        const app_view = dependencyViewByKey(active_relation.app_artifact, &.{}, relation_artifacts, &.{}) orelse {
-            checkedModuleInvariant("platform/app relation missing app relation artifact", .{});
+        const app_view = dependencyViewByKey(active_relation.app_module, &.{}, relation_modules, &.{}) orelse {
+            checkedModuleInvariant("platform/app relation missing app relation module", .{});
         };
 
         const rows = try allocator.alloc(PlatformRequirementRelation, active_relation.relations.len);
@@ -20260,9 +20259,9 @@ pub const PlatformRequirementRelationTable = struct {
                     .{ i, declaration_index, input.requires_idx, declaration.requires_idx },
                 );
             }
-            if (!std.meta.eql(input.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
+            if (!std.meta.eql(input.app_value.module.bytes, active_relation.app_module.bytes)) {
                 base.invariant(
-                    "checked module invariant violated: platform/app checked relation {d} points at a value outside the app artifact",
+                    "checked module invariant violated: platform/app checked relation {d} points at a value outside the app module",
                     .{i},
                 );
             }
@@ -20287,7 +20286,7 @@ pub const PlatformRequirementRelationTable = struct {
         return .{ .relations = rows };
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 
     pub fn lookupByRelationId(self: *const PlatformRequirementRelationTable, relation_id: PlatformRequirementRelationId) ?PlatformRequirementRelation {
         const raw = @backingInt(relation_id);
@@ -20528,9 +20527,9 @@ pub const PlatformRequiredBindingTable = struct {
                     .{ i, declaration_index, binding.requires_idx, declaration.requires_idx },
                 );
             }
-            if (!std.meta.eql(binding.app_value.artifact.bytes, active_relation.app_artifact.bytes)) {
+            if (!std.meta.eql(binding.app_value.module.bytes, active_relation.app_module.bytes)) {
                 base.invariant(
-                    "checked module invariant violated: platform/app binding {d} points at a value outside the app artifact",
+                    "checked module invariant violated: platform/app binding {d} points at a value outside the app module",
                     .{i},
                 );
             }
@@ -20586,10 +20585,10 @@ pub const PlatformRequiredBindingTable = struct {
         closure_pool: ClosurePool.Serialized = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 13);
+            std.debug.assert(store_serialize.relocatablePointerCount(Serialized) == 13);
         }
 
-        const Serde = artifact_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
+        const Serde = store_serialize.SliceStoreSerde(PlatformRequiredBindingTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
@@ -20640,7 +20639,7 @@ fn validatePlatformAppRelationForModule(
         }
     }
     const expected_key = PlatformAppRelationKey.compute(
-        active_relation.app_artifact,
+        active_relation.app_module,
         active_relation.requirement_context,
     );
     if (!std.meta.eql(active_relation.key.bytes, expected_key.bytes)) {
@@ -20663,7 +20662,7 @@ const EnclosingIdentityIndex = struct {
     names: *const canonical.CanonicalNameStore,
     store: *const CheckedTypeStore,
     /// Identity origins per scheme root; each span indexes `pool`.
-    spans_by_root: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
+    spans_by_root: collections.DenseMap(CheckedTypeId, store_serialize.Span),
     pool: std.ArrayList(CheckedTypeId),
     orderer: CheckedIdentityOrderer,
 
@@ -20676,7 +20675,7 @@ const EnclosingIdentityIndex = struct {
             .allocator = allocator,
             .names = names,
             .store = store,
-            .spans_by_root = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+            .spans_by_root = collections.DenseMap(CheckedTypeId, store_serialize.Span).init(allocator),
             .pool = .empty,
             .orderer = CheckedIdentityOrderer.init(allocator, names, store),
         };
@@ -20705,7 +20704,7 @@ const EnclosingIdentityIndex = struct {
     fn identityOriginsOf(
         self: *EnclosingIdentityIndex,
         scheme_root: CheckedTypeId,
-    ) Allocator.Error!artifact_serialize.Span {
+    ) Allocator.Error!store_serialize.Span {
         if (self.spans_by_root.get(scheme_root)) |span| return span;
         const start: u32 = @intCast(self.pool.items.len);
         if (try self.store.rootContainsIdentityVariables(scheme_root)) {
@@ -20713,7 +20712,7 @@ const EnclosingIdentityIndex = struct {
             try self.pool.ensureUnusedCapacity(self.allocator, roots.len);
             for (roots) |root| self.pool.appendAssumeCapacity(self.store.identityOrigin(root));
         }
-        const span: artifact_serialize.Span = .{
+        const span: store_serialize.Span = .{
             .start = start,
             .len = @intCast(self.pool.items.len - start),
         };
@@ -21620,7 +21619,7 @@ pub const LiteralGraph = struct {
     /// scheme of another module.
     pub fn calleeNode(self: *const LiteralGraph, owner: canonical.CheckedModuleRef, callee: LiteralCallee) ?u32 {
         return switch (callee) {
-            .template => |template| if (template.artifact.eql(owner)) template.template.index() else null,
+            .template => |template| if (template.module.eql(owner)) template.template.index() else null,
             .scope => |scope| self.scope_owners[@backingInt(scope)] orelse self.defaultsNode(),
         };
     }
@@ -22055,11 +22054,11 @@ fn literalTemplateOfValueRef(dispatch: CheckedDispatch, ref: ResolvedValueRef) A
     var alias_view: ?ImportedModuleView = null;
     const body: ProcedureBindingBody = switch (use.binding) {
         .top_level => |top_level| blk: {
-            if (!top_level.artifact.eql(owner)) return null;
+            if (!top_level.module.eql(owner)) return null;
             break :blk source.top_level_procedure_bindings.get(top_level.binding).body;
         },
         .imported => |imported| blk: {
-            const view = import_views.viewForKey(imported.artifact) orelse return null;
+            const view = import_views.viewForKey(imported.module) orelse return null;
             alias_view = view;
             const binding = try importedProcedureBindingForDef(view, imported.def) orelse return null;
             break :blk binding.body;
@@ -22380,7 +22379,7 @@ pub fn computeLiteralNodeEdges(allocator: Allocator, dispatch: CheckedDispatch, 
             for (items) |item| {
                 // An alias chain that leaves this module is instantiated
                 // where the chain's procedure lives.
-                if (item.alias and !item.template.artifact.eql(self.owner)) continue;
+                if (item.alias and !item.template.module.eql(self.owner)) continue;
                 const holder = (try self.dispatch.source.analyses.literalEvidenceHolder(self.dispatch, self.graph, item.id)) orelse
                     checkedModuleInvariant("a literal edge reached from a body has no holder", .{});
                 if (!try self.place(.{ .node = item.id }, holder)) continue;
@@ -22657,13 +22656,13 @@ pub const LiteralComponent = struct {
     /// The schemes of the component's nodes with literal requirements,
     /// sorted; scheme `i`'s are `requirements[scope_spans[i]]`.
     scope_keys: []const LiteralScopeKey,
-    scope_spans: []const artifact_serialize.Span,
+    scope_spans: []const store_serialize.Span,
     requirements: []const LiteralRequirement,
     /// The edges the component's nodes hold, by `literalEdgeRef`, ascending,
     /// with their literal arguments: edge `arg_edges[i]`'s are
     /// `args[arg_spans[i]]`.
     arg_edges: []const u64,
-    arg_spans: []const artifact_serialize.Span,
+    arg_spans: []const store_serialize.Span,
     args: []const LiteralArgSource,
     /// The component's literal argument roots, by id.
     roots: []const LiteralRootRecord,
@@ -22795,7 +22794,7 @@ fn literalAliasChainSteps(
                 const use = if (tag == .platform_required_proc) ref.procedure else ref;
                 switch (use.binding) {
                     .top_level => |top_level| {
-                        const owner_key = top_level.artifact;
+                        const owner_key = top_level.module;
                         const local_owner = owner_key.eql(owner);
                         const bindings: *const TopLevelProcedureBindingTable = if (local_owner) source.top_level_procedure_bindings else &(try (import_views.viewForKey(owner_key) orelse return false).checkedTables()).top_level_procedure_bindings;
                         switch (bindings.get(top_level.binding).body) {
@@ -22812,7 +22811,7 @@ fn literalAliasChainSteps(
                         }
                     },
                     .imported => |imported| {
-                        const view = import_views.viewForKey(imported.artifact) orelse return false;
+                        const view = import_views.viewForKey(imported.module) orelse return false;
                         const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse
                             checkedModuleInvariant("an alias chain's imported procedure was not exported by its checked module", .{});
                         switch (binding.body) {
@@ -22959,12 +22958,12 @@ pub fn computeLiteralComponent(
         for (graph.finishedNode(node).edges, 0..) |edge, edge_index| {
             const callee: LiteralCalleeScheme = switch (edge.callee) {
                 .template => |template| blk: {
-                    if (template.artifact.eql(owner)) {
+                    if (template.module.eql(owner)) {
                         const key: LiteralScopeKey = .{ .template = template.template.index(), .scope = null };
                         break :blk literalLocalCallee(graph, component, key, try dispatch.templateSchemeVars(template.template));
                     }
-                    const view = import_views.viewForKey(template.artifact) orelse continue;
-                    try modules.append(allocator, template.artifact);
+                    const view = import_views.viewForKey(template.module) orelse continue;
+                    try modules.append(allocator, template.module);
                     break :blk .{
                         .live = null,
                         .finished = try (try view.dispatch()).templateLiteralRequirements(template.template),
@@ -23093,7 +23092,7 @@ pub fn computeLiteralComponent(
         while (it.next()) |key| try scope_keys.append(allocator, key.*);
     }
     std.mem.sort(LiteralScopeKey, scope_keys.items, {}, literalScopeKeyLessThan);
-    const scope_spans = try allocator.alloc(artifact_serialize.Span, scope_keys.items.len);
+    const scope_spans = try allocator.alloc(store_serialize.Span, scope_keys.items.len);
     errdefer allocator.free(scope_spans);
     var requirements: std.ArrayListUnmanaged(LiteralRequirement) = .empty;
     defer requirements.deinit(allocator);
@@ -23106,7 +23105,7 @@ pub fn computeLiteralComponent(
     // The edges' literal arguments.
     var arg_edges: std.ArrayListUnmanaged(u64) = .empty;
     defer arg_edges.deinit(allocator);
-    var arg_spans: std.ArrayListUnmanaged(artifact_serialize.Span) = .empty;
+    var arg_spans: std.ArrayListUnmanaged(store_serialize.Span) = .empty;
     defer arg_spans.deinit(allocator);
     var args: std.ArrayListUnmanaged(LiteralArgSource) = .empty;
     defer args.deinit(allocator);
@@ -23322,11 +23321,11 @@ fn checkedTypeHoldsFunction(
                     },
                     .local_declaration => |declaration_id| try pending.append(allocator, .{ .key = item.key, .types = item.types, .ty = item.types.nominalDeclarationById(declaration_id).backing }),
                     .imported_declaration => |imported| {
-                        const declaring: CheckedTypeStoreView = if (imported.artifact.eql(own_key))
+                        const declaring: CheckedTypeStoreView = if (imported.module.eql(own_key))
                             own_types
                         else
-                            (import_views.viewForKey(imported.artifact) orelse checkedModuleInvariant("a nominal type's declaring module is not available", .{})).checked_types;
-                        try pending.append(allocator, .{ .key = imported.artifact.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
+                            (import_views.viewForKey(imported.module) orelse checkedModuleInvariant("a nominal type's declaring module is not available", .{})).checked_types;
+                        try pending.append(allocator, .{ .key = imported.module.bytes, .types = declaring, .ty = declaring.nominalDeclarationById(imported.declaration).backing });
                     },
                     // A nominal read with a box payload capability is
                     // declared in its module like any other.
@@ -23410,7 +23409,7 @@ fn projectResolvedDispatchTargetCallable(
     const target_key = switch (target.kind) {
         .local_proc => return target.callable_ty,
         .structural => checkedModuleInvariant("structural method registry result was published as a direct callable target", .{}),
-        .procedure => |procedure| procedure.template.artifact,
+        .procedure => |procedure| procedure.template.module,
     };
     if (target_key.eql(owner)) return target.callable_ty;
 
@@ -23863,7 +23862,7 @@ fn validatePlatformBindingRelation(
             .{binding_index},
         );
     }
-    if (!std.meta.eql(relation.app_value.artifact.bytes, app_value.artifact.bytes) or
+    if (!std.meta.eql(relation.app_value.module.bytes, app_value.module.bytes) or
         relation.app_value.pattern != app_value.pattern)
     {
         base.invariant(
@@ -23908,7 +23907,7 @@ fn platformRequiredValueUseWithRelation(
                 .runtime_result_provenance = proc_use.procedure.runtime_result_provenance,
             },
             .root_evidence = .{
-                .checked_module = relation.app_value.artifact,
+                .checked_module = relation.app_value.module,
                 .span = relation.root_evidence,
             },
             .relation_template_closure = proc_use.relation_template_closure,
@@ -23940,10 +23939,10 @@ fn copyPlatformRequiredValueUse(
 }
 
 /// Public `platformRequirementContextKey` function.
-pub fn platformRequirementContextKey(artifact: *const CheckedModule) Allocator.Error!PlatformRequirementContextKey {
+pub fn platformRequirementContextKey(checked: *const CheckedModule) Allocator.Error!PlatformRequirementContextKey {
     return PlatformRequirementContextKey.compute(
-        artifact.module_identity,
-        try artifact.platformRequiredDeclarations().identityHash(artifact.typesView()),
+        checked.module_identity,
+        try checked.platformRequiredDeclarations().identityHash(checked.typesView()),
     );
 }
 
@@ -23952,15 +23951,15 @@ fn buildPlatformAppRelationFromDeclarations(
     module_idx: u32,
     requirement_context: PlatformRequirementContextKey,
     declarations: PlatformRequiredDeclarationTable,
-    app_artifact: *const CheckedModule,
+    app_module: *const CheckedModule,
     resolver: ModuleResolver,
 ) Allocator.Error!PlatformAppRelation {
     // The relation borrows the app's export closures, which live as long
     // as the app.
-    const app_closures = try importedView(app_artifact).exportClosures(resolver);
+    const app_closures = try importedView(app_module).exportClosures(resolver);
     // The one read of an app's analyses from its platform: the root
     // evidence of each requirement the app solves.
-    const app_root_evidence = try (try importedView(app_artifact).dispatch()).analyses().platformRequirementRootEvidence(try importedView(app_artifact).dispatch());
+    const app_root_evidence = try (try importedView(app_module).dispatch()).analyses().platformRequirementRootEvidence(try importedView(app_module).dispatch());
     var relations = std.ArrayList(PlatformRequirementRelationInput).empty;
     errdefer relations.deinit(allocator);
     var bindings = std.ArrayList(PlatformRequiredBindingInput).empty;
@@ -23968,26 +23967,26 @@ fn buildPlatformAppRelationFromDeclarations(
     var checked_error_requires = std.ArrayList(u32).empty;
     errdefer checked_error_requires.deinit(allocator);
 
-    const relation_key = PlatformAppRelationKey.compute(app_artifact.key.digest(), requirement_context);
+    const relation_key = PlatformAppRelationKey.compute(app_module.key.digest(), requirement_context);
 
     for (0..declarations.count()) |requires_idx| {
         const declaration = declarations.get(requires_idx);
         // The checker records successful solutions as exact app value/type
         // facts. A missing row is recorded explicitly as a checked-error
-        // requirement so publication stays total without inventing a binding.
-        const solution = (try app_artifact.platformRequirementSolutions()).lookupByRequiredIndex(declaration.requires_idx) orelse {
+        // requirement so the pairing stays total without inventing a binding.
+        const solution = (try app_module.platformRequirementSolutions()).lookupByRequiredIndex(declaration.requires_idx) orelse {
             try checked_error_requires.append(allocator, declaration.requires_idx);
             continue;
         };
 
         const app_value_ref = TopLevelValueRef{
-            .artifact = app_artifact.key.digest(),
+            .module = app_module.key.digest(),
             .pattern = solution.pattern,
         };
 
         const value_kind = solution.value_kind;
 
-        const top_level = (try app_artifact.checkedTables()).top_level_values.lookupByDef(solution.def) orelse {
+        const top_level = (try app_module.checkedTables()).top_level_values.lookupByDef(solution.def) orelse {
             checkedModuleInvariant("platform requirement solution references a def with no published top-level value", .{});
         };
         if (builtin.mode == .debug) {
@@ -24017,23 +24016,23 @@ fn buildPlatformAppRelationFromDeclarations(
                     .procedure_binding => |binding| binding,
                     .const_ref => checkedModuleInvariant("platform requirement solution needs a procedure but the app value is a const", .{}),
                 };
-                _ = (try app_artifact.checkedTables()).top_level_procedure_bindings.get(procedure_binding);
+                _ = (try app_module.checkedTables()).top_level_procedure_bindings.get(procedure_binding);
                 const exported_index = exportedProcedureBindingForAppValue(
-                    (try app_artifact.exportRows()).procedure_bindings,
+                    (try app_module.exportRows()).procedure_bindings,
                     top_level,
                 );
-                const exported_binding = (try app_artifact.exportRows()).procedure_bindings[exported_index];
-                const template_closure = try exportedProcedureBindingClosureForAppValue(app_artifact, app_closures, exported_index);
+                const exported_binding = (try app_module.exportRows()).procedure_bindings[exported_index];
+                const template_closure = try exportedProcedureBindingClosureForAppValue(app_module, app_closures, exported_index);
 
                 break :blk .{ .procedure_value = .{
                     .procedure = platformRequiredProcedureUse(
-                        app_artifact.key,
+                        app_module.key,
                         app_value_ref,
                         procedure_binding,
                         exported_binding,
                     ),
                     .root_evidence = .{
-                        .checked_module = app_artifact.key.digest(),
+                        .checked_module = app_module.key.digest(),
                         .span = app_root_evidence.spans[solution.source_solution],
                     },
                     .relation_template_closure = template_closure,
@@ -24043,7 +24042,7 @@ fn buildPlatformAppRelationFromDeclarations(
                     .const_ref => |ref| ref,
                     .procedure_binding => checkedModuleInvariant("platform requirement solution needs a const but the app value is a procedure", .{}),
                 };
-                const template_closure = try exportedConstTemplateClosureForAppValue(app_artifact, app_closures, app_value_ref, const_ref);
+                const template_closure = try exportedConstTemplateClosureForAppValue(app_module, app_closures, app_value_ref, const_ref);
 
                 break :blk .{ .const_value = .{
                     .const_use = .{
@@ -24067,11 +24066,11 @@ fn buildPlatformAppRelationFromDeclarations(
         .key = relation_key,
         .requirement_context = requirement_context,
         .platform_module_idx = module_idx,
-        .app_artifact = app_artifact.key.digest(),
+        .app_module = app_module.key.digest(),
         .relations = owned_relations,
         .bindings = owned_bindings,
         .checked_error_requires = owned_checked_errors,
-        .identity_solutions_app = (try app_artifact.platformRequirementSolutions()).identity_solutions,
+        .identity_solutions_app = (try app_module.platformRequirementSolutions()).identity_solutions,
     };
 }
 
@@ -24082,7 +24081,7 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
     if (comptime @typeInfo(T) == .pointer) {
         const pointer = @typeInfo(T).pointer;
         comptime std.debug.assert(pointer.size == .slice);
-        artifact_serialize.assertRelocatablePod(pointer.child);
+        store_serialize.assertRelocatablePod(pointer.child);
         const result = try allocator.alignedAlloc(pointer.child, .fromByteUnits(pointer.attrs.@"align" orelse @alignOf(pointer.child)), source.len);
         @memcpy(result, source);
         return result;
@@ -24117,11 +24116,11 @@ fn copyPairingColumns(comptime T: type, source: T, allocator: Allocator) Allocat
             }
             return result;
         } else {
-            artifact_serialize.assertRelocatablePod(T);
+            store_serialize.assertRelocatablePod(T);
             return source;
         }
     } else {
-        artifact_serialize.assertRelocatablePod(T);
+        store_serialize.assertRelocatablePod(T);
         return source;
     }
 }
@@ -24319,7 +24318,7 @@ pub const PlatformPairing = struct {
     /// Comptime fingerprint of `Serialized`'s layout. The compiler's cache
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 8);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = store_serialize.rootLayoutVersionHash(Serialized, 8);
 
     /// A pairing's cache entry: its evaluation output alone, keyed by the
     /// platform's and the app's checked entries. A hit installs it over a
@@ -24357,15 +24356,15 @@ pub const PlatformPairing = struct {
             },
         };
 
-        pub fn serialize(self: *Serialized, artifact: *const CheckedModule, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
-            std.debug.assert(artifact.pairing != null and artifact.evaluation.state == .finalized);
-            self.relation = artifact.checking_context_identity.platform_app_relation.?.bytes;
-            try self.evaluation.serialize(&artifact.evaluation, gpa, writer);
+        pub fn serialize(self: *Serialized, checked: *const CheckedModule, gpa: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            std.debug.assert(checked.pairing != null and checked.evaluation.state == .finalized);
+            self.relation = checked.checking_context_identity.platform_app_relation.?.bytes;
+            try self.evaluation.serialize(&checked.evaluation, gpa, writer);
         }
 
-        pub fn validate(self: *const Serialized, len: usize) error{CorruptArtifact}!void {
-            if (len < @sizeOf(Serialized)) return error.CorruptArtifact;
-            try artifact_serialize.validateSerialized(Serialized, self, len);
+        pub fn validate(self: *const Serialized, len: usize) error{CorruptSerializedData}!void {
+            if (len < @sizeOf(Serialized)) return error.CorruptSerializedData;
+            try store_serialize.validateSerialized(Serialized, self, len);
             try self.evaluation.validateContents(@intFromPtr(self));
         }
 
@@ -24393,7 +24392,7 @@ pub fn pairCheckedPlatform(
     allocator: Allocator,
     platform: *const CheckedModule,
     app: *const CheckedModule,
-    available_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
 ) Allocator.Error!CheckedModule {
     std.debug.assert(platform.evaluation.state == .finalized);
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
@@ -24402,7 +24401,7 @@ pub fn pairCheckedPlatform(
     // before it creates any type.
     _ = try platform.typesView().interfaceCapabilities();
     _ = try app.typesView().interfaceCapabilities();
-    for (available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
+    for (available_modules) |available| _ = try available.checked_types.interfaceCapabilities();
     const platform_analyses = platform.body_analyses orelse checkedModuleInvariant("a platform was paired before its body analyses were attached", .{});
     const thread_safe = platform_analyses.allocator;
     const io = platform_analyses.io;
@@ -24415,7 +24414,7 @@ pub fn pairCheckedPlatform(
     }
     const session = arena.allocator();
     const app_views = [_]ImportedModuleView{importedView(app)};
-    const pairing_views = CheckedImportViews{ .current_owner = platform.key.digest(), .direct = &.{}, .available = available_artifacts, .relations = &app_views };
+    const pairing_views = CheckedImportViews{ .current_owner = platform.key.digest(), .direct = &.{}, .available = available_modules, .relations = &app_views };
     const relation = try buildPlatformAppRelationFromDeclarations(session, platform.module_identity.module_idx, try platform.platformRequirementContextKey(), platform.platformRequiredDeclarations(), app, pairing_views.resolver());
 
     const pairing = try thread_safe.create(PlatformPairing);
@@ -24426,7 +24425,7 @@ pub fn pairCheckedPlatform(
         .io = io,
         .platform = platform,
         .app = app,
-        .available = try session.dupe(ImportedModuleView, available_artifacts),
+        .available = try session.dupe(ImportedModuleView, available_modules),
         .app_views = app_views,
         .relation = relation,
         .overlay = undefined,
@@ -24664,14 +24663,14 @@ fn findTag(
 }
 
 fn exportedProcedureBindingClosureForAppValue(
-    app_artifact: *const CheckedModule,
+    app_module: *const CheckedModule,
     closures: *const ExportClosures,
     binding_index: usize,
 ) Allocator.Error!ImportedTemplateClosureView {
-    switch ((try app_artifact.exportRows()).procedure_bindings[binding_index].body) {
+    switch ((try app_module.exportRows()).procedure_bindings[binding_index].body) {
         .direct_template => |direct| {
             if (checkedTemplateFromCallableTemplateForClosure(direct.template)) |template_ref| {
-                return try exportedProcedureTemplateClosureForRef(app_artifact, closures, template_ref);
+                return try exportedProcedureTemplateClosureForRef(app_module, closures, template_ref);
             }
         },
         .callable_eval_template, .checked_error => {},
@@ -24686,23 +24685,23 @@ fn exportedProcedureBindingForAppValue(
     for (bindings, 0..) |binding, index| {
         if (binding.binding.def == app_value.def and binding.binding.pattern == app_value.pattern) return index;
     }
-    checkedModuleInvariant("platform-required app procedure was not exported by the app artifact", .{});
+    checkedModuleInvariant("platform-required app procedure was not exported by the app module", .{});
 }
 
 fn platformRequiredProcedureUse(
-    app_artifact: CheckedModuleKey,
+    app_module: CheckedModuleKey,
     app_value: TopLevelValueRef,
     procedure_binding: TopLevelProcedureBindingRef,
     exported_binding: ImportedProcedureBindingView,
 ) ProcedureUseTemplate {
-    if (!exported_binding.binding.artifact.eql(app_artifact.digest()) or
+    if (!exported_binding.binding.module.eql(app_module.digest()) or
         exported_binding.binding.pattern != app_value.pattern)
     {
         checkedModuleInvariant("platform-required app procedure use disagreed with its exported binding", .{});
     }
     return .{
         .binding = .{ .platform_required = .{
-            .artifact = app_artifact.digest(),
+            .module = app_module.digest(),
             .app_value = app_value,
             .procedure_binding = procedure_binding,
         } },
@@ -24714,30 +24713,30 @@ fn platformRequiredProcedureUse(
 }
 
 fn exportedProcedureTemplateClosureForRef(
-    app_artifact: *const CheckedModule,
+    app_module: *const CheckedModule,
     closures: *const ExportClosures,
     template_ref: canonical.ProcedureTemplateRef,
 ) Allocator.Error!ImportedTemplateClosureView {
-    for ((try app_artifact.exportRows()).procedure_templates, 0..) |template, index| {
+    for ((try app_module.exportRows()).procedure_templates, 0..) |template, index| {
         if (canonical.procedureTemplateRefEql(template.template, template_ref)) return closures.procedureTemplate(index);
     }
-    checkedModuleInvariant("platform-required app procedure template was not exported by the app artifact", .{});
+    checkedModuleInvariant("platform-required app procedure template was not exported by the app module", .{});
 }
 
 fn exportedConstTemplateClosureForAppValue(
-    app_artifact: *const CheckedModule,
+    app_module: *const CheckedModule,
     closures: *const ExportClosures,
     app_value: TopLevelValueRef,
     const_ref: ConstRef,
 ) Allocator.Error!ImportedTemplateClosureView {
-    for ((try app_artifact.exportRows()).const_templates, 0..) |template, index| {
+    for ((try app_module.exportRows()).const_templates, 0..) |template, index| {
         if (template.pattern != app_value.pattern) continue;
         if (!constRefEql(template.const_ref, const_ref)) {
             checkedModuleInvariant("platform-required app const export disagreed with top-level const ref", .{});
         }
         return closures.constTemplate(index);
     }
-    checkedModuleInvariant("platform-required app const was not exported by the app artifact", .{});
+    checkedModuleInvariant("platform-required app const was not exported by the app module", .{});
 }
 
 fn topLevelDefSourceName(
@@ -25682,7 +25681,7 @@ pub const CompileTimeRootTable = struct {
             );
         }
 
-        try publishCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
+        try recordCompileTimeRootRequestEligibility(allocator, module, checked_types, roots.items);
 
         std.mem.sort(CompileTimeRoot, roots.items, {}, struct {
             fn lessThan(_: void, a: CompileTimeRoot, b: CompileTimeRoot) bool {
@@ -25818,7 +25817,7 @@ pub const CompileTimeRootTable = struct {
 
 /// Request eligibility from each root's solved type. Diagnostic exclusion
 /// follows once the body diagnostic facts are published.
-fn publishCompileTimeRootRequestEligibility(
+fn recordCompileTimeRootRequestEligibility(
     allocator: Allocator,
     module: TypedCIR.Module,
     checked_types: *const CheckedSourceTypes,
@@ -25906,7 +25905,7 @@ const TypeVarMention = struct {
 const TypeVarMentions = struct {
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
-    memo: collections.DenseMap(CheckedTypeId, artifact_serialize.Span),
+    memo: collections.DenseMap(CheckedTypeId, store_serialize.Span),
     pool: std.ArrayList(TypeVarMention) = .empty,
     /// Walk state of one query: each (type, flags) pair is visited once, so a
     /// cyclic type terminates.
@@ -26364,7 +26363,7 @@ pub fn computeTemplateDemandNode(allocator: Allocator, dispatch: CheckedDispatch
     const import_views = try dispatchImportViews(dispatch);
     var pass = TemplateDemandWalk{
         .allocator = allocator,
-        .artifact_key = source.key,
+        .module_key = source.key,
         .checked_types = source.types.store,
         .bodies = dispatchSourceBodies(source),
         .templates = source.templates,
@@ -26376,7 +26375,7 @@ pub fn computeTemplateDemandNode(allocator: Allocator, dispatch: CheckedDispatch
         .mentions = .{
             .allocator = allocator,
             .checked_types = source.types.store,
-            .memo = collections.DenseMap(CheckedTypeId, artifact_serialize.Span).init(allocator),
+            .memo = collections.DenseMap(CheckedTypeId, store_serialize.Span).init(allocator),
             .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
             .reach = .{
                 .allocator = allocator,
@@ -26481,7 +26480,7 @@ pub fn computeTemplateDemandComponent(
 
 /// The demand vector of a template of a module dispatch resolution reads.
 pub fn importedTemplateDemands(dispatch: CheckedDispatch, callee: canonical.ProcedureTemplateRef) Allocator.Error![]const SchemeVarDemand {
-    const view = (try dispatch.importedView(callee.artifact)) orelse
+    const view = (try dispatch.importedView(callee.module)) orelse
         checkedModuleInvariant("a demand edge named a module dispatch resolution does not read", .{});
     return (try view.dispatch()).templateDemands(callee.template);
 }
@@ -26493,7 +26492,7 @@ pub fn importedTemplateDemands(dispatch: CheckedDispatch, callee: canonical.Proc
 /// (`TemplateDemandGraph`).
 const TemplateDemandWalk = struct {
     allocator: Allocator,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     checked_types: *const CheckedTypeStore,
     bodies: CheckedBodies,
     templates: *const CheckedProcedureTemplateTable,
@@ -26524,7 +26523,7 @@ const TemplateDemandWalk = struct {
     current_demands: []SchemeVarDemand = &.{},
 
     const ImportedDefKey = struct {
-        artifact: ModuleId,
+        module: ModuleId,
         def: CIR.Def.Idx,
     };
 
@@ -27127,7 +27126,7 @@ const TemplateDemandWalk = struct {
         if (procedure.intrinsic != null) return null;
         const body = switch (procedure.binding) {
             .top_level => |binding| blk: {
-                if (!binding.artifact.eql(self.artifact_key.digest())) return null;
+                if (!binding.module.eql(self.module_key.digest())) return null;
                 break :blk self.top_level_procedure_bindings.get(binding.binding).body;
             },
             .imported => |imported| return try self.importedTemplate(imported),
@@ -27137,9 +27136,9 @@ const TemplateDemandWalk = struct {
     }
 
     fn importedTemplate(self: *TemplateDemandWalk, imported: ImportedProcedureBindingRef) Allocator.Error!?canonical.ProcedureTemplateRef {
-        const key: ImportedDefKey = .{ .artifact = imported.artifact, .def = imported.def };
+        const key: ImportedDefKey = .{ .module = imported.module, .def = imported.def };
         if (self.imported_templates.get(key)) |cached| return cached;
-        const view = (try self.dispatch.importedView(imported.artifact)) orelse return null;
+        const view = (try self.dispatch.importedView(imported.module)) orelse return null;
         const template = if (try importedProcedureBindingForDef(view, imported.def)) |binding|
             directProcedureBindingTemplate(binding.body)
         else
@@ -27164,11 +27163,11 @@ const TemplateDemandWalk = struct {
     /// where the slot needs the variable's exact type. False when the callee
     /// is not a template this module reads.
     fn relateCall(self: *TemplateDemandWalk, callee: canonical.ProcedureTemplateRef, subst: []const CheckedTypeId) Allocator.Error!bool {
-        const local = callee.artifact.eql(self.artifact_key.digest());
+        const local = callee.module.eql(self.module_key.digest());
         const callee_vars = if (local)
             try self.dispatch.templateSchemeVars(callee.template)
         else blk: {
-            const view = (try self.dispatch.importedView(callee.artifact)) orelse return false;
+            const view = (try self.dispatch.importedView(callee.module)) orelse return false;
             break :blk try (try view.dispatch()).templateSchemeVars(callee.template);
         };
         if (subst.len != callee_vars.len) return false;
@@ -27272,7 +27271,7 @@ fn compileTimeRootHasConstBody(kind: CompileTimeRootKind) bool {
 /// at compile time, and at compile time only through a further pairing.
 const ExhaustivenessTemplateReachability = struct {
     allocator: Allocator,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     procedure_templates: *const CheckedProcedureTemplateTable,
     entry_wrappers: *const EntryWrapperTable,
     callable_eval_templates: CallableEvalTemplateTableView,
@@ -27289,7 +27288,7 @@ const ExhaustivenessTemplateReachability = struct {
 
     fn init(
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
         callable_eval_templates: CallableEvalTemplateTableView,
@@ -27307,7 +27306,7 @@ const ExhaustivenessTemplateReachability = struct {
         @memset(compile_time_templates, false);
         return .{
             .allocator = allocator,
-            .artifact_key = artifact_key,
+            .module_key = module_key,
             .procedure_templates = procedure_templates,
             .entry_wrappers = entry_wrappers,
             .callable_eval_templates = callable_eval_templates,
@@ -27330,7 +27329,7 @@ const ExhaustivenessTemplateReachability = struct {
 
     fn build(
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         root_requests: *const RootRequestTable,
         procedure_templates: *const CheckedProcedureTemplateTable,
         entry_wrappers: *const EntryWrapperTable,
@@ -27341,7 +27340,7 @@ const ExhaustivenessTemplateReachability = struct {
     ) Allocator.Error!ExhaustivenessTemplateReachability {
         var reachability = try ExhaustivenessTemplateReachability.init(
             allocator,
-            artifact_key,
+            module_key,
             procedure_templates,
             entry_wrappers,
             callable_eval_templates,
@@ -27397,7 +27396,7 @@ const ExhaustivenessTemplateReachability = struct {
         }
         if (request.procedure_binding) |binding| {
             try self.markTopLevelProcedureBinding(kind, .{
-                .artifact = self.artifact_key.digest(),
+                .module = self.module_key.digest(),
                 .binding = binding,
             });
         }
@@ -27484,7 +27483,7 @@ const ExhaustivenessTemplateReachability = struct {
             .top_level => |top_level| try self.markTopLevelProcedureBinding(kind, top_level),
             .hosted => |hosted| try self.markProcedureTemplate(kind, hosted.template),
             .platform_required => |required| try self.markTopLevelProcedureBinding(kind, .{
-                .artifact = required.artifact,
+                .module = required.module,
                 .binding = required.procedure_binding,
             }),
             .imported => {},
@@ -27496,7 +27495,7 @@ const ExhaustivenessTemplateReachability = struct {
         kind: ReachabilityKind,
         binding_ref: ModuleTopLevelProcedureBindingRef,
     ) Allocator.Error!void {
-        if (!binding_ref.artifact.eql(self.artifact_key.digest())) return;
+        if (!binding_ref.module.eql(self.module_key.digest())) return;
         const binding = self.top_level_procedure_bindings.get(binding_ref.binding);
         try self.markProcedureBindingBody(kind, binding.body);
     }
@@ -27556,7 +27555,7 @@ const ExhaustivenessTemplateReachability = struct {
         kind: ReachabilityKind,
         template_ref: ModuleCallableEvalTemplateRef,
     ) Allocator.Error!void {
-        if (!template_ref.artifact.eql(self.artifact_key.digest())) return;
+        if (!template_ref.module.eql(self.module_key.digest())) return;
         try self.markCallableEvalTemplate(kind, template_ref.template);
     }
 
@@ -27576,7 +27575,7 @@ const ExhaustivenessTemplateReachability = struct {
         self: *const ExhaustivenessTemplateReachability,
         template_ref: canonical.ProcedureTemplateRef,
     ) ?usize {
-        if (!template_ref.artifact.eql(self.artifact_key.digest())) return null;
+        if (!template_ref.module.eql(self.module_key.digest())) return null;
         // A literal root's entry wrapper converts a literal and reaches no
         // exhaustiveness check.
         const idx = template_ref.template.rowIndex() orelse return null;
@@ -27787,7 +27786,7 @@ fn moduleExhaustivenessSites(
         }
     }
 
-    const owner_artifact = owner.key.digest();
+    const owner_module = owner.key.digest();
     for (obligations, sites, owner_templates, replacing_roots, replacing_requests, 0..) |obligation, *site, owner_template_id, replacing_root, replacing_request, index| {
         const id: CheckedExhaustivenessSiteId = @fromBackingInt(@intCast(index));
         const kind: CheckedComptimeSiteKind = switch (obligation.source) {
@@ -27823,7 +27822,7 @@ fn moduleExhaustivenessSites(
         }
 
         const owner_template: ?canonical.ProcedureTemplateRef = if (owner_template_id) |template_id| .{
-            .artifact = owner_artifact,
+            .module = owner_module,
             .proc_base = templates[template_id.index()].proc_base,
             .template = template_id,
         } else null;
@@ -28129,7 +28128,7 @@ fn selectedHoistedRootBody(
 
 /// Public `ConstRef` declaration.
 pub const ConstRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     owner: ConstOwner,
     template: ConstTemplateId,
     source_scheme: CheckedTypeSchemeId,
@@ -28140,7 +28139,7 @@ pub const ConstLocator = ConstRef;
 
 /// Return the checked module id that owns a compile-time constant.
 pub fn constModuleId(ref: ConstRef) ModuleId {
-    return ref.artifact;
+    return ref.module;
 }
 
 /// Public `ConstOwner` declaration.
@@ -28219,7 +28218,7 @@ pub const TopLevelValueTable = struct {
         callable_eval_templates: *CallableEvalTemplateTable,
         procedure_bindings: *TopLevelProcedureBindingTable,
         const_templates: *ConstTemplateTable,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         compile_time_roots: *const CompileTimeRootTable,
         checked_source_types: *const CheckedSourceTypes,
     ) Allocator.Error!TopLevelValueTable {
@@ -28245,7 +28244,7 @@ pub const TopLevelValueTable = struct {
                 const binding = try procedure_bindings.appendDirect(
                     allocator,
                     source_scheme,
-                    .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                    .{ .module = template.module, .proc_base = template.proc_base },
                     template,
                 );
                 break :blk .{ .procedure_binding = binding };
@@ -28287,14 +28286,14 @@ pub const TopLevelValueTable = struct {
                 break :blk .{ .procedure_binding = binding };
             } else if (def.expr.data == .e_anno_only) .{ .const_ref = try const_templates.reserveUnimplementedTopLevel(
                 allocator,
-                artifact_key,
+                module_key,
                 module.moduleIndex(),
                 checked_pattern,
                 source_scheme,
                 .{ .region = module.regionAt(ModuleEnv.nodeIdxFrom(def.expr.idx)) },
             ) } else .{ .const_ref = try const_templates.reserveTopLevel(
                 allocator,
-                artifact_key,
+                module_key,
                 module.moduleIndex(),
                 checked_pattern,
                 source_scheme,
@@ -28331,7 +28330,7 @@ pub const TopLevelValueTable = struct {
     }
 
     pub fn lookupByPattern(self: *const TopLevelValueTable, pattern: CIR.Pattern.Idx) ?TopLevelValueEntry {
-        const found = artifact_serialize.binarySearchByKey(TopLevelValueByPatternEntry, CIR.Pattern.Idx, self.by_pattern, pattern, TopLevelValueByPatternEntry.order) orelse return null;
+        const found = store_serialize.binarySearchByKey(TopLevelValueByPatternEntry, CIR.Pattern.Idx, self.by_pattern, pattern, TopLevelValueByPatternEntry.order) orelse return null;
         return self.entries[found.entry];
     }
 
@@ -28352,7 +28351,7 @@ pub const TopLevelValueTable = struct {
         return self.entries[self.by_def[lo].entry];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `HoistedConstId` declaration.
@@ -28402,7 +28401,7 @@ pub const HoistedConstTable = struct {
     pub fn fromRoots(
         allocator: Allocator,
         module: TypedCIR.Module,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         validation_scheme: ?CheckedTypeSchemeId,
         roots: *const CompileTimeRootTable,
         const_templates: *ConstTemplateTable,
@@ -28439,7 +28438,7 @@ pub const HoistedConstTable = struct {
             } else checked_source_types.schemeForSourceVar(module, source_var);
             const const_ref = try const_templates.reserveHoisted(
                 allocator,
-                artifact_key,
+                module_key,
                 module.moduleIndex(),
                 root.id,
                 source_scheme,
@@ -28530,7 +28529,7 @@ pub const HoistedConstTable = struct {
         return self.entries[index];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `CheckedCallableBodyRef` declaration.
@@ -28549,25 +28548,25 @@ pub const CheckedStringRange = extern struct {
 
 /// A procedure template body of a checked module: its root expression.
 pub const ModuleCheckedBodyRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     body: CIR.Expr.Idx,
 };
 
 /// Public `ModuleCheckedTypeRef` declaration.
 pub const ModuleCheckedTypeRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     ty: CheckedTypeId,
 };
 
 /// Public `ModuleCheckedTypeSchemeRef` declaration.
 pub const ModuleCheckedTypeSchemeRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     scheme: CheckedTypeSchemeId,
 };
 
 /// Public `ModuleCheckedCallableBodyRef` declaration.
 pub const ModuleCheckedCallableBodyRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     body: CheckedCallableBodyRef,
 };
 
@@ -28575,25 +28574,25 @@ pub const ModuleProcedureTemplateRef = canonical.ProcedureTemplateRef;
 
 /// Public `ModuleCallableEvalTemplateRef` declaration.
 pub const ModuleCallableEvalTemplateRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     template: CallableEvalTemplateId,
 };
 
 /// Public `ModuleResolvedValueRefTableRef` declaration.
 pub const ModuleResolvedValueRefTableRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     table: ResolvedValueRefTableRef,
 };
 
 /// Public `ModuleStaticDispatchPlanTableRef` declaration.
 pub const ModuleStaticDispatchPlanTableRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
     table: StaticDispatchPlanTableRef,
 };
 
 /// Public `ModuleInterfaceCapabilitiesRef` declaration.
 pub const ModuleInterfaceCapabilitiesRef = struct {
-    artifact: CheckedModuleDigest,
+    module: CheckedModuleDigest,
 };
 
 /// Public `ImportedTemplateClosureView` declaration.
@@ -28678,7 +28677,7 @@ pub const ClosurePool = struct {
         var stored: StoredImportedTemplateClosure = .{};
         inline for (closure_fields) |name| {
             const Elem = std.meta.Child(@FieldType(ImportedTemplateClosureView, name));
-            @field(stored, name) = try artifact_serialize.appendSpan(ClosureRange, Elem, &@field(self, name), allocator, @field(closure, name));
+            @field(stored, name) = try store_serialize.appendSpan(ClosureRange, Elem, &@field(self, name), allocator, @field(closure, name));
         }
         return stored;
     }
@@ -28693,7 +28692,7 @@ pub const ClosurePool = struct {
         return closure;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 
     /// Relocatable serialized form: one `SerializedSlice` per flat pool (11
     /// base-pointer fixups, independent of stored data size).
@@ -28711,10 +28710,10 @@ pub const ClosurePool = struct {
         interface_capabilities: SerializedSlice(ModuleInterfaceCapabilitiesRef) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 11);
+            std.debug.assert(store_serialize.relocatablePointerCount(Serialized) == 11);
         }
 
-        const Serde = artifact_serialize.SliceStoreSerde(ClosurePool, @This());
+        const Serde = store_serialize.SliceStoreSerde(ClosurePool, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
@@ -28729,11 +28728,11 @@ test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
     // An owned closure view (slices allocated by the caller, freed by commit).
     var closure = ImportedTemplateClosureView{};
     closure.checked_bodies = try gpa.dupe(ModuleCheckedBodyRef, &.{
-        .{ .artifact = key_a.digest(), .body = @fromBackingInt(@intCast(7)) },
-        .{ .artifact = key_b.digest(), .body = @fromBackingInt(@intCast(9)) },
+        .{ .module = key_a.digest(), .body = @fromBackingInt(@intCast(7)) },
+        .{ .module = key_b.digest(), .body = @fromBackingInt(@intCast(9)) },
     });
     closure.interface_capabilities = try gpa.dupe(ModuleInterfaceCapabilitiesRef, &.{
-        .{ .artifact = key_a.digest() },
+        .{ .module = key_a.digest() },
     });
 
     var pool = ClosurePool.empty;
@@ -28747,16 +28746,16 @@ test "ClosurePool: commit/reconstruct then serialize/relocate round-trip" {
     try std.testing.expectEqual(@as(usize, 1), reconstructed.interface_capabilities.len);
 
     // Serialize → aligned buffer → deserialize, then materialize again.
-    var rt = try artifact_serialize.roundTripForTest(gpa, ClosurePool, &pool);
+    var rt = try store_serialize.roundTripForTest(gpa, ClosurePool, &pool);
     defer gpa.free(rt.buffer);
     defer rt.loaded.deinit(gpa);
 
     const loaded = rt.loaded.reconstruct(stored);
     try std.testing.expectEqual(@as(usize, 2), loaded.checked_bodies.len);
     try std.testing.expectEqual(@as(u32, 9), @backingInt(loaded.checked_bodies[1].body));
-    try std.testing.expectEqualSlices(u8, &key_b.bytes, &loaded.checked_bodies[1].artifact.bytes);
+    try std.testing.expectEqualSlices(u8, &key_b.bytes, &loaded.checked_bodies[1].module.bytes);
     try std.testing.expectEqual(@as(usize, 1), loaded.interface_capabilities.len);
-    try std.testing.expectEqualSlices(u8, &key_a.bytes, &loaded.interface_capabilities[0].artifact.bytes);
+    try std.testing.expectEqualSlices(u8, &key_a.bytes, &loaded.interface_capabilities[0].module.bytes);
 }
 
 test "platform relation procedure use preserves exported runtime result provenance" {
@@ -28769,7 +28768,7 @@ test "platform relation procedure use preserves exported runtime result provenan
     const required_relation_id: PlatformRequirementRelationId = @fromBackingInt(@intCast(10));
     const exported = ImportedProcedureBindingView{
         .binding = .{
-            .artifact = app_key.digest(),
+            .module = app_key.digest(),
             .def = @fromBackingInt(@intCast(1)),
             .pattern = app_pattern,
         },
@@ -28786,7 +28785,7 @@ test "platform relation procedure use preserves exported runtime result provenan
         .value = .{ .procedure_binding = procedure_binding },
     };
     const app_value_ref = TopLevelValueRef{
-        .artifact = app_key.digest(),
+        .module = app_key.digest(),
         .pattern = app_pattern,
     };
     const resolved_export = exported;
@@ -28817,7 +28816,7 @@ test "platform relation procedure use preserves exported runtime result provenan
         .value_use = stored_use,
     }});
 
-    var rt = try artifact_serialize.roundTripForTest(gpa, PlatformRequiredBindingTable, &table);
+    var rt = try store_serialize.roundTripForTest(gpa, PlatformRequiredBindingTable, &table);
     defer gpa.free(rt.buffer);
     defer rt.loaded.deinit(gpa);
     try std.testing.expectEqual(required_binding_id, rt.loaded.bindings[0].id);
@@ -28847,9 +28846,9 @@ pub fn appendImportedTemplateClosureModuleKeys(
     inline for (closure_fields) |name| {
         const Elem = std.meta.Child(@FieldType(ImportedTemplateClosureView, name));
         // Method registry entries are keyed by the owning table, not by module.
-        if (comptime @hasField(Elem, "artifact")) {
+        if (comptime @hasField(Elem, "module")) {
             for (@field(closure, name)) |value| {
-                try appendClosureModuleKey(allocator, keys, value.artifact);
+                try appendClosureModuleKey(allocator, keys, value.module);
             }
         }
     }
@@ -28863,34 +28862,34 @@ pub fn appendImportedTemplateClosureModuleKeys(
 pub fn appendPlatformRelationDependencyModuleKeysFromView(
     allocator: Allocator,
     keys: *std.ArrayList(ModuleId),
-    relation_artifact: ImportedModuleView,
+    relation_module: ImportedModuleView,
     resolver: ModuleResolver,
     binding: PlatformRequiredBinding,
     binding_relation_closure: ImportedTemplateClosureView,
 ) Allocator.Error!void {
-    for (relation_artifact.direct_import_module_keys) |key| {
+    for (relation_module.direct_import_module_keys) |key| {
         try appendClosureModuleKey(allocator, keys, key.digest());
     }
 
     try appendImportedTemplateClosureModuleKeys(allocator, keys, binding_relation_closure);
-    try appendRelationModuleExportedValueClosureKeysFromView(allocator, keys, relation_artifact, try relation_artifact.exportClosures(resolver), binding);
+    try appendRelationModuleExportedValueClosureKeysFromView(allocator, keys, relation_module, try relation_module.exportClosures(resolver), binding);
 }
 
 fn appendRelationModuleExportedValueClosureKeysFromView(
     allocator: Allocator,
     keys: *std.ArrayList(ModuleId),
-    relation_artifact: ImportedModuleView,
+    relation_module: ImportedModuleView,
     closures: *const ExportClosures,
     binding: PlatformRequiredBinding,
 ) Allocator.Error!void {
     switch (binding.value_use) {
         .procedure_value => {
             var found = false;
-            for ((try relation_artifact.exportRows()).procedure_bindings, 0..) |exported, binding_index| {
+            for ((try relation_module.exportRows()).procedure_bindings, 0..) |exported, binding_index| {
                 if (exported.binding.pattern != binding.app_value.pattern) continue;
                 found = true;
                 try appendImportedTemplateClosureModuleKeys(allocator, keys, closures.procedureBinding(binding_index));
-                for ((try relation_artifact.exportRows()).procedure_templates, 0..) |template, template_index| {
+                for ((try relation_module.exportRows()).procedure_templates, 0..) |template, template_index| {
                     if (template.def == exported.binding.def) {
                         try appendImportedTemplateClosureModuleKeys(allocator, keys, closures.procedureTemplate(template_index));
                     }
@@ -28902,7 +28901,7 @@ fn appendRelationModuleExportedValueClosureKeysFromView(
         },
         .const_value => |const_use| {
             var found = false;
-            for ((try relation_artifact.exportRows()).const_templates, 0..) |template, template_index| {
+            for ((try relation_module.exportRows()).const_templates, 0..) |template, template_index| {
                 if (template.pattern != binding.app_value.pattern) continue;
                 if (!constRefEql(template.const_ref, const_use.const_use.const_ref)) continue;
                 found = true;
@@ -28942,7 +28941,7 @@ fn reachedSourceRoot(owner: ImportedModuleView, var_: Var) Allocator.Error!?Chec
 /// declarations and binding scheme codec requirements name, and the modules
 /// its export closures reach.
 pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!PublicApiDependencies {
-    const artifact_key = owner.key.digest();
+    const module_key = owner.key.digest();
     const checked_types = owner.checked_types;
     const module_env = owner.module_env;
     var keys = ModuleKeyAccumulator.empty;
@@ -28960,7 +28959,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
             const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(def_idx)) orelse {
                 checkedModuleInvariant("exported def type root was not published", .{});
             };
-            try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+            try appendPublicApiTypeDependencies(allocator, module_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
         }
 
         // Platform requirement signatures are public API too: requirement
@@ -28969,7 +28968,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
         // through this module's type-owner dependencies (issue 9911).
         for (module_env.requires_types.items.items) |required_type| {
             const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse continue;
-            try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+            try appendPublicApiTypeDependencies(allocator, module_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
         }
 
         try appendExposedTypeDeclarationPublicApiDependencies(allocator, owner, resolver, &visited_types, &keys, &type_owner_keys);
@@ -28986,7 +28985,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
                 const root = try reachedSourceRoot(owner, requirement_var) orelse {
                     checkedModuleInvariant("binding scheme codec requirement root was not published", .{});
                 };
-                try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+                try appendPublicApiTypeDependencies(allocator, module_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
             }
         }
 
@@ -29000,7 +28999,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
             const root = try reachedSourceRoot(owner, ModuleEnv.varFrom(required_type.type_anno)) orelse {
                 checkedModuleInvariant("platform requirement declaration has no platform-owned checked payload", .{});
             };
-            try appendPublicApiTypeDependencies(allocator, artifact_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
+            try appendPublicApiTypeDependencies(allocator, module_key, checked_types, root, &visited_types, resolver, &keys, &type_owner_keys);
         }
     }
 
@@ -29009,7 +29008,7 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
     if (try closuresNameDependencyModule(owner, resolver)) {
         var closure_dependencies = PublicApiClosureDependencyCollector.init(
             allocator,
-            artifact_key,
+            module_key,
             resolver,
             &(try owner.checkedTables()).checked_procedure_templates,
             (try owner.checkedTables()).callable_eval_templates.view(),
@@ -29025,13 +29024,13 @@ pub fn computePublicApiDependencies(allocator: Allocator, owner: ImportedModuleV
         try closure_dependencies.appendExportClosures(owner, try owner.exportClosures(resolver));
     }
 
-    const artifacts = try keys.toOwnedSlice(allocator);
-    errdefer allocator.free(artifacts);
-    const type_owner_artifacts = try type_owner_keys.toOwnedSlice(allocator);
+    const checked_modules = try keys.toOwnedSlice(allocator);
+    errdefer allocator.free(checked_modules);
+    const type_owner_modules = try type_owner_keys.toOwnedSlice(allocator);
 
     return .{
-        .artifacts = artifacts,
-        .type_owner_artifacts = type_owner_artifacts,
+        .modules = checked_modules,
+        .type_owner_modules = type_owner_modules,
     };
 }
 
@@ -29064,17 +29063,17 @@ fn closuresNameDependencyModule(owner: ImportedModuleView, resolver: ModuleResol
 
         fn binding(self: @This(), ref: ProcedureBindingRef) bool {
             return switch (ref) {
-                .top_level => |top_level| self.dependency(top_level.artifact),
-                .imported => |imported| self.dependency(imported.artifact),
-                .hosted => |hosted| self.dependency(hosted.template.artifact),
+                .top_level => |top_level| self.dependency(top_level.module),
+                .imported => |imported| self.dependency(imported.module),
+                .hosted => |hosted| self.dependency(hosted.template.module),
                 .platform_required => true,
             };
         }
 
         fn callable(self: @This(), template: canonical.CallableProcedureTemplateRef) bool {
             return switch (template) {
-                .checked => |checked| self.dependency(checked.artifact),
-                .synthetic => |synthetic| self.dependency(synthetic.template.artifact),
+                .checked => |checked| self.dependency(checked.module),
+                .synthetic => |synthetic| self.dependency(synthetic.template.module),
                 .lifted => true,
             };
         }
@@ -29082,18 +29081,18 @@ fn closuresNameDependencyModule(owner: ImportedModuleView, resolver: ModuleResol
     const names: Names = .{ .own = own, .resolver = resolver };
     const rows = try owner.exportRows();
     for (rows.procedure_templates) |exported| {
-        if (names.dependency(exported.template.artifact)) return true;
+        if (names.dependency(exported.template.module)) return true;
     }
     for (rows.procedure_bindings) |binding| switch (binding.body) {
         .direct_template => |direct| if (names.callable(direct.template)) return true,
         .callable_eval_template, .checked_error => {},
     };
     for (rows.const_templates) |exported| {
-        if (names.dependency(exported.const_ref.artifact)) return true;
+        if (names.dependency(exported.const_ref.module)) return true;
     }
     for ((try owner.valueRefs()).records) |record| switch (record.ref) {
-        .top_level_const, .imported_const => |const_use| if (names.dependency(const_use.const_ref.artifact)) return true,
-        .selected_hoisted_const => |selected| if (names.dependency(selected.const_use.const_ref.artifact)) return true,
+        .top_level_const, .imported_const => |const_use| if (names.dependency(const_use.const_ref.module)) return true,
+        .selected_hoisted_const => |selected| if (names.dependency(selected.const_use.const_ref.module)) return true,
         .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |procedure| if (names.binding(procedure.binding)) return true,
         .platform_required_const, .platform_required_proc => return true,
         .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .platform_required_declaration, .platform_required_checked_error => {},
@@ -29158,7 +29157,7 @@ fn appendExposedTypeDeclarationPublicApiDependencies(
 /// already walked contributes nothing new, since the key lists deduplicate.
 fn appendPublicApiTypeDependencies(
     allocator: Allocator,
-    artifact_key: ModuleId,
+    module_key: ModuleId,
     checked_types: CheckedTypeStoreView,
     root: CheckedTypeId,
     visited: *std.AutoHashMap(ModuleTypeVisit, void),
@@ -29166,14 +29165,14 @@ fn appendPublicApiTypeDependencies(
     keys: *ModuleKeyAccumulator,
     type_owner_keys: *ModuleKeyAccumulator,
 ) Allocator.Error!void {
-    var modules = try WalkModules.init(allocator, artifact_key, checked_types, resolver);
+    var modules = try WalkModules.init(allocator, module_key, checked_types, resolver);
     defer modules.deinit(allocator);
     var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
     defer pending.deinit(allocator);
     try pending.append(allocator, .{ .module = 0, .ty = root });
     while (pending.pop()) |item| {
         const module = modules.entries.items[item.module].module;
-        if ((try visited.getOrPut(.{ .artifact = module.bytes, .ty = @backingInt(item.ty) })).found_existing) continue;
+        if ((try visited.getOrPut(.{ .module = module.bytes, .ty = @backingInt(item.ty) })).found_existing) continue;
 
         const start = pending.items.len;
         var children = WalkChildren{ .allocator = allocator, .module = item.module, .pending = &pending };
@@ -29187,7 +29186,7 @@ fn appendPublicApiTypeDependencies(
             .alias => |alias| {
                 try appendPublicApiOwnerDependency(
                     allocator,
-                    artifact_key,
+                    module_key,
                     alias.owner_module.*,
                     resolver,
                     keys,
@@ -29199,7 +29198,7 @@ fn appendPublicApiTypeDependencies(
             .nominal => |nominal| {
                 try appendPublicApiOwnerDependency(
                     allocator,
-                    artifact_key,
+                    module_key,
                     nominal.owner_module.*,
                     resolver,
                     keys,
@@ -29236,13 +29235,13 @@ fn appendPublicApiTypeDependencies(
 
 fn appendPublicApiOwnerDependency(
     allocator: Allocator,
-    artifact_key: ModuleId,
+    module_key: ModuleId,
     owner_key: ModuleId,
     resolver: ModuleResolver,
     keys: *ModuleKeyAccumulator,
     type_owner_keys: *ModuleKeyAccumulator,
 ) Allocator.Error!void {
-    if (ModuleId.eql(owner_key, artifact_key)) return;
+    if (ModuleId.eql(owner_key, module_key)) return;
     if (keys.contains(owner_key) and type_owner_keys.contains(owner_key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(owner_key, resolver)) return;
     _ = try keys.append(allocator, owner_key);
@@ -29255,12 +29254,12 @@ fn importedViewIdentityMatches(view: *const ImportedModuleView, origin_hash: *co
 
 fn appendPublicApiClosureDependencyKey(
     allocator: Allocator,
-    artifact_key: ModuleId,
+    module_key: ModuleId,
     resolver: ModuleResolver,
     keys: *ModuleKeyAccumulator,
     key: ModuleId,
 ) Allocator.Error!void {
-    if (ModuleId.eql(key, artifact_key)) return;
+    if (ModuleId.eql(key, module_key)) return;
     if (keys.contains(key)) return;
     if (publicApiDependencyKeyIsKnownBuiltin(key, resolver)) return;
     _ = try keys.append(allocator, key);
@@ -29278,7 +29277,7 @@ fn publicApiDependencyKeyIsKnownBuiltin(
 
 const PublicApiClosureDependencyCollector = struct {
     allocator: Allocator,
-    artifact_key: ModuleId,
+    module_key: ModuleId,
     resolver: ModuleResolver,
     checked_templates: *const CheckedProcedureTemplateTable,
     callable_eval_templates: CallableEvalTemplateTableView,
@@ -29295,7 +29294,7 @@ const PublicApiClosureDependencyCollector = struct {
 
     fn init(
         allocator: Allocator,
-        artifact_key: ModuleId,
+        module_key: ModuleId,
         resolver: ModuleResolver,
         checked_templates: *const CheckedProcedureTemplateTable,
         callable_eval_templates: CallableEvalTemplateTableView,
@@ -29309,7 +29308,7 @@ const PublicApiClosureDependencyCollector = struct {
     ) PublicApiClosureDependencyCollector {
         return .{
             .allocator = allocator,
-            .artifact_key = artifact_key,
+            .module_key = module_key,
             .resolver = resolver,
             .checked_templates = checked_templates,
             .callable_eval_templates = callable_eval_templates,
@@ -29391,7 +29390,7 @@ const PublicApiClosureDependencyCollector = struct {
 
     const ClosureStep = union(enum) {
         closure: ImportedTemplateClosureView,
-        artifact_key: ModuleId,
+        module_key: ModuleId,
         type_owner_key: ModuleId,
         procedure_template: canonical.ProcedureTemplateRef,
         callable_eval_template: ModuleCallableEvalTemplateRef,
@@ -29412,29 +29411,29 @@ const PublicApiClosureDependencyCollector = struct {
         const gpa = self.allocator;
         switch (step) {
             .closure => |closure| {
-                for (closure.checked_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+                for (closure.checked_bodies) |value| try pending.append(gpa, .{ .module_key = value.module });
                 for (closure.checked_type_roots) |value| {
-                    try pending.append(gpa, .{ .artifact_key = value.artifact });
-                    try pending.append(gpa, .{ .type_owner_key = value.artifact });
+                    try pending.append(gpa, .{ .module_key = value.module });
+                    try pending.append(gpa, .{ .type_owner_key = value.module });
                 }
                 for (closure.checked_type_schemes) |value| {
-                    try pending.append(gpa, .{ .artifact_key = value.artifact });
-                    try pending.append(gpa, .{ .type_owner_key = value.artifact });
+                    try pending.append(gpa, .{ .module_key = value.module });
+                    try pending.append(gpa, .{ .type_owner_key = value.module });
                 }
-                for (closure.checked_callable_bodies) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+                for (closure.checked_callable_bodies) |value| try pending.append(gpa, .{ .module_key = value.module });
                 for (closure.checked_procedure_templates) |value| try pending.append(gpa, .{ .procedure_template = value });
                 for (closure.callable_eval_templates) |value| try pending.append(gpa, .{ .callable_eval_template = value });
                 for (closure.const_templates) |value| try pending.append(gpa, .{ .const_ref = value });
-                for (closure.resolved_value_refs) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.static_dispatch_plans) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
-                for (closure.interface_capabilities) |value| try pending.append(gpa, .{ .artifact_key = value.artifact });
+                for (closure.resolved_value_refs) |value| try pending.append(gpa, .{ .module_key = value.module });
+                for (closure.static_dispatch_plans) |value| try pending.append(gpa, .{ .module_key = value.module });
+                for (closure.interface_capabilities) |value| try pending.append(gpa, .{ .module_key = value.module });
             },
-            .artifact_key => |key| try self.appendModuleKey(key),
+            .module_key => |key| try self.appendModuleKey(key),
             .type_owner_key => |key| try self.appendTypeOwnerModuleKey(key),
             .procedure_template => |template_ref| {
-                const key = template_ref.artifact;
+                const key = template_ref.module;
                 try self.appendModuleKey(key);
-                if (!ModuleId.eql(key, self.artifact_key)) return;
+                if (!ModuleId.eql(key, self.module_key)) return;
 
                 const entry = try self.visited_templates.getOrPut(template_ref);
                 if (entry.found_existing) return;
@@ -29453,8 +29452,8 @@ const PublicApiClosureDependencyCollector = struct {
                 try pending.append(gpa, .{ .resolved_value_refs = template.resolved_value_refs });
             },
             .callable_eval_template => |template_ref| {
-                try self.appendModuleKey(template_ref.artifact);
-                if (!ModuleId.eql(template_ref.artifact, self.artifact_key)) return;
+                try self.appendModuleKey(template_ref.module);
+                if (!ModuleId.eql(template_ref.module, self.module_key)) return;
 
                 const entry = try self.visited_callable_eval_templates.getOrPut(template_ref);
                 if (entry.found_existing) return;
@@ -29469,8 +29468,8 @@ const PublicApiClosureDependencyCollector = struct {
                 try pending.append(gpa, .{ .procedure_template = wrapper.template });
             },
             .const_ref => |const_ref| {
-                try self.appendModuleKey(const_ref.artifact);
-                if (!ModuleId.eql(const_ref.artifact, self.artifact_key)) return;
+                try self.appendModuleKey(const_ref.module);
+                if (!ModuleId.eql(const_ref.module, self.module_key)) return;
 
                 const entry = try self.visited_consts.getOrPut(const_ref);
                 if (entry.found_existing) return;
@@ -29524,13 +29523,13 @@ const PublicApiClosureDependencyCollector = struct {
             },
             .procedure_use => |procedure| switch (procedure.binding) {
                 .top_level => |binding_ref| try pending.append(gpa, .{ .top_level_binding = binding_ref }),
-                .imported => |imported| try self.appendModuleKey(imported.artifact),
+                .imported => |imported| try self.appendModuleKey(imported.module),
                 .hosted => |hosted| try pending.append(gpa, .{ .procedure_template = hosted.template }),
-                .platform_required => |required| try self.appendModuleKey(required.artifact),
+                .platform_required => |required| try self.appendModuleKey(required.module),
             },
             .top_level_binding => |binding_ref| {
-                try self.appendModuleKey(binding_ref.artifact);
-                if (!ModuleId.eql(binding_ref.artifact, self.artifact_key)) return;
+                try self.appendModuleKey(binding_ref.module);
+                if (!ModuleId.eql(binding_ref.module, self.module_key)) return;
 
                 switch (self.top_level_bindings.get(binding_ref.binding).body) {
                     .direct_template => |direct| switch (direct.template) {
@@ -29540,7 +29539,7 @@ const PublicApiClosureDependencyCollector = struct {
                     },
                     .checked_error => {},
                     .callable_eval_template => |template| try pending.append(gpa, .{ .callable_eval_template = .{
-                        .artifact = self.artifact_key,
+                        .module = self.module_key,
                         .template = template,
                     } }),
                 }
@@ -29560,7 +29559,7 @@ const PublicApiClosureDependencyCollector = struct {
     ) Allocator.Error!void {
         try appendPublicApiClosureDependencyKey(
             self.allocator,
-            self.artifact_key,
+            self.module_key,
             self.resolver,
             self.keys,
             key,
@@ -29573,7 +29572,7 @@ const PublicApiClosureDependencyCollector = struct {
     ) Allocator.Error!void {
         try appendPublicApiClosureDependencyKey(
             self.allocator,
-            self.artifact_key,
+            self.module_key,
             self.resolver,
             self.type_owner_keys,
             key,
@@ -29584,13 +29583,13 @@ const PublicApiClosureDependencyCollector = struct {
 /// A type of one module, which a walk over several modules' types visits
 /// once.
 const ModuleTypeVisit = struct {
-    artifact: [32]u8,
+    module: [32]u8,
     ty: u32,
 };
 
 const LoweringVisibilityBuilder = struct {
     allocator: Allocator,
-    artifact_key: ModuleId,
+    module_key: ModuleId,
     checked_types: CheckedTypeStoreView,
     resolver: ModuleResolver,
     keys: ModuleKeyAccumulator = .empty,
@@ -29603,13 +29602,13 @@ const LoweringVisibilityBuilder = struct {
 
     fn init(
         allocator: Allocator,
-        artifact_key: ModuleId,
+        module_key: ModuleId,
         checked_types: CheckedTypeStoreView,
         resolver: ModuleResolver,
     ) LoweringVisibilityBuilder {
         return .{
             .allocator = allocator,
-            .artifact_key = artifact_key,
+            .module_key = module_key,
             .checked_types = checked_types,
             .resolver = resolver,
             .visited_types = std.AutoHashMap(ModuleTypeVisit, void).init(allocator),
@@ -29638,7 +29637,7 @@ const LoweringVisibilityBuilder = struct {
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, key);
         while (pending.pop()) |next| {
-            if (ModuleId.eql(next, self.artifact_key)) continue;
+            if (ModuleId.eql(next, self.module_key)) continue;
             const settled = try self.settled_keys.getOrPut(self.allocator, next);
             if (settled.found_existing) continue;
             if (self.viewByKey(next)) |view| {
@@ -29662,7 +29661,7 @@ const LoweringVisibilityBuilder = struct {
         key: ModuleId,
         pending: *std.ArrayListUnmanaged(ModuleId),
     ) Allocator.Error!void {
-        if (ModuleId.eql(key, self.artifact_key)) return;
+        if (ModuleId.eql(key, self.module_key)) return;
         const entry = try self.visited_public_api.getOrPut(key);
         if (entry.found_existing) return;
         entry.value_ptr.* = {};
@@ -29671,8 +29670,8 @@ const LoweringVisibilityBuilder = struct {
             checkedModuleInvariant("lowering visibility referenced a checked module its resolver does not resolve", .{});
         };
         const dependencies = try view.publicApiDependencies(self.resolver);
-        try pending.appendSlice(self.allocator, dependencies.artifacts);
-        try pending.appendSlice(self.allocator, dependencies.type_owner_artifacts);
+        try pending.appendSlice(self.allocator, dependencies.modules);
+        try pending.appendSlice(self.allocator, dependencies.type_owner_modules);
     }
 
     fn appendRootRequest(self: *LoweringVisibilityBuilder, request: RootRequest) Allocator.Error!void {
@@ -29683,14 +29682,14 @@ const LoweringVisibilityBuilder = struct {
     /// each type once from an explicit work list. A nominal's backing is
     /// walked in its declaring module.
     fn appendTypeRoot(self: *LoweringVisibilityBuilder, root: CheckedTypeId) Allocator.Error!void {
-        var modules = try WalkModules.init(self.allocator, self.artifact_key, self.checked_types, self.resolver);
+        var modules = try WalkModules.init(self.allocator, self.module_key, self.checked_types, self.resolver);
         defer modules.deinit(self.allocator);
         var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
         defer pending.deinit(self.allocator);
         try pending.append(self.allocator, .{ .module = 0, .ty = root });
         while (pending.pop()) |item| {
             const module = modules.entries.items[item.module].module;
-            const entry = try self.visited_types.getOrPut(.{ .artifact = module.bytes, .ty = @backingInt(item.ty) });
+            const entry = try self.visited_types.getOrPut(.{ .module = module.bytes, .ty = @backingInt(item.ty) });
             if (entry.found_existing) continue;
             entry.value_ptr.* = {};
 
@@ -29760,19 +29759,19 @@ const LoweringVisibilityBuilder = struct {
 /// its roots and exports reach, the app modules its platform requirement
 /// bindings reach, and the public API dependencies of each of those.
 pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!LoweringVisibility {
-    const artifact_key = owner.key.digest();
-    var builder = LoweringVisibilityBuilder.init(allocator, artifact_key, owner.checked_types, resolver);
+    const module_key = owner.key.digest();
+    var builder = LoweringVisibilityBuilder.init(allocator, module_key, owner.checked_types, resolver);
     defer builder.deinit();
 
     const public_api_dependencies = try owner.publicApiDependencies(resolver);
     for (owner.direct_import_module_keys) |key| try builder.appendKey(key.digest());
-    for (public_api_dependencies.artifacts) |key| try builder.appendKey(key);
-    for (public_api_dependencies.type_owner_artifacts) |key| try builder.appendKey(key);
+    for (public_api_dependencies.modules) |key| try builder.appendKey(key);
+    for (public_api_dependencies.type_owner_modules) |key| try builder.appendKey(key);
     for ((try owner.rootRequests()).requests) |request| try builder.appendRootRequest(request);
 
     var closure_dependencies = PublicApiClosureDependencyCollector.init(
         allocator,
-        artifact_key,
+        module_key,
         resolver,
         &(try owner.checkedTables()).checked_procedure_templates,
         (try owner.checkedTables()).callable_eval_templates.view(),
@@ -29789,7 +29788,7 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
     for ((try owner.rootRequests()).requests) |request| {
         if (request.procedure_template) |template| try closure_dependencies.appendProcedureTemplateRef(template);
         if (request.procedure_binding) |binding| try closure_dependencies.appendTopLevelProcedureBinding(.{
-            .artifact = artifact_key,
+            .module = module_key,
             .binding = binding,
         });
         if (request.procedure_use) |procedure| try closure_dependencies.appendProcedureUse(procedure);
@@ -29798,8 +29797,8 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
     try closure_dependencies.appendExportClosures(owner, try owner.exportClosures(resolver));
 
     for (owner.platform_required_bindings.bindings) |binding| {
-        const relation_view = resolver.resolve(binding.app_value.artifact) orelse {
-            checkedModuleInvariant("lowering visibility relation binding referenced unavailable relation artifact", .{});
+        const relation_view = resolver.resolve(binding.app_value.module) orelse {
+            checkedModuleInvariant("lowering visibility relation binding referenced unavailable relation module", .{});
         };
         var relation_keys = std.ArrayList(ModuleId).empty;
         defer relation_keys.deinit(allocator);
@@ -29825,16 +29824,16 @@ pub fn computeLoweringVisibility(allocator: Allocator, owner: ImportedModuleView
 fn dependencyViewByKey(
     key: ModuleId,
     imports: []const CheckedImport,
-    available_artifacts: []const ImportedModuleView,
-    relation_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
+    relation_modules: []const ImportedModuleView,
 ) ?*const ImportedModuleView {
-    for (imports) |*import_artifact| {
-        if (import_artifact.key.digest().eql(key)) return &import_artifact.view;
+    for (imports) |*import_module| {
+        if (import_module.key.digest().eql(key)) return &import_module.view;
     }
-    for (available_artifacts) |*view| {
+    for (available_modules) |*view| {
         if (view.key.digest().eql(key)) return view;
     }
-    for (relation_artifacts) |*view| {
+    for (relation_modules) |*view| {
         if (view.key.digest().eql(key)) return view;
     }
     return null;
@@ -29855,7 +29854,7 @@ fn buildImportedTemplateClosure(
     var builder = ImportedTemplateClosureBuilder.init(context);
     defer builder.deinit();
 
-    try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key.digest() });
+    try builder.appendInterfaceCapabilities(.{ .module = context.module_key.digest() });
     try builder.appendTemplate(template_ref, template);
 
     return try builder.finish();
@@ -29892,7 +29891,7 @@ fn UniqueList(comptime T: type) type {
 /// built for one module.
 const ImportedTemplateClosureContext = struct {
     allocator: Allocator,
-    artifact_key: CheckedModuleKey,
+    module_key: CheckedModuleKey,
     checked_types: CheckedTypeStoreView,
     checked_templates: *const CheckedProcedureTemplateTable,
     callable_eval_template_table: CallableEvalTemplateTableView,
@@ -29906,7 +29905,7 @@ const ImportedTemplateClosureContext = struct {
     fn fromView(allocator: Allocator, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!ImportedTemplateClosureContext {
         return .{
             .allocator = allocator,
-            .artifact_key = owner.key,
+            .module_key = owner.key,
             .checked_types = owner.checked_types,
             .checked_templates = &(try owner.checkedTables()).checked_procedure_templates,
             .callable_eval_template_table = (try owner.checkedTables()).callable_eval_templates.view(),
@@ -30107,7 +30106,7 @@ const ImportedTemplateClosureBuilder = struct {
             },
             .callable_eval_template_done => |template_id| {
                 _ = try self.callable_eval_templates.append(self.context.allocator, .{
-                    .artifact = self.context.artifact_key.digest(),
+                    .module = self.context.module_key.digest(),
                     .template = template_id,
                 });
             },
@@ -30115,12 +30114,12 @@ const ImportedTemplateClosureBuilder = struct {
     }
 
     fn appendCheckedBody(self: *ImportedTemplateClosureBuilder, body: CIR.Expr.Idx) Allocator.Error!void {
-        const ref = ModuleCheckedBodyRef{ .artifact = self.context.artifact_key.digest(), .body = body };
+        const ref = ModuleCheckedBodyRef{ .module = self.context.module_key.digest(), .body = body };
         _ = try self.checked_bodies.append(self.context.allocator, ref);
     }
 
     fn appendCheckedTypeRoot(self: *ImportedTemplateClosureBuilder, ty: CheckedTypeId) Allocator.Error!void {
-        const ref = ModuleCheckedTypeRef{ .artifact = self.context.artifact_key.digest(), .ty = ty };
+        const ref = ModuleCheckedTypeRef{ .module = self.context.module_key.digest(), .ty = ty };
         _ = try self.checked_type_roots.append(self.context.allocator, ref);
     }
 
@@ -30129,7 +30128,7 @@ const ImportedTemplateClosureBuilder = struct {
         scheme: CheckedTypeSchemeId,
     ) Allocator.Error!void {
         std.debug.assert(self.context.checked_types.scheme(scheme).id == scheme);
-        const ref = ModuleCheckedTypeSchemeRef{ .artifact = self.context.artifact_key.digest(), .scheme = scheme };
+        const ref = ModuleCheckedTypeSchemeRef{ .module = self.context.module_key.digest(), .scheme = scheme };
         _ = try self.checked_type_schemes.append(self.context.allocator, ref);
     }
 
@@ -30138,7 +30137,7 @@ const ImportedTemplateClosureBuilder = struct {
         table: ResolvedValueRefTableRef,
     ) Allocator.Error!void {
         if (table.len == 0) return;
-        const ref = ModuleResolvedValueRefTableRef{ .artifact = self.context.artifact_key.digest(), .table = table };
+        const ref = ModuleResolvedValueRefTableRef{ .module = self.context.module_key.digest(), .table = table };
         _ = try self.resolved_value_refs.append(self.context.allocator, ref);
     }
 
@@ -30147,7 +30146,7 @@ const ImportedTemplateClosureBuilder = struct {
         table: StaticDispatchPlanTableRef,
     ) Allocator.Error!void {
         if (table.len == 0) return;
-        const ref = ModuleStaticDispatchPlanTableRef{ .artifact = self.context.artifact_key.digest(), .table = table };
+        const ref = ModuleStaticDispatchPlanTableRef{ .module = self.context.module_key.digest(), .table = table };
         _ = try self.static_dispatch_plans.append(self.context.allocator, ref);
     }
 
@@ -30235,7 +30234,7 @@ const ImportedTemplateClosureBuilder = struct {
             .checked_error => {},
             .callable_eval_template => |template_id| {
                 _ = try self.callable_eval_templates.append(self.context.allocator, .{
-                    .artifact = binding.binding.artifact,
+                    .module = binding.binding.module,
                     .template = template_id,
                 });
             },
@@ -30246,7 +30245,7 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         ref: ImportedProcedureBindingRef,
     ) Allocator.Error!ImportedProcedureBindingView {
-        const view = self.context.resolver.require(ref.artifact);
+        const view = self.context.resolver.require(ref.module);
         return (try view.exportRows()).procedureBinding(ref.def, ref.pattern) orelse
             checkedModuleInvariant("imported procedure dependency had no published imported closure", .{});
     }
@@ -30307,7 +30306,7 @@ const ImportedTemplateClosureBuilder = struct {
     ) Allocator.Error!void {
         if (!try self.const_templates.append(self.context.allocator, const_ref)) return;
 
-        if (!std.meta.eql(const_ref.artifact.bytes, self.context.artifact_key.bytes)) return;
+        if (!std.meta.eql(const_ref.module.bytes, self.context.module_key.bytes)) return;
 
         const scheme = self.context.checked_types.scheme(const_ref.source_scheme);
         try self.appendCheckedTypeRoot(scheme.root);
@@ -30390,8 +30389,8 @@ const ImportedTemplateClosureBuilder = struct {
             .top_level => |binding| binding,
             .imported, .hosted, .platform_required => return null,
         };
-        if (!std.meta.eql(top_level.artifact.bytes, self.context.artifact_key.bytes)) {
-            checkedModuleInvariant("top-level callable-eval closure dependency referenced a different artifact", .{});
+        if (!std.meta.eql(top_level.module.bytes, self.context.module_key.bytes)) {
+            checkedModuleInvariant("top-level callable-eval closure dependency referenced a different module", .{});
         }
         const binding = self.context.top_level_bindings.get(top_level.binding);
         return switch (binding.body) {
@@ -30429,8 +30428,8 @@ const ImportedTemplateClosureBuilder = struct {
         self: *ImportedTemplateClosureBuilder,
         binding_ref: ModuleTopLevelProcedureBindingRef,
     ) ?canonical.ProcedureTemplateRef {
-        if (!std.meta.eql(binding_ref.artifact.bytes, self.context.artifact_key.bytes)) {
-            checkedModuleInvariant("top-level procedure closure dependency referenced a different artifact", .{});
+        if (!std.meta.eql(binding_ref.module.bytes, self.context.module_key.bytes)) {
+            checkedModuleInvariant("top-level procedure closure dependency referenced a different module", .{});
         }
         const binding = self.context.top_level_bindings.get(binding_ref.binding);
         return switch (binding.body) {
@@ -30457,7 +30456,7 @@ fn buildImportedConstTemplateClosure(
     var builder = ImportedTemplateClosureBuilder.init(context);
     defer builder.deinit();
 
-    try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key.digest() });
+    try builder.appendInterfaceCapabilities(.{ .module = context.module_key.digest() });
     try builder.appendConstTemplate(const_ref);
 
     return try builder.finish();
@@ -30510,13 +30509,13 @@ fn buildProcedureBindingClosure(
             var builder = ImportedTemplateClosureBuilder.init(context);
             defer builder.deinit();
 
-            try builder.appendInterfaceCapabilities(.{ .artifact = context.artifact_key.digest() });
+            try builder.appendInterfaceCapabilities(.{ .module = context.module_key.digest() });
             try builder.appendCheckedTypeRoot(template.checked_fn_root);
             try builder.appendCheckedTypeScheme(template.source_scheme);
             try builder.appendTemplate(wrapper.template, entry_template);
 
             _ = try builder.callable_eval_templates.append(context.allocator, .{
-                .artifact = context.artifact_key.digest(),
+                .module = context.module_key.digest(),
                 .template = template_id,
             });
 
@@ -30590,19 +30589,19 @@ pub const ConstTemplateTable = struct {
     pub fn reserveTopLevel(
         self: *ConstTemplateTable,
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         module_idx: u32,
         pattern: CIR.Pattern.Idx,
         source_scheme: CheckedTypeSchemeId,
     ) Allocator.Error!ConstRef {
-        return self.appendTopLevel(allocator, artifact_key, module_idx, pattern, source_scheme, .reserved);
+        return self.appendTopLevel(allocator, module_key, module_idx, pattern, source_scheme, .reserved);
     }
 
     /// Record a top-level constant whose declaration never received a value.
     pub fn reserveUnimplementedTopLevel(
         self: *ConstTemplateTable,
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         module_idx: u32,
         pattern: CIR.Pattern.Idx,
         source_scheme: CheckedTypeSchemeId,
@@ -30610,7 +30609,7 @@ pub const ConstTemplateTable = struct {
     ) Allocator.Error!ConstRef {
         return self.appendTopLevel(
             allocator,
-            artifact_key,
+            module_key,
             module_idx,
             pattern,
             source_scheme,
@@ -30621,7 +30620,7 @@ pub const ConstTemplateTable = struct {
     fn appendTopLevel(
         self: *ConstTemplateTable,
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         module_idx: u32,
         pattern: CIR.Pattern.Idx,
         source_scheme: CheckedTypeSchemeId,
@@ -30639,7 +30638,7 @@ pub const ConstTemplateTable = struct {
             .state = state,
         });
         return .{
-            .artifact = artifact_key.digest(),
+            .module = module_key.digest(),
             .owner = owner,
             .template = id,
             .source_scheme = source_scheme,
@@ -30649,7 +30648,7 @@ pub const ConstTemplateTable = struct {
     pub fn reserveHoisted(
         self: *ConstTemplateTable,
         allocator: Allocator,
-        artifact_key: CheckedModuleKey,
+        module_key: CheckedModuleKey,
         module_idx: u32,
         root: ComptimeRootKey,
         source_scheme: CheckedTypeSchemeId,
@@ -30666,7 +30665,7 @@ pub const ConstTemplateTable = struct {
             .state = .reserved,
         });
         return .{
-            .artifact = artifact_key.digest(),
+            .module = module_key.digest(),
             .owner = owner,
             .template = id,
             .source_scheme = source_scheme,
@@ -30721,8 +30720,8 @@ pub const ConstTemplateTable = struct {
         for (self.templates.items, 0..) |template, i| {
             std.debug.assert(@backingInt(template.id) == i);
             switch (template.state) {
-                // A declaration with no implementation is sealed on
-                // publication; there is never a value to fill in later.
+                // A declaration with no implementation is sealed when its
+                // module is opened; there is never a value to fill in later.
                 .eval_template, .unimplemented => {},
                 .reserved => base.invariant(
                     "checked module invariant violated: constant template {d} was not sealed before publication",
@@ -30746,7 +30745,7 @@ pub const ConstTemplateTable = struct {
         return record;
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// Public `ImportedConstTemplateView` declaration.
@@ -30774,7 +30773,7 @@ fn checkedModuleKeyLessThan(_: void, a: ModuleId, b: ModuleId) bool {
 }
 
 fn constRefEql(a: ConstRef, b: ConstRef) bool {
-    return a.artifact.eql(b.artifact) and
+    return a.module.eql(b.module) and
         std.meta.eql(a.owner, b.owner) and
         a.template == b.template and
         (a.source_scheme == b.source_scheme);
@@ -30798,7 +30797,7 @@ pub const CompileTimeDebugStore = struct {
     pub const Serialized = extern struct {
         entries: SerializedSlice(Entry) = .{},
         bytes: SerializedSlice(u8) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeDebugStore, @This());
+        const Serde = store_serialize.SliceStoreSerde(CompileTimeDebugStore, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
@@ -30818,10 +30817,10 @@ pub const CompileTimeDebugStore = struct {
         return .{ .entries = entries, .bytes = bytes };
     }
 
-    pub fn validate(self: CompileTimeDebugStore) error{CorruptArtifact}!void {
+    pub fn validate(self: CompileTimeDebugStore) error{CorruptSerializedData}!void {
         for (self.entries) |entry| {
             if (entry.message_start > self.bytes.len or
-                entry.message_len > self.bytes.len - entry.message_start) return error.CorruptArtifact;
+                entry.message_len > self.bytes.len - entry.message_start) return error.CorruptSerializedData;
         }
     }
 
@@ -30829,7 +30828,7 @@ pub const CompileTimeDebugStore = struct {
         return self.bytes[entry.message_start..][0..entry.message_len];
     }
 
-    pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
+    pub const deinit = store_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
 /// The checked roots each evaluated compile-time root's body reads (design.md
@@ -30853,7 +30852,7 @@ pub const CompileTimeRootReadTable = struct {
     pub const Serialized = extern struct {
         rows: SerializedSlice(Row) = .{},
         refs: SerializedSlice(Ref) = .{},
-        const Serde = artifact_serialize.SliceStoreSerde(CompileTimeRootReadTable, @This());
+        const Serde = store_serialize.SliceStoreSerde(CompileTimeRootReadTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
     };
@@ -30902,10 +30901,10 @@ pub const CompileTimeRootReadTable = struct {
         return self.refs[row.start..][0..row.len];
     }
 
-    pub fn validate(self: CompileTimeRootReadTable) error{CorruptArtifact}!void {
+    pub fn validate(self: CompileTimeRootReadTable) error{CorruptSerializedData}!void {
         for (self.rows, 0..) |row, index| {
-            if (index != 0 and @backingInt(self.rows[index - 1].root) >= @backingInt(row.root)) return error.CorruptArtifact;
-            if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptArtifact;
+            if (index != 0 and @backingInt(self.rows[index - 1].root) >= @backingInt(row.root)) return error.CorruptSerializedData;
+            if (row.start > self.refs.len or row.len > self.refs.len - row.start) return error.CorruptSerializedData;
         }
     }
 
@@ -31025,7 +31024,7 @@ pub const EvaluationOutput = struct {
         debug: CompileTimeDebugStore.Serialized = .{},
         root_reads: CompileTimeRootReadTable.Serialized = .{},
         reported_sites: SerializedSlice(CheckedExhaustivenessSiteId) = .{},
-        address_space: artifact_serialize.SerializedScalar(EvaluatedAddressSpace, .any) = .{},
+        address_space: store_serialize.SerializedScalar(EvaluatedAddressSpace, .any) = .{},
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = EvaluationOutput,
@@ -31034,20 +31033,20 @@ pub const EvaluationOutput = struct {
             },
         };
 
-        const Serde = artifact_serialize.SliceStoreSerde(EvaluationOutput, @This());
+        const Serde = store_serialize.SliceStoreSerde(EvaluationOutput, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserializeWithAllocator;
 
         /// Check every range the output's tables hold against themselves,
         /// once the buffer at `base_addr` that holds them is validated.
-        pub fn validateContents(self: *const Serialized, base_addr: usize) error{CorruptArtifact}!void {
+        pub fn validateContents(self: *const Serialized, base_addr: usize) error{CorruptSerializedData}!void {
             const address_space: *const u8 = @ptrCast(&self.address_space.value);
-            _ = std.enums.fromInt(EvaluatedAddressSpace, address_space.*) orelse return error.CorruptArtifact;
+            _ = std.enums.fromInt(EvaluatedAddressSpace, address_space.*) orelse return error.CorruptSerializedData;
             try self.debug.deserialize(base_addr).validate();
             try self.root_reads.deserialize(base_addr).validate();
             const roots = self.roots.deserialize(base_addr);
             for (roots, 0..) |root, index| {
-                if (index != 0 and @backingInt(roots[index - 1].id) >= @backingInt(root.id)) return error.CorruptArtifact;
+                if (index != 0 and @backingInt(roots[index - 1].id) >= @backingInt(root.id)) return error.CorruptSerializedData;
             }
         }
     };
@@ -31386,14 +31385,14 @@ pub const CheckedModule = struct {
     /// Point the module's types at its module analyses, which compute
     /// their interface capabilities.
     pub fn attachCapabilitySource(self: *CheckedModule) void {
-        const analyses = self.module_analyses orelse checkedModuleInvariant("an artifact's capability source was attached before its module analyses", .{});
+        const analyses = self.module_analyses orelse checkedModuleInvariant("a module's capability source was attached before its module analyses", .{});
         const hash = self.moduleEnvConst().contentIdentityHash() orelse checkedModuleInvariant("a checked module has no content identity", .{});
         const current_module = self.canonical_names.lookupModuleIdentity(hash) orelse checkedModuleInvariant("a checked module's own identity was never interned", .{});
         self.checked_types.capability_source = .{ .analyses = analyses, .current_module = current_module, .module = self.key.digest() };
     }
 
     /// Let the module's slots run: its type store and name store are
-    /// published and its interface capabilities have their source, so no
+    /// readable by other threads and its interface capabilities have their source, so no
     /// slot can see the module before every type and name its cache entry
     /// holds exists. A pairing's stores and capabilities are its platform's.
     pub fn openToAnalyses(self: *CheckedModule) void {
@@ -31403,8 +31402,8 @@ pub const CheckedModule = struct {
             if (self.nameStore().published == null) checkedModuleInvariant("a module's analyses were let run before its name store was published", .{});
             if (type_store.capability_source == null) checkedModuleInvariant("a module's analyses were let run before its interface capabilities had their source", .{});
         }
-        if (self.module_analyses) |analyses| analyses.markPublished();
-        if (self.body_analyses) |analyses| analyses.markPublished();
+        if (self.module_analyses) |analyses| analyses.markOpened();
+        if (self.body_analyses) |analyses| analyses.markOpened();
     }
 
     /// The checked modules lowering this module's roots reads.
@@ -31476,7 +31475,7 @@ pub const CheckedModule = struct {
     }
 
     /// A platform with declared app requirements is runtime-lowerable only
-    /// after checking has published its exact app relation.
+    /// after pairing has supplied its exact app relation.
     pub fn hasUnboundPlatformRequirements(self: *const CheckedModule) bool {
         return self.module_identity.kind == .platform and
             self.platformRequiredDeclarations().count() > 0 and
@@ -31549,11 +31548,11 @@ pub const CheckedModule = struct {
     /// and the module awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the module.
     pub fn reopenForEvaluation(self: *CheckedModule) Allocator.Error!void {
-        if (self.evaluation.state != .finalized) checkedModuleInvariant("only a finalized artifact can be reopened for evaluation", .{});
+        if (self.evaluation.state != .finalized) checkedModuleInvariant("only a finalized module can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedModuleInvariant("checked module was reopened for evaluation twice", .{});
         // A relocated cache entry's output aliases its buffer and a paired
         // module's may alias its platform's, so it moves into owned storage; an
-        // module this process published already owns it. The arena belongs
+        // module this process opened already owns it. The arena belongs
         // to the allocator that owns the module, which `owningAllocator`
         // reads back through the arena.
         if (self.serialized_backing != null or self.pairing_arena != null) {
@@ -31655,35 +31654,35 @@ pub const CheckedModule = struct {
         comptime {
             // The inference output's and the evaluation output's slices;
             // fixed at compile time, independent of stored data size.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 63);
+            std.debug.assert(store_serialize.relocatablePointerCount(Serialized) == 63);
             // A cache entry holds the `ModuleEnv`, the inference output and
             // the evaluation output, and nothing else.
             const fields = @typeInfo(Serialized).@"struct".field_names;
             std.debug.assert(fields.len == 2);
-            std.debug.assert(artifact_serialize.comptimeStrEq(fields[0], "inference"));
-            std.debug.assert(artifact_serialize.comptimeStrEq(fields[1], "evaluation"));
+            std.debug.assert(store_serialize.comptimeStrEq(fields[0], "inference"));
+            std.debug.assert(store_serialize.comptimeStrEq(fields[1], "evaluation"));
         }
 
         /// Append the module's inference and evaluation outputs to `writer`.
         pub fn serialize(
             self: *Serialized,
-            artifact: *const CheckedModule,
+            checked: *const CheckedModule,
             gpa: Allocator,
             writer: *CompactWriter,
         ) Allocator.Error!void {
-            if (artifact.pairing != null) checkedModuleInvariant("a paired module cannot be cached as a module", .{});
-            if (artifact.evaluation.state != .finalized) checkedModuleInvariant("cannot serialize a module whose evaluation is unfinished", .{});
-            try self.inference.serialize(&artifact.inference, gpa, writer);
-            try self.evaluation.serialize(&artifact.evaluation, gpa, writer);
+            if (checked.pairing != null) checkedModuleInvariant("a paired module cannot be cached as a module", .{});
+            if (checked.evaluation.state != .finalized) checkedModuleInvariant("cannot serialize a module whose evaluation is unfinished", .{});
+            try self.inference.serialize(&checked.inference, gpa, writer);
+            try self.evaluation.serialize(&checked.evaluation, gpa, writer);
         }
 
         /// Bounds-check every relocatable marker's `(offset, len)` against
         /// the `backing`-buffer length before anything aliases it, so a
         /// truncated or corrupt blob (builtin trailer / disk cache) fails
         /// cleanly instead of producing dangling out-of-bounds slices.
-        pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptArtifact}!void {
-            if (backing_len < @sizeOf(Serialized)) return error.CorruptArtifact;
-            try artifact_serialize.validateSerialized(Serialized, self, backing_len);
+        pub fn validate(self: *const Serialized, backing_len: usize) error{CorruptSerializedData}!void {
+            if (backing_len < @sizeOf(Serialized)) return error.CorruptSerializedData;
+            try store_serialize.validateSerialized(Serialized, self, backing_len);
             try self.evaluation.validateContents(@intFromPtr(self));
             try self.inference.deserialize(@intFromPtr(self)).validate();
         }
@@ -31702,13 +31701,13 @@ pub const CheckedModule = struct {
     /// mismatched struct (a real hazard during development, where
     /// a reported release version can remain unchanged between rebuilds).
     pub const SERIALIZED_VERSION_HASH: [32]u8 =
-        artifact_serialize.rootLayoutVersionHash(Serialized, serialized_layout_version);
+        store_serialize.rootLayoutVersionHash(Serialized, serialized_layout_version);
 
     // A-11: validate the entire serialized sub-store tree at compile time—every
     // field must be a relocatable marker or relocation-invariant POD (a raw pointer
     // embedded outside a marker would silently dangle after relocation).
     comptime {
-        artifact_serialize.assertSerializedRelocatable(Serialized);
+        store_serialize.assertSerializedRelocatable(Serialized);
     }
 
     /// Validate a version hash read from a serialized module (builtin blob trailer
@@ -31732,16 +31731,16 @@ pub const CheckedModule = struct {
     /// running compiler's layout hash and returns the serialized prefix to relocate,
     /// keeping the one place that knows the trailer's position. A stale or truncated
     /// blob is rejected rather than relocated into a mismatched struct.
-    pub fn splitVersionTrailer(blob: []const u8) error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch }![]const u8 {
-        if (blob.len < VERSION_TRAILER_LEN) return error.CorruptBuiltinArtifact;
+    pub fn splitVersionTrailer(blob: []const u8) error{ CorruptBuiltinOutputs, BuiltinOutputsVersionMismatch }![]const u8 {
+        if (blob.len < VERSION_TRAILER_LEN) return error.CorruptBuiltinOutputs;
         const serialized_len = blob.len - VERSION_TRAILER_LEN;
         // The serialized prefix must be at least a whole `Serialized` header—the loader
         // `@ptrCast`s it to `*const Serialized`. This mirrors the disk-cache loader's
         // `< @sizeOf(Serialized)` floor so a truncated builtin blob is a clean error, not
         // an out-of-bounds read.
-        if (serialized_len < @sizeOf(Serialized)) return error.CorruptBuiltinArtifact;
+        if (serialized_len < @sizeOf(Serialized)) return error.CorruptBuiltinOutputs;
         if (!expectSerializedVersion(blob[serialized_len..][0..VERSION_TRAILER_LEN])) {
-            return error.BuiltinArtifactVersionMismatch;
+            return error.BuiltinOutputsVersionMismatch;
         }
         return blob[0..serialized_len];
     }
@@ -31916,7 +31915,7 @@ pub const CheckedModule = struct {
             // A method bound to another module's procedure
             // (`method = Other.function`) names that module's template, which
             // this module does not hold.
-            if (!std.meta.eql(procedure.template.artifact.bytes, self.key.bytes)) continue;
+            if (!std.meta.eql(procedure.template.module.bytes, self.key.bytes)) continue;
             const template_index = procedure.template.template.rowIndex() orelse (try self.checkedTables()).checked_procedure_templates.templates.items.len;
             if (template_index >= (try self.checkedTables()).checked_procedure_templates.templates.items.len) {
                 base.invariant(
@@ -31982,7 +31981,7 @@ pub const CheckedModule = struct {
             std.debug.assert(request.module_idx == self.module_identity.module_idx);
             std.debug.assert(self.typesView().containsId(request.checked_type));
             if (request.procedure_template) |template_ref| {
-                std.debug.assert(template_ref.artifact.eql(self.key.digest()));
+                std.debug.assert(template_ref.module.eql(self.key.digest()));
                 if (template_ref.template.rowIndex()) |row| std.debug.assert(row < (try self.checkedTables()).checked_procedure_templates.templates.items.len);
                 const evidence = request.root_evidence orelse {
                     base.invariant("checked module invariant violated: procedure template root has no checked evidence vector", .{});
@@ -32097,7 +32096,7 @@ pub const CheckedModule = struct {
                     std.debug.assert(wrapper.checked_fn_root == template.checked_fn_root);
                     std.debug.assert(wrapper.template.template == template.template_id);
                     std.debug.assert(wrapper.template.proc_base == template.proc_base);
-                    std.debug.assert(std.meta.eql(wrapper.template.artifact.bytes, self.key.bytes));
+                    std.debug.assert(std.meta.eql(wrapper.template.module.bytes, self.key.bytes));
                 },
                 .literal_root => checkedModuleInvariant("a literal root's entry wrapper is a row of the template table", .{}),
                 // An unimplemented declaration publishes no body to verify.
@@ -32106,12 +32105,12 @@ pub const CheckedModule = struct {
         }
 
         for ((try self.exportRows()).procedure_templates) |exported| {
-            std.debug.assert(std.meta.eql(exported.template.artifact.bytes, self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.template.module.bytes, self.key.bytes));
             std.debug.assert(@backingInt(exported.template.template) < (try self.checkedTables()).checked_procedure_templates.templates.items.len);
         }
 
         for ((try self.exportRows()).procedure_bindings) |exported| {
-            std.debug.assert(std.meta.eql(exported.binding.artifact.bytes, self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.binding.module.bytes, self.key.bytes));
             switch (exported.body) {
                 .direct_template => {},
                 .checked_error => |expr| std.debug.assert((try self.bodies()).exprData(expr) == .runtime_error),
@@ -32120,13 +32119,13 @@ pub const CheckedModule = struct {
         }
 
         for ((try self.exportRows()).const_templates) |exported| {
-            std.debug.assert(std.meta.eql(exported.const_ref.artifact.bytes, self.key.bytes));
+            std.debug.assert(std.meta.eql(exported.const_ref.module.bytes, self.key.bytes));
             std.debug.assert(@backingInt(exported.const_ref.template) < (try self.checkedTables()).const_templates.templates.items.len);
             switch (exported.template.state) {
                 .eval_template => |eval| {
                     std.debug.assert((try self.checkedTables()).compile_time_roots.position(eval.root) != null);
                     std.debug.assert(compileTimeRootHasConstBody((try self.checkedTables()).compile_time_roots.root(eval.root).kind));
-                    std.debug.assert(std.meta.eql(eval.entry_template.artifact.bytes, self.key.bytes));
+                    std.debug.assert(std.meta.eql(eval.entry_template.module.bytes, self.key.bytes));
                     std.debug.assert(@backingInt(eval.entry_template.template) < (try self.checkedTables()).checked_procedure_templates.templates.items.len);
                 },
                 .reserved => base.invariant(
@@ -32224,11 +32223,11 @@ pub const CheckedModule = struct {
                             switch (direct.template) {
                                 .checked => |template| {
                                     std.debug.assert(template.proc_base == direct.proc_value.proc_base);
-                                    std.debug.assert(std.meta.eql(template.artifact.bytes, direct.proc_value.artifact.bytes));
+                                    std.debug.assert(std.meta.eql(template.module.bytes, direct.proc_value.module.bytes));
                                 },
                                 .synthetic => |synthetic| {
                                     std.debug.assert(synthetic.template.proc_base == direct.proc_value.proc_base);
-                                    std.debug.assert(std.meta.eql(synthetic.template.artifact.bytes, direct.proc_value.artifact.bytes));
+                                    std.debug.assert(std.meta.eql(synthetic.template.module.bytes, direct.proc_value.module.bytes));
                                     std.debug.assert(@backingInt(synthetic.template.template) < (try self.checkedTables()).checked_procedure_templates.templates.items.len);
                                 },
                                 .lifted => base.invariant(
@@ -32296,7 +32295,7 @@ pub const CheckedModule = struct {
             if (self.checking_context_identity.platform_app_relation != null) {
                 switch (record.ref) {
                     .platform_required_declaration => base.invariant(
-                        "checked module invariant violated: executable platform artifact kept a declaration-only required lookup",
+                        "checked module invariant violated: executable platform module kept a declaration-only required lookup",
                         .{},
                     ),
                     .local_param,
@@ -32330,7 +32329,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModule, binding: PlatformR
 
     switch (binding.value_use) {
         .const_value => |const_use| {
-            std.debug.assert(std.meta.eql(const_use.const_use.const_ref.artifact.bytes, binding.app_value.artifact.bytes));
+            std.debug.assert(std.meta.eql(const_use.const_use.const_ref.module.bytes, binding.app_value.module.bytes));
             const owner = constRefTopLevelOwner(const_use.const_use.const_ref) orelse {
                 base.invariant("checked module invariant violated: platform-required const use referenced a non-top-level ConstRef", .{});
             };
@@ -32338,7 +32337,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModule, binding: PlatformR
         },
         .procedure_value => |procedure_use| switch (procedure_use.procedure.binding) {
             .platform_required => |required| {
-                std.debug.assert(std.meta.eql(required.artifact.bytes, binding.app_value.artifact.bytes));
+                std.debug.assert(std.meta.eql(required.module.bytes, binding.app_value.module.bytes));
                 std.debug.assert(required.app_value.pattern == binding.app_value.pattern);
                 if (self.platformRequiredBindings().relationClosure(binding).interface_capabilities.len == 0) {
                     base.invariant(
@@ -32349,7 +32348,7 @@ fn verifyPlatformRequiredValueUse(self: *const CheckedModule, binding: PlatformR
                 const evidence = procedure_use.root_evidence orelse {
                     base.invariant("checked module invariant violated: platform-required procedure use has no root evidence", .{});
                 };
-                std.debug.assert(std.meta.eql(evidence.checked_module.bytes, binding.app_value.artifact.bytes));
+                std.debug.assert(std.meta.eql(evidence.checked_module.bytes, binding.app_value.module.bytes));
             },
             .top_level,
             .imported,
@@ -32370,10 +32369,10 @@ pub const ImportedModuleView = struct {
     canonical_names: *const canonical.CanonicalNameStore,
     module_identity: ModuleIdentity,
     direct_import_module_keys: []const CheckedModuleKey = &.{},
-    /// The module's analyses; null only for a view of no published module.
+    /// The module's analyses; null only for a view of no opened module.
     module_analyses: ?*ModuleAnalyses = null,
     checked_types: CheckedTypeStoreView,
-    /// The module's body facts; null only for a view of no published module.
+    /// The module's body facts; null only for a view of no opened module.
     body_analyses: ?*BodyAnalyses = null,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     checking_context_identity: *const CheckingContextIdentity = &empty_checking_context_identity,
@@ -32581,21 +32580,21 @@ pub const LoweringModuleView = struct {
 };
 
 /// Public `importedView` function.
-pub fn importedView(artifact: *const CheckedModule) ImportedModuleView {
+pub fn importedView(checked: *const CheckedModule) ImportedModuleView {
     return .{
-        .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
-        .key = artifact.key,
-        .module_env = artifact.moduleEnvConst(),
-        .canonical_names = artifact.nameStore(),
-        .module_identity = artifact.module_identity,
-        .direct_import_module_keys = artifact.direct_import_module_keys,
-        .module_analyses = artifact.module_analyses,
-        .checked_types = artifact.typesView(),
-        .body_analyses = artifact.body_analyses,
-        .platform_required_bindings = artifact.platformRequiredBindings(),
-        .checking_context_identity = &artifact.checking_context_identity,
-        .evaluation = &artifact.evaluation,
-        .const_store = &artifact.evaluation.const_store,
+        .code_generation_key = if (checked.pairing_arena != null) checked.codeGenerationKey() else null,
+        .key = checked.key,
+        .module_env = checked.moduleEnvConst(),
+        .canonical_names = checked.nameStore(),
+        .module_identity = checked.module_identity,
+        .direct_import_module_keys = checked.direct_import_module_keys,
+        .module_analyses = checked.module_analyses,
+        .checked_types = checked.typesView(),
+        .body_analyses = checked.body_analyses,
+        .platform_required_bindings = checked.platformRequiredBindings(),
+        .checking_context_identity = &checked.checking_context_identity,
+        .evaluation = &checked.evaluation,
+        .const_store = &checked.evaluation.const_store,
     };
 }
 
@@ -32603,20 +32602,6 @@ pub fn importedView(artifact: *const CheckedModule) ImportedModuleView {
 pub fn importedNames(view: ImportedModuleView) *const canonical.NameStore {
     return view.canonical_names;
 }
-
-/// Public `ModuleNamePublisher` declaration.
-///
-/// Checking finalization uses this boundary when checked module data must record
-/// names that came from post-check lowering. The caller stores only ids owned by
-/// `target`; no lowering-run label id may cross this boundary into checked
-/// module data.
-pub const ModuleNamePublisher = struct {
-    target: *CheckedModule,
-
-    pub fn init(target: *CheckedModule) ModuleNamePublisher {
-        return .{ .target = target };
-    }
-};
 
 /// One step of projecting a checked type into another store: a child type to
 /// project, or a name to remap into the target's name store.
@@ -32927,14 +32912,14 @@ const CheckedTypeStoreImportProjector = struct {
                 const representation: CheckedNominalRepresentationRef = switch (nominal.representation) {
                     .builtin => |builtin_id| .{ .builtin = builtin_id },
                     .local_declaration => |declaration| .{ .imported_declaration = .{
-                        .artifact = self.imported.key.digest(),
+                        .module = self.imported.key.digest(),
                         .declaration = declaration,
                     } },
                     .imported_declaration => |imported_decl| .{ .imported_declaration = imported_decl },
                     // A nominal another module declares is represented by
                     // its declaration in every importer.
                     .local_box_payload_capability => |capability| .{ .imported_declaration = .{
-                        .artifact = self.imported.key.digest(),
+                        .module = self.imported.key.digest(),
                         .declaration = self.imported.checked_types.demandedInterfaceCapabilities().boxPayloadCapability(capability.capability).declaration,
                     } },
                     .opaque_without_backing => .opaque_without_backing,
@@ -33098,9 +33083,9 @@ fn directImportModuleKeysFromModule(
     for (imported_names, 0..) |_, i| {
         const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const resolved_module_idx = module_env.imports.getResolvedModule(import_idx) orelse continue;
-        const key = publishImportKeyForModule(imports, resolved_module_idx) orelse {
+        const key = checkedImportKeyForModule(imports, resolved_module_idx) orelse {
             base.invariant(
-                "checked module publication invariant violated: import {d} resolved to module {d} without a published artifact key",
+                "checked module invariant violated: import {d} resolved to module {d} without a checked module key",
                 .{ i, resolved_module_idx },
             );
         };
@@ -33110,9 +33095,9 @@ fn directImportModuleKeysFromModule(
     return try keys.toOwnedSlice(allocator);
 }
 
-fn publishImportKeyForModule(imports: []const CheckedImport, module_idx: u32) ?CheckedModuleKey {
-    for (imports) |import_artifact| {
-        if (import_artifact.module_idx == module_idx) return import_artifact.key;
+fn checkedImportKeyForModule(imports: []const CheckedImport, module_idx: u32) ?CheckedModuleKey {
+    for (imports) |import_module| {
+        if (import_module.module_idx == module_idx) return import_module.key;
     }
     return null;
 }
@@ -33619,23 +33604,23 @@ test "mixed field-access segment labels are lowering-visible" {
 }
 
 /// Public `loweringView` function.
-pub fn loweringView(artifact: *const CheckedModule) Allocator.Error!LoweringModuleView {
+pub fn loweringView(checked: *const CheckedModule) Allocator.Error!LoweringModuleView {
     return .{
-        .module = artifact,
-        .roots = try artifact.rootRequests(),
+        .module = checked,
+        .roots = try checked.rootRequests(),
         .relation_modules = &.{},
     };
 }
 
 /// Public `loweringViewWithRelations` function.
 pub fn loweringViewWithRelations(
-    artifact: *const CheckedModule,
-    relation_artifacts: []const ImportedModuleView,
+    checked: *const CheckedModule,
+    relation_modules: []const ImportedModuleView,
 ) Allocator.Error!LoweringModuleView {
     return .{
-        .module = artifact,
-        .roots = try artifact.rootRequests(),
-        .relation_modules = relation_artifacts,
+        .module = checked,
+        .roots = try checked.rootRequests(),
+        .relation_modules = relation_modules,
     };
 }
 
@@ -33744,7 +33729,7 @@ pub fn inferenceKeyFromModuleEnv(
     return hasher.finalResult();
 }
 
-/// The defaulted-field expressions this module declares that its published
+/// The defaulted-field expressions this module declares that its checked
 /// types or its record constructions name, ascending.
 fn moduleDefaultExprs(
     allocator: Allocator,
@@ -33819,7 +33804,7 @@ pub const CheckedTables = struct {
     }
 };
 
-/// The checked tables of `owner`, a published module, computed from its live
+/// The checked tables of `owner`, an opened module, computed from its live
 /// checked data: its environment, sealed solver store and recorded outputs,
 /// its body analyses, and the modules its resolver resolves. The types the
 /// tables name that have no solver variable (the empty record of a
@@ -33837,8 +33822,8 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
     const module_index = &module_body_analyses.index;
     const names: *canonical.CanonicalNameStore = @constCast(owner.canonical_names);
     const store = owner.checked_types.store orelse checkedModuleInvariant("checked tables were demanded of a view without a type store", .{});
-    const artifact_key = owner.key;
-    const owner_artifact = artifact_key.digest();
+    const module_key = owner.key;
+    const owner_module = module_key.digest();
     // A module given no resolver reads no other module.
     const resolver = analyses.resolver orelse no_import_views.resolver();
 
@@ -33848,7 +33833,7 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
         .module_index = module_index,
         .selected_hoisted_roots = selected_hoisted_roots,
         .promoted_local_procedures = promoted_local_procedures,
-    }, store, owner.checked_types, owner_artifact, resolver);
+    }, store, owner.checked_types, owner_module, resolver);
     defer checked_types.deinit();
 
     const imports = try directImportModules(allocator, owner, resolver);
@@ -33856,7 +33841,7 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
     // An associated lookup names its target's module by content identity:
     // a module the module's direct imports and its types' name owners
     // reach.
-    const reached = try analyses.reachedImports(owner_artifact, owner.direct_import_module_keys, store);
+    const reached = try analyses.reachedImports(owner_module, owner.direct_import_module_keys, store);
     // The tables read the nominal representations of the module's types and
     // of the types of every module it reaches, whose capabilities, with the
     // module's own, exist before the tables create any type
@@ -33869,16 +33854,16 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
 
     const default_exprs = try moduleDefaultExprs(allocator, module, names, &checked_types);
     defer allocator.free(default_exprs);
-    const body_tables = checked_bodies_mod.Tables{ .module = owner_artifact };
+    const body_tables = checked_bodies_mod.Tables{ .module = owner_module };
 
     const value_binding_defs = env.store.sliceDefs(env.value_binding_defs);
 
     const tables = try allocator.create(CheckedTables);
     errdefer allocator.destroy(tables);
 
-    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, value_binding_defs, owner_artifact, &checked_types, module_index);
+    var checked_procedure_templates = try CheckedProcedureTemplateTable.fromModule(allocator, module, value_binding_defs, owner_module, &checked_types, module_index);
     errdefer checked_procedure_templates.deinit(allocator);
-    try checked_procedure_templates.appendPromotedLocalProcedures(allocator, module, owner_artifact, &checked_types, module_index, promoted_local_procedures);
+    try checked_procedure_templates.appendPromotedLocalProcedures(allocator, module, owner_module, &checked_types, module_index, promoted_local_procedures);
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(allocator, module, names, &checked_types, bodies_for(owner, module_body_analyses, body_tables));
@@ -33910,7 +33895,7 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
     if (compile_time_roots.roots.len != 0) {
         store.beginCreation(io);
         errdefer store.endCreation(io);
-        try checked_procedure_templates.appendEntryWrappersForRoots(allocator, owner_artifact, store, &entry_wrappers, compile_time_roots.roots);
+        try checked_procedure_templates.appendEntryWrappersForRoots(allocator, owner_module, store, &entry_wrappers, compile_time_roots.roots);
         try store.finishCreation(allocator, io);
     }
 
@@ -33921,23 +33906,23 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
     var const_templates = ConstTemplateTable{};
     errdefer const_templates.deinit(allocator);
 
-    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, value_binding_defs, names, module_index, &checked_procedure_templates, &callable_eval_templates, &top_level_procedure_bindings, &const_templates, artifact_key, &compile_time_roots, &checked_types);
+    var top_level_values = try TopLevelValueTable.fromModule(allocator, module, value_binding_defs, names, module_index, &checked_procedure_templates, &callable_eval_templates, &top_level_procedure_bindings, &const_templates, module_key, &compile_time_roots, &checked_types);
     errdefer top_level_values.deinit(allocator);
 
-    var hoisted_constants = try HoistedConstTable.fromRoots(allocator, module, artifact_key, empty_record_scheme, &compile_time_roots, &const_templates, &checked_types);
+    var hoisted_constants = try HoistedConstTable.fromRoots(allocator, module, module_key, empty_record_scheme, &compile_time_roots, &const_templates, &checked_types);
     errdefer hoisted_constants.deinit(allocator);
 
     var selected_hoisted_callables = try SelectedHoistedCallableTable.fromRoots(allocator, module, &compile_time_roots, &callable_eval_templates, &top_level_procedure_bindings, &checked_types, checked_procedure_templates.promoted);
     defer selected_hoisted_callables.deinit(allocator);
 
-    var resolved_value_refs = try ResolvedValueRefTable.fromModule(allocator, module, artifact_key, imports, reached, &checked_procedure_templates, owner.platformRequiredDeclarations(), &platform_required_bindings, &top_level_values, &selected_hoisted_callables, &hoisted_constants, &checked_types);
+    var resolved_value_refs = try ResolvedValueRefTable.fromModule(allocator, module, module_key, imports, reached, &checked_procedure_templates, owner.platformRequiredDeclarations(), &platform_required_bindings, &top_level_values, &selected_hoisted_callables, &hoisted_constants, &checked_types);
     errdefer resolved_value_refs.deinit(allocator);
-    publishBindingResolutions(env, &callable_eval_templates, &top_level_procedure_bindings);
+    applyBindingResolutions(env, &callable_eval_templates, &top_level_procedure_bindings);
 
     var method_binding_targets = MethodBindingTargets{
         .allocator = allocator,
         .module = module,
-        .owner = owner_artifact,
+        .owner = owner_module,
         .module_index = module_index,
         .resolved_value_refs = &resolved_value_refs,
         .procedure_bindings = &top_level_procedure_bindings,
@@ -33946,7 +33931,7 @@ pub fn computeCheckedTables(allocator: Allocator, owner: ImportedModuleView) All
         .resolver = resolver,
     };
     defer method_binding_targets.deinit();
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, names, owner_artifact, &template_lookup, &checked_types, module_index, &method_binding_targets);
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(allocator, module, names, owner_module, &template_lookup, &checked_types, module_index, &method_binding_targets);
     errdefer method_registry.deinit(allocator);
 
     var resolved_tables = body_tables;
@@ -34119,17 +34104,17 @@ const MethodBindingTargets = struct {
     fn useBody(self: *const MethodBindingTargets, use: ProcedureUseTemplate) Allocator.Error!?ProcedureUseBody {
         const top_level: ModuleTopLevelProcedureBindingRef = switch (use.binding) {
             .top_level => |top_level| top_level,
-            .platform_required => |required| .{ .artifact = required.artifact, .binding = required.procedure_binding },
+            .platform_required => |required| .{ .module = required.module, .binding = required.procedure_binding },
             .hosted => return null,
             .imported => |imported| {
-                const view = self.resolver.require(imported.artifact);
+                const view = self.resolver.require(imported.module);
                 const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse
                     checkedModuleInvariant("an imported procedure use was not exported by its checked module", .{});
                 return .{ .view = view, .body = binding.body };
             },
         };
-        if (top_level.artifact.eql(self.owner)) return .{ .view = null, .body = self.procedure_bindings.get(top_level.binding).body };
-        const view = self.resolver.require(top_level.artifact);
+        if (top_level.module.eql(self.owner)) return .{ .view = null, .body = self.procedure_bindings.get(top_level.binding).body };
+        const view = self.resolver.require(top_level.module);
         return .{ .view = view, .body = (try view.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body };
     }
 
@@ -34293,11 +34278,11 @@ pub fn openCheckedModule(
     // The module's types read the nominal representations of the types of
     // every module it imports or resolves against.
     for (inputs.imports) |import| _ = try import.view.checked_types.interfaceCapabilities();
-    for (inputs.available_artifacts) |available| _ = try available.checked_types.interfaceCapabilities();
+    for (inputs.available_modules) |available| _ = try available.checked_types.interfaceCapabilities();
     if (inputs.resolver) |resolver| {
         module_analyses.attachResolver(resolver);
     } else {
-        try module_analyses.attachImportViews(inputs.imports, inputs.available_artifacts);
+        try module_analyses.attachImportViews(inputs.imports, inputs.available_modules);
     }
 
     // Omitted defaults name their fields and origin modules through the
@@ -34310,7 +34295,7 @@ pub fn openCheckedModule(
     const sealed_keys = try sealed_type_keys.SealedTypeKeys.create(allocator, inputs.io, module_env);
     var sealed_keys_owned = true;
     errdefer if (sealed_keys_owned) sealed_keys.destroy();
-    var checked_type_store = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, identity.key.digest(), inputs.imports, inputs.available_artifacts, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
+    var checked_type_store = try CheckedTypeStore.fromModule(allocator, module, &canonical_names, identity.key.digest(), inputs.imports, inputs.available_modules, module_index, selected_hoisted_roots, promoted_local_procedures, sealed_keys);
     errdefer if (!stores_moved) checked_type_store.deinit(allocator);
     checked_type_store.markPublished();
     checked_type_store.releaseSuperseded(allocator);
@@ -34331,7 +34316,7 @@ pub fn openCheckedModule(
     }
     errdefer if (serialized_backing == null) inference.deinit(allocator);
 
-    var artifact = CheckedModule{
+    var checked = CheckedModule{
         .key = identity.key,
         .source_hash = identity.source_hash,
         .canonical_names = canonical_names,
@@ -34351,47 +34336,47 @@ pub fn openCheckedModule(
     // own name store (`typesView`). It owns the body analyses once it is
     // returned.
     sealed_keys_owned = false;
-    artifact.checked_types.key_names = null;
+    checked.checked_types.key_names = null;
     // Other threads read the module's names from here on, while its
     // analyses intern into them, exactly as they read its types.
-    artifact.canonical_names.markPublished();
-    artifact.attachCapabilitySource();
+    checked.canonical_names.markPublished();
+    checked.attachCapabilitySource();
     stores_moved = true;
     errdefer {
-        if (artifact.checked_types.sealed_keys) |keys| keys.destroy();
-        artifact.checked_types.deinit(allocator);
-        artifact.canonical_names.deinit();
+        if (checked.checked_types.sealed_keys) |keys| keys.destroy();
+        checked.checked_types.deinit(allocator);
+        checked.canonical_names.deinit();
     }
-    artifact.openToAnalyses();
-    artifact.evaluation = switch (inputs.outputs) {
+    checked.openToAnalyses();
+    checked.evaluation = switch (inputs.outputs) {
         .stored => stored_evaluation.?,
         // The evaluation output starts with an entry for every compile-time
         // root and constant template, which the module's checked tables hold.
-        .checked => try preparedEvaluationOutput(allocator, try artifact.checkedTables()),
+        .checked => try preparedEvaluationOutput(allocator, try checked.checkedTables()),
     };
     analyses_owned = false;
     module_analyses_owned = false;
-    return artifact;
+    return checked;
 }
 
-/// Evaluate every compile-time root of `artifact`, a module opened right
+/// Evaluate every compile-time root of `checked`, a module opened right
 /// after checking, and finish its evaluation output.
 pub fn evaluateOpenedModule(
     allocator: Allocator,
-    artifact: *CheckedModule,
+    checked: *CheckedModule,
     compile_time_finalizer: CompileTimeFinalizer,
     imports: []const CheckedImport,
-    available_artifacts: []const ImportedModuleView,
+    available_modules: []const ImportedModuleView,
     problem_store: ?*problem.Store,
 ) CompileTimeFinalizer.Error!void {
-    std.debug.assert(artifact.evaluation.state == .prepared);
-    try compile_time_finalizer.run(allocator, artifact, imports, available_artifacts, &.{}, problem_store);
-    artifact.evaluation.state = .finalized;
-    try artifact.verifyComplete();
+    std.debug.assert(checked.evaluation.state == .prepared);
+    try compile_time_finalizer.run(allocator, checked, imports, available_modules, &.{}, problem_store);
+    checked.evaluation.state = .finalized;
+    try checked.verifyComplete();
 }
 
 /// Why the baked Builtin module cannot be opened.
-pub const OpenBakedBuiltinError = Allocator.Error || error{ CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch, CorruptArtifact };
+pub const OpenBakedBuiltinError = Allocator.Error || error{ CorruptBuiltinOutputs, BuiltinOutputsVersionMismatch, CorruptSerializedData };
 
 /// Open the Builtin module `env` from `blob`, its baked stored outputs
 /// followed by their layout-version trailer. Every compile-time root of
@@ -34417,7 +34402,7 @@ pub fn openBakedBuiltin(
     });
 }
 
-/// A freshly published module's evaluation output, awaiting evaluation: an
+/// A freshly opened module's evaluation output, awaiting evaluation: an
 /// entry for every row of its root table, holding the payload the row starts
 /// with, and for every constant template with a body.
 fn preparedEvaluationOutput(
@@ -34455,7 +34440,7 @@ const ProvidedExportKindExpectation = struct {
 fn expectProvidedExportKind(
     source: []const u8,
     expected: ProvidedExportKindExpectation,
-) (@import("test/TestEnv.zig").TestEnvError || CompileTimeFinalizer.Error || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch })!void {
+) (@import("test/TestEnv.zig").TestEnvError || CompileTimeFinalizer.Error || error{ CorruptSerializedData, CorruptBuiltinOutputs, BuiltinOutputsVersionMismatch })!void {
     const TestEnv = @import("test/TestEnv.zig");
     const compiled_builtins = @import("compiled_builtins");
     const allocator = std.testing.allocator;
@@ -34464,10 +34449,10 @@ fn expectProvidedExportKind(
     defer test_env.deinit();
     try test_env.assertNoErrors();
 
-    // The baked builtin module is the published form of the builtin module
+    // The baked builtin module is the opened form of the builtin module
     // `test_env` checked against, so it serves as the real direct import.
-    var builtin_artifact = try openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
-    defer builtin_artifact.deinitRetainingModuleEnv(allocator);
+    var builtin_checked = try openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
+    defer builtin_checked.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{
         .{ .precompiled = test_env.builtin_module.env },
@@ -34477,34 +34462,34 @@ fn expectProvidedExportKind(
     defer modules.deinit();
     const imports = [_]CheckedImport{.{
         .module_idx = 0,
-        .key = builtin_artifact.key,
-        .view = importedView(&builtin_artifact),
+        .key = builtin_checked.key,
+        .view = importedView(&builtin_checked),
     }};
 
-    // Prepared metadata is enough: the root and export tables are published
+    // Prepared metadata is enough: the root and export tables are computed
     // before any compile-time evaluation runs.
-    var artifact = try openCheckedModule(allocator, .{
+    var checked = try openCheckedModule(allocator, .{
         .module_idx = 1,
         .io = std.testing.io,
         .module_env_storage = .{ .checked_source = test_env.module_env },
         .imports = &imports,
         .outputs = .{ .checked = .{} },
     });
-    defer artifact.deinitRetainingModuleEnv(allocator);
+    defer checked.deinitRetainingModuleEnv(allocator);
 
     var provided_runtime_roots: usize = 0;
-    for ((try artifact.rootRequests()).runtime_requests) |root| {
+    for ((try checked.rootRequests()).runtime_requests) |root| {
         if (root.kind == .provided_export) provided_runtime_roots += 1;
     }
     var deferred_procedure_roots: usize = 0;
-    for ((try artifact.rootRequests()).requests) |root| {
+    for ((try checked.rootRequests()).requests) |root| {
         if (root.kind == .provided_export and root.requires_pairing) deferred_procedure_roots += 1;
     }
     try std.testing.expectEqual(expected.deferred_procedure_roots, deferred_procedure_roots);
 
     var provided_data_exports: usize = 0;
     var provided_procedure_exports: usize = 0;
-    for ((try artifact.providedExports()).exports) |provided| {
+    for ((try checked.providedExports()).exports) |provided| {
         switch (provided) {
             .data => provided_data_exports += 1,
             .procedure => provided_procedure_exports += 1,
@@ -34696,7 +34681,7 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
     var scope_by_checked_expr = try nestedProcScopeMap(std.testing.allocator, &scopes);
     defer scope_by_checked_expr.deinit();
 
-    publishLocalProcedureDispatchScopes(&refs, &scope_by_checked_expr);
+    recordLocalProcedureDispatchScopes(&refs, &scope_by_checked_expr);
 
     try std.testing.expectEqual(
         @as(?DispatchScopeId, testIndexId(DispatchScopeId, 0)),
@@ -35076,7 +35061,7 @@ test "relation projection preserves anonymous row identity and provenance" {
 
     var module_env = try ModuleEnv.init(allocator, "");
     defer module_env.deinit();
-    var source_artifact = CheckedModule{
+    var source_module = CheckedModule{
         .key = testCheckedModuleKey(70),
         .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = source_names,
@@ -35091,9 +35076,9 @@ test "relation projection preserves anonymous row identity and provenance" {
         .checked_types = source_store,
         .evaluation = EvaluationOutput.init(allocator),
     };
-    defer source_artifact.evaluation.const_store.deinit();
-    source_artifact.body_analyses = try BodyAnalyses.create(allocator, std.testing.io, &module_env, &.{});
-    defer source_artifact.body_analyses.?.destroy();
+    defer source_module.evaluation.const_store.deinit();
+    source_module.body_analyses = try BodyAnalyses.create(allocator, std.testing.io, &module_env, &.{});
+    defer source_module.body_analyses.?.destroy();
 
     var target_names = canonical.CanonicalNameStore.init(allocator);
     defer target_names.deinit();
@@ -35106,7 +35091,7 @@ test "relation projection preserves anonymous row identity and provenance" {
         allocator,
         &target_store,
         &target_names,
-        importedView(&source_artifact),
+        importedView(&source_module),
     );
     defer projector.deinit();
 
@@ -35304,14 +35289,14 @@ test "relationless required platform does not publish provided runtime roots" {
     });
 }
 
-test "artifact views are read-only projections" {
+test "checked module views are read-only projections" {
     var names = canonical.CanonicalNameStore.init(std.testing.allocator);
     const test_module = try names.internModuleName("Test");
 
     var module_env = try ModuleEnv.init(std.testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = CheckedModule{
+    var checked = CheckedModule{
         .key = .{},
         .source_hash = @as([32]u8, @splat(0)),
         .canonical_names = names,
@@ -35325,16 +35310,16 @@ test "artifact views are read-only projections" {
         .module_env = .{ .checked_source = &module_env },
         .evaluation = EvaluationOutput.init(std.testing.allocator),
     };
-    artifact.body_analyses = try BodyAnalyses.create(std.testing.allocator, std.testing.io, &module_env, &.{});
+    checked.body_analyses = try BodyAnalyses.create(std.testing.allocator, std.testing.io, &module_env, &.{});
     defer {
-        artifact.body_analyses.?.destroy();
-        artifact.evaluation.const_store.deinit();
-        artifact.canonical_names.deinit();
+        checked.body_analyses.?.destroy();
+        checked.evaluation.const_store.deinit();
+        checked.canonical_names.deinit();
     }
 
-    const imported = importedView(&artifact);
-    try std.testing.expect(imported.body_analyses == artifact.body_analyses);
-    try std.testing.expect(imported.evaluation == &artifact.evaluation);
+    const imported = importedView(&checked);
+    try std.testing.expect(imported.body_analyses == checked.body_analyses);
+    try std.testing.expect(imported.evaluation == &checked.evaluation);
 }
 
 // Round-trip tests for transform-A sub-stores (POD-element slices). Each store
@@ -35352,7 +35337,7 @@ fn isSliceField(comptime FT: type) bool {
 /// slices or lists, allocate + byte-fill each field, serialize, deserialize, and assert
 /// every field is byte-identical (incl. padding) after relocation. Validates the
 /// per-field serialize/deserialize wiring for any POD element shape.
-fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestError!void {
+fn expectAllSliceStoreRoundTrips(comptime Store: type) store_serialize.TestError!void {
     const gpa = std.testing.allocator;
     var store: Store = .{};
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
@@ -35364,8 +35349,8 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
         const Elem = std.meta.Child(if (slice) @FieldType(Store, field_name) else @FieldType(@FieldType(Store, field_name), "items"));
         // Give lists spare capacity to prove serialization only writes live rows.
         const buf = try gpa.alloc(Elem, if (slice) 3 else 7);
-        artifact_serialize.poisonSlice(Elem, buf, 0x5A);
-        artifact_serialize.zeroSlicePadding(Elem, buf);
+        store_serialize.poisonSlice(Elem, buf, 0x5A);
+        store_serialize.zeroSlicePadding(Elem, buf);
         @field(store, field_name) = if (slice) buf else .{ .items = buf[0..3], .capacity = buf.len, .pointer_stability = .{} };
     }
     defer inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
@@ -35376,7 +35361,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
         }
     };
 
-    const rt = try artifact_serialize.roundTripForTest(gpa, Store, &store);
+    const rt = try store_serialize.roundTripForTest(gpa, Store, &store);
     defer gpa.free(rt.buffer);
     inline for (@typeInfo(Store).@"struct".field_names) |field_name| {
         if (comptime isNestedStoreField(@FieldType(Store, field_name))) continue;
@@ -35385,7 +35370,7 @@ fn expectAllSliceStoreRoundTrips(comptime Store: type) artifact_serialize.TestEr
         const slice = comptime isSliceField(@FieldType(Store, field_name));
         const before = if (slice) @field(store, field_name) else @field(store, field_name).items;
         const after = if (slice) @field(rt.loaded, field_name) else @field(rt.loaded, field_name).items;
-        try artifact_serialize.expectSlicesByteEqual(std.meta.Child(@TypeOf(before)), before, after);
+        try store_serialize.expectSlicesByteEqual(std.meta.Child(@TypeOf(before)), before, after);
     }
 }
 
@@ -35400,18 +35385,18 @@ test "transform-A stores: serialize/deserialize round-trip preserves every slice
 }
 
 /// Module analyses whose public API dependencies are `dependencies` and
-/// whose export closures are empty, published before any consumer reads them.
-fn testPublishedModuleAnalyses(allocator: Allocator, dependencies: PublicApiDependencies) Allocator.Error!*ModuleAnalyses {
+/// whose export closures are empty, set before any consumer reads them.
+fn testOpenedModuleAnalyses(allocator: Allocator, dependencies: PublicApiDependencies) Allocator.Error!*ModuleAnalyses {
     if (!builtin.is_test) unreachable; // test scaffolding: only test blocks call this
 
     const analyses = try ModuleAnalyses.create(allocator, std.testing.io, null);
     errdefer analyses.destroy();
-    analyses.markPublished();
+    analyses.markOpened();
     const published = try allocator.create(PublicApiDependencies);
     errdefer allocator.destroy(published);
-    const artifacts = try allocator.dupe(ModuleId, dependencies.artifacts);
-    errdefer allocator.free(artifacts);
-    published.* = .{ .artifacts = artifacts, .type_owner_artifacts = try allocator.dupe(ModuleId, dependencies.type_owner_artifacts) };
+    const checked_modules = try allocator.dupe(ModuleId, dependencies.modules);
+    errdefer allocator.free(checked_modules);
+    published.* = .{ .modules = checked_modules, .type_owner_modules = try allocator.dupe(ModuleId, dependencies.type_owner_modules) };
     std.debug.assert(analyses.public_api_dependencies.acquire(std.testing.io) == .claimed);
     analyses.public_api_dependencies.publish(std.testing.io, published);
     const closures = try allocator.create(ExportClosures);
@@ -35482,13 +35467,13 @@ test "lowering visibility follows recursive public API and type-owner dependenci
     const d_type_owners = [_]ModuleId{key_b.digest()};
 
     const analyses = [_]*ModuleAnalyses{
-        try testPublishedModuleAnalyses(gpa, .{ .artifacts = &root_public, .type_owner_artifacts = &root_type_owners }),
-        try testPublishedModuleAnalyses(gpa, .{ .artifacts = &a_public, .type_owner_artifacts = &a_type_owners }),
-        try testPublishedModuleAnalyses(gpa, .{}),
-        try testPublishedModuleAnalyses(gpa, .{}),
-        try testPublishedModuleAnalyses(gpa, .{ .type_owner_artifacts = &d_type_owners }),
-        try testPublishedModuleAnalyses(gpa, .{}),
-        try testPublishedModuleAnalyses(gpa, .{}),
+        try testOpenedModuleAnalyses(gpa, .{ .modules = &root_public, .type_owner_modules = &root_type_owners }),
+        try testOpenedModuleAnalyses(gpa, .{ .modules = &a_public, .type_owner_modules = &a_type_owners }),
+        try testOpenedModuleAnalyses(gpa, .{}),
+        try testOpenedModuleAnalyses(gpa, .{}),
+        try testOpenedModuleAnalyses(gpa, .{ .type_owner_modules = &d_type_owners }),
+        try testOpenedModuleAnalyses(gpa, .{}),
+        try testOpenedModuleAnalyses(gpa, .{}),
     };
     defer for (analyses) |module_analyses| module_analyses.destroy();
 
@@ -35737,15 +35722,15 @@ test "publishing a module releases each resource exactly once under allocation f
         "Builtin",
         compiled_builtins.builtin_source,
     );
-    var artifact_owns_module = false;
-    errdefer if (!artifact_owns_module) builtin_module.deinit();
-    var builtin_artifact = try openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
-    artifact_owns_module = true;
-    defer builtin_artifact.deinit(gpa);
+    var checked_owns_module = false;
+    errdefer if (!checked_owns_module) builtin_module.deinit();
+    var builtin_checked = try openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
+    checked_owns_module = true;
+    defer builtin_checked.deinit(gpa);
 
     // Aliases only: value definitions and nominal types would request
     // compile-time roots that only real evaluation can fill.
-    var env = try TestEnv.init("OomPublish",
+    var env = try TestEnv.init("OomOpen",
         \\Pair(a, b) : (a, b)
         \\Wrapper(a) : { value : a, extra : Pair(a, Str) }
         \\Choice(a) : [Missing, Found(a, List(Str))]
@@ -35761,22 +35746,22 @@ test "publishing a module releases each resource exactly once under allocation f
     defer modules.deinit();
     const imports = [_]CheckedImport{.{
         .module_idx = 0,
-        .key = builtin_artifact.key,
-        .view = importedView(&builtin_artifact),
+        .key = builtin_checked.key,
+        .view = importedView(&builtin_checked),
     }};
-    const available = [_]ImportedModuleView{importedView(&builtin_artifact)};
+    const available = [_]ImportedModuleView{importedView(&builtin_checked)};
 
     const NoRoots = struct {
         fn finalize(
             _: ?*anyopaque,
             _: Allocator,
-            artifact: *CheckedModule,
+            checked: *CheckedModule,
             _: []const CheckedImport,
             _: []const ImportedModuleView,
             _: []const ImportedModuleView,
             _: ?*problem.Store,
         ) CompileTimeFinalizer.Error!void {
-            std.debug.assert((try artifact.rootRequests()).requests.len == 0);
+            std.debug.assert((try checked.rootRequests()).requests.len == 0);
         }
     };
     const finalizer = CompileTimeFinalizer{ .finalize = &NoRoots.finalize };
@@ -35789,16 +35774,16 @@ test "publishing a module releases each resource exactly once under allocation f
             views: []const ImportedModuleView,
             finalize: CompileTimeFinalizer,
         ) CompileTimeFinalizer.Error!void {
-            var artifact = try openCheckedModule(failing, .{
+            var checked = try openCheckedModule(failing, .{
                 .module_idx = 1,
                 .io = std.testing.io,
                 .module_env_storage = .{ .checked_source = module_env },
                 .imports = direct,
-                .available_artifacts = views,
+                .available_modules = views,
                 .outputs = .{ .checked = .{} },
             });
-            defer artifact.deinitRetainingModuleEnv(failing);
-            try evaluateOpenedModule(failing, &artifact, finalize, direct, views, null);
+            defer checked.deinitRetainingModuleEnv(failing);
+            try evaluateOpenedModule(failing, &checked, finalize, direct, views, null);
         }
     };
     // SafeAllocator's in-place growth depends on neighboring allocations.
@@ -35876,12 +35861,12 @@ test "compile-time debug store validates message ranges" {
         .entries = &.{.{ .root = observations.entries[0].root, .message_start = 2, .message_len = std.math.maxInt(u32) }},
         .bytes = "abc",
     };
-    try std.testing.expectError(error.CorruptArtifact, malformed.validate());
+    try std.testing.expectError(error.CorruptSerializedData, malformed.validate());
     const outside: CompileTimeDebugStore = .{
         .entries = &.{.{ .root = observations.entries[0].root, .message_start = 4, .message_len = 0 }},
         .bytes = "abc",
     };
-    try std.testing.expectError(error.CorruptArtifact, outside.validate());
+    try std.testing.expectError(error.CorruptSerializedData, outside.validate());
 }
 
 /// Test scaffolding for the direct-dispatch classification predicate: a

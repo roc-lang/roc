@@ -287,8 +287,8 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             /// Reject an `(entries_offset, entries_len)` that is misaligned for `Entry` or
             /// reaches outside the `backing_len`-byte buffer, before `deserializeInto`
             /// dereferences it.
-            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptArtifact}!void {
-                const span_bytes = std.math.mul(u64, self.entries_len, @sizeOf(Entry)) catch return error.CorruptArtifact;
+            pub fn validateRelocations(self: *const Serialized, backing_len: u64) error{CorruptSerializedData}!void {
+                const span_bytes = std.math.mul(u64, self.entries_len, @sizeOf(Entry)) catch return error.CorruptSerializedData;
                 try validateRelocatedSpan(@alignOf(Entry), self.entries_offset, span_bytes, backing_len);
             }
 
@@ -498,13 +498,13 @@ test "SortedArrayBuilder.Serialized: the cache validator rejects a misaligned or
     // An offset one byte past the entries is no longer aligned to `Entry`.
     var misaligned = written.*;
     misaligned.items.entries_offset += 1;
-    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, &misaligned, buffer.len));
+    try testing.expectError(error.CorruptSerializedData, validateSerializedRelocations(Header, &misaligned, buffer.len));
 
     // A truncated buffer leaves the entries reaching past its end.
-    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, written, buffer.len - 1));
+    try testing.expectError(error.CorruptSerializedData, validateSerializedRelocations(Header, written, buffer.len - 1));
 
     // A corrupt length whose byte extent overflows.
     var huge = written.*;
     huge.items.entries_len = std.math.maxInt(u64);
-    try testing.expectError(error.CorruptArtifact, validateSerializedRelocations(Header, &huge, buffer.len));
+    try testing.expectError(error.CorruptSerializedData, validateSerializedRelocations(Header, &huge, buffer.len));
 }

@@ -3,7 +3,7 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Publish the type-checked module to a CheckedModule and serialize it
+//! 3. Open the type-checked module as a CheckedModule and serialize it
 //! 4. Output Builtin.bin, builtin_indices.zig, and Builtin.outputs.bin to paths provided by the build system
 
 const std = @import("std");
@@ -134,7 +134,7 @@ pub fn main(process_init: std.process.Init) !void {
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
-    // Publish the type-checked Builtin to a CheckedModule and serialize
+    // Open the type-checked Builtin as a CheckedModule and serialize
     // it from the same prepared env that is embedded as Builtin.bin.
     try serializeBuiltinOutputs(gpa, io, builtin_env, &compiled.inference, builtin_outputs_path);
 
@@ -145,7 +145,7 @@ pub fn main(process_init: std.process.Init) !void {
     try writeBuiltinIndicesZig(io, builtin_indices, builtin_indices_zig_path);
 }
 
-/// Publish the prepared Builtin env to a CheckedModule, then serialize
+/// Open the prepared Builtin env as a CheckedModule, then serialize
 /// the module to the output path.
 fn serializeBuiltinOutputs(
     gpa: Allocator,
@@ -162,14 +162,14 @@ fn serializeBuiltinOutputs(
     // The baked module serves either strategy's programs and no
     // compilation reopens it, so its evaluation completes every root.
     const finalizer_options: comptime_finalizer.Options = .{ .complete_baked_module = true };
-    var artifact = try check.Checked.openCheckedModule(gpa, .{
+    var checked = try check.Checked.openCheckedModule(gpa, .{
         .module_idx = 0,
         .module_env_storage = .{ .checked_source = builtin_env },
         .io = io,
         .outputs = .{ .checked = inference.* },
     });
-    defer artifact.deinitRetainingModuleEnv(gpa);
-    try check.Checked.evaluateOpenedModule(gpa, &artifact, comptime_finalizer.finalizerWithOptions(&finalizer_options), &.{}, &.{}, null);
+    defer checked.deinitRetainingModuleEnv(gpa);
+    try check.Checked.evaluateOpenedModule(gpa, &checked, comptime_finalizer.finalizerWithOptions(&finalizer_options), &.{}, &.{}, null);
 
     var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
@@ -182,7 +182,7 @@ fn serializeBuiltinOutputs(
     defer writer.deinit(arena_alloc);
 
     const hdr = try writer.appendAlloc(arena_alloc, CheckedModule.Serialized);
-    try hdr.serialize(&artifact, arena_alloc, &writer);
+    try hdr.serialize(&checked, arena_alloc, &writer);
 
     try writer.writeGather(file, io);
 

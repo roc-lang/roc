@@ -994,16 +994,16 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     var typed_cir_modules = try check.TypedCIR.Modules.init(allocator, &source_modules);
     defer typed_cir_modules.deinit();
 
-    var builtin_artifact = eval.bakedBuiltinModule(allocator, @as(std.Io, undefined), builtin_module.env) catch |err| switch (err) {
+    var builtin_checked = eval.bakedBuiltinModule(allocator, @as(std.Io, undefined), builtin_module.env) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.CorruptBuiltinArtifact, error.BuiltinArtifactVersionMismatch, error.CorruptArtifact => return error.CorruptEmbeddedBuiltins,
+        error.CorruptBuiltinOutputs, error.BuiltinOutputsVersionMismatch, error.CorruptSerializedData => return error.CorruptEmbeddedBuiltins,
     };
-    errdefer builtin_artifact.deinitRetainingModuleEnv(allocator);
+    errdefer builtin_checked.deinitRetainingModuleEnv(allocator);
 
-    var publish_imports = [_]check.Checked.CheckedImport{.{
+    var checked_imports = [_]check.Checked.CheckedImport{.{
         .module_idx = 1,
-        .key = builtin_artifact.key,
-        .view = check.Checked.importedView(&builtin_artifact),
+        .key = builtin_checked.key,
+        .view = check.Checked.importedView(&builtin_checked),
     }};
 
     const main_def = findDefByName(checked_module.module_env, "main") orelse return error.TypeCheckError;
@@ -1016,22 +1016,22 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
 
     var inference_arena = base.SingleThreadArena.init(allocator);
     defer inference_arena.deinit();
-    var root_artifact = try check.Checked.openCheckedModule(allocator, .{
+    var root_module = try check.Checked.openCheckedModule(allocator, .{
         .module_idx = 0,
         .module_env_storage = .{ .checked_source = checked_module.module_env },
         .io = @as(std.Io, undefined),
-        .imports = &publish_imports,
+        .imports = &checked_imports,
         .explicit_roots = &explicit_roots,
         .outputs = .{ .checked = try check.InferenceOutput.fromChecker(inference_arena.allocator(), &checked_module.solver.?, null) },
     });
-    errdefer root_artifact.deinitRetainingModuleEnv(allocator);
-    try check.Checked.evaluateOpenedModule(allocator, &root_artifact, eval.CompileTimeFinalization.finalizer(), &publish_imports, &.{}, null);
+    errdefer root_module.deinitRetainingModuleEnv(allocator);
+    try check.Checked.evaluateOpenedModule(allocator, &root_module, eval.CompileTimeFinalization.finalizer(), &checked_imports, &.{}, null);
 
-    var import_artifacts = [_]check.Checked.CheckedModule{builtin_artifact};
-    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});
+    var import_modules = [_]check.Checked.CheckedModule{builtin_checked};
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_module, &import_modules, .u32, .{});
 
-    root_artifact.deinitRetainingModuleEnv(allocator);
-    import_artifacts[0].deinitRetainingModuleEnv(allocator);
+    root_module.deinitRetainingModuleEnv(allocator);
+    import_modules[0].deinitRetainingModuleEnv(allocator);
     checked_module.deinit();
 
     return .{ .lowered = lowered };
@@ -1755,12 +1755,12 @@ fn writeCanCirResponse(response_buffer: []u8, data: CompilerStageData) (Allocato
 
 fn collectPlaygroundTestRootRequests(
     alloc: Allocator,
-    artifact: *const check.Checked.CheckedModule,
+    checked: *const check.Checked.CheckedModule,
 ) Allocator.Error![]check.Checked.RootRequest {
     var roots = std.ArrayList(check.Checked.RootRequest).empty;
     errdefer roots.deinit(alloc);
 
-    for ((try artifact.rootRequests()).requests) |root| {
+    for ((try checked.rootRequests()).requests) |root| {
         if (root.kind != .test_expect) continue;
         try roots.append(alloc, root);
     }
@@ -1792,7 +1792,7 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         .module,
         data.module_env.common.source,
         &.{},
-        .{ .io = @as(std.Io, undefined), .roots = .published_only },
+        .{ .io = @as(std.Io, undefined), .roots = .checker_selected },
     );
     defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 
@@ -1810,10 +1810,10 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
         return html_writer_allocating.toOwnedSlice();
     }
 
-    var import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_artifacts.len);
+    var import_views = try allocator.alloc(check.Checked.ImportedModuleView, resources.import_modules.len);
     defer allocator.free(import_views);
-    for (resources.import_artifacts, 0..) |*artifact, i| {
-        import_views[i] = check.Checked.importedView(artifact);
+    for (resources.import_modules, 0..) |*checked, i| {
+        import_views[i] = check.Checked.importedView(checked);
     }
 
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(

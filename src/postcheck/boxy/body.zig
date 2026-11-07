@@ -3164,7 +3164,7 @@ pub const Builder = struct {
     /// The compile-time root of a hoisted constant of this module, or null
     /// for a constant of another module or one no root computes.
     fn hoistedRootOfConstRef(self: *Builder, const_ref: checked.ConstRef) ?checked.ComptimeRootKey {
-        if (!std.mem.eql(u8, &const_ref.artifact.bytes, &self.view.key.bytes)) return null;
+        if (!std.mem.eql(u8, &const_ref.module.bytes, &self.view.key.bytes)) return null;
         return switch (const_ref.owner) {
             .hoisted_root => |hoisted| hoisted.root,
             .top_level_binding => |top_level| self.view.tables().compile_time_roots.lookupIdByPattern(top_level.pattern),
@@ -5140,7 +5140,7 @@ pub const Builder = struct {
     }
 
     pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
-        const owner = self.program.moduleByKey(use.const_ref.artifact);
+        const owner = self.program.moduleByKey(use.const_ref.module);
         if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.rootBoxyValue(root_id)) |stored| {
             return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
         };
@@ -6826,7 +6826,7 @@ pub const Builder = struct {
         const view = self.program.module(module_index);
         const template = view.tables().callable_eval_templates.view().templates[@backingInt(template_id)];
         const wrapper = self.program.rootWrapper(module_index, template.root);
-        const owner = self.program.moduleByKey(.{ .bytes = wrapper.artifact.bytes });
+        const owner = self.program.moduleByKey(.{ .bytes = wrapper.module.bytes });
         return .{
             .module = module_index,
             .lookup = template.forwarded_lookup orelse invariant("a method's alias binding is not an exact procedure alias"),
@@ -7791,7 +7791,7 @@ pub const Builder = struct {
             .direct_template => |direct| Program.directTemplate(direct.template),
             .callable_eval_template, .checked_error => return null,
         };
-        const owner = self.program.moduleByKey(.{ .bytes = template_ref.artifact.bytes });
+        const owner = self.program.moduleByKey(.{ .bytes = template_ref.module.bytes });
         const op = ((try owner.dispatch().procedureTemplate(template_ref.template)).provided_low_level orelse return null).layoutResolved() orelse return null;
         for (call.args) |arg| switch (self.bodies().exprData(arg)) {
             .lookup_local => {},

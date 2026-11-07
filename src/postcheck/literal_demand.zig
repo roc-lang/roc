@@ -154,7 +154,7 @@ pub const LiteralDemand = struct {
     /// The reach flags of a checked procedure template. A template the
     /// analysis never saw has no checked data to bound it.
     pub fn templateFlags(self: *const LiteralDemand, template: checked_names.ProcedureTemplateRef) Flags {
-        const node = self.templates.get(.{ .module = template.artifact.bytes, .template = @backingInt(template.template) }) orelse return Flags.all;
+        const node = self.templates.get(.{ .module = template.module.bytes, .template = @backingInt(template.template) }) orelse return Flags.all;
         return self.flags.items[node];
     }
 
@@ -312,14 +312,14 @@ const Builder = struct {
     /// The node of a template, or a node that reaches everything when no
     /// module in view declares it.
     fn templateNode(self: *Builder, template: checked_names.ProcedureTemplateRef) Allocator.Error!NodeId {
-        const key: TemplateKey = .{ .module = template.artifact.bytes, .template = @backingInt(template.template) };
+        const key: TemplateKey = .{ .module = template.module.bytes, .template = @backingInt(template.template) };
         if (self.demand.templates.get(key)) |node| return node;
         const node = try self.addNode(.{});
         try self.demand.templates.put(self.allocator, key, node);
         // A literal root's entry wrapper runs its literal's conversion plan,
         // if it is a conversion root, and nothing else.
         if (checked.templateLiteralRoot(template.template)) |root| {
-            if (self.views.get(template.artifact.bytes)) |view| {
+            if (self.views.get(template.module.bytes)) |view| {
                 const dispatch = try view.dispatch();
                 if ((try dispatch.literalRoot(root)).plan) |plan_id| try self.addPlan(node, view, dispatch, plan_id);
                 return node;
@@ -398,17 +398,17 @@ const Builder = struct {
     fn procedureUseTarget(self: *Builder, use: checked.ProcedureUseTemplate) Allocator.Error!?TemplateOrUnbounded {
         return switch (use.binding) {
             .top_level => |top_level| blk: {
-                const view = self.views.get(top_level.artifact.bytes) orelse break :blk .unbounded;
+                const view = self.views.get(top_level.module.bytes) orelse break :blk .unbounded;
                 break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body);
             },
             .imported => |imported| blk: {
-                const view = self.views.get(imported.artifact.bytes) orelse break :blk .unbounded;
+                const view = self.views.get(imported.module.bytes) orelse break :blk .unbounded;
                 const binding = (try view.exportRows()).procedureBinding(imported.def, imported.pattern) orelse break :blk .unbounded;
                 break :blk try self.bindingBodyTarget(view, binding.body);
             },
             .hosted => null,
             .platform_required => |required| blk: {
-                const view = self.views.get(required.artifact.bytes) orelse break :blk .unbounded;
+                const view = self.views.get(required.module.bytes) orelse break :blk .unbounded;
                 break :blk try self.bindingBodyTarget(view, (try view.checkedTables()).top_level_procedure_bindings.get(required.procedure_binding).body);
             },
         };
@@ -439,7 +439,7 @@ const Builder = struct {
     /// value is neither stored nor evaluated by this compilation.
     fn constReadLowersBody(self: *Builder, use: checked.ConstUseTemplate) Allocator.Error!bool {
         const const_ref = use.const_ref;
-        const view = self.views.get(const_ref.artifact.bytes) orelse return true;
+        const view = self.views.get(const_ref.module.bytes) orelse return true;
         switch (try view.constValue(const_ref)) {
             .stored_const, .unimplemented => return false,
             .reserved, .eval_template => {},

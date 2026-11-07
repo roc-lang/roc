@@ -110,7 +110,7 @@ test "issue 11418: shared LIR generation leaves runtime-only procedures to the r
         .work_metrics = &metrics,
     };
     coord.runtime_lowering = .{ .target = target };
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
     try std.testing.expect(session.completed != null);

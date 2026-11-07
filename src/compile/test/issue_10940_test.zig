@@ -75,8 +75,8 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
 
     try build_env.build(main_path);
 
-    const artifact = (try build_env.executableRootCheckedModule());
-    for ((try artifact.rootRequests()).runtime_requests) |root| {
+    const checked = (try build_env.executableRootCheckedModule());
+    for ((try checked.rootRequests()).runtime_requests) |root| {
         try std.testing.expect(root.kind != .runtime_entrypoint);
     }
 
@@ -90,7 +90,7 @@ test "issue 10940: explicit roots do not require a default app entrypoint" {
     }
 }
 
-test "issue 10940: a headerless default app still publishes main!" {
+test "issue 10940: a headerless default app still exposes main! as a root" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -115,9 +115,9 @@ test "issue 10940: a headerless default app still publishes main!" {
 
     try build_env.build(main_path);
 
-    const artifact = (try build_env.executableRootCheckedModule());
+    const checked = (try build_env.executableRootCheckedModule());
     var found_runtime_entrypoint = false;
-    for ((try artifact.rootRequests()).runtime_requests) |root| {
+    for ((try checked.rootRequests()).runtime_requests) |root| {
         if (root.kind == .runtime_entrypoint) {
             found_runtime_entrypoint = true;
         }
@@ -125,7 +125,7 @@ test "issue 10940: a headerless default app still publishes main!" {
     try std.testing.expect(found_runtime_entrypoint);
 }
 
-test "issue 10940: explicit roots do not automatically publish a defined main!" {
+test "issue 10940: explicit roots do not automatically root a defined main!" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -151,8 +151,8 @@ test "issue 10940: explicit roots do not automatically publish a defined main!" 
 
     try build_env.build(main_path);
 
-    const artifact = (try build_env.executableRootCheckedModule());
-    for ((try artifact.rootRequests()).runtime_requests) |root| {
+    const checked = (try build_env.executableRootCheckedModule());
+    for ((try checked.rootRequests()).runtime_requests) |root| {
         try std.testing.expect(root.kind != .runtime_entrypoint);
     }
 }

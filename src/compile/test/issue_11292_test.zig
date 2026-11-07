@@ -87,7 +87,7 @@ fn expectCheckReports(fixture: []const u8, expected_titles: []const []const u8) 
     try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = fixture });
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
-    try coord.finishCheckedProgram(.executable_artifacts);
+    try coord.finishCheckedProgram(.executable_program);
 
     for (expected_titles) |title| {
         var count: usize = 0;

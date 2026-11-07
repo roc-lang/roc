@@ -1,6 +1,6 @@
 //! Checked static-dispatch registry and normalized dispatch-site records.
 //!
-//! The registry is built at checked-module publication. Post-check lowering uses
+//! The registry is built by the checked module's checked tables slot. Post-check lowering uses
 //! its exact callable-or-structural resolutions; the dispatch-site record
 //! chooses the dispatcher type variable explicitly.
 
@@ -12,7 +12,7 @@ const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
 const checked_ids = @import("checked_ids.zig");
 const collections = @import("collections");
-const artifact_serialize = @import("artifact_serialize.zig");
+const store_serialize = @import("store_serialize.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 
 const Allocator = std.mem.Allocator;
@@ -55,7 +55,7 @@ pub const ProcedureTemplateLookup = struct {
     promoted: []const PromotedProcedureTemplateEntry = &.{},
 
     pub fn entryForDef(self: *const ProcedureTemplateLookup, def_idx: CIR.Def.Idx) ?ProcedureTemplateLookupEntry {
-        const found = artifact_serialize.binarySearchByKey(ProcedureTemplateLookupEntry, CIR.Def.Idx, self.by_def, def_idx, templateEntryOrder) orelse return null;
+        const found = store_serialize.binarySearchByKey(ProcedureTemplateLookupEntry, CIR.Def.Idx, self.by_def, def_idx, templateEntryOrder) orelse return null;
         return found.*;
     }
 
@@ -1010,7 +1010,7 @@ pub const MethodRegistry = struct {
         // every load is defined (entries are zeroed at build/serialization).
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
-        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        const found = store_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const target = found.target orelse return .rejected;
         return .{ .target = target };
     }
@@ -1022,7 +1022,7 @@ pub const MethodRegistry = struct {
     pub fn inspectOverride(self: *const MethodRegistry, key: MethodKey) ?InspectOverride {
         var normalized = key;
         collections.CompactWriter.zeroValuePadding(MethodKey, @ptrCast(&normalized));
-        const found = artifact_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
+        const found = store_serialize.binarySearchByKey(MethodRegistryEntry, MethodKey, self.entries, normalized, methodEntryOrder) orelse return null;
         const callable_ty = found.inspect_override orelse return null;
         return .{
             .target = found.target orelse
@@ -1044,7 +1044,7 @@ pub const MethodRegistry = struct {
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
-        owner_artifact: canonical.CheckedModuleDigest,
+        owner_module: canonical.CheckedModuleDigest,
         local_templates: *const ProcedureTemplateLookup,
         checked_types: anytype,
         module_index: anytype,
@@ -1098,7 +1098,7 @@ pub const MethodRegistry = struct {
                         .own_procedure => |own_def| blk: {
                             const template = callableTemplateForDef(local_templates, own_def);
                             break :blk .{ .procedure = .{
-                                .proc = .{ .artifact = template.artifact, .proc_base = canonical.ProcBase.of(.checked_source, @backingInt(own_def)) },
+                                .proc = .{ .module = template.module, .proc_base = canonical.ProcBase.of(.checked_source, @backingInt(own_def)) },
                                 .template = template,
                                 .runtime_target = procedureRuntimeTargetForDef(module, own_def, method_owner),
                             } };
@@ -1107,7 +1107,7 @@ pub const MethodRegistry = struct {
                             const template = local_templates.promotedTemplateForPattern(pattern) orelse
                                 base.invariant("checked static dispatch registry invariant violated: a promoted method target has no promoted template", .{});
                             break :blk .{ .procedure = .{
-                                .proc = .{ .artifact = template.artifact, .proc_base = template.proc_base },
+                                .proc = .{ .module = template.module, .proc_base = template.proc_base },
                                 .template = template,
                             } };
                         },
@@ -1137,7 +1137,7 @@ pub const MethodRegistry = struct {
                             .binding => checked_types.methodCallableType(module, referenced.binding_var),
                         },
                         .alias = if (std.meta.activeTag(target.kind) == .procedure)
-                            methodAliasForBinding(module, owner_artifact, module_index, entry.value)
+                            methodAliasForBinding(module, owner_module, module_index, entry.value)
                         else
                             null,
                         // Inspection calls an override from rendering workers
@@ -1241,19 +1241,19 @@ fn methodBindingExpr(
 /// lookup chain reaching a procedure.
 fn methodAliasForBinding(
     module: TypedCIR.Module,
-    owner_artifact: canonical.CheckedModuleDigest,
+    owner_module: canonical.CheckedModuleDigest,
     module_index: anytype,
     binding: ModuleEnv.MethodBinding,
 ) MethodAlias {
     if (module.nodeTag(binding.type_node_idx) == .def) {
         const pattern = module.moduleEnvConst().store.getDef(binding.def_idx).pattern;
         if (!module_index.reachesPattern(pattern)) base.invariant("checked static dispatch registry invariant violated: a method alias binding pattern was not checked", .{});
-        return .{ .module = owner_artifact, .binding = .{ .top_level = pattern } };
+        return .{ .module = owner_module, .binding = .{ .top_level = pattern } };
     }
     const expr = methodBindingExpr(module, binding) orelse
         base.invariant("checked static dispatch registry invariant violated: a local method alias binding had no value", .{});
     if (!module_index.reachesExpr(expr)) base.invariant("checked static dispatch registry invariant violated: a local method alias lookup was not checked", .{});
-    return .{ .module = owner_artifact, .binding = .{ .local = .{ .lookup = expr } } };
+    return .{ .module = owner_module, .binding = .{ .local = .{ .lookup = expr } } };
 }
 
 /// What a method bound by reference reaches, or null when its value is not
@@ -1935,7 +1935,7 @@ pub const EvidencePath = struct {
 pub const EvidenceParamRecord = struct {
     method: canonical.MethodNameId,
     /// Range of independent callable types in the template table.
-    callable_contracts: artifact_serialize.Span = .{},
+    callable_contracts: store_serialize.Span = .{},
     dispatcher_ty: CheckedTypeId,
     /// The constraint's callable type in the owning scheme: the interface
     /// the selected target must satisfy. Relating a target to it binds the
@@ -2073,7 +2073,7 @@ pub const RecordedDispatchPlan = struct {
     /// The callable checking recorded for the call.
     callable_ty: CheckedTypeId,
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
-    args: artifact_serialize.Span = .{},
+    args: store_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
 
     /// The plan's operands within its table's pool.
@@ -2097,7 +2097,7 @@ pub const StaticDispatchCallPlan = struct {
     /// resolution.
     callable_ty: CheckedTypeId,
     /// Range into `StaticDispatchPlanTable.operand_pool` (transform B).
-    args: artifact_serialize.Span = .{},
+    args: store_serialize.Span = .{},
     result_mode: StaticDispatchResultMode,
     /// Exact generated-codec contract selected for a structural parser or
     /// encoder call. Null for every other resolution kind.
@@ -2146,7 +2146,7 @@ pub const ResolvedIteratorDispatchCall = struct {
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
     dispatcher_arg_index: u32,
-    args: artifact_serialize.Span = .{},
+    args: store_serialize.Span = .{},
     resolution: CheckedCallResolution,
 
     fn fromRecorded(call: IteratorDispatchCall, resolution: CheckedCallResolution, callable_ty: CheckedTypeId) ResolvedIteratorDispatchCall {
@@ -2217,7 +2217,7 @@ pub const GeneratedCodecContentDigest = struct {
 };
 
 /// The exact checked resolution of one compiler-generated codec call.
-/// `pending` exists only while CheckedModule publication links the checker
+/// `pending` exists only while the checked tables slot links the checker
 /// snapshot to its target evidence or nested structural derivation.
 pub const GeneratedCodecCallResolution = union(enum(u8)) {
     pending,
@@ -2266,7 +2266,7 @@ pub const GeneratedCodecDerivation = struct {
     encoding_ty: CheckedTypeId,
     state_ty: CheckedTypeId,
     error_ty: CheckedTypeId,
-    calls: artifact_serialize.Span = .{},
+    calls: store_serialize.Span = .{},
 
     pub fn callsSlice(self: GeneratedCodecDerivation, table: *const GeneratedCodecTable) []const GeneratedCodecCall {
         return table.generated_codec_calls[self.calls.start .. self.calls.start + self.calls.len];
@@ -2325,7 +2325,7 @@ pub const IteratorDispatchCall = struct {
     callable_ty: CheckedTypeId,
     dispatcher_arg_index: u32,
     /// Range into `StaticDispatchPlanTable.iter_operand_pool` (transform B).
-    args: artifact_serialize.Span = .{},
+    args: store_serialize.Span = .{},
 
     pub fn argsSlice(self: IteratorDispatchCall, table: *const StaticDispatchPlanTable) []const IteratorDispatchOperand {
         return table.iter_operand_pool[self.args.start .. self.args.start + self.args.len];
@@ -2424,14 +2424,14 @@ fn planKvOrder(e: PlanKV, key: u32) std.math.Order {
 /// Binary-search a sorted `PlanKV` slice; returns the value (`@backingInt` of
 /// the id) or null.
 fn lookupPlanKV(sorted: []const PlanKV, key: u32) ?u32 {
-    const found = artifact_serialize.binarySearchByKey(PlanKV, u32, sorted, key, planKvOrder) orelse return null;
+    const found = store_serialize.binarySearchByKey(PlanKV, u32, sorted, key, planKvOrder) orelse return null;
     return found.val;
 }
 
 /// Append `ops` to `pool` and return their `(start, len)` range. Used to flatten
 /// per-plan operand slices into the table's shared operand pools (transform B).
-fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator, ops: []const T) Allocator.Error!artifact_serialize.Span {
-    return artifact_serialize.appendSpan(artifact_serialize.Span, T, pool, allocator, ops);
+fn pushOperands(comptime T: type, pool: *std.ArrayList(T), allocator: Allocator, ops: []const T) Allocator.Error!store_serialize.Span {
+    return store_serialize.appendSpan(store_serialize.Span, T, pool, allocator, ops);
 }
 
 /// Take `entries` as a slice sorted by key. A key recorded more than once
@@ -2820,7 +2820,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (numeral_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => base.invariant("unresolved numeral dispatch plan reached checked publication", .{}),
+                .unresolved => base.invariant("unresolved numeral dispatch plan reached the checked tables", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(numeral_plan.node_idx));
             if (!literalNodeConverts(bodies, numeral_plan.node_idx, .numeral)) continue;
@@ -2863,7 +2863,7 @@ pub const StaticDispatchPlanTable = struct {
             switch (quote_plan.dispatchResolution()) {
                 .builtin_direct, .checked_error => continue,
                 .custom_dispatch, .specialization_dispatch => {},
-                .unresolved => base.invariant("unresolved quote dispatch plan reached checked publication", .{}),
+                .unresolved => base.invariant("unresolved quote dispatch plan reached the checked tables", .{}),
             }
             const node: CIR.Node.Idx = @fromBackingInt(@intCast(quote_plan.node_idx));
             if (!literalNodeConverts(bodies, quote_plan.node_idx, .quote)) continue;
@@ -3470,7 +3470,7 @@ fn pushExprOperands(
     bodies: anytype,
     first: ?CIR.Expr.Idx,
     rest: []const CIR.Expr.Idx,
-) Allocator.Error!artifact_serialize.Span {
+) Allocator.Error!store_serialize.Span {
     const count = rest.len + @intFromBool(first != null);
     if (count == 0) return .{ .start = 0, .len = 0 };
     const start = std.math.cast(u32, pool.items.len) orelse return error.OutOfMemory;

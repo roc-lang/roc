@@ -1264,7 +1264,7 @@ fn sharedPreOpenedBuiltin(allocator: Allocator) SweepError!helpers.PreOpenedBuil
     return .{
         .env = shared_builtins.?.builtin_module.env,
         .indices = shared_builtins.?.builtin_indices,
-        .artifact = &shared_builtins.?.checked_module,
+        .module = &shared_builtins.?.checked_module,
     };
 }
 

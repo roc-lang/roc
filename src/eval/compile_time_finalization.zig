@@ -242,9 +242,9 @@ const DebugEvents = struct {
                 }
             }.lessThan);
             // The module owns these bytes for cache publication and replay.
-            const artifact_allocator = entry.module.evaluationAllocator();
-            const stored = try checked.CompileTimeDebugStore.init(artifact_allocator, inputs.items);
-            if (entry.module.freesReplacedEvaluationColumns()) entry.module.evaluation.debug.deinit(artifact_allocator);
+            const module_allocator = entry.module.evaluationAllocator();
+            const stored = try checked.CompileTimeDebugStore.init(module_allocator, inputs.items);
+            if (entry.module.freesReplacedEvaluationColumns()) entry.module.evaluation.debug.deinit(module_allocator);
             entry.module.evaluation.debug = stored;
         }
     }
@@ -1845,9 +1845,9 @@ fn evaluateRootsBoxy(
     evaluation_options.keep_artifacts = false;
     evaluation_options.retry = null;
 
-    const artifacts = try allocator.alloc(*checked.CheckedModule, modules.len);
-    defer allocator.free(artifacts);
-    for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
+    const checked_modules = try allocator.alloc(*checked.CheckedModule, modules.len);
+    defer allocator.free(checked_modules);
+    for (modules, checked_modules) |entry, *checked_module| checked_module.* = entry.module;
     const states = try allocator.alloc(RootCompletionState, modules.len);
     var states_initialized: usize = 0;
     defer {
@@ -1859,17 +1859,17 @@ fn evaluateRootsBoxy(
         states_initialized += 1;
     }
 
-    var graph = try checked_root_graph.build(allocator, artifacts, roots);
+    var graph = try checked_root_graph.build(allocator, checked_modules, roots);
     defer graph.deinit(allocator);
     const specialized = try allocator.alloc(bool, roots.len);
     defer allocator.free(specialized);
     if (base.dev_diagnostics.isSet(.trace_boxy_work)) {
         for (roots, 0..) |root, ordinal| {
-            const artifact = modules[root.module].module;
-            const compile_time_root = (try artifact.compileTimeRoot(root.root));
-            var label = try devRootLabel(allocator, artifact, compile_time_root);
+            const checked_module = modules[root.module].module;
+            const compile_time_root = (try checked_module.compileTimeRoot(root.root));
+            var label = try devRootLabel(allocator, checked_module, compile_time_root);
             defer label.deinit(allocator);
-            std.debug.print("boxy-work: pending root {d} {s} {s} #{d}: {s} (deps {any})\n", .{ ordinal, artifact.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet, graph.deps[ordinal] });
+            std.debug.print("boxy-work: pending root {d} {s} {s} #{d}: {s} (deps {any})\n", .{ ordinal, checked_module.moduleEnvConst().module_name, @tagName(compile_time_root.kind), @backingInt(root.root), label.snippet, graph.deps[ordinal] });
         }
     }
     // A literal argument root is the `.boxy` evaluator's whatever its
@@ -1877,7 +1877,7 @@ fn evaluateRootsBoxy(
     // (design.md "Literal Arguments").
     for (roots, specialized) |root, *flag| {
         flag.* = root.root.kind() != .literal_argument and
-            try checked_root_graph.rootHoldsFunction(allocator, lowering_modules.root, lowering_modules.imports, artifacts[root.module], root.request);
+            try checked_root_graph.rootHoldsFunction(allocator, lowering_modules.root, lowering_modules.imports, checked_modules[root.module], root.request);
     }
     var images = BoxyLinkedImages{ .allocator = allocator };
     defer images.deinit();
@@ -2043,13 +2043,13 @@ const ModuleEvaluation = struct {
         allocator.free(self.reads);
     }
 
-    fn artifact(self: *const ModuleEvaluation, shared: Shared) *checked.CheckedModule {
+    fn checkedModule(self: *const ModuleEvaluation, shared: Shared) *checked.CheckedModule {
         return shared.modules[self.module].module;
     }
 
     /// Whether the module's program runs against its imports' objects.
     fn links(self: *const ModuleEvaluation, shared: Shared) bool {
-        return shared.options.boxy_objects != null and !self.artifact(shared).hasPlatformRequirements();
+        return shared.options.boxy_objects != null and !self.checkedModule(shared).hasPlatformRequirements();
     }
 
     /// Whether the module's program can be lowered: its imports' objects
@@ -2057,7 +2057,7 @@ const ModuleEvaluation = struct {
     fn canLower(self: *const ModuleEvaluation, shared: Shared) FinalizeError!bool {
         if (!self.links(shared)) return true;
         const source = shared.options.boxy_objects.?;
-        return source.ready(source.context, self.artifact(shared));
+        return source.ready(source.context, self.checkedModule(shared));
     }
 
     /// Evaluate the roots holding function values, then lower the rest as
@@ -2065,7 +2065,7 @@ const ModuleEvaluation = struct {
     fn start(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
         const allocator = evaluations.allocator;
         const module_index = self.module;
-        const module = self.artifact(shared);
+        const module = self.checkedModule(shared);
         const roots = shared.roots;
         const chosen = try allocator.alloc(bool, roots.len);
         defer allocator.free(chosen);
@@ -2281,7 +2281,7 @@ const ModuleEvaluation = struct {
     fn finish(self: *ModuleEvaluation, shared: Shared, evaluations: *ModuleEvaluations) FinalizeError!void {
         self.state = .done;
         evaluations.remaining -= 1;
-        if (shared.options.boxy_objects) |source| try source.completed(source.context, self.artifact(shared));
+        if (shared.options.boxy_objects) |source| try source.completed(source.context, self.checkedModule(shared));
     }
 };
 
@@ -3929,7 +3929,7 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         template_ref: canonical.ProcedureTemplateRef,
     ) Allocator.Error!bool {
-        if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
+        if (!moduleMatches(template_ref.module, self.module.key)) return true;
         if (checked.templateLiteralRoot(template_ref.template)) |root| {
             const stamp = try self.visited_literal_wrappers.getOrPut(self.allocator, root);
             if (stamp.found_existing and stamp.value_ptr.* == self.visit) return true;
@@ -4019,7 +4019,7 @@ const RootCompletionState = struct {
     }
 
     fn constUseIsUnimplemented(self: *RootCompletionState, const_ref: checked.ConstRef) Allocator.Error!bool {
-        if (!artifactMatches(const_ref.artifact, self.module.key)) return false;
+        if (!moduleMatches(const_ref.module, self.module.key)) return false;
         return (try self.module.checkedTables()).const_templates.get(const_ref).state == .unimplemented;
     }
 
@@ -4051,7 +4051,7 @@ const RootCompletionState = struct {
         self: *RootCompletionState,
         const_ref: checked.ConstRef,
     ) Allocator.Error!?checked.ComptimeRootKey {
-        if (!artifactMatches(const_ref.artifact, self.module.key)) return null;
+        if (!moduleMatches(const_ref.module, self.module.key)) return null;
         return switch (const_ref.owner) {
             .top_level_binding => |top_level| {
                 return (try self.module.checkedTables()).compile_time_roots.lookupIdByPattern(top_level.pattern) orelse
@@ -4075,7 +4075,7 @@ const RootCompletionState = struct {
         var binding = proc_use.binding;
         while (true) switch (binding) {
             .top_level => |top_level| {
-                if (!artifactMatches(top_level.artifact, self.module.key)) return .{ .complete = true };
+                if (!moduleMatches(top_level.module, self.module.key)) return .{ .complete = true };
                 return switch ((try self.module.checkedTables()).top_level_procedure_bindings.get(top_level.binding).body) {
                     .direct_template => |direct| switch (direct.template) {
                         .checked => |checked_template| .{ .template = checked_template },
@@ -4089,7 +4089,7 @@ const RootCompletionState = struct {
             },
             .imported, .hosted => return .{ .complete = true },
             .platform_required => |required| {
-                if (!artifactMatches(required.artifact, self.module.key)) return .{ .complete = true };
+                if (!moduleMatches(required.module, self.module.key)) return .{ .complete = true };
                 const required_binding = self.module.platformRequiredBindings().lookupByBindingId(@backingInt(required.procedure_binding)) orelse
                     finalizationInvariant("platform-required procedure dependency referenced a missing binding");
                 switch (required_binding.value_use) {
@@ -4116,7 +4116,7 @@ fn lowerEvalAndFinishRoots(
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
     // A literal argument root is the `.boxy` evaluator's under either
-    // strategy: a module's module serves both strategies' programs (design.md
+    // strategy: a module's checked module serves both strategies' programs (design.md
     // "Literal Arguments"). The `.boxy` evaluator specializes the roots whose
     // values hold function values and lowers the rest as one `.boxy` program
     // (see `finalizeProgramBoxy`); a batch's roots depend on none of each
@@ -4530,7 +4530,7 @@ fn checkedProducerReportedFailure(
     root_id: checked.ComptimeRootKey,
 ) Allocator.Error!bool {
     for (owners.modules) |owner| {
-        if (!artifactMatches(module, owner.module.key)) continue;
+        if (!moduleMatches(module, owner.module.key)) continue;
         // Only a selected hoisted root of the root table is guarded.
         if (root_id.isLiteral()) return true;
         return !(try owner.module.checkedTables()).compile_time_roots.root(root_id).guarded;
@@ -5788,11 +5788,11 @@ const DevProgram = struct {
         if (options.boxy_linked_images) |images| splice.external = .{ .context = images, .resolve = BoxyLinkedImages.external };
         const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized);
         defer allocator.free(static_rc_helpers);
-        var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
-        errdefer artifacts.deinit();
+        var checked_modules = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
+        errdefer checked_modules.deinit();
         // Prepared fragments own their carried strings. The splice borrows
         // those bytes until image placement completes.
-        const carried_data = try artifacts.dataItems(allocator);
+        const carried_data = try checked_modules.dataItems(allocator);
         defer allocator.free(carried_data);
         try splice.addDataItems(carried_data);
 
@@ -5884,7 +5884,7 @@ const DevProgram = struct {
             .splice = splice,
             .executable = executable,
             .entry_offsets = entry_offsets,
-            .excerpts = artifacts,
+            .excerpts = checked_modules,
             .capture_prefix = lowered.lir_result.erased_capture_prefix,
             .composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null,
             .linked_images = options.boxy_linked_images,
@@ -5906,14 +5906,14 @@ const DevProgram = struct {
 
     fn compileProcedures(allocator: Allocator, codegen: *backend.HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, static_helpers: []const @import("layout").RcHelperKey, options: Options) Allocator.Error!NativeProcCompiler.Retained {
         var metrics: NativeProcCompiler.Metrics = .{};
-        const artifacts = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, codegen, demand, .{
+        const checked_modules = try NativeProcCompiler.run(backend.HostLirCodeGen, allocator, codegen, demand, .{
             .target = backend.dev.LirCodeGenMod.host_lir_codegen_target,
             .executor = options.post_check_executor,
             .static_helpers = static_helpers,
             .metrics_out = &metrics,
         });
         if (options.timing) |timing| timing.addNativeEmission(metrics);
-        return artifacts;
+        return checked_modules;
     }
 
     fn resolveCallable(raw: ?*anyopaque, data_ptr: [*]u8) error{RuntimeError}!NativeRootExport.CallableResolution {
@@ -7304,7 +7304,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
     };
 }
 
-fn artifactMatches(a: anytype, b: checked.CheckedModuleKey) bool {
+fn moduleMatches(a: anytype, b: checked.CheckedModuleKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
 }
 
@@ -7358,14 +7358,14 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     // Finalization completes a subset of the lowering's modules, in an order
     // of its own. Only `key` is read, so the rest of each module stays out
     // of this test.
-    var artifacts: [3]checked.CheckedModule = undefined;
-    artifacts[0].key = .{ .bytes = keys[2].bytes };
-    artifacts[1].key = .{ .bytes = keys[0].bytes };
-    artifacts[2].key = .{ .bytes = keys[2].bytes };
+    var checked_modules: [3]checked.CheckedModule = undefined;
+    checked_modules[0].key = .{ .bytes = keys[2].bytes };
+    checked_modules[1].key = .{ .bytes = keys[0].bytes };
+    checked_modules[2].key = .{ .bytes = keys[2].bytes };
     const modules = [_]ProgramModule{
-        .{ .module = &artifacts[0], .problem_store = null },
-        .{ .module = &artifacts[1], .problem_store = null },
-        .{ .module = &artifacts[2], .problem_store = null },
+        .{ .module = &checked_modules[0], .problem_store = null },
+        .{ .module = &checked_modules[1], .problem_store = null },
+        .{ .module = &checked_modules[2], .problem_store = null },
     };
 
     var owners = try ModuleOwners.init(allocator, program.lowering_modules.items, &modules);
@@ -7374,8 +7374,8 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     try std.testing.expectEqual(@as(?u32, null), owners.position(@fromBackingInt(@intCast(1))));
     try std.testing.expectEqual(@as(?u32, 0), owners.position(@fromBackingInt(@intCast(2))));
     try std.testing.expect(owners.get(@fromBackingInt(@intCast(1))) == null);
-    try std.testing.expectEqual(&artifacts[0], owners.get(@fromBackingInt(@intCast(2))).?.module);
-    try std.testing.expectEqual(&artifacts[1], owners.get(.first).?.module);
+    try std.testing.expectEqual(&checked_modules[0], owners.get(@fromBackingInt(@intCast(2))).?.module);
+    try std.testing.expectEqual(&checked_modules[1], owners.get(.first).?.module);
     try std.testing.expectEqual(@as(?u32, 2), owners.next_alias[0]);
     try std.testing.expectEqual(@as(?u32, null), owners.next_alias[1]);
     try std.testing.expectEqual(@as(?u32, null), owners.next_alias[2]);
@@ -7635,8 +7635,8 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         defer strings.deinit();
         var codegen = try backend.HostLirCodeGen.init(allocator, &program.store, &program.layouts, strings.view(), roc_target.host_cpu.level());
         defer codegen.deinit();
-        var artifacts = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
-        errdefer artifacts.deinit();
+        var checked_modules = try DevProgram.compileProcedures(allocator, &codegen, &.{proc}, &.{}, .{ .post_check_executor = executor.executor(), .timing = &timing });
+        errdefer checked_modules.deinit();
         try std.testing.expect(executor.callbacks > 0);
         try std.testing.expect(timing.snapshot().native_emission.procedures_emitted > 0);
         const entry = try codegen.generateEntrypointWrapper("ctfe_retained_leaf", proc, &.{}, .u64);
@@ -7646,7 +7646,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         var result: u64 = 0;
         image.callRocABIAt(entry.offset, @ptrCast(&result), null);
         try std.testing.expectEqual(@as(u64, 42), result);
-        break :block artifacts;
+        break :block checked_modules;
     };
     defer retained.deinit();
     // Every producer workspace, string table, and executable mapping is dead.

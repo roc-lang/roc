@@ -4,7 +4,7 @@
 //! Lowering walks the module's CIR expressions, patterns and statements
 //! directly, keyed by their CIR ids. This reader answers the questions
 //! lowering asks of one node: its normalized shape, its checked type, the
-//! dispatch plan and resolved value reference publication attached to it,
+//! dispatch plan and resolved value reference attached to it,
 //! the facts checking recorded for it, and the body-level analyses computed
 //! on first demand for the definition that contains it.
 
@@ -132,7 +132,7 @@ pub const TagDiscriminantEquality = struct {
 };
 
 /// The shape of an expression node, read from CIR. Facts checking and
-/// publication attached to the node are separate accessors of the reader.
+/// attached to the node are separate accessors of the reader.
 pub const ExprData = union(enum) {
     /// Any numeric literal (`numeralLiteral`, `numeralPlan`,
     /// `literalConversionRoot`).
@@ -413,7 +413,7 @@ pub const Binder = struct {
     recursive_value: bool,
 };
 
-/// The publication tables a reader answers by-node questions from. A reader
+/// The checked tables a reader answers by-node questions from. A reader
 /// built before a table exists reports that table's facts as absent; the
 /// body-level analyses read every table and require them all.
 pub const Tables = struct {
