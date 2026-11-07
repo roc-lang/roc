@@ -25964,10 +25964,16 @@ const TypeVarMention = struct {
     flags: TypeVarMentionFlags,
 };
 
-/// The type variables each checked type mentions, memoized by type.
-const TypeVarMentions = struct {
+/// The type variables each checked type of one module's store mentions,
+/// memoized by type. Every answer is a function of the types alone, so the
+/// module's template demand walks share their memos: a walk borrows one from
+/// its module for its lifetime (`ModuleAnalyses.borrowTypeVarMentions`) and
+/// returns it.
+pub const TypeVarMentions = struct {
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
+    /// The modules `reach` finds declarations through.
+    import_views: CheckedImportViews,
     memo: collections.DenseMap(CheckedTypeId, store_serialize.Span),
     pool: std.ArrayList(TypeVarMention) = .empty,
     /// Walk state of one query: each (type, flags) pair is visited once, so a
@@ -25982,13 +25988,40 @@ const TypeVarMentions = struct {
         flags: TypeVarMentionFlags,
     };
 
-    fn deinit(self: *TypeVarMentions) void {
+    /// The mentions of the types of `dispatch`'s module.
+    pub fn create(allocator: Allocator, dispatch: CheckedDispatch) Allocator.Error!*TypeVarMentions {
+        const source = dispatch.source;
+        const import_views = try dispatchImportViews(dispatch);
+        const mentions = try allocator.create(TypeVarMentions);
+        errdefer allocator.destroy(mentions);
+        mentions.* = .{
+            .allocator = allocator,
+            .checked_types = source.types.store,
+            .import_views = import_views,
+            .memo = collections.DenseMap(CheckedTypeId, store_serialize.Span).init(allocator),
+            .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
+            .reach = undefined,
+        };
+        mentions.reach = .{
+            .allocator = allocator,
+            .modules = try WalkModules.init(allocator, source.key.digest(), source.types.store.view(), mentions.import_views.resolver()),
+        };
+        return mentions;
+    }
+
+    /// Whether the mentions are of the types of `dispatch`'s module.
+    pub fn reads(self: *const TypeVarMentions, dispatch: CheckedDispatch) bool {
+        return self.checked_types == dispatch.source.types.store;
+    }
+
+    pub fn destroy(self: *TypeVarMentions) void {
         self.reach.deinit();
         self.memo.deinit();
         self.pool.deinit(self.allocator);
         self.pending.deinit(self.allocator);
         self.visited.deinit(self.allocator);
         self.found.deinit();
+        self.allocator.destroy(self);
     }
 
     /// The variables `root` mentions, in ascending type-id order.
@@ -26421,9 +26454,7 @@ pub fn computeTemplateDemandGraph(allocator: Allocator, dispatch: CheckedDispatc
 /// edges to the templates it calls.
 pub fn computeTemplateDemandNode(allocator: Allocator, dispatch: CheckedDispatch, template: u32) Allocator.Error!*TemplateDemandNode {
     const source = dispatch.source;
-    // The resolver the reach walk finds declaring modules through reads
-    // `import_views`, which outlives the walk.
-    const import_views = try dispatchImportViews(dispatch);
+    const mentions = try source.analyses.borrowTypeVarMentions(dispatch);
     var pass = TemplateDemandWalk{
         .allocator = allocator,
         .module_key = source.key,
@@ -26435,16 +26466,7 @@ pub fn computeTemplateDemandNode(allocator: Allocator, dispatch: CheckedDispatch
         .static_dispatch_plans = source.plans,
         .dispatch = dispatch,
         .current_slots = collections.DenseMap(CheckedTypeId, u32).init(allocator),
-        .mentions = .{
-            .allocator = allocator,
-            .checked_types = source.types.store,
-            .memo = collections.DenseMap(CheckedTypeId, store_serialize.Span).init(allocator),
-            .found = collections.DenseMap(CheckedTypeId, TypeVarMentionFlags).init(allocator),
-            .reach = .{
-                .allocator = allocator,
-                .modules = try WalkModules.init(allocator, source.key.digest(), source.types.store.view(), import_views.resolver()),
-            },
-        },
+        .mentions = mentions,
     };
     defer pass.deinit();
     return pass.walkTemplate(template);
@@ -26564,7 +26586,8 @@ const TemplateDemandWalk = struct {
     static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     dispatch: CheckedDispatch,
 
-    mentions: TypeVarMentions,
+    /// The memo the walk borrowed from its module.
+    mentions: *TypeVarMentions,
     /// The walked template's own vector.
     demands: std.ArrayList(SchemeVarDemand) = .empty,
     edges: std.ArrayList(TemplateDemandEdge) = .empty,
@@ -26644,7 +26667,7 @@ const TemplateDemandWalk = struct {
     };
 
     fn deinit(self: *TemplateDemandWalk) void {
-        self.mentions.deinit();
+        self.dispatch.source.analyses.returnTypeVarMentions(self.mentions);
         self.current_slots.deinit();
         self.raised.deinit(self.allocator);
         self.raise_pending.deinit(self.allocator);

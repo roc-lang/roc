@@ -61,6 +61,7 @@ const ResolvedValueRefTable = checked_module.ResolvedValueRefTable;
 const PlatformPairing = checked_module.PlatformPairing;
 const UnitId = @import("body_analyses.zig").UnitId;
 const EvidenceTraversal = checked_module.EvidenceTraversal;
+const TypeVarMentions = checked_module.TypeVarMentions;
 const ModuleEnv = @import("can").ModuleEnv;
 
 const TemplateSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_template_schema);
@@ -260,6 +261,13 @@ pub const ModuleAnalyses = struct {
     /// Guards `idle_evidence_traversals` and `evidence_traversal_count`; held
     /// around a borrow's or a return's list update only.
     evidence_traversal_mutex: std.Io.Mutex = .init,
+    /// The type-variable mention memos no template demand walk of the module
+    /// has borrowed (`borrowTypeVarMentions`), with capacity for every memo
+    /// the module has created.
+    idle_type_var_mentions: std.ArrayListUnmanaged(*TypeVarMentions) = .empty,
+    type_var_mentions_count: usize = 0,
+    /// Guards `idle_type_var_mentions` and `type_var_mentions_count`.
+    type_var_mentions_mutex: std.Io.Mutex = .init,
     /// Set once the module is opened (`CheckedModule.openToAnalyses`):
     /// no slot of the module runs before it.
     opened: std.atomic.Value(bool) = .init(false),
@@ -407,6 +415,9 @@ pub const ModuleAnalyses = struct {
         std.debug.assert(self.idle_evidence_traversals.items.len == self.evidence_traversal_count);
         for (self.idle_evidence_traversals.items) |traversal| traversal.destroy(allocator);
         self.idle_evidence_traversals.deinit(allocator);
+        std.debug.assert(self.idle_type_var_mentions.items.len == self.type_var_mentions_count);
+        for (self.idle_type_var_mentions.items) |mentions| mentions.destroy();
+        self.idle_type_var_mentions.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -426,6 +437,40 @@ pub const ModuleAnalyses = struct {
         try self.idle_evidence_traversals.ensureTotalCapacity(self.allocator, self.evidence_traversal_count + 1);
         self.evidence_traversal_count += 1;
         return traversal;
+    }
+
+    /// A type-variable mention memo over the types of `dispatch`'s module
+    /// for one template demand walk to use until it returns it
+    /// (`returnTypeVarMentions`): an idle one of the module's store, or a new
+    /// one.
+    pub fn borrowTypeVarMentions(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TypeVarMentions {
+        const idle = blk: {
+            self.type_var_mentions_mutex.lockUncancelable(self.io);
+            defer self.type_var_mentions_mutex.unlock(self.io);
+            break :blk self.idle_type_var_mentions.pop();
+        };
+        if (idle) |mentions| {
+            if (mentions.reads(dispatch)) return mentions;
+            mentions.destroy();
+        } else {
+            self.type_var_mentions_mutex.lockUncancelable(self.io);
+            defer self.type_var_mentions_mutex.unlock(self.io);
+            try self.idle_type_var_mentions.ensureTotalCapacity(self.allocator, self.type_var_mentions_count + 1);
+            self.type_var_mentions_count += 1;
+        }
+        return TypeVarMentions.create(self.allocator, dispatch) catch |err| {
+            self.type_var_mentions_mutex.lockUncancelable(self.io);
+            defer self.type_var_mentions_mutex.unlock(self.io);
+            self.type_var_mentions_count -= 1;
+            return err;
+        };
+    }
+
+    /// Give back a memo `borrowTypeVarMentions` lent.
+    pub fn returnTypeVarMentions(self: *ModuleAnalyses, mentions: *TypeVarMentions) void {
+        self.type_var_mentions_mutex.lockUncancelable(self.io);
+        defer self.type_var_mentions_mutex.unlock(self.io);
+        self.idle_type_var_mentions.appendAssumeCapacity(mentions);
     }
 
     /// Give back a traversal `borrowEvidenceTraversal` lent.
