@@ -189,6 +189,7 @@ test "lir tests" {
     std.testing.refAllDecls(ArcSolve);
     std.testing.refAllDecls(ArcCertify);
     std.testing.refAllDecls(@import("arc_liveness.zig"));
+    std.testing.refAllDecls(@import("arc_fresh.zig"));
     std.testing.refAllDecls(ArcDismantle);
     std.testing.refAllDecls(LirImage);
 }

@@ -944,13 +944,15 @@ test "an empty compile-time list rebuilds with the capacity it was evaluated wit
     }.inspect);
 }
 
-test "a compile-time record of an empty list with capacity and a scalar keeps its static datum where a callee writes its list" {
+test "a compile-time record of an empty list with capacity and a scalar is built fresh where a callee writes its list" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
     // whose empty list carries no capacity. Its list was evaluated with room,
-    // so the record keeps its slot and names a fresh form; the append that
-    // would write the list in place is a callee's, through its record
-    // parameter's field, so the read keeps the static datum.
+    // so the record keeps its slot and names a fresh form. The callee's
+    // append writes its record parameter's `items` field in place, which is
+    // the callee's fresh demand on that field, so the read takes its fresh
+    // form: the list rebuilt with its capacity and the record around it,
+    // reading nothing of the datum.
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -964,7 +966,34 @@ test "a compile-time record of an empty list with capacity and a scalar keeps it
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 8);
+            return 0;
+        }
+    }.inspect);
+}
+
+test "an empty list with capacity two struct levels into a compile-time record is built fresh where a callee writes it" {
+    // The callee appends to `record.inner.items`, a field of a field of its
+    // parameter, so its fresh demand names that path and the read of the
+    // whole record takes its fresh form.
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\state : { inner : { items : List(U64), n : U64 }, count : U64 }
+        \\state = { inner: { items: List.with_capacity(8), n: 1 }, count: 3 }
+        \\fill : { inner : { items : List(U64), n : U64 }, count : U64 }, U64 -> U64
+        \\fill = |record, n| List.len(List.append(record.inner.items, n)) + record.count + record.inner.n
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(fill(state, List.len(args))))
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
+            try expectLowLevelPresent(result, .list_with_capacity);
+            try expectIntLiteralPresent(result, 8);
             return 0;
         }
     }.inspect);
