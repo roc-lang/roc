@@ -2198,31 +2198,66 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
-fn checkedTypeIsConcreteCompileTimeRoot(
+/// Whether checked types of one module are concrete compile-time roots
+/// (`ConcreteRootScan`), asked of any number of roots. Every type a walk that
+/// found its root concrete entered is concrete under the walk that entered
+/// it, so a later walk that reaches it stops there.
+const ConcreteRootProofs = struct {
     allocator: Allocator,
-    module: ModuleId,
-    checked_types: CheckedTypeStoreView,
-    resolver: ModuleResolver,
-    root: CheckedTypeId,
-) Allocator.Error!bool {
-    var active = std.AutoHashMap(u64, void).init(allocator);
-    defer active.deinit();
-    var modules = try WalkModules.init(allocator, module, checked_types, resolver);
-    defer modules.deinit(allocator);
-    var scan = ConcreteRootScan{ .allocator = allocator, .modules = &modules, .active = &active };
-    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .module = 0, .id = root } });
-}
+    modules: WalkModules,
+    proven: std.AutoHashMapUnmanaged(ConcreteRootScan.Entered, void) = .empty,
+    /// The types the current walk has entered.
+    entered: std.AutoHashMapUnmanaged(ConcreteRootScan.Entered, void) = .empty,
 
-/// Whether a checked type is concrete enough to be a compile-time root. A
-/// type reached again while it is still being walked (a recursive type)
-/// counts as concrete.
+    fn init(allocator: Allocator, module: ModuleId, checked_types: CheckedTypeStoreView, resolver: ModuleResolver) Allocator.Error!ConcreteRootProofs {
+        return .{ .allocator = allocator, .modules = try WalkModules.init(allocator, module, checked_types, resolver) };
+    }
+
+    fn deinit(self: *ConcreteRootProofs) void {
+        self.modules.deinit(self.allocator);
+        self.proven.deinit(self.allocator);
+        self.entered.deinit(self.allocator);
+    }
+
+    fn isConcrete(self: *ConcreteRootProofs, root: CheckedTypeId) Allocator.Error!bool {
+        self.entered.clearRetainingCapacity();
+        var scan = ConcreteRootScan{ .allocator = self.allocator, .proofs = self };
+        const concrete = try ConcreteRootScan.Eval.run(self.allocator, &scan, .{ .ty = .{ .walk = .value_graph, .module = 0, .id = root } });
+        if (concrete) {
+            try self.proven.ensureUnusedCapacity(self.allocator, self.entered.count());
+            var entered = self.entered.keyIterator();
+            while (entered.next()) |key| self.proven.putAssumeCapacity(key.*, {});
+        }
+        return concrete;
+    }
+
+    /// Whether `root` is a context-free compile-time root: concrete, and
+    /// either produced by a producer that fixes its callable type or
+    /// reaching no callable slot.
+    fn isContextFree(self: *ConcreteRootProofs, producer_callable_type_is_fixed: bool, root: CheckedTypeId) Allocator.Error!bool {
+        if (!try self.isConcrete(root)) return false;
+        // A callable root or an annotated data producer fixes its callable graph at
+        // the producer. An unannotated data root can instead receive callable type
+        // relations from a use site, so it must not seal a context-free graph first.
+        const own = self.modules.entries.items[0];
+        return producer_callable_type_is_fixed or
+            try checkedTypeHasNoReachableCallableSlots(self.allocator, own.module, own.types, self.modules.resolver, root);
+    }
+};
+
+/// Whether a checked type is concrete enough to be a compile-time root:
+/// whether no type it reaches, through the walk that reaches it, is one that
+/// makes it not concrete. Every group is an `all`, so the walk ends at the
+/// first such type, and a type reached again counts as concrete: it is either
+/// still being walked (a recursive type) or was walked and found concrete.
 const ConcreteRootScan = struct {
     allocator: Allocator,
-    /// The modules the walk has entered; a nominal's backing is walked in
-    /// its declaring module.
-    modules: *WalkModules,
-    /// The types on the path currently being walked (`WalkModules.key`).
-    active: *std.AutoHashMap(u64, void),
+    /// The modules the walk has entered (a nominal's backing is walked in its
+    /// declaring module), the types it has entered, with the walk that
+    /// entered each, and the types earlier walks proved concrete.
+    proofs: *ConcreteRootProofs,
+
+    const Entered = struct { walk: ConcreteRootWalk, key: u64 };
 
     const Leaf = union(enum) {
         ty: struct { walk: ConcreteRootWalk, module: u32, id: CheckedTypeId },
@@ -2241,9 +2276,11 @@ const ConcreteRootScan = struct {
         };
         const walk = ty.walk;
         const module = ty.module;
-        if (scan.active.contains(WalkModules.key(module, ty.id))) return .{ .value = true };
+        const entered: Entered = .{ .walk = walk, .key = WalkModules.key(module, ty.id) };
+        if (scan.proofs.proven.contains(entered)) return .{ .value = true };
+        if ((try scan.proofs.entered.getOrPut(scan.allocator, entered)).found_existing) return .{ .value = true };
 
-        switch (scan.modules.typesOf(module).payload(ty.id)) {
+        switch (scan.proofs.modules.typesOf(module).payload(ty.id)) {
             .pending => checkedModuleInvariant("compile-time root checked type was pending", .{}),
             .field_kind, .err => return .{ .value = false },
             .flex => return .{ .value = false },
@@ -2297,7 +2334,7 @@ const ConcreteRootScan = struct {
                 if (needs_backing) {
                     // Declaration formals stand for the args checked above, so they
                     // count as concrete while walking the backing template.
-                    if (try scan.modules.declaration(scan.allocator, module, nominal)) |site| {
+                    if (try scan.proofs.modules.declaration(scan.allocator, module, nominal)) |site| {
                         try items.add(.{ .ty = .{ .walk = .decl_template, .module = site.module, .id = site.declaration.backing } });
                     }
                 }
@@ -2316,13 +2353,10 @@ const ConcreteRootScan = struct {
                 try items.add(.{ .ty = .{ .walk = walk, .module = module, .id = tag_union.ext } });
             },
         }
-        try scan.active.put(WalkModules.key(module, ty.id), {});
         return .{ .group = .all };
     }
 
-    pub fn exit(scan: *ConcreteRootScan, leaf: Leaf, _: ?bool) Allocator.Error!void {
-        _ = scan.active.remove(WalkModules.key(leaf.ty.module, leaf.ty.id));
-    }
+    pub fn exit(_: *ConcreteRootScan, _: Leaf, _: ?bool) Allocator.Error!void {}
 };
 
 test "compile-time roots reject undetermined record field kinds" {
@@ -2343,7 +2377,9 @@ test "compile-time roots reject undetermined record field kinds" {
     try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .record = .{ .fields = fields, .ext = leaf } }));
 
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1).digest(), .direct = &.{} };
-    try std.testing.expect(!try checkedTypeIsConcreteCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), root));
+    var proofs = try ConcreteRootProofs.init(allocator, imports.current_owner, store.view(), imports.resolver());
+    defer proofs.deinit();
+    try std.testing.expect(!try proofs.isConcrete(root));
 }
 
 test "compile-time data roots with reachable callables require producer type evidence" {
@@ -2373,8 +2409,10 @@ test "compile-time data roots with reachable callables require producer type evi
     } }));
 
     const imports = CheckedImportViews{ .current_owner = testCheckedModuleKey(1).digest(), .direct = &.{} };
-    try std.testing.expect(!try checkedTypeIsContextFreeCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), false, root));
-    try std.testing.expect(try checkedTypeIsContextFreeCompileTimeRoot(allocator, imports.current_owner, store.view(), imports.resolver(), true, root));
+    var proofs = try ConcreteRootProofs.init(allocator, imports.current_owner, store.view(), imports.resolver());
+    defer proofs.deinit();
+    try std.testing.expect(!try proofs.isContextFree(false, root));
+    try std.testing.expect(try proofs.isContextFree(true, root));
 }
 
 fn compileTimeRootRequestIsEligible(root: CompileTimeRoot) bool {
@@ -21292,9 +21330,11 @@ pub fn computeUnitLiteralConversions(allocator: Allocator, dispatch: CheckedDisp
     const import_views = try dispatchImportViews(dispatch);
     const store = source.types.store;
     try demandDispatchCapabilities(dispatch, &.{});
+    var proofs = try ConcreteRootProofs.init(allocator, source.key.digest(), store.view(), import_views.resolver());
+    defer proofs.deinit();
     for (candidates.items, nodes, records) |candidate, *node, *record| {
         node.* = candidate.literal.node();
-        const eligible = try checkedTypeIsContextFreeCompileTimeRoot(allocator, source.key.digest(), store.view(), import_views.resolver(), false, candidate.ty);
+        const eligible = try proofs.isContextFree(false, candidate.ty);
         record.* = .{
             .root = .{
                 .id = literalConversionRootId(candidate.literal),
@@ -23154,9 +23194,11 @@ pub fn computeLiteralComponent(
     }.lessThan);
     const roots = try allocator.alloc(LiteralRootRecord, new_roots.items.len);
     errdefer allocator.free(roots);
+    var proofs = try ConcreteRootProofs.init(allocator, owner, store.view(), import_views.resolver());
+    defer proofs.deinit();
     for (new_roots.items, roots) |new_root, *record| {
         const validate_only = !new_root.site.carriesValue() or try checkedTypeHoldsFunction(allocator, store.view(), owner, import_views, new_root.ty);
-        const eligible = try checkedTypeIsContextFreeCompileTimeRoot(allocator, owner, store.view(), import_views.resolver(), false, new_root.ty);
+        const eligible = try proofs.isContextFree(false, new_root.ty);
         record.* = .{
             .root = .{
                 .id = new_root.id,
@@ -25849,6 +25891,8 @@ fn recordCompileTimeRootRequestEligibility(
     checked_types: *const CheckedSourceTypes,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
+    var proofs = try ConcreteRootProofs.init(allocator, checked_types.current_owner, checked_types.view, checked_types.resolver);
+    defer proofs.deinit();
     for (roots) |*root| {
         const producer_callable_type_is_fixed = switch (root.kind) {
             .callable_binding => true,
@@ -25865,14 +25909,7 @@ fn recordCompileTimeRootRequestEligibility(
             .literal_argument,
             => false,
         };
-        const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
-            allocator,
-            checked_types.current_owner,
-            checked_types.view,
-            checked_types.resolver,
-            producer_callable_type_is_fixed,
-            root.checked_type,
-        );
+        const context_free = try proofs.isContextFree(producer_callable_type_is_fixed, root.checked_type);
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
@@ -27214,23 +27251,6 @@ const TemplateDemandWalk = struct {
         return true;
     }
 };
-
-fn checkedTypeIsContextFreeCompileTimeRoot(
-    allocator: Allocator,
-    module: ModuleId,
-    checked_types: CheckedTypeStoreView,
-    resolver: ModuleResolver,
-    producer_callable_type_is_fixed: bool,
-    root: CheckedTypeId,
-) Allocator.Error!bool {
-    if (!try checkedTypeIsConcreteCompileTimeRoot(allocator, module, checked_types, resolver, root)) return false;
-
-    // A callable root or an annotated data producer fixes its callable graph at
-    // the producer. An unannotated data root can instead receive callable type
-    // relations from a use site, so it must not seal a context-free graph first.
-    return producer_callable_type_is_fixed or
-        try checkedTypeHasNoReachableCallableSlots(allocator, module, checked_types, resolver, root);
-}
 
 fn deinitCompileTimeRootSlice(allocator: Allocator, roots: []CompileTimeRoot) void {
     for (roots) |*root| {
