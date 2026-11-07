@@ -9,7 +9,7 @@ type=expr
 ~~~
 # EXPECTED
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:2:1:3
-TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:14:1:26
+TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:5:1:12
 TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 # PROBLEMS
 ~~~clojure
@@ -49,11 +49,11 @@ TYPE MISMATCH - can_list_mismatch_then_nested_error.md:1:18:1:25
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 1 14) (end 1 26))
+		(region (start 1 5) (end 1 12))
 		(headline
 			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
-			(source-region (file "can_list_mismatch_then_nested_error.md") (start 1 14) (end 1 26) (annotation error) (line-text "[1, \"hello\", [3, \"world\"]]"))
+			(source-region (file "can_list_mismatch_then_nested_error.md") (start 1 5) (end 1 12) (annotation error) (line-text "[1, \"hello\", [3, \"world\"]]"))
 			(line-break)
 			(reflow "The type was determined to be:")
 			(line-break)

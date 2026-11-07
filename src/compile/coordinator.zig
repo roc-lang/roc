@@ -10880,7 +10880,6 @@ fn reportCheckingErrors(coord: *Coordinator) error{TestUnexpectedResult} {
     return error.TestUnexpectedResult;
 }
 
-
 fn expectSameInferenceEntries(expected: []const InferenceEntry, actual: []const InferenceEntry) error{TestExpectedEqual}!void {
     try std.testing.expectEqual(expected.len, actual.len);
     for (expected, actual) |want, got| {

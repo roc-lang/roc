@@ -1247,6 +1247,21 @@ checker recovery. The recovery rules:
   literal expression whose conversion fails is not a pattern owner: it
   becomes a runtime error itself, like the source of any other rejected
   dispatch.
+- A source literal's conversion, and every obligation derived from it, fails
+  at the literal's own occurrences (every literal merged into its relation),
+  whichever unification grounded the literal's type and whichever queued
+  entry carries it (`Check.poisonSourceLiteralConversionFailure`). In
+  `var $xs = [1]` followed by `$xs = bad($xs)`, where
+  `bad = |xs| xs.append(Bool.True)`, resolving the call's copy of `append`
+  makes the list's item `Bool`, and the `1` is the runtime error: the call is
+  a valid call, and the statement that builds the list crashes. The report
+  still belongs to the relation that grounded the literal, so it is withdrawn
+  with that relation when the relation is void. Only a copy that
+  instantiation made of a literal conversion belongs to the use that copied
+  it. A class that a default decided was grounded by no relation, so once a
+  requirement rejects its default every literal it holds has no type: the
+  class's rejection retires all of them (`(3, x) = ("a", 1)` retires both
+  the pattern's `3`, rejecting the destructure, and the `"a"`).
 - An effectful top-level value's right-hand side is erroneous.
 - A value binding whose annotation is rejected for introducing a type
   variable the binding cannot quantify is checked without the annotation, and
@@ -5184,10 +5199,16 @@ own this root even when a containing expression has been replaced by a checked
 error. Rejected declarations retain their explicit target-less registry entry;
 skipped associated values request no method callable root. Which target each
 method binding has (a procedure template, a promoted or local procedure, a
-structural declaration, a rejected declaration or none) is one classification
-computed from the module's checked source alone; the registry builds its
-entries from it, and the module's type roots reach exactly the callable types
-and checker-recorded inspect instances it names, so the two cannot disagree. The method registry
+structural declaration, a rejected declaration, a reference to another
+binding, or none) is one classification computed from the module's checked
+source alone; the registry builds its entries from it, and the module's type
+roots reach exactly the callable types and checker-recorded inspect instances
+it names, so the two cannot disagree. A binding bound by reference
+(`method = f`) has its target resolved with the module's checked tables (see
+"Procedure Aliases"); its class names the binding's own type and inspect
+instance, and every other callable type its target can have is either a type
+of a checked node of the module or a template's function root in the store of
+the module that owns the template. The method registry
 view a consumer reads is a per-module on-demand analysis ("On-Demand Analyses
 And Write-Once Slots").
 
@@ -5692,9 +5713,11 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   pattern-validation constant, then each entry wrapper's function type and
   scheme) are created under the creation lock, in two sections, each after
   every slot the creation reads. What the tables read of other modules
-  (their export rows and interface capabilities) is demanded before the
-  slot is claimed, so its computation never waits on a slot of its own
-  kind. A platform/app pairing reads its platform's tables, except its
+  (their export rows and interface capabilities, and the checked tables of
+  the modules a method's procedure alias chain enters, which are modules
+  its imports reach and whose tables computing those export rows
+  completed) is demanded before the slot is claimed, so its computation
+  never waits on a slot of its own kind. A platform/app pairing reads its platform's tables, except its
   resolved value references, which are the pairing's own slot over its
   platform's.
 - Per-module slots of `check.ModuleAnalyses`
@@ -6023,7 +6046,7 @@ lowering in its worker's workspace and never added to the checked module:
 The checked boundary has exactly the live data of "The Live Checked Module",
 and these shapes are forbidden:
 
-- a frozen copy of a checked module (`CheckedModuleArtifact`) or a pass that
+- a frozen copy of a checked module (`CheckedModule`) or a pass that
   builds one (`publishFromTypedModule`), or any way to make a checked module
   other than opening it (`openCheckedModule`);
 - a checked cache payload beside the `ModuleEnv` other than the inference
@@ -17853,6 +17876,22 @@ callable (`from_callable`). The edge's node carries its substitution of the
 alias scope's variables. Monotype seeds the alias's scope with it and
 instantiates the forwarded lookup's own recorded substitution there, alias by
 alias along the chain, which composes the target's substitution exactly.
+
+The chain may leave the module that declares the method: `to_inspect =
+Other.render` forwards to another module's procedure, and that module's own
+aliases forward further. The method registry is computed with the module's
+other checked tables and resolves the chain from their resolved value
+references and procedure bindings, and from the export rows and checked
+tables of the modules the chain enters, which its imports reach and which are
+computed before it. That is exactly the chain Monotype and Boxy compose along, so the procedure a method
+dispatches to and the procedure its instantiation composes to are one
+decision. The target names the procedure's template, whose module owns the
+target's data, its callable type included; the alias records the module that
+declares it, which is where composition starts. A chain that reaches a
+binding checking rejected makes the method a rejected declaration (see
+"Methods Never Capture"). A chain that reaches a constant or a computed
+callable reaches no procedure, so the binding is an associated value, not a
+method target.
 
 ### Static Dispatch In Monotype
 
