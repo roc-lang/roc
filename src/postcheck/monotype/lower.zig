@@ -33615,9 +33615,14 @@ const BodyContext = struct {
         const rendered = switch (frame.cursor) {
             0 => {
                 task.str_ty = try self.primitiveType(.str);
-                if (checkedExpr(self.view, task.expr).data == .runtime_error) {
+                // A divergent operand never produces a value to render, so it
+                // lowers for its effect alone and its value type is never
+                // requested: a runtime error's checked type can contain the
+                // error it was retired for, and a rejected dispatch has no
+                // result type to instantiate.
+                if (try self.checkedExprDivergesInLoweredRuntime(task.expr)) {
                     frame.cursor = 2;
-                    return requestLowerTask(self, .{ .with_type = .{ .expr = task.expr, .ty = task.str_ty } });
+                    return divergentStep(self, task.expr, .{ .effect_data = task.str_ty });
                 }
                 task.value_node = try self.lowerExprTypeNode(task.expr);
                 frame.cursor = 1;
@@ -33627,7 +33632,8 @@ const BodyContext = struct {
                 try self.inspectCall(input.?.exprValue(), try self.activeTypeFromNode(task.value_node), task.str_ty)
             else
                 try self.deferInspectAtNode(input.?.exprValue(), task.value_node, task.str_ty),
-            else => input.?.exprValue(),
+            // The operand diverged, so no message around it can be produced.
+            else => return loweredExprStep(try self.addExpr(.{ .ty = task.str_ty, .data = input.?.dataValue() })),
         };
         const snippet = task.expect_err_snippet orelse return loweredExprStep(rendered);
         return loweredExprStep(try self.expectErrMessage(rendered, snippet, task.str_ty));
