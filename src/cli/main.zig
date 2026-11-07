@@ -13283,6 +13283,10 @@ fn appendReusedCliTestOutcome(
     own: *std.ArrayList(CliTestResultItem),
     inline_expects: *std.ArrayList(CliTestResultItem),
 ) Allocator.Error!void {
+    // Reserve both destinations before publishing an owning result. Once it
+    // is appended, no allocation may fail and run the local payload cleanup.
+    try own.ensureUnusedCapacity(ctx.gpa, 1);
+    try inline_expects.ensureUnusedCapacity(ctx.gpa, outcome.inline_expects.len);
     const env = planned.module.semantic.env;
     const transcript = try ctx.gpa.alloc(CliTestTranscriptEvent, outcome.events.len);
     var copied_events: usize = 0;
@@ -13309,7 +13313,7 @@ fn appendReusedCliTestOutcome(
         .message => |message| try ctx.gpa.dupe(u8, message),
     };
     errdefer if (failure_detail) |message| ctx.gpa.free(message);
-    try own.append(ctx.gpa, .{
+    own.appendAssumeCapacity(.{
         .result = if (outcome.passed) .passed else .failed,
         .order = root.order,
         .region = if (outcome.region) |region| base.Region.from_raw_offsets(region.start, region.end) else testRootRegion(env, root.source),
@@ -13327,7 +13331,7 @@ fn appendReusedCliTestOutcome(
         const source_module = source_modules.byIdentity(inline_expect.module) orelse
             base.invariant("roc test invariant violated: a reused outcome names an inline expect admission did not resolve", .{});
         const result: CliTestResult = if (inline_expect.failed == 0) .passed else .failed;
-        try inline_expects.append(ctx.gpa, .{
+        inline_expects.appendAssumeCapacity(.{
             .result = result,
             .order = std.math.maxInt(u32) - @as(u32, @intCast(outcome.inline_expects.len - index)),
             .region = base.Region.from_raw_offsets(inline_expect.region_start, inline_expect.region_end),
@@ -13418,15 +13422,17 @@ fn publishCliTestOutcomes(
         for (outcomes.items) |outcome| test_outcome_file.freeBorrowed(ctx.gpa, outcome);
         outcomes.deinit(ctx.gpa);
     }
+    // Every constructed outcome immediately enters the owning cleanup list.
+    try outcomes.ensureTotalCapacity(ctx.gpa, planned.test_roots.len);
     const observations = results[planned.test_roots.len..];
     for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
         if (reused) |index| {
-            try outcomes.append(ctx.gpa, try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
+            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
             continue;
         }
         const own = results[root_index];
         if (own.inline_expect or own.order != root.order) base.invariant("roc test invariant violated: merged results are not in plan order", .{});
-        if (try cliTestOutcomeOfResults(ctx, planned, root, own, observations, source_modules)) |outcome| try outcomes.append(ctx.gpa, outcome);
+        if (try cliTestOutcomeOfResults(ctx, planned, root, own, observations, source_modules)) |outcome| outcomes.appendAssumeCapacity(outcome);
     }
     std.mem.sort(test_outcome_file.Outcome, outcomes.items, {}, struct {
         fn lessThan(_: void, a: test_outcome_file.Outcome, b: test_outcome_file.Outcome) bool {
@@ -15084,7 +15090,15 @@ fn completePlannedModuleResults(
     source_modules: *const CliTestSourceModuleMap,
 ) Allocator.Error![]CliTestResultItem {
     const results = try mergeCliRootOutcomes(ctx, planned, fresh, source_modules);
-    errdefer ctx.gpa.free(results);
+    errdefer {
+        // Fresh payloads remain the caller's until completion succeeds.
+        // Replayed root payloads were allocated by mergeCliRootOutcomes;
+        // inline replay items only borrow current source-module data.
+        for (results[0..planned.test_roots.len], planned.reused) |item, reused| {
+            if (reused != null) deinitCliTestResultItemPayload(ctx.gpa, item);
+        }
+        ctx.gpa.free(results);
+    }
     if (outcome_store) |manager| try publishCliTestOutcomes(ctx, manager, planned, results, source_modules);
     return results;
 }
@@ -15103,6 +15117,188 @@ fn appendPlannedModuleResult(
         .results = results,
     });
     results_owned_by_module = true;
+}
+
+const CliOutcomeOwnershipTest = enum { replay, publication, completion };
+
+/// Exercise the real ownership boundaries, including serialization, without
+/// filesystem publication. The source plan is borrowed across failure sweeps;
+/// all result payloads and publication scratch use the injected allocator.
+fn exerciseCliOutcomeOwnership(
+    allocator: Allocator,
+    planned: *CliTestPlanModule,
+    sources: *const CliTestSourceModuleMap,
+    operation: CliOutcomeOwnershipTest,
+) !void {
+    const testing = std.testing;
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, testing.allocator, &io_state, .test_cmd);
+    ctx.initIo();
+    defer ctx.deinit();
+    // publishCliTestOutcomes still constructs and encodes every outcome.
+    // Disabling the store only prevents the final filesystem write.
+    var manager = CacheManager.init(allocator, .{ .enabled = false }, ctx.coreCtx());
+    defer manager.deinit();
+
+    const replay_index: usize = if (planned.reused[0] != null) 0 else 1;
+    const fresh_index = 1 - replay_index;
+    if (operation == .replay) {
+        var own: std.ArrayList(CliTestResultItem) = .empty;
+        defer {
+            deinitCliTestResultItemPayloads(allocator, own.items);
+            own.deinit(allocator);
+        }
+        var inline_expects: std.ArrayList(CliTestResultItem) = .empty;
+        defer inline_expects.deinit(allocator);
+        appendReusedCliTestOutcome(&ctx, planned, planned.test_roots[replay_index], planned.outcome_file.?.outcomes[0], sources, &own, &inline_expects) catch |err| {
+            try testing.expectEqual(@as(usize, 0), own.items.len);
+            try testing.expectEqual(@as(usize, 0), inline_expects.items.len);
+            return err;
+        };
+        try testing.expectEqual(@as(usize, 1), own.items.len);
+        try testing.expectEqual(@as(usize, 1), inline_expects.items.len);
+        try testing.expectEqualStrings("replayed detail", own.items[0].failure_detail.?);
+        try testing.expectEqualStrings("replayed stderr", own.items[0].transcript[1].payload);
+        try testing.expectEqual(planned.test_roots[replay_index].order, inline_expects.items[0].owner_order.?);
+        try testing.expect(inline_expects.items[0].source_env == planned.module.semantic.env);
+        return;
+    }
+
+    // Fresh payloads are independently owned before completion. On error the
+    // caller must still be able to read and free them; on success the returned
+    // array owns both these payloads and the newly allocated replay payloads.
+    const fresh_events = try allocator.alloc(CliTestTranscriptEvent, 1);
+    var fresh_owns_payloads = true;
+    defer if (fresh_owns_payloads) allocator.free(fresh_events);
+    const fresh_payload = try allocator.dupe(u8, "fresh stdout");
+    defer if (fresh_owns_payloads) allocator.free(fresh_payload);
+    fresh_events[0] = .{ .stream = .stdout, .kind = .dbg, .payload = fresh_payload };
+    const fresh_detail = try allocator.dupe(u8, "fresh detail");
+    defer if (fresh_owns_payloads) allocator.free(fresh_detail);
+    const fresh_order = planned.test_roots[fresh_index].order;
+    const fresh = [_]CliTestResultItem{
+        .{
+            .result = .failed,
+            .order = fresh_order,
+            .region = testRootRegion(planned.module.semantic.env, planned.test_roots[fresh_index].source),
+            .detail_origin = .execution,
+            .transcript = fresh_events,
+            .failure_detail = fresh_detail,
+        },
+        .{
+            .result = .failed,
+            .order = 10,
+            .region = base.Region.from_raw_offsets(7, 9),
+            .owner_order = fresh_order,
+            .inline_expect = true,
+            .inline_passed = 2,
+            .inline_failed = 1,
+            .source_env = planned.module.semantic.env,
+            .source_name = "Ownership",
+            .failure_detail = null,
+        },
+    };
+    const results = completePlannedModuleResults(&ctx, if (operation == .completion) &manager else null, planned, &fresh, sources) catch |err| {
+        try testing.expectEqualStrings("fresh stdout", fresh_events[0].payload);
+        try testing.expectEqualStrings("fresh detail", fresh_detail);
+        return err;
+    };
+    fresh_owns_payloads = false;
+    defer deinitCliTestResultItems(allocator, results);
+    try testing.expectEqual(@as(usize, 4), results.len);
+    try testing.expect(results[fresh_index].transcript.ptr == fresh_events.ptr);
+    try testing.expect(results[fresh_index].failure_detail.?.ptr == fresh_detail.ptr);
+    try testing.expectEqualStrings("replayed detail", results[replay_index].failure_detail.?);
+    try testing.expectEqualStrings("replayed stdout", results[replay_index].transcript[0].payload);
+    try testing.expectEqualStrings("replayed stderr", results[replay_index].transcript[1].payload);
+    try testing.expect(results[2].inline_expect and results[3].inline_expect);
+    try testing.expect(results[2].owner_order != results[3].owner_order);
+    if (operation == .publication) try publishCliTestOutcomes(&ctx, &manager, planned, results, sources);
+}
+
+fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) !void {
+    const allocator = std.testing.allocator;
+    const source = "expect {}\nexpect {}\n";
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Ownership");
+    // Only reporting consumes this CIR fixture: no checked types or lowered
+    // artifact are read by the helpers under test.
+    const body = try env.store.addExpr(.{ .e_empty_record = .{} }, base.Region.from_raw_offsets(7, 9));
+    var roots: [2]check.CheckedArtifact.RootRequest = undefined;
+    for (&roots, 0..) |*root, index| {
+        const start: u32 = @intCast(index * 10);
+        const statement = try env.store.addStatement(.{ .s_expect = .{ .body = body } }, base.Region.from_raw_offsets(start, start + 9));
+        root.* = .{
+            .order = @intCast(index),
+            .module_idx = 0,
+            .kind = .test_expect,
+            .source = .{ .statement = statement },
+            .checked_type = undefined,
+            .abi = .test_expect,
+            .exposure = .private,
+        };
+    }
+    const identity: [32]u8 = @splat(1);
+    var sources: CliTestSourceModuleMap = .{};
+    defer sources.deinit(allocator);
+    const workspace = compile.watch_inputs.hashBytes(env.qualifiedModuleName());
+    try sources.modules.put(allocator, workspace, .{ .env = &env, .common = &env.common, .path = "Ownership.roc", .name = "Ownership", .identity = identity });
+    try sources.bind(allocator, identity, workspace);
+    var outcomes = [_]test_outcome_file.Outcome{.{
+        .order = 0,
+        .passed = false,
+        .region = null,
+        .detail = .{ .message = "replayed detail" },
+        .events = &.{
+            .{ .stream = 0, .kind = 0, .payload = "replayed stdout" },
+            .{ .stream = 1, .kind = 2, .payload = "replayed stderr" },
+        },
+        .inline_expects = &.{.{ .module = identity, .region_start = 7, .region_end = 9, .passed = 3, .failed = 1 }},
+    }};
+    var indices = [_]u32{ 0, 1 };
+    var reused = [_]?u32{ 0, null };
+    var planned: CliTestPlanModule = .{
+        .module_index = 0,
+        .module = .{
+            .name = "Ownership",
+            .path = "Ownership.roc",
+            .semantic = .{ .env = &env, .checked_artifact = null },
+            .source = source,
+            .package_name = "",
+            .package_origin = .root,
+            .is_platform_main = false,
+            .is_app = false,
+            .is_platform_sibling = false,
+            .depth = 0,
+        },
+        .artifact = undefined,
+        .test_roots = &roots,
+        .result_indices = &indices,
+        .reused = &reused,
+        .outcome_file = .{ .key = identity, .outcomes = &outcomes, .bytes = null, .bytes_allocator = allocator },
+    };
+    var deterministic = base.DeterministicAllocator.init(allocator);
+    // Both first-entry constructors must be safe: replay duplicates borrowed
+    // arrays, while fresh publication constructs them from result items.
+    for (0..2) |replay_index| {
+        reused = .{ null, null };
+        reused[replay_index] = 0;
+        outcomes[0].order = @intCast(replay_index);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), exerciseCliOutcomeOwnership, .{ &planned, &sources, operation });
+    }
+}
+
+test "test outcome ownership replay transfers payloads atomically under OOM" {
+    try checkCliOutcomeOwnership(.replay);
+}
+
+test "test outcome ownership publication cleans constructed outcomes under OOM" {
+    try checkCliOutcomeOwnership(.publication);
+}
+
+test "test outcome ownership mixed completion preserves fresh payloads under OOM" {
+    try checkCliOutcomeOwnership(.completion);
 }
 
 const InlineExpectResultKey = struct {
