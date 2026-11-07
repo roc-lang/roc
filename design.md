@@ -14679,6 +14679,14 @@ body traversal or a guess from generated symbols. Instrumentation may change a
 public worker's calling contract, which importers must still consume and hash;
 private test workers must not change that interface fingerprint.
 
+A linked CTFE root program uses module-unit identities to call its imports,
+but produces no module interface: nothing links against that program. Its
+`compile_time` flag excludes both definition-worker seeding and exported
+table-needs serialization; only its requested roots and their dependencies
+are lowered. Ordinary object producers and compiler-only function-metadata
+producers keep `compile_time = false` and emit their complete module interface.
+Function-storage metadata does not turn a producer into a CTFE root program.
+
 #### Caching Under `.boxy`
 
 With `--specialize=no`, every command writes what `roc check` writes, and

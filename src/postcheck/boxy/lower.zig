@@ -3110,7 +3110,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     // workers other objects reach by symbol (design.md "Per-Module Output").
     // A compile-time program's unit lowers only what its roots reach: nothing
     // links against it.
-    if (program.moduleUnit() != null) try seedUnitWorkers(program);
+    if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
 
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
@@ -3191,7 +3191,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
 
-    if (program.moduleUnit() != null) {
+    if (program.moduleUnit() != null and !input.compile_time) {
         for (program.workers.items) |worker| {
             if (worker.imported or !program.result.store.getProcSpec(worker.proc).exported) continue;
             // An importer fills the worker's tables from its needs.
