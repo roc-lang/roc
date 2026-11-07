@@ -3443,10 +3443,12 @@ pub const Coordinator = struct {
     /// Have a worker demand the analyses of `checked`, a module with no
     /// type-check task that checking or opening every module importing it
     /// reads (Builtin), while the coordinator's first modules are parsed.
-    /// Without workers its first reader demands them.
+    /// A compilation that builds module objects reads its root requests
+    /// too (`BoxyObjects.eligibility`). Without workers its first reader
+    /// demands them.
     pub fn demandImportedModuleAnalysesOnWorker(self: *Coordinator, checked: *const CheckedModule) Allocator.Error!void {
         if (!self.hasWorkers()) return;
-        try self.enqueueTask(.{ .imported_module_analyses = checked });
+        try self.enqueueTask(.{ .imported_module_analyses = .{ .checked = checked, .root_requests = self.buildsBoxyObjects() } });
     }
 
     /// Shutdown workers and wait for them to complete.
@@ -4408,8 +4410,8 @@ pub const Coordinator = struct {
                 defer ice.leave();
                 return self.executeTypeCheck(t, allocators);
             },
-            .imported_module_analyses => |checked| {
-                try demandImportedModuleAnalyses(checked);
+            .imported_module_analyses => |imported| {
+                try self.demandImportedModuleAnalyses(imported);
                 return .imported_module_analyses_demanded;
             },
             .post_check => coordinatorInvariant("post-check tasks run through the post-check executor, never executeTaskInline", .{}),
@@ -6147,13 +6149,19 @@ pub const Coordinator = struct {
 
     /// The compilation's Boxy unit scheduler: with `--specialize=no`, a
     /// cache to file the objects in, and a host that runs native code.
+    /// Whether this compilation builds module objects (`boxyObjects`).
+    fn buildsBoxyObjects(self: *const Coordinator) bool {
+        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) return false;
+        if (self.specialization_strategy != .boxy or self.boxy_object_lowering == null) return false;
+        const manager = self.cache_manager orelse return false;
+        return manager.config.enabled;
+    }
+
     fn boxyObjects(self: *Coordinator) CoordinatorError!?*BoxyObjects {
         if (self.boxy_objects) |*objects| return objects;
-        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) return null;
-        if (self.specialization_strategy != .boxy) return null;
-        const lowering = self.boxy_object_lowering orelse return null;
-        const manager = self.cache_manager orelse return null;
-        if (!manager.config.enabled) return null;
+        if (!self.buildsBoxyObjects()) return null;
+        const lowering = self.boxy_object_lowering.?;
+        const manager = self.cache_manager.?;
         self.boxy_objects = try BoxyObjects.init(self, lowering, manager);
         self.boxy_objects.?.bindOwnedInterfaces();
         return &self.boxy_objects.?;
@@ -7371,10 +7379,15 @@ pub const Coordinator = struct {
     /// Demand the analyses of `checked`, a module without a type-check task,
     /// that checking or opening every module importing it reads: its export
     /// rows, which read its checked tables, and its public API dependencies.
-    fn demandImportedModuleAnalyses(checked: *const CheckedModule) Allocator.Error!void {
+    fn demandImportedModuleAnalyses(self: *Coordinator, imported: messages.ImportedModuleAnalysesTask) Allocator.Error!void {
+        const checked = imported.checked;
         const view = Checked.importedView(checked);
         _ = try view.exportRows();
         _ = try view.publicApiDependencies(checked.analysesResolver());
+        if (imported.root_requests) {
+            try self.demandLiteralNodesInParallel(checked);
+            _ = try view.rootRequests();
+        }
     }
 
     /// One range of a module's literal graph nodes, demanded by one task.

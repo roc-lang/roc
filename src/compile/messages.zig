@@ -234,11 +234,18 @@ pub const WorkerTask = union(enum) {
     type_check: TypeCheckTask,
     /// Demand the analyses of a module that has no type-check task of its
     /// own (Builtin) which checking or opening any other module reads.
-    imported_module_analyses: *const Checked.CheckedModule,
+    imported_module_analyses: ImportedModuleAnalysesTask,
     /// A token of a post-check session with a task queued: the worker
     /// taking it runs a task of that session, if one is still queued, and
     /// delivers the completion to the session itself.
     post_check: *anyopaque,
+};
+
+/// The module an `imported_module_analyses` task demands the analyses of.
+pub const ImportedModuleAnalysesTask = struct {
+    checked: *const Checked.CheckedModule,
+    /// Whether the compilation reads the module's root requests too.
+    root_requests: bool,
 };
 
 /// Result of successfully parsing a module
