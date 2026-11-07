@@ -552,7 +552,7 @@ pub const NumeralLiteral = extern struct {
 
     comptime {
         // Every byte this struct persists must belong to a declared field. The checked
-        // cache and the baked builtin artifact copy its representation verbatim, so an
+        // cache and the baked builtin module copy its representation verbatim, so an
         // implicit gap here writes whatever that memory happened to hold. This is the
         // same proof the serialization boundary runs; asserting it beside the
         // declaration points at this file when a field is added or reordered.
@@ -565,7 +565,7 @@ pub const NumeralLiteral = extern struct {
 /// for an instantiation—the source-to-fresh var relation needed by its slot.
 /// Ordinary evidence edges retain constrained vars; a where-method use retains
 /// the instantiator's complete structural map. Shared monomorphic edges have no
-/// copy pairs. Checked-artifact construction resolves the recorded vars after
+/// copy pairs. Checked-module construction resolves the recorded vars after
 /// checking settles to decide how each callee dispatch requirement was
 /// satisfied at this site.
 pub const SchemeUseRecord = extern struct {
@@ -726,7 +726,7 @@ pub const GeneratedCodecRenaming = extern struct {
 
 /// One static-dispatch obligation checking rejected. The raw constraint
 /// function variable is the obligation identity used by dispatch expressions,
-/// instantiated scheme evidence, and checked-artifact publication.
+/// instantiated scheme evidence, and checked-module publication.
 pub const RejectedStaticDispatch = extern struct {
     constraint_fn_var: u32,
 
@@ -1188,7 +1188,7 @@ store: NodeStore,
 
 /// Exact strict-demand edges between top-level definitions, which checking
 /// produces once it has resolved dispatch; serialization preserves them for
-/// checked-artifact publication. It is not a transient traversal aid.
+/// checked-module publication. It is not a transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
 /// The top-level definitions whose calls can invoke a function value they do
@@ -1202,7 +1202,7 @@ callable_checking_facts: CallableCheckingFact.SafeList,
 checking_dependency: CheckingDependency,
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
-/// checked-artifact consumption. Serialized user modules intentionally do not
+/// checked-module consumption. Serialized user modules intentionally do not
 /// preserve this flag; the baked builtin module does, because its static env is
 /// prepared before embedding and must not allocate/copy on compiler startup.
 runtime_prepared: bool,
@@ -1285,7 +1285,7 @@ exhaustiveness_obligations: ExhaustivenessObligation.SafeList,
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
 /// Generated codec derivations validated by checking and consumed by checked
-/// artifact publication.
+/// module publication.
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 /// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
 generated_codec_calls: GeneratedCodecCall.SafeList,

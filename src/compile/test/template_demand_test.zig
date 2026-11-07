@@ -6,8 +6,8 @@ const check = @import("check");
 const roc_target = @import("roc_target");
 const BuildEnv = @import("../compile_build.zig").BuildEnv;
 
-const CheckedArtifact = check.CheckedArtifact;
-const Demand = CheckedArtifact.SchemeVarDemand;
+const Checked = check.Checked;
+const Demand = Checked.SchemeVarDemand;
 
 fn setupFailed(err: anytype) error{TestUnexpectedResult} {
     std.debug.print("building the test module failed: {s}\n", .{@errorName(err)});
@@ -51,12 +51,12 @@ fn expectDemandsWithImports(source: []const u8, imports: []const ImportedSource,
         std.debug.print("unexpected report: {s}\n", .{report.title});
         return error.TestUnexpectedResult;
     };
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     const templates = &(try artifact.checkedTables()).checked_procedure_templates;
     for (expected) |entry| {
         const name, const demands = entry;
         const template = for (templates.templates.items) |*template| {
-            const def_name = check.CheckedArtifact.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
+            const def_name = check.Checked.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
             if (std.mem.eql(u8, def_name, name)) break template;
         } else {
             std.debug.print("no template named {s}\n", .{name});

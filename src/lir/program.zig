@@ -12,7 +12,7 @@ const root = @import("root_metadata.zig");
 
 const Allocator = std.mem.Allocator;
 const names = check.CheckedNames;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const const_store = check.ConstStore;
 
 /// Dense index in the export slice returned by one static-data materialization.
@@ -258,7 +258,7 @@ pub const ConstPlan = union(enum) {
     record: []const ConstPlanId,
     tag_union: []const ConstTagVariant,
     named: struct {
-        named_type: check.CheckedModule.ConstNamedType,
+        named_type: check.Checked.ConstNamedType,
         backing: ConstPlanId,
     },
     fn_value: FnSetId,
@@ -275,7 +275,7 @@ pub const ConstRootPlan = struct {
     /// types and diagnostics. One lowered program unions several modules'
     /// root requests, so position in the root plan is not an owner.
     owner: LIR.LoweringModuleId,
-    request: check.CheckedModule.RootRequest,
+    request: check.Checked.RootRequest,
     proc: LIR.LirProcSpecId,
     ret_layout: layout.Idx,
     /// Exact producer-owned Monotype representation of the evaluated root.

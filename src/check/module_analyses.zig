@@ -10,57 +10,57 @@
 
 const std = @import("std");
 const collections = @import("collections");
-const checked_artifact = @import("checked_artifact.zig");
+const checked_module = @import("checked_module.zig");
 
 const Allocator = std.mem.Allocator;
-const CheckedModuleArtifact = checked_artifact.CheckedModuleArtifact;
-const ImportedModuleView = checked_artifact.ImportedModuleView;
-const ModuleResolver = checked_artifact.ModuleResolver;
-const ExportClosures = checked_artifact.ExportClosures;
-const ExportRows = checked_artifact.ExportRows;
-const ProvidedExportTable = checked_artifact.ProvidedExportTable;
-const PlatformTypeInputs = checked_artifact.PlatformTypeInputs;
-const PlatformRequirementSolutionTable = checked_artifact.PlatformRequirementSolutionTable;
-const HostedProcTable = checked_artifact.HostedProcTable;
-const HostedBindingTable = checked_artifact.HostedBindingTable;
-const PublicApiDependencies = checked_artifact.PublicApiDependencies;
-const LoweringVisibility = checked_artifact.LoweringVisibility;
-const ModuleInterfaceCapabilities = checked_artifact.ModuleInterfaceCapabilities;
-const CheckedTypeStore = checked_artifact.CheckedTypeStore;
+const CheckedModule = checked_module.CheckedModule;
+const ImportedModuleView = checked_module.ImportedModuleView;
+const ModuleResolver = checked_module.ModuleResolver;
+const ExportClosures = checked_module.ExportClosures;
+const ExportRows = checked_module.ExportRows;
+const ProvidedExportTable = checked_module.ProvidedExportTable;
+const PlatformTypeInputs = checked_module.PlatformTypeInputs;
+const PlatformRequirementSolutionTable = checked_module.PlatformRequirementSolutionTable;
+const HostedProcTable = checked_module.HostedProcTable;
+const HostedBindingTable = checked_module.HostedBindingTable;
+const PublicApiDependencies = checked_module.PublicApiDependencies;
+const LoweringVisibility = checked_module.LoweringVisibility;
+const ModuleInterfaceCapabilities = checked_module.ModuleInterfaceCapabilities;
+const CheckedTypeStore = checked_module.CheckedTypeStore;
 const canonical = @import("canonical_names.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
-const CheckedDispatch = checked_artifact.CheckedDispatch;
-const SchemeAnalysis = checked_artifact.SchemeAnalysis;
-const TemplateDispatch = checked_artifact.TemplateDispatch;
-const TemplateDispatchRelations = checked_artifact.TemplateDispatchRelations;
-const ModuleDispatch = checked_artifact.ModuleDispatch;
-const DispatchIndex = checked_artifact.DispatchIndex;
-const PlatformRequirementRootEvidence = checked_artifact.PlatformRequirementRootEvidence;
-const DispatchScopeId = checked_artifact.DispatchScopeId;
-const CheckedBodies = checked_artifact.CheckedBodies;
-const NestedProcSiteOwner = checked_artifact.NestedProcSiteOwner;
-const OwnerNestedProcSites = checked_artifact.OwnerNestedProcSites;
-const ModuleNestedProcSites = checked_artifact.ModuleNestedProcSites;
-const TemplateExhaustivenessSites = checked_artifact.TemplateExhaustivenessSites;
-const CheckedExhaustivenessSiteTable = checked_artifact.CheckedExhaustivenessSiteTable;
+const CheckedDispatch = checked_module.CheckedDispatch;
+const SchemeAnalysis = checked_module.SchemeAnalysis;
+const TemplateDispatch = checked_module.TemplateDispatch;
+const TemplateDispatchRelations = checked_module.TemplateDispatchRelations;
+const ModuleDispatch = checked_module.ModuleDispatch;
+const DispatchIndex = checked_module.DispatchIndex;
+const PlatformRequirementRootEvidence = checked_module.PlatformRequirementRootEvidence;
+const DispatchScopeId = checked_module.DispatchScopeId;
+const CheckedBodies = checked_module.CheckedBodies;
+const NestedProcSiteOwner = checked_module.NestedProcSiteOwner;
+const OwnerNestedProcSites = checked_module.OwnerNestedProcSites;
+const ModuleNestedProcSites = checked_module.ModuleNestedProcSites;
+const TemplateExhaustivenessSites = checked_module.TemplateExhaustivenessSites;
+const CheckedExhaustivenessSiteTable = checked_module.CheckedExhaustivenessSiteTable;
 const CIR = @import("can").CIR;
-const TemplateDemandGraph = checked_artifact.TemplateDemandGraph;
-const TemplateDemandNode = checked_artifact.TemplateDemandNode;
-const TemplateDemandComponent = checked_artifact.TemplateDemandComponent;
-const SchemeVarDemand = checked_artifact.SchemeVarDemand;
-const LiteralGraph = checked_artifact.LiteralGraph;
-const LiteralNodeEdges = checked_artifact.LiteralNodeEdges;
-const LiteralPoolHolders = checked_artifact.LiteralPoolHolders;
-const LiteralComponentOrder = checked_artifact.LiteralComponentOrder;
-const LiteralComponent = checked_artifact.LiteralComponent;
-const LiteralArgumentDemand = checked_artifact.LiteralArgumentDemand;
-const UnitLiteralConversions = checked_artifact.UnitLiteralConversions;
-const RootRequestTable = checked_artifact.RootRequestTable;
-const CheckedTables = checked_artifact.CheckedTables;
-const ResolvedValueRefTable = checked_artifact.ResolvedValueRefTable;
-const PlatformPairing = checked_artifact.PlatformPairing;
+const TemplateDemandGraph = checked_module.TemplateDemandGraph;
+const TemplateDemandNode = checked_module.TemplateDemandNode;
+const TemplateDemandComponent = checked_module.TemplateDemandComponent;
+const SchemeVarDemand = checked_module.SchemeVarDemand;
+const LiteralGraph = checked_module.LiteralGraph;
+const LiteralNodeEdges = checked_module.LiteralNodeEdges;
+const LiteralPoolHolders = checked_module.LiteralPoolHolders;
+const LiteralComponentOrder = checked_module.LiteralComponentOrder;
+const LiteralComponent = checked_module.LiteralComponent;
+const LiteralArgumentDemand = checked_module.LiteralArgumentDemand;
+const UnitLiteralConversions = checked_module.UnitLiteralConversions;
+const RootRequestTable = checked_module.RootRequestTable;
+const CheckedTables = checked_module.CheckedTables;
+const ResolvedValueRefTable = checked_module.ResolvedValueRefTable;
+const PlatformPairing = checked_module.PlatformPairing;
 const UnitId = @import("body_analyses.zig").UnitId;
-const EvidenceTraversal = checked_artifact.EvidenceTraversal;
+const EvidenceTraversal = checked_module.EvidenceTraversal;
 const ModuleEnv = @import("can").ModuleEnv;
 
 const TemplateSchemaSlot = collections.OnceSlot(*SchemeAnalysis, .module_template_schema);
@@ -126,7 +126,7 @@ const OwnerSlots = struct {
     scope_by_checked_expr: collections.DenseMap(CIR.Expr.Idx, DispatchScopeId),
 
     fn create(allocator: Allocator, bodies: CheckedBodies) Allocator.Error!*OwnerSlots {
-        const templates = (bodies.tables.templates orelse checked_artifact.checkedArtifactInvariant("owner analyses were demanded of bodies without templates", .{}));
+        const templates = (bodies.tables.templates orelse checked_module.checkedModuleInvariant("owner analyses were demanded of bodies without templates", .{}));
         const template_count = templates.templates.items.len;
         const slots = try allocator.create(OwnerSlots);
         errdefer allocator.destroy(slots);
@@ -143,7 +143,7 @@ const OwnerSlots = struct {
             .template_nested_sites = template_nested_sites,
             .default_nested_sites = default_nested_sites,
             .template_exhaustiveness = template_exhaustiveness,
-            .scope_by_checked_expr = try checked_artifact.nestedProcScopeMap(allocator, templates.dispatch_scopes),
+            .scope_by_checked_expr = try checked_module.nestedProcScopeMap(allocator, templates.dispatch_scopes),
         };
         return slots;
     }
@@ -190,13 +190,13 @@ const DispatchImports = struct {
 
 const DispatchImportsRequest = struct {
     analyses: *ModuleAnalyses,
-    module: checked_artifact.ModuleId,
-    direct_imports: []const checked_artifact.CheckedModuleArtifactKey,
+    module: checked_module.ModuleId,
+    direct_imports: []const checked_module.CheckedModuleKey,
     store: *const CheckedTypeStore,
 
     fn compute(self: DispatchImportsRequest) Allocator.Error!*DispatchImports {
         const allocator = self.analyses.allocator;
-        const views = try checked_artifact.computeDispatchImports(allocator, self.module, self.direct_imports, self.store.sealed_origins.items, self.analyses.resolver);
+        const views = try checked_module.computeDispatchImports(allocator, self.module, self.direct_imports, self.store.sealed_origins.items, self.analyses.resolver);
         errdefer allocator.free(views);
         const result = try allocator.create(DispatchImports);
         result.* = .{ .views = views };
@@ -211,7 +211,7 @@ pub const ModuleAnalyses = struct {
     io: std.Io,
     /// The platform a platform/app pairing reads: the pairing's export
     /// closures and public API dependencies are its platform's.
-    platform: ?*const CheckedModuleArtifact,
+    platform: ?*const CheckedModule,
     /// The platform/app pairing whose analyses these are, which classifies
     /// its own value references (`PlatformPairing.valueRefs`).
     pairing: ?*PlatformPairing = null,
@@ -227,14 +227,14 @@ pub const ModuleAnalyses = struct {
     lowering_visibility: collections.OnceSlot(*LoweringVisibility, .module_lowering_visibility) = .empty,
     interface_capabilities: collections.OnceSlot(*ModuleInterfaceCapabilities, .module_interface_capabilities) = .empty,
     /// Resolves the modules the module's analyses read other than its own:
-    /// the importing compilation's resolver, or one over publication's
+    /// the importing compilation's resolver, or one over the opening's
     /// import views (`owned_import_views`).
-    resolver: ?checked_artifact.ModuleResolver = null,
+    resolver: ?checked_module.ModuleResolver = null,
     /// A copy of the import views publication resolved against, which
     /// `resolver` resolves through for as long as the module lives.
-    owned_import_views: ?*checked_artifact.CheckedImportViews = null,
+    owned_import_views: ?*checked_module.CheckedImportViews = null,
     /// The modules dispatch resolution searches and resolves types in
-    /// (`checked_artifact.computeDispatchImports`).
+    /// (`checked_module.computeDispatchImports`).
     dispatch_imports: collections.OnceSlot(*DispatchImports, .module_dispatch_imports) = .empty,
     dispatch_slots: collections.OnceSlot(*DispatchSlots, .module_dispatch_slots) = .empty,
     dispatch_index: collections.OnceSlot(*DispatchIndex, .module_dispatch_index) = .empty,
@@ -251,7 +251,7 @@ pub const ModuleAnalyses = struct {
     /// name, beyond its checked candidates. They select among the module's
     /// candidates when its root requests are read; nothing records them
     /// with the module.
-    explicit_roots: []const checked_artifact.ExplicitRootRequestInput = &.{},
+    explicit_roots: []const checked_module.ExplicitRootRequestInput = &.{},
     /// The traversals no evidence pass of the module has borrowed
     /// (`borrowEvidenceTraversal`). Its capacity covers every traversal the
     /// module has created, so a return never allocates.
@@ -260,11 +260,11 @@ pub const ModuleAnalyses = struct {
     /// Guards `idle_evidence_traversals` and `evidence_traversal_count`; held
     /// around a borrow's or a return's list update only.
     evidence_traversal_mutex: std.Io.Mutex = .init,
-    /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
+    /// Set once the module is published (`CheckedModule.openToAnalyses`):
     /// no slot of the module runs before it.
     published: std.atomic.Value(bool) = .init(false),
 
-    pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModuleArtifact) Allocator.Error!*ModuleAnalyses {
+    pub fn create(allocator: Allocator, io: std.Io, platform: ?*const CheckedModule) Allocator.Error!*ModuleAnalyses {
         const analyses = try allocator.create(ModuleAnalyses);
         analyses.* = .{ .allocator = allocator, .io = io, .platform = platform };
         return analyses;
@@ -272,15 +272,15 @@ pub const ModuleAnalyses = struct {
 
     /// Give the analyses the explicit root requests of the compilation that
     /// reads the module. They must be given before any root request is read.
-    pub fn attachExplicitRoots(self: *ModuleAnalyses, roots: []const checked_artifact.ExplicitRootRequestInput) Allocator.Error!void {
+    pub fn attachExplicitRoots(self: *ModuleAnalyses, roots: []const checked_module.ExplicitRootRequestInput) Allocator.Error!void {
         std.debug.assert(self.explicit_roots.len == 0 and self.root_requests.peek() == null);
         if (roots.len == 0) return;
-        self.explicit_roots = try self.allocator.dupe(checked_artifact.ExplicitRootRequestInput, roots);
+        self.explicit_roots = try self.allocator.dupe(checked_module.ExplicitRootRequestInput, roots);
     }
 
     /// Give the analyses the resolver they find other modules through. It
     /// must resolve every module of the build for as long as the module lives.
-    pub fn attachResolver(self: *ModuleAnalyses, resolver: checked_artifact.ModuleResolver) void {
+    pub fn attachResolver(self: *ModuleAnalyses, resolver: checked_module.ModuleResolver) void {
         std.debug.assert(self.resolver == null);
         self.resolver = resolver;
     }
@@ -289,12 +289,12 @@ pub const ModuleAnalyses = struct {
     /// resolved against: its direct imports and the modules available to it.
     pub fn attachImportViews(
         self: *ModuleAnalyses,
-        imports: []const checked_artifact.PublishImportArtifact,
+        imports: []const checked_module.CheckedImport,
         available: []const ImportedModuleView,
     ) Allocator.Error!void {
-        const owned = try self.allocator.create(checked_artifact.CheckedImportViews);
+        const owned = try self.allocator.create(checked_module.CheckedImportViews);
         errdefer self.allocator.destroy(owned);
-        const direct = try self.allocator.dupe(checked_artifact.PublishImportArtifact, imports);
+        const direct = try self.allocator.dupe(checked_module.CheckedImport, imports);
         errdefer self.allocator.free(direct);
         owned.* = .{ .current_owner = .{}, .direct = direct, .available = try self.allocator.dupe(ImportedModuleView, available) };
         self.owned_import_views = owned;
@@ -314,8 +314,8 @@ pub const ModuleAnalyses = struct {
     /// imports and its types' name owners, transitively: its dispatch imports.
     pub fn reachedImports(
         self: *ModuleAnalyses,
-        module: checked_artifact.ModuleId,
-        direct_imports: []const checked_artifact.CheckedModuleArtifactKey,
+        module: checked_module.ModuleId,
+        direct_imports: []const checked_module.CheckedModuleKey,
         store: *const CheckedTypeStore,
     ) Allocator.Error![]const ImportedModuleView {
         self.assertPublished();
@@ -336,7 +336,7 @@ pub const ModuleAnalyses = struct {
 
     fn assertPublished(self: *const ModuleAnalyses) void {
         if (std.debug.runtime_safety and !self.published.load(.acquire)) {
-            checked_artifact.checkedArtifactInvariant("a slot of a module was claimed before the module was published", .{});
+            checked_module.checkedModuleInvariant("a slot of a module was claimed before the module was published", .{});
         }
     }
 
@@ -439,7 +439,7 @@ pub const ModuleAnalyses = struct {
     /// its platform's.
     pub fn exportRows(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ExportRows {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).exportRows(checked_module.importedView(platform));
         if (self.export_rows.peek()) |rows| return rows;
         // The rows read the module's checked tables, which read other
         // modules' export rows: they are demanded before the rows are
@@ -452,7 +452,7 @@ pub const ModuleAnalyses = struct {
     /// are its pairing's own slot, read at their types under the pairing.
     pub fn providedExports(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const ProvidedExportTable {
         self.assertPublished();
-        if (self.platform != null) checked_artifact.checkedArtifactInvariant("a pairing's provided exports were read from its module analyses", .{});
+        if (self.platform != null) checked_module.checkedModuleInvariant("a pairing's provided exports were read from its module analyses", .{});
         return self.provided_exports.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.providedExports);
     }
 
@@ -460,7 +460,7 @@ pub const ModuleAnalyses = struct {
     /// platform/app pairing's are its platform's.
     pub fn platformTypeInputs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformTypeInputs {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).platformTypeInputs(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).platformTypeInputs(checked_module.importedView(platform));
         return self.platform_type_inputs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformTypeInputs);
     }
 
@@ -468,7 +468,7 @@ pub const ModuleAnalyses = struct {
     /// recorded. A platform/app pairing's are its platform's.
     pub fn platformRequirementSolutions(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const PlatformRequirementSolutionTable {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).platformRequirementSolutions(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).platformRequirementSolutions(checked_module.importedView(platform));
         return self.platform_requirement_solutions.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.platformRequirementSolutions);
     }
 
@@ -476,7 +476,7 @@ pub const ModuleAnalyses = struct {
     /// pairing's are its platform's.
     pub fn hostedProcs(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedProcTable {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).hostedProcs(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).hostedProcs(checked_module.importedView(platform));
         return self.hosted_procs.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedProcs);
     }
 
@@ -484,7 +484,7 @@ pub const ModuleAnalyses = struct {
     /// section. A platform/app pairing's are its platform's.
     pub fn hostedBindings(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const HostedBindingTable {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).hostedBindings(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).hostedBindings(checked_module.importedView(platform));
         return self.hosted_bindings.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.hostedBindings);
     }
 
@@ -492,12 +492,12 @@ pub const ModuleAnalyses = struct {
     /// are its platform's.
     pub fn checkedTables(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const CheckedTables {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).checkedTables(checked_artifact.importedView(platform));
+        if (self.platform) |platform| return platformAnalyses(platform).checkedTables(checked_module.importedView(platform));
         if (self.checked_tables.peek()) |tables| return tables;
         // A thread never waits on a slot of a kind it holds a claim of, so
         // what the tables read of other modules is demanded first, holding
         // no claim.
-        try checked_artifact.demandCheckedTablesInputs(self.allocator, owner);
+        try checked_module.demandCheckedTablesInputs(self.allocator, owner);
         return self.checked_tables.getOrCompute(self.io, Allocator.Error, ViewRequest{ .analyses = self, .owner = owner }, ViewRequest.checkedTables);
     }
 
@@ -513,45 +513,45 @@ pub const ModuleAnalyses = struct {
         owner: ImportedModuleView,
 
         fn checkedTables(request: ViewRequest) Allocator.Error!*CheckedTables {
-            return checked_artifact.computeCheckedTables(request.analyses.allocator, request.owner);
+            return checked_module.computeCheckedTables(request.analyses.allocator, request.owner);
         }
 
         fn hostedProcs(request: ViewRequest) Allocator.Error!*HostedProcTable {
-            return checked_artifact.computeHostedProcs(request.analyses.allocator, request.owner);
+            return checked_module.computeHostedProcs(request.analyses.allocator, request.owner);
         }
 
         fn hostedBindings(request: ViewRequest) Allocator.Error!*HostedBindingTable {
-            return checked_artifact.computeHostedBindings(request.analyses.allocator, request.owner, request.analyses.resolver);
+            return checked_module.computeHostedBindings(request.analyses.allocator, request.owner, request.analyses.resolver);
         }
 
         fn exportRows(request: ViewRequest) Allocator.Error!*ExportRows {
-            return checked_artifact.computeExportRows(request.analyses.allocator, request.owner);
+            return checked_module.computeExportRows(request.analyses.allocator, request.owner);
         }
 
         fn platformTypeInputs(request: ViewRequest) Allocator.Error!*PlatformTypeInputs {
-            return checked_artifact.computePlatformTypeInputs(request.analyses.allocator, request.owner);
+            return checked_module.computePlatformTypeInputs(request.analyses.allocator, request.owner);
         }
 
         fn platformRequirementSolutions(request: ViewRequest) Allocator.Error!*PlatformRequirementSolutionTable {
-            return checked_artifact.computePlatformRequirementSolutions(request.analyses.allocator, request.owner);
+            return checked_module.computePlatformRequirementSolutions(request.analyses.allocator, request.owner);
         }
 
         fn providedExports(request: ViewRequest) Allocator.Error!*ProvidedExportTable {
-            return checked_artifact.computeModuleProvidedExports(request.analyses.allocator, request.owner);
+            return checked_module.computeModuleProvidedExports(request.analyses.allocator, request.owner);
         }
     };
 
     /// The template closure of every row of `owner`'s export rows.
     pub fn exportClosures(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const ExportClosures {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).exportClosures(checked_artifact.importedView(platform), resolver);
+        if (self.platform) |platform| return platformAnalyses(platform).exportClosures(checked_module.importedView(platform), resolver);
         return self.export_closures.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.exportClosures);
     }
 
     /// The checked modules a consumer of `owner`'s public API reads.
     pub fn publicApiDependencies(self: *ModuleAnalyses, owner: ImportedModuleView, resolver: ModuleResolver) Allocator.Error!*const PublicApiDependencies {
         self.assertPublished();
-        if (self.platform) |platform| return platformAnalyses(platform).publicApiDependencies(checked_artifact.importedView(platform), resolver);
+        if (self.platform) |platform| return platformAnalyses(platform).publicApiDependencies(checked_module.importedView(platform), resolver);
         return self.public_api_dependencies.getOrCompute(self.io, Allocator.Error, Request{ .analyses = self, .owner = owner, .resolver = resolver }, Request.publicApiDependencies);
     }
 
@@ -617,8 +617,8 @@ pub const ModuleAnalyses = struct {
         const slots = try self.ownerSlots(bodies);
         const slot = switch (owner) {
             .template => |template| blk: {
-                const raw = template.template.rowIndex() orelse return &checked_artifact.empty_owner_nested_proc_sites;
-                if (raw >= slots.template_nested_sites.len) checked_artifact.checkedArtifactInvariant("nested procedure sites were demanded of a template outside the module's templates", .{});
+                const raw = template.template.rowIndex() orelse return &checked_module.empty_owner_nested_proc_sites;
+                if (raw >= slots.template_nested_sites.len) checked_module.checkedModuleInvariant("nested procedure sites were demanded of a template outside the module's templates", .{});
                 break :blk &slots.template_nested_sites[raw];
             },
             .default_root => |default| &slots.default_nested_sites[defaultPosition(bodies, default)],
@@ -639,9 +639,9 @@ pub const ModuleAnalyses = struct {
     pub fn templateExhaustivenessSites(self: *ModuleAnalyses, bodies: CheckedBodies, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateExhaustivenessSites {
         self.assertPublished();
         if (self.platform) |platform| return platformAnalyses(platform).templateExhaustivenessSites(try platform.bodies(), template);
-        const raw = template.rowIndex() orelse return &checked_artifact.empty_template_exhaustiveness_sites;
+        const raw = template.rowIndex() orelse return &checked_module.empty_template_exhaustiveness_sites;
         const slots = try self.ownerSlots(bodies);
-        if (raw >= slots.template_exhaustiveness.len) checked_artifact.checkedArtifactInvariant("exhaustiveness sites were demanded of a template outside the module's templates", .{});
+        if (raw >= slots.template_exhaustiveness.len) checked_module.checkedModuleInvariant("exhaustiveness sites were demanded of a template outside the module's templates", .{});
         return slots.template_exhaustiveness[raw].getOrCompute(self.io, Allocator.Error, ExhaustivenessRequest{ .allocator = self.allocator, .bodies = bodies, .template = template }, ExhaustivenessRequest.compute);
     }
 
@@ -652,7 +652,7 @@ pub const ModuleAnalyses = struct {
         self.assertPublished();
         if (self.exhaustiveness_sites.peek()) |done| return done;
         const platform_sites: ?*const CheckedExhaustivenessSiteTable = if (self.platform) |platform|
-            try platformAnalyses(platform).exhaustivenessSites(checked_artifact.importedView(platform))
+            try platformAnalyses(platform).exhaustivenessSites(checked_module.importedView(platform))
         else
             null;
         _ = try self.rootRequests(owner);
@@ -665,7 +665,7 @@ pub const ModuleAnalyses = struct {
             fn order(key: u32, item: u32) std.math.Order {
                 return std.math.order(key, item);
             }
-        }.order) orelse checked_artifact.checkedArtifactInvariant("nested procedure sites were demanded of an expression that is not a defaulted-field default", .{});
+        }.order) orelse checked_module.checkedModuleInvariant("nested procedure sites were demanded of an expression that is not a defaulted-field default", .{});
     }
 
     const BodiesRequest = struct {
@@ -677,7 +677,7 @@ pub const ModuleAnalyses = struct {
         }
 
         fn moduleNestedProcSites(request: BodiesRequest) Allocator.Error!*ModuleNestedProcSites {
-            return checked_artifact.computeModuleNestedProcSites(request.analyses.allocator, request.bodies, request.analyses);
+            return checked_module.computeModuleNestedProcSites(request.analyses.allocator, request.bodies, request.analyses);
         }
     };
 
@@ -688,7 +688,7 @@ pub const ModuleAnalyses = struct {
         owner: NestedProcSiteOwner,
 
         fn nestedProcSites(request: OwnerRequest) Allocator.Error!*OwnerNestedProcSites {
-            return checked_artifact.computeOwnerNestedProcSites(request.allocator, request.bodies, &request.slots.scope_by_checked_expr, request.owner);
+            return checked_module.computeOwnerNestedProcSites(request.allocator, request.bodies, &request.slots.scope_by_checked_expr, request.owner);
         }
     };
 
@@ -698,7 +698,7 @@ pub const ModuleAnalyses = struct {
         template: canonical.CheckedProcedureTemplateId,
 
         fn compute(request: ExhaustivenessRequest) Allocator.Error!*TemplateExhaustivenessSites {
-            return checked_artifact.computeTemplateExhaustivenessSites(request.allocator, request.bodies, request.template);
+            return checked_module.computeTemplateExhaustivenessSites(request.allocator, request.bodies, request.template);
         }
     };
 
@@ -708,12 +708,12 @@ pub const ModuleAnalyses = struct {
         platform_sites: ?*const CheckedExhaustivenessSiteTable,
 
         fn compute(request: PolicyRequest) Allocator.Error!*CheckedExhaustivenessSiteTable {
-            return checked_artifact.computeExhaustivenessSites(request.analyses.allocator, request.analyses, request.owner, request.platform_sites);
+            return checked_module.computeExhaustivenessSites(request.analyses.allocator, request.analyses, request.owner, request.platform_sites);
         }
     };
 
     fn dispatchSlots(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*DispatchSlots {
-        if (self.dispatch_slots.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.dispatch_slots.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.dispatch_slots.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.createSlots);
     }
 
@@ -721,8 +721,8 @@ pub const ModuleAnalyses = struct {
     pub fn templateSchema(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const SchemeAnalysis {
         self.assertPublished();
         const all = try self.dispatchSlots(dispatch);
-        const raw = template.rowIndex() orelse return &checked_artifact.empty_scheme_analysis;
-        if (raw >= all.template_schemas.len) return &checked_artifact.empty_scheme_analysis;
+        const raw = template.rowIndex() orelse return &checked_module.empty_scheme_analysis;
+        if (raw >= all.template_schemas.len) return &checked_module.empty_scheme_analysis;
         return all.template_schemas[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.schema);
     }
 
@@ -737,8 +737,8 @@ pub const ModuleAnalyses = struct {
     pub fn templateDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatch {
         self.assertPublished();
         const all = try self.dispatchSlots(dispatch);
-        const raw = template.rowIndex() orelse return &checked_artifact.empty_template_dispatch;
-        if (raw >= all.template_dispatch.len) return &checked_artifact.empty_template_dispatch;
+        const raw = template.rowIndex() orelse return &checked_module.empty_template_dispatch;
+        if (raw >= all.template_dispatch.len) return &checked_module.empty_template_dispatch;
         return all.template_dispatch[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.dispatchResolution);
     }
 
@@ -747,22 +747,22 @@ pub const ModuleAnalyses = struct {
     pub fn templateDispatchRelations(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: canonical.CheckedProcedureTemplateId) Allocator.Error!*const TemplateDispatchRelations {
         self.assertPublished();
         const all = try self.dispatchSlots(dispatch);
-        const raw = template.rowIndex() orelse return &checked_artifact.empty_template_relations;
-        if (raw >= all.template_relations.len) return &checked_artifact.empty_template_relations;
+        const raw = template.rowIndex() orelse return &checked_module.empty_template_relations;
+        if (raw >= all.template_relations.len) return &checked_module.empty_template_relations;
         return all.template_relations[raw].getOrCompute(self.io, Allocator.Error, TemplateRequest{ .analyses = self, .dispatch = dispatch, .template = template }, TemplateRequest.relations);
     }
 
     /// The module-wide indexes dispatch resolution reads.
     pub fn dispatchIndex(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const DispatchIndex {
         self.assertPublished();
-        if (self.dispatch_index.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.dispatch_index.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.dispatch_index.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.index);
     }
 
     /// The module's dispatch resolution of what no template resolves.
     pub fn moduleDispatch(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const ModuleDispatch {
         self.assertPublished();
-        if (self.module_dispatch.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.module_dispatch.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.module_dispatch.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.moduleResolution);
     }
 
@@ -770,7 +770,7 @@ pub const ModuleAnalyses = struct {
     /// solutions.
     pub fn platformRequirementRootEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*const PlatformRequirementRootEvidence {
         self.assertPublished();
-        if (self.platform_root_evidence.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.platform_root_evidence.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.platform_root_evidence.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.platformRootEvidence);
     }
 
@@ -784,7 +784,7 @@ pub const ModuleAnalyses = struct {
             if ((try self.templateDispatch(dispatch, @fromBackingInt(template))).plan(plan)) |resolution| return resolution;
         }
         return (try self.moduleDispatch(dispatch)).plan(plan) orelse
-            checked_artifact.checkedArtifactInvariant("a dispatch plan had no resolution", .{});
+            checked_module.checkedModuleInvariant("a dispatch plan had no resolution", .{});
     }
 
     /// The resolution of iterator plan `plan`, found as `planResolution`
@@ -797,7 +797,7 @@ pub const ModuleAnalyses = struct {
             if ((try self.templateDispatch(dispatch, @fromBackingInt(template))).iteratorPlan(plan)) |resolution| return resolution;
         }
         return (try self.moduleDispatch(dispatch)).iteratorPlan(plan) orelse
-            checked_artifact.checkedArtifactInvariant("an iterator plan had no resolution", .{});
+            checked_module.checkedModuleInvariant("an iterator plan had no resolution", .{});
     }
 
     /// The template whose resolution resolves plan `plan` (`planResolution`),
@@ -829,7 +829,7 @@ pub const ModuleAnalyses = struct {
     /// for the defaulted-field expressions' sites and for the sites a
     /// template's chain deferred, so a site of templates that deferred none
     /// of it has none there.
-    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_artifact.SiteEvidenceLookup {
+    pub fn siteEvidence(self: *ModuleAnalyses, dispatch: CheckedDispatch, site: u32) Allocator.Error!?checked_module.SiteEvidenceLookup {
         self.assertPublished();
         const index = try self.dispatchIndex(dispatch);
         const reaches = index.siteTemplates(site);
@@ -849,7 +849,7 @@ pub const ModuleAnalyses = struct {
     /// demand vectors and edges and of their components.
     pub fn templateDemandGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*TemplateDemandGraph {
         self.assertPublished();
-        if (self.template_demand_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.template_demand_graph.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.template_demand_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.demandGraph);
     }
 
@@ -865,7 +865,7 @@ pub const ModuleAnalyses = struct {
         template: u32,
 
         fn compute(request: DemandNodeRequest) Allocator.Error!*TemplateDemandNode {
-            return checked_artifact.computeTemplateDemandNode(request.analyses.allocator, request.dispatch, request.template);
+            return checked_module.computeTemplateDemandNode(request.analyses.allocator, request.dispatch, request.template);
         }
     };
 
@@ -942,7 +942,7 @@ pub const ModuleAnalyses = struct {
         }
         for (order.items) |next| {
             for (graph.components.info(next).members) |member| for (graph.finishedNode(member).edges) |edge| switch (edge.callee) {
-                .imported => |callee| _ = try checked_artifact.importedTemplateDemands(dispatch, callee),
+                .imported => |callee| _ = try checked_module.importedTemplateDemands(dispatch, callee),
                 .local => {},
             };
             _ = try graph.component_slots[next].getOrCompute(self.io, Allocator.Error, ComponentRequest{ .analyses = self, .dispatch = dispatch, .graph = graph, .component = next }, ComponentRequest.compute);
@@ -954,7 +954,7 @@ pub const ModuleAnalyses = struct {
     /// dispatch resolution, and the slots of the rest.
     pub fn literalGraph(self: *ModuleAnalyses, dispatch: CheckedDispatch) Allocator.Error!*LiteralGraph {
         self.assertPublished();
-        if (self.literal_graph.peek() == null) try checked_artifact.demandDispatchCapabilities(dispatch, &.{});
+        if (self.literal_graph.peek() == null) try checked_module.demandDispatchCapabilities(dispatch, &.{});
         return self.literal_graph.getOrCompute(self.io, Allocator.Error, DispatchRequest{ .analyses = self, .dispatch = dispatch }, DispatchRequest.literalGraph);
     }
 
@@ -972,19 +972,19 @@ pub const ModuleAnalyses = struct {
         node: u32,
 
         fn compute(request: LiteralNodeRequest) Allocator.Error!*LiteralNodeEdges {
-            return checked_artifact.computeLiteralNodeEdges(request.analyses.allocator, request.dispatch, request.graph, request.node);
+            return checked_module.computeLiteralNodeEdges(request.analyses.allocator, request.dispatch, request.graph, request.node);
         }
 
         fn pool(request: LiteralNodeRequest) Allocator.Error!*LiteralPoolHolders {
-            return checked_artifact.computeLiteralPoolHolders(request.analyses.allocator, request.dispatch, request.graph, request.node);
+            return checked_module.computeLiteralPoolHolders(request.analyses.allocator, request.dispatch, request.graph, request.node);
         }
 
         fn modulePool(request: LiteralNodeRequest) Allocator.Error!*LiteralPoolHolders {
-            return checked_artifact.computeLiteralModulePoolHolders(request.analyses.allocator, request.dispatch, request.graph);
+            return checked_module.computeLiteralModulePoolHolders(request.analyses.allocator, request.dispatch, request.graph);
         }
 
         fn order(request: LiteralNodeRequest) Allocator.Error!*LiteralComponentOrder {
-            return checked_artifact.computeLiteralComponentOrder(request.analyses.allocator, request.dispatch, request.graph);
+            return checked_module.computeLiteralComponentOrder(request.analyses.allocator, request.dispatch, request.graph);
         }
     };
 
@@ -1000,10 +1000,10 @@ pub const ModuleAnalyses = struct {
     }
 
     /// The node holding edge `edge`, or null when no body reaches it.
-    pub fn literalEdgeHolder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, edge: checked_artifact.LiteralEdge) Allocator.Error!?u32 {
+    pub fn literalEdgeHolder(self: *ModuleAnalyses, dispatch: CheckedDispatch, graph: *LiteralGraph, edge: checked_module.LiteralEdge) Allocator.Error!?u32 {
         return switch (edge) {
             .node => |id| self.literalEvidenceHolder(dispatch, graph, id),
-            .use => |expr| checked_artifact.literalUseHolder(dispatch, graph, expr),
+            .use => |expr| checked_module.literalUseHolder(dispatch, graph, expr),
             .literal => null,
         };
     }
@@ -1096,14 +1096,14 @@ pub const ModuleAnalyses = struct {
         component: u32,
 
         fn compute(request: LiteralComponentRequest) Allocator.Error!*LiteralComponent {
-            return checked_artifact.computeLiteralComponent(request.analyses.allocator, request.dispatch, request.graph, request.component);
+            return checked_module.computeLiteralComponent(request.analyses.allocator, request.dispatch, request.graph, request.component);
         }
     };
 
     /// The literal argument roots procedure template `template`'s edges read,
     /// ascending. Demands, holding no claim, the component of every edge the
     /// template reaches before claiming.
-    pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_artifact.ComptimeRootKey {
+    pub fn templateLiteralArgumentDemand(self: *ModuleAnalyses, dispatch: CheckedDispatch, template: u32) Allocator.Error![]const checked_module.ComptimeRootKey {
         self.assertPublished();
         const graph = try self.literalGraph(dispatch);
         if (graph.demand_slots[template].peek()) |done| return done.roots;
@@ -1119,7 +1119,7 @@ pub const ModuleAnalyses = struct {
         template: u32,
 
         fn compute(request: LiteralDemandRequest) Allocator.Error!*LiteralArgumentDemand {
-            return checked_artifact.computeLiteralArgumentDemand(request.allocator, request.graph, request.template);
+            return checked_module.computeLiteralArgumentDemand(request.allocator, request.graph, request.template);
         }
     };
 
@@ -1136,7 +1136,7 @@ pub const ModuleAnalyses = struct {
         unit: UnitId,
 
         fn compute(request: UnitConversionRequest) Allocator.Error!*UnitLiteralConversions {
-            return checked_artifact.computeUnitLiteralConversions(request.analyses.allocator, request.dispatch, request.unit);
+            return checked_module.computeUnitLiteralConversions(request.analyses.allocator, request.dispatch, request.unit);
         }
     };
 
@@ -1145,7 +1145,7 @@ pub const ModuleAnalyses = struct {
     pub fn rootRequests(self: *ModuleAnalyses, owner: ImportedModuleView) Allocator.Error!*const RootRequestTable {
         self.assertPublished();
         const platform_requests: ?*const RootRequestTable = if (self.platform) |platform|
-            try platformAnalyses(platform).rootRequests(checked_artifact.importedView(platform))
+            try platformAnalyses(platform).rootRequests(checked_module.importedView(platform))
         else
             null;
         return self.root_requests.getOrCompute(self.io, Allocator.Error, RootRequestsRequest{ .analyses = self, .owner = owner, .platform_requests = platform_requests }, RootRequestsRequest.compute);
@@ -1157,7 +1157,7 @@ pub const ModuleAnalyses = struct {
         platform_requests: ?*const RootRequestTable,
 
         fn compute(request: RootRequestsRequest) Allocator.Error!*RootRequestTable {
-            return checked_artifact.computeRootRequests(request.analyses.allocator, request.owner, request.platform_requests);
+            return checked_module.computeRootRequests(request.analyses.allocator, request.owner, request.platform_requests);
         }
     };
 
@@ -1168,7 +1168,7 @@ pub const ModuleAnalyses = struct {
         component: u32,
 
         fn compute(request: ComponentRequest) Allocator.Error!*TemplateDemandComponent {
-            return checked_artifact.computeTemplateDemandComponent(request.analyses.allocator, request.dispatch, request.graph, request.component);
+            return checked_module.computeTemplateDemandComponent(request.analyses.allocator, request.dispatch, request.graph, request.component);
         }
     };
 
@@ -1177,7 +1177,7 @@ pub const ModuleAnalyses = struct {
         dispatch: CheckedDispatch,
 
         fn literalGraph(request: DispatchRequest) Allocator.Error!*LiteralGraph {
-            return checked_artifact.computeLiteralGraph(request.analyses.allocator, request.dispatch);
+            return checked_module.computeLiteralGraph(request.analyses.allocator, request.dispatch);
         }
 
         fn unitConversionSlots(request: DispatchRequest) Allocator.Error!*UnitConversionSlots {
@@ -1185,7 +1185,7 @@ pub const ModuleAnalyses = struct {
         }
 
         fn demandGraph(request: DispatchRequest) Allocator.Error!*TemplateDemandGraph {
-            return checked_artifact.computeTemplateDemandGraph(request.analyses.allocator, request.dispatch);
+            return checked_module.computeTemplateDemandGraph(request.analyses.allocator, request.dispatch);
         }
 
         fn createSlots(request: DispatchRequest) Allocator.Error!*DispatchSlots {
@@ -1198,15 +1198,15 @@ pub const ModuleAnalyses = struct {
         }
 
         fn index(request: DispatchRequest) Allocator.Error!*DispatchIndex {
-            return checked_artifact.computeDispatchIndex(request.analyses.allocator, request.dispatch);
+            return checked_module.computeDispatchIndex(request.analyses.allocator, request.dispatch);
         }
 
         fn moduleResolution(request: DispatchRequest) Allocator.Error!*ModuleDispatch {
-            return checked_artifact.computeModuleDispatch(request.analyses.allocator, request.dispatch);
+            return checked_module.computeModuleDispatch(request.analyses.allocator, request.dispatch);
         }
 
         fn platformRootEvidence(request: DispatchRequest) Allocator.Error!*PlatformRequirementRootEvidence {
-            return checked_artifact.computePlatformRequirementRootEvidence(request.analyses.allocator, request.dispatch);
+            return checked_module.computePlatformRequirementRootEvidence(request.analyses.allocator, request.dispatch);
         }
     };
 
@@ -1216,15 +1216,15 @@ pub const ModuleAnalyses = struct {
         template: canonical.CheckedProcedureTemplateId,
 
         fn schema(request: TemplateRequest) Allocator.Error!*SchemeAnalysis {
-            return checked_artifact.computeTemplateSchema(request.analyses.allocator, request.dispatch, request.template);
+            return checked_module.computeTemplateSchema(request.analyses.allocator, request.dispatch, request.template);
         }
 
         fn dispatchResolution(request: TemplateRequest) Allocator.Error!*TemplateDispatch {
-            return checked_artifact.computeTemplateDispatch(request.analyses.allocator, request.dispatch, request.template);
+            return checked_module.computeTemplateDispatch(request.analyses.allocator, request.dispatch, request.template);
         }
 
         fn relations(request: TemplateRequest) Allocator.Error!*TemplateDispatchRelations {
-            return checked_artifact.computeTemplateDispatchRelations(request.analyses.allocator, request.dispatch, request.template);
+            return checked_module.computeTemplateDispatchRelations(request.analyses.allocator, request.dispatch, request.template);
         }
     };
 
@@ -1234,12 +1234,12 @@ pub const ModuleAnalyses = struct {
         scope: DispatchScopeId,
 
         fn schema(request: ScopeRequest) Allocator.Error!*SchemeAnalysis {
-            return checked_artifact.computeScopeSchema(request.analyses.allocator, request.dispatch, request.scope);
+            return checked_module.computeScopeSchema(request.analyses.allocator, request.dispatch, request.scope);
         }
     };
 
-    fn platformAnalyses(platform: *const CheckedModuleArtifact) *ModuleAnalyses {
-        return platform.module_analyses orelse checked_artifact.checkedArtifactInvariant("a pairing's platform has no module analyses", .{});
+    fn platformAnalyses(platform: *const CheckedModule) *ModuleAnalyses {
+        return platform.module_analyses orelse checked_module.checkedModuleInvariant("a pairing's platform has no module analyses", .{});
     }
 
     const Request = struct {
@@ -1251,7 +1251,7 @@ pub const ModuleAnalyses = struct {
             const allocator = request.analyses.allocator;
             const closures = try allocator.create(ExportClosures);
             errdefer allocator.destroy(closures);
-            closures.* = try checked_artifact.computeExportClosures(allocator, request.owner, request.resolver);
+            closures.* = try checked_module.computeExportClosures(allocator, request.owner, request.resolver);
             return closures;
         }
 
@@ -1259,7 +1259,7 @@ pub const ModuleAnalyses = struct {
             const allocator = request.analyses.allocator;
             const dependencies = try allocator.create(PublicApiDependencies);
             errdefer allocator.destroy(dependencies);
-            dependencies.* = try checked_artifact.computePublicApiDependencies(allocator, request.owner, request.resolver);
+            dependencies.* = try checked_module.computePublicApiDependencies(allocator, request.owner, request.resolver);
             return dependencies;
         }
 
@@ -1267,7 +1267,7 @@ pub const ModuleAnalyses = struct {
             const allocator = request.analyses.allocator;
             const visibility = try allocator.create(LoweringVisibility);
             errdefer allocator.destroy(visibility);
-            visibility.* = try checked_artifact.computeLoweringVisibility(allocator, request.owner, request.resolver);
+            visibility.* = try checked_module.computeLoweringVisibility(allocator, request.owner, request.resolver);
             return visibility;
         }
     };

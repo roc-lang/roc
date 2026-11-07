@@ -18,8 +18,8 @@ const CacheData = @import("cache_module.zig").CacheModule.CacheData;
 
 const Allocator = std.mem.Allocator;
 const CacheManager = cache_manager_mod.CacheManager;
-const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
-const ImportedView = check.CheckedArtifact.ImportedModuleView;
+const Artifact = check.Checked.CheckedModule;
+const ImportedView = check.Checked.ImportedModuleView;
 const ExportInterfaces = eval.CompileTimeFinalization.ExportInterfaces;
 const dev_diagnostics = base.dev_diagnostics;
 
@@ -451,7 +451,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
         if (!present) try views.append(gpa, platform_view);
     }
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
-        .root = try check.CheckedArtifact.loweringViewWithRelations(unit.artifact, &.{}),
+        .root = try check.Checked.loweringViewWithRelations(unit.artifact, &.{}),
         .imports = views.items,
     };
     std.debug.assert(unit.test_unit == (if (unit.config.boxy_unit) |module_unit| module_unit.expect_sites else false));
@@ -462,7 +462,7 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
     defer gpa.free(test_metadata);
     var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(gpa, modules, .{ .requests = test_requests, .test_plan_metadata = test_metadata }, unit.config);
     defer lowered.deinit();
-    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.CheckedArtifact.importedView(unit.artifact)) else @as([32]u8, @splat(0));
+    const module_digest = if (unit.test_unit) unit.config.boxy_unit.?.names.of(check.Checked.importedView(unit.artifact)) else @as([32]u8, @splat(0));
     const test_modules = try gpa.alloc([32]u8, test_requests.len);
     defer gpa.free(test_modules);
     @memset(test_modules, module_digest);
@@ -585,8 +585,8 @@ fn build(unit: Unit, module_name: []const u8) BuildError!Built {
 
 /// A module's top-level expects, in source order: the roots a test unit
 /// exports wrappers for, and the roots `roc test` plans for the module.
-pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.CheckedArtifact.RootRequest {
-    var roots = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Error![]check.Checked.RootRequest {
+    var roots = std.ArrayList(check.Checked.RootRequest).empty;
     errdefer roots.deinit(gpa);
     for ((try artifact.rootRequests()).requests) |root| {
         if (root.kind != .test_expect) continue;
@@ -597,7 +597,7 @@ pub fn testRootRequests(gpa: Allocator, artifact: *const Artifact) Allocator.Err
 
 /// The test-plan metadata of a test unit's roots: each root's slot is its
 /// own position, so the lowering is a function of the unit's sources alone.
-pub fn testPlanMetadata(gpa: Allocator, requests: []const check.CheckedArtifact.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
+pub fn testPlanMetadata(gpa: Allocator, requests: []const check.Checked.RootRequest) Allocator.Error![]lir.CheckedPipeline.RootTestPlanMetadata {
     const metadata = try gpa.alloc(lir.CheckedPipeline.RootTestPlanMetadata, requests.len);
     for (requests, metadata, 0..) |request, *slot, index| slot.* = .{
         .request_index = @intCast(index),

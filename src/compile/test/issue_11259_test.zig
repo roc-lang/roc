@@ -197,7 +197,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     }
     try std.testing.expectEqual(@as(usize, if (expected_rejections == 0) 0 else 1), mismatches);
 
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var rejected: usize = 0;
@@ -217,7 +217,7 @@ fn expectConversionRecovery(source: []const u8, imported_source: ?[]const u8, ex
     var found_independent = expected.independent_expr == null;
     var completed_conversions: usize = 0;
     // Every compile-time root: the root table's rows, then the literal roots.
-    var root_ids: std.ArrayList(check.CheckedArtifact.ComptimeRootKey) = .empty;
+    var root_ids: std.ArrayList(check.Checked.ComptimeRootKey) = .empty;
     defer root_ids.deinit(std.testing.allocator);
     for ((try artifact.checkedTables()).compile_time_roots.roots) |row| try root_ids.append(std.testing.allocator, row.id);
     try (try artifact.dispatch()).appendLiteralRoots(std.testing.allocator, &root_ids);

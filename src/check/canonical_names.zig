@@ -15,7 +15,7 @@ const CompactWriter = collections.CompactWriter;
 const artifact_serialize = @import("artifact_serialize.zig");
 
 /// Relocatable, serial-id string interner used to back the name stores so the
-/// published artifact can be serialized and deserialized with a constant number
+/// opened module can be serialized and deserialized with a constant number
 /// of relocation fixups.
 /// Re-exported from `base` (a general collections-layer data structure, sibling
 /// to `SmallStringInterner`). Kept under the `canonical.` namespace because
@@ -130,13 +130,13 @@ pub const NestedProcSiteId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
 pub const EntryWrapperId = enum(u32) { _ };
 
-/// A checked module artifact named by its identity digest
-/// (`CheckedModuleArtifactKey.bytes`).
-pub const ArtifactRef = extern struct {
+/// A checked module named by its identity digest
+/// (`CheckedModuleKey.bytes`).
+pub const CheckedModuleRef = extern struct {
     bytes: [32]u8 = @as([32]u8, @splat(0)),
 
     /// Integer equality over the digest: a single 256-bit compare.
-    pub fn eql(a: ArtifactRef, b: ArtifactRef) bool {
+    pub fn eql(a: CheckedModuleRef, b: CheckedModuleRef) bool {
         return @as(u256, @bitCast(a.bytes)) == @as(u256, @bitCast(b.bytes));
     }
 };
@@ -150,17 +150,17 @@ pub const ModuleContentIdentity = struct {
 };
 
 /// Digest for checked module identity at post-check boundaries.
-pub const CheckedModuleDigest = ArtifactRef;
+pub const CheckedModuleDigest = CheckedModuleRef;
 
 /// Public `ProcedureValueRef` declaration.
 pub const ProcedureValueRef = struct {
-    artifact: ArtifactRef = .{},
+    artifact: CheckedModuleRef = .{},
     proc_base: ProcBase,
 };
 
 /// Public `ProcedureTemplateRef` declaration.
 pub const ProcedureTemplateRef = struct {
-    artifact: ArtifactRef = .{},
+    artifact: CheckedModuleRef = .{},
     proc_base: ProcBase,
     template: CheckedProcedureTemplateId,
 };
@@ -255,7 +255,7 @@ pub const ProcBaseKind = enum(u32) {
 ///
 /// Identifies a nominal type by (declaring module's deep content identity,
 /// declaring statement). One statement declares exactly one type, and
-/// statement indices are stable across artifacts because equal content
+/// statement indices are stable across modules because equal content
 /// identities imply byte-identical module source, so the pair determines the
 /// type. Neither the type's name nor any module name text participates: the
 /// declared name is display metadata carried on the checked nominal payload
@@ -544,7 +544,7 @@ pub const CanonicalNameStore = struct {
     }
 
     /// Look up a module content identity without inserting. This is the single
-    /// cross-artifact identity resolution operation (rebase): one map probe per
+    /// cross-module identity resolution operation (rebase): one map probe per
     /// distinct identity, comparing full 256-bit values.
     pub fn lookupModuleIdentity(self: *const CanonicalNameStore, hash: *const [32]u8) ?ModuleIdentityId {
         const id = self.module_identities.lookup(hash) orelse return null;

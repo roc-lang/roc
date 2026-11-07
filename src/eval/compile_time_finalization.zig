@@ -16,7 +16,7 @@ const lir = @import("lir");
 const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 const canonical = check.CanonicalNames;
 const CompilerHost = @import("compiler_host.zig");
 const ConstStoreWriter = @import("const_store_writer.zig");
@@ -84,14 +84,14 @@ pub const Options = struct {
     event_callback: ?EventCallback = null,
     debug_observer: ?DebugObserver = null,
     debug_events: ?*DebugEvents = null,
-    /// Artifact copies store results independently; shared slots publish once.
+    /// Module copies store results independently; shared slots publish once.
     publish_shared_slots: bool = true,
     /// A coordinator may persist an early dependency batch, then replay all
     /// stored and new observations together with the complete program.
     defer_debug_replay: bool = false,
-    /// Completed checked artifacts contribute stored observations, without
+    /// Completed checked modules contribute stored observations, without
     /// evaluating their roots again. Borrowed only for finalization.
-    cached_debug_modules: []const *const checked.CheckedModuleArtifact = &.{},
+    cached_debug_modules: []const *const checked.CheckedModule = &.{},
     std_io: ?std.Io = null,
     slow_root_threshold_ns: u64 = 3 * std.time.ns_per_s,
     slow_root_period_ns: u64 = std.time.ns_per_s,
@@ -105,7 +105,7 @@ pub const Options = struct {
     strategy: base.SpecializationStrategy = .lss,
     /// Evaluate the roots the other strategy's evaluator owns as well: a
     /// literal argument root under `.lss` (design.md "Literal Arguments").
-    /// Set for an artifact no later compilation reopens, the baked Builtin,
+    /// Set for a module no later compilation reopens, the baked Builtin,
     /// which must be complete for either strategy's programs.
     complete_baked_module: bool = false,
     /// The cached module objects a `.boxy` evaluation links a module's
@@ -170,7 +170,7 @@ pub const UnfinalizedReports = struct {
 
 /// A checked module's source, and the store its reports go to.
 pub const ReportDestination = struct {
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     problem_store: ?*check.problem.Store,
 };
 
@@ -213,13 +213,13 @@ const DebugEvents = struct {
     /// Replay the observations an earlier compilation stored for the roots
     /// this compilation demands: every root, or, for a demand-driven
     /// compilation, the stored roots its program demands.
-    fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
+    fn appendStored(self: *DebugEvents, module: *const checked.CheckedModule) Allocator.Error!void {
         for (module.evaluation.debug.entries) |entry| {
             try self.appendEvent(module.key.digest(), (try module.compileTimeRoot(entry.root)), module.evaluation.debug.message(entry), false);
         }
     }
 
-    fn appendCached(self: *DebugEvents, modules: []const *const checked.CheckedModuleArtifact) Allocator.Error!void {
+    fn appendCached(self: *DebugEvents, modules: []const *const checked.CheckedModule) Allocator.Error!void {
         for (modules) |module| try self.appendStored(module);
     }
 
@@ -241,7 +241,7 @@ const DebugEvents = struct {
                     return @backingInt(a.root) < @backingInt(b.root);
                 }
             }.lessThan);
-            // The artifact owns these bytes for cache publication and replay.
+            // The module owns these bytes for cache publication and replay.
             const artifact_allocator = entry.module.evaluationAllocator();
             const stored = try checked.CompileTimeDebugStore.init(artifact_allocator, inputs.items);
             if (entry.module.freesReplacedEvaluationColumns()) entry.module.evaluation.debug.deinit(artifact_allocator);
@@ -257,7 +257,7 @@ const DebugEvents = struct {
 
 /// A prepared module and its checking-owned diagnostic destination.
 pub const ProgramModule = struct {
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     problem_store: ?*check.problem.Store,
 };
 
@@ -273,9 +273,9 @@ const ModuleOwners = struct {
     /// Position in `modules` per `LIR.LoweringModuleId`, or null when the
     /// lowering carried a checked module this finalization does not complete.
     positions: []const ?u32,
-    /// Independently owned artifacts with the same checked identity.
+    /// Independently owned modules with the same checked identity.
     next_alias: []const ?u32,
-    /// Site observations apply once to every artifact of the declared owner.
+    /// Site observations apply once to every module of the declared owner.
     report_sites: bool = true,
     /// The lowering's module table, by `LIR.LoweringModuleId`.
     lowering_modules: []const checked.ModuleId,
@@ -350,7 +350,7 @@ const ModuleOwners = struct {
         return self.modules[index];
     }
 
-    /// Every artifact this finalization completes for lowering module `id`,
+    /// Every module this finalization completes for lowering module `id`,
     /// or, for a module whose finalization completed earlier, its report
     /// destination.
     fn reportTargets(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) Allocator.Error!ReportTargets {
@@ -1103,7 +1103,7 @@ fn specializeAndEvaluate(
     defer source_modules.deinit(allocator);
     for (modules) |entry| {
         for ((try entry.module.rootRequests()).compile_time_requests) |request| {
-            // A reopened artifact's roots that an earlier compilation
+            // A reopened module's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
             const root_id = (try compileTimeRootForRequest(entry.module, request));
             if (entry.module.evaluation.rootPayload(root_id) != .pending) continue;
@@ -1335,14 +1335,14 @@ pub const BoxyObjectSource = struct {
     /// Whether the object of every module of `module`'s import closure is
     /// known, built or restored, or known not to exist. Asks for the ones
     /// not yet asked for.
-    ready: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!bool,
+    ready: *const fn (context: *anyopaque, module: *const checked.CheckedModule) FinalizeError!bool,
     /// The objects of `module`'s import closure, which `ready` reported
     /// known. Null when an import has no object of its own: a platform
     /// module with requirements belongs to its app's program.
-    objects: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!?BoxyObjectSet,
+    objects: *const fn (context: *anyopaque, module: *const checked.CheckedModule) FinalizeError!?BoxyObjectSet,
     /// Every compile-time root of `module` is complete, so its object can
     /// be built: the evaluation of a module importing it may need it.
-    completed: *const fn (context: *anyopaque, module: *const checked.CheckedModuleArtifact) FinalizeError!void,
+    completed: *const fn (context: *anyopaque, module: *const checked.CheckedModule) FinalizeError!void,
     /// Build `program` on the session, as soon as it has a worker for it.
     submit: *const fn (context: *anyopaque, program: base.post_check_task_executor.Task) FinalizeError!void,
     /// A completion of a submitted task, if one has finished.
@@ -1766,8 +1766,8 @@ fn finalizeProgramBoxy(
     const owned_runtime_roots = try cloneRootRequests(allocator, runtime_roots);
     errdefer deinitRootRequests(allocator, owned_runtime_roots);
 
-    // The pending roots of the first artifact of each checked identity;
-    // another artifact of the same identity repeats its results.
+    // The pending roots of the first module of each checked identity;
+    // another module of the same identity repeats its results.
     var roots = std.ArrayList(checked_root_graph.Root).empty;
     defer roots.deinit(allocator);
     var canonical_modules = std.AutoHashMapUnmanaged([32]u8, void).empty;
@@ -1845,7 +1845,7 @@ fn evaluateRootsBoxy(
     evaluation_options.keep_artifacts = false;
     evaluation_options.retry = null;
 
-    const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
+    const artifacts = try allocator.alloc(*checked.CheckedModule, modules.len);
     defer allocator.free(artifacts);
     for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
     const states = try allocator.alloc(RootCompletionState, modules.len);
@@ -2043,7 +2043,7 @@ const ModuleEvaluation = struct {
         allocator.free(self.reads);
     }
 
-    fn artifact(self: *const ModuleEvaluation, shared: Shared) *checked.CheckedModuleArtifact {
+    fn artifact(self: *const ModuleEvaluation, shared: Shared) *checked.CheckedModule {
         return shared.modules[self.module].module;
     }
 
@@ -2499,7 +2499,7 @@ fn runBoxyBatch(
         plan.* = const_roots[local];
     }
     _ = try evalProgramRoots(allocator, entry.module, requests, root_ids, state, entry.problem_store, owners, stage_options, lowered, plans, program);
-    // Every other artifact of the module's checked identity repeats each
+    // Every other module of the module's checked identity repeats each
     // root that completed; it owns its own store and diagnostics, while
     // site observations apply once.
     for (modules, states, 0..) |alias_entry, *alias_state, alias_index| {
@@ -3213,7 +3213,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
         }
 
         /// Run one module's roots, then repeat each root that completed for
-        /// every other artifact sharing its checked identity.
+        /// every other module sharing its checked identity.
         fn evaluateModuleRoots(
             self: *Self,
             module_index: usize,
@@ -3233,7 +3233,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 const alias_entry = self.modules[index];
                 const alias_state = &self.states[index];
                 const alias_requests = self.published.by_module[index];
-                // Each artifact owns its ConstStore and diagnostics, but debug
+                // Each module owns its ConstStore and diagnostics, but debug
                 // observations persist and replay once per checked identity.
                 var alias_events = DebugEvents{ .allocator = self.allocator };
                 defer alias_events.deinit();
@@ -3702,8 +3702,8 @@ pub fn finalizerWithOptions(options: *const Options) checked.CompileTimeFinalize
 fn finalize(
     context: ?*anyopaque,
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
-    imports: []const checked.PublishImportArtifact,
+    module: *checked.CheckedModule,
+    imports: []const checked.CheckedImport,
     available_modules: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     problem_store: ?*check.problem.Store,
@@ -3732,7 +3732,7 @@ fn finalize(
             const root_id = state.rootIdForRequestIndex(request_index);
             // A literal argument root is the `.boxy` evaluator's: a Solved
             // compilation leaves it for a `.boxy` compilation to evaluate
-            // when it reopens the artifact, as it leaves any root it does
+            // when it reopens the module, as it leaves any root it does
             // not demand (design.md "Literal Arguments").
             if (options.strategy == .lss and !options.complete_baked_module and root_id.kind() == .literal_argument) {
                 try module.fillRootPayload(root_id, .unevaluated);
@@ -3792,7 +3792,7 @@ fn finalize(
 
 const RootCompletionState = struct {
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     /// Each completed root.
     done_roots: std.AutoHashMapUnmanaged(checked.ComptimeRootKey, void) = .empty,
     request_root_ids: []checked.ComptimeRootKey,
@@ -3812,7 +3812,7 @@ const RootCompletionState = struct {
 
     fn init(
         allocator: Allocator,
-        module: *checked.CheckedModuleArtifact,
+        module: *checked.CheckedModule,
         requests: []const checked.RootRequest,
     ) Allocator.Error!RootCompletionState {
         const request_root_ids = try allocator.alloc(checked.ComptimeRootKey, requests.len);
@@ -4103,7 +4103,7 @@ const RootCompletionState = struct {
 
 fn lowerEvalAndFinishRoots(
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
@@ -4116,7 +4116,7 @@ fn lowerEvalAndFinishRoots(
         finalizationInvariant("compile-time finalization request/root-id batch length mismatch");
     }
     // A literal argument root is the `.boxy` evaluator's under either
-    // strategy: a module's artifact serves both strategies' programs (design.md
+    // strategy: a module's module serves both strategies' programs (design.md
     // "Literal Arguments"). The `.boxy` evaluator specializes the roots whose
     // values hold function values and lowers the rest as one `.boxy` program
     // (see `finalizeProgramBoxy`); a batch's roots depend on none of each
@@ -4155,7 +4155,7 @@ fn lowerEvalAndFinishRoots(
 fn lowerEvalAndFinishBatch(
     strategy: base.SpecializationStrategy,
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     lowering_imports: []const checked.ImportedModuleView,
     relation_modules: []const checked.ImportedModuleView,
     requests: []const checked.RootRequest,
@@ -4206,7 +4206,7 @@ fn lowerEvalAndFinishBatch(
 
 fn evalInterpreterProgramRoots(
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     requests: []const checked.RootRequest,
     root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
@@ -4513,7 +4513,7 @@ fn moduleKeyBytesEqual(a: [32]u8, b: [32]u8) bool {
     return true;
 }
 
-/// The checked module a program lowered whose artifact key is `key`.
+/// The checked module a program lowered whose module key is `key`.
 fn loweredModuleOfKey(lir_result: *const lir.Program.Result, key: [32]u8) checked.ModuleId {
     for (lir_result.lowering_modules.items) |module| {
         if (moduleKeyBytesEqual(module.bytes, key)) return module;
@@ -4555,7 +4555,7 @@ const EmbeddedReport = enum {
 /// module is named as the failure's origin.
 fn reportEmbeddedFailure(
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root_region: base.Region,
     owners: *const ModuleOwners,
     lir_result: *const lir.Program.Result,
@@ -6046,7 +6046,7 @@ const DevProgram = struct {
 /// Execute borrowed LIR; the compilation owner retains the lowered program.
 fn evalProgramRoots(
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     requests: []const checked.RootRequest,
     root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
@@ -6064,7 +6064,7 @@ fn evalProgramRoots(
 
 fn evalDevProgramRoots(
     allocator: Allocator,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     requests: []const checked.RootRequest,
     root_ids: []const checked.ComptimeRootKey,
     state: *RootCompletionState,
@@ -6381,7 +6381,7 @@ fn spinnerByte(tick: usize) u8 {
 
 fn devRootLabel(
     allocator: Allocator,
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root: checked.CompileTimeRoot,
 ) Allocator.Error!DevRootLabel {
     const env = module.moduleEnvConst();
@@ -6400,7 +6400,7 @@ fn devRootLabel(
 }
 
 fn devRootSourceRegion(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root: checked.CompileTimeRoot,
 ) base.Region {
     const env = module.moduleEnvConst();
@@ -6422,7 +6422,7 @@ fn devRootSourceRegion(
 /// its binding pattern's when the root rejects that binder, and otherwise the
 /// pattern's it matches.
 fn rootBodySourceRegion(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root: checked.CompileTimeRoot,
 ) base.Region {
     const store = &module.moduleEnvConst().store;
@@ -6438,7 +6438,7 @@ fn rootBodySourceRegion(
 
 /// The source region of a literal's CIR node: an expression, or a custom
 /// literal pattern.
-fn literalSourceRegion(module: *const checked.CheckedModuleArtifact, node: u32) base.Region {
+fn literalSourceRegion(module: *const checked.CheckedModule, node: u32) base.Region {
     return module.moduleEnvConst().store.getNodeRegion(@fromBackingInt(node));
 }
 
@@ -6462,7 +6462,7 @@ fn devComptimeExhaustivenessRootPayload(
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     root_proc: lir.LIR.LirProcSpecId,
@@ -6485,7 +6485,7 @@ fn devComptimeExhaustivenessRootPayload(
 
 fn devCrashedRootPayload(
     problem_store: ?*check.problem.Store,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     request: checked.RootRequest,
     message: []const u8,
@@ -6531,7 +6531,7 @@ fn reportDevHostEvents(
     allocator: Allocator,
     options: Options,
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root: checked.CompileTimeRoot,
     native: *const DevProgram,
     lir_store: *const lir.LirStore,
@@ -6661,7 +6661,7 @@ fn literalRejectionReported(store: *const check.problem.Store, kind: lir.LIR.Lit
 
 /// The payload of a failed root in an evaluation that collects no diagnostics.
 fn appendCrashConst(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
     const data = try module.evaluation.const_store.addBlobData(message);
@@ -6673,7 +6673,7 @@ fn appendCrashConst(
 }
 
 fn appendCheckedErrorConst(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     message: []const u8,
 ) Allocator.Error!checked.ConstNodeId {
     const data = try module.evaluation.const_store.addBlobData(message);
@@ -6686,7 +6686,7 @@ fn appendCheckedErrorConst(
 
 fn reportCompileTimeExpectFailures(
     maybe_problem_store: ?*check.problem.Store,
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root: checked.CompileTimeRoot,
     lir_store: *const lir.LirStore,
     failures: []const ExpectFailure,
@@ -6725,7 +6725,7 @@ fn evalCompileTimeRoot(
     problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     slots: *const StaticSlotEnvironment,
@@ -6768,7 +6768,7 @@ fn reportCompileTimeExhaustiveness(
     maybe_problem_store: ?*check.problem.Store,
     owners: *const ModuleOwners,
     root_owner: lir.LIR.LoweringModuleId,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     lir_result: *const lir.Program.Result,
     failure: ExhaustivenessFailure,
@@ -6787,7 +6787,7 @@ fn reportCompileTimeExhaustiveness(
 /// ids, so it can never be the root a site's validation was explicitly
 /// delegated to.
 fn comptimeSiteMayResolvePending(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root_id: ?checked.ComptimeRootKey,
     checked_site: checked.CheckedExhaustivenessSiteId,
 ) Allocator.Error!bool {
@@ -6887,7 +6887,7 @@ fn discardUnreachedRootComptimeSites(
 /// left its original expression to runtime, which decides the site
 /// statically again, exactly as if the root had not been selected. Every
 /// other site is decided by its checking mode.
-pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact, store: *check.problem.Store) Allocator.Error!void {
+pub fn finishPendingExhaustiveness(module: *const checked.CheckedModule, store: *check.problem.Store) Allocator.Error!void {
     var retained: usize = 0;
     for (store.pending_static_exhaustiveness.items) |pending| {
         if (pending.reported) continue;
@@ -6914,7 +6914,7 @@ pub fn finishPendingExhaustiveness(module: *const checked.CheckedModuleArtifact,
 
 fn reportCompileTimeCrash(
     maybe_problem_store: ?*check.problem.Store,
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     failed_at: FailedAt,
     owners: *const ModuleOwners,
@@ -6952,7 +6952,7 @@ fn exhaustivenessFailure(meaning: ?lir.LIR.FailureMeaning) ?ExhaustivenessFailur
 }
 
 fn failedRootPayload(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     message: []const u8,
     failure: RootFailure,
@@ -6989,7 +6989,7 @@ const RootFailure = enum {
     }
 
     /// The failure a failed root's stored payload records.
-    fn ofPayload(module: *const checked.CheckedModuleArtifact, payload: checked.CompileTimeRootPayload) RootFailure {
+    fn ofPayload(module: *const checked.CheckedModule, payload: checked.CompileTimeRootPayload) RootFailure {
         return switch (payload) {
             .const_node => |node| switch (module.evaluation.const_store.get(node)) {
                 .checked_error => .checked_error,
@@ -7008,7 +7008,7 @@ const RootFailure = enum {
 };
 
 fn appendFailureConst(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     message: []const u8,
     failure: RootFailure,
 ) Allocator.Error!checked.ConstNodeId {
@@ -7049,13 +7049,13 @@ const ComptimeFailureSite = struct {
 /// would not identify the declaring module.
 /// Whether source file `file` is `module`'s: an object names its modules'
 /// files as its link names them (`ModuleNames`), a whole program by content.
-fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModuleArtifact) bool {
+fn fileIsModule(file: base.SourceFileEntry, module: *const checked.CheckedModule) bool {
     if (@as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(module.module_identity.stable_hash))) return true;
     return @as(u256, @bitCast(file.module_identity)) == @as(u256, @bitCast(ModuleNames.stableName(checked.importedView(module))));
 }
 
 fn comptimeFailureSiteFrom(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     root_region: base.Region,
     failed_region: ?base.Region,
     failed_loc: ?base.SourceLoc,
@@ -7079,7 +7079,7 @@ fn comptimeFailureSiteFrom(
 /// `comptimeFailureSiteFrom` with the failed statement's file entry resolved
 /// through the LIR store's source-file table.
 fn comptimeFailureSiteFromLoc(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     lir_store: *const lir.LirStore,
     root_region: base.Region,
     failed_region: ?base.Region,
@@ -7111,7 +7111,7 @@ fn comptimeFailureOrigin(
 fn finalizationImports(
     allocator: Allocator,
     root: checked.ImportedModuleView,
-    imports: []const checked.PublishImportArtifact,
+    imports: []const checked.CheckedImport,
     available_modules: []const checked.ImportedModuleView,
 ) Allocator.Error![]checked.ImportedModuleView {
     var out = std.ArrayList(checked.ImportedModuleView).empty;
@@ -7150,7 +7150,7 @@ fn regionsEqual(a: base.Region, b: base.Region) bool {
 
 /// The definition a root of the module's root table evaluates, or null for
 /// any other root.
-fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.ComptimeRootKey) Allocator.Error!?@FieldType(checked.RootSource, "def") {
+fn rootDef(module: *const checked.CheckedModule, root_id: checked.ComptimeRootKey) Allocator.Error!?@FieldType(checked.RootSource, "def") {
     if (root_id.isLiteral()) return null;
     return switch ((try module.checkedTables()).compile_time_roots.root(root_id).source) {
         .def => |def| def,
@@ -7159,7 +7159,7 @@ fn rootDef(module: *const checked.CheckedModuleArtifact, root_id: checked.Compti
 }
 
 fn compileTimeRootForRequest(
-    module: *const checked.CheckedModuleArtifact,
+    module: *const checked.CheckedModule,
     request: checked.RootRequest,
 ) Allocator.Error!checked.ComptimeRootKey {
     const root_id = request.compile_time_root orelse {
@@ -7201,7 +7201,7 @@ fn storeRootValue(
 
 /// Record a root's final payload and stored type and mark it done.
 fn completeRoot(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     writer: *ConstStoreWriter.Writer,
     state: *RootCompletionState,
     root: LirProgram.ConstRootPlan,
@@ -7233,7 +7233,7 @@ fn completeRoot(
 
 /// Record a completed constant root's stored value in its const templates.
 pub fn finishConstRoot(
-    module: *checked.CheckedModuleArtifact,
+    module: *checked.CheckedModule,
     root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
     root_type: ?check.ConstStore.ConstTypeId,
@@ -7304,7 +7304,7 @@ fn rootSourceEql(a: checked.RootSource, b: checked.RootSource) bool {
     };
 }
 
-fn artifactMatches(a: anytype, b: checked.CheckedModuleArtifactKey) bool {
+fn artifactMatches(a: anytype, b: checked.CheckedModuleKey) bool {
     return std.meta.eql(a.bytes, b.bytes);
 }
 
@@ -7356,9 +7356,9 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     try program.setLoweringModules(&keys);
 
     // Finalization completes a subset of the lowering's modules, in an order
-    // of its own. Only `key` is read, so the rest of each artifact stays out
+    // of its own. Only `key` is read, so the rest of each module stays out
     // of this test.
-    var artifacts: [3]checked.CheckedModuleArtifact = undefined;
+    var artifacts: [3]checked.CheckedModule = undefined;
     artifacts[0].key = .{ .bytes = keys[2].bytes };
     artifacts[1].key = .{ .bytes = keys[0].bytes };
     artifacts[2].key = .{ .bytes = keys[2].bytes };
@@ -7650,7 +7650,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
     };
     defer retained.deinit();
     // Every producer workspace, string table, and executable mapping is dead.
-    // Only the same LIR domain and independently owned artifacts remain.
+    // Only the same LIR domain and independently owned modules remain.
     for (0..2) |iteration| {
         if (iteration == 1) program.store.getProcSpecPtr(proc).native_code_revision += 1;
         var strings = try backend.StaticStringData.build(allocator, &program.store, backend.dev.LirCodeGenMod.host_lir_codegen_target);

@@ -3,8 +3,8 @@
 //! This executable runs during `zig build` on the host machine to:
 //! 1. Parse and type-check the Builtin.roc module (which contains nested Bool, Try, Str, Dict, Set types)
 //! 2. Serialize the resulting ModuleEnv to a binary file
-//! 3. Publish the type-checked module to a CheckedModuleArtifact and serialize it
-//! 4. Output Builtin.bin, builtin_indices.zig, and Builtin.artifact.bin to paths provided by the build system
+//! 3. Publish the type-checked module to a CheckedModule and serialize it
+//! 4. Output Builtin.bin, builtin_indices.zig, and Builtin.outputs.bin to paths provided by the build system
 
 const std = @import("std");
 const base = @import("base");
@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 const CoreCtx = can.CoreCtx;
 const CIR = can.CIR;
 const CompactWriter = collections.CompactWriter;
-const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
+const CheckedModule = check.Checked.CheckedModule;
 
 const max_builtin_bytes = 1024 * 1024;
 
@@ -66,7 +66,7 @@ fn readFileAllocPath(gpa: Allocator, io: std.Io, path: []const u8, limit: usize)
 /// 1. the absolute path to Builtin.roc for cache tracking
 /// 2. the output path for Builtin.bin
 /// 3. the output path for builtin_indices.zig
-/// 4. the output path for Builtin.artifact.bin
+/// 4. the output path for Builtin.outputs.bin
 ///
 /// We also keep project-relative defaults so manual runs still succeed.
 pub fn main(process_init: std.process.Init) !void {
@@ -87,7 +87,7 @@ pub fn main(process_init: std.process.Init) !void {
     const builtin_src_path = if (args.len >= 2) args[1] else "src/build/roc/Builtin.roc";
     const builtin_bin_path = if (args.len >= 3) args[2] else "zig-out/builtins/Builtin.bin";
     const builtin_indices_zig_path = if (args.len >= 4) args[3] else "zig-out/builtins/builtin_indices.zig";
-    const builtin_artifact_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.artifact.bin";
+    const builtin_outputs_path = if (args.len >= 5) args[4] else "zig-out/builtins/Builtin.outputs.bin";
 
     // Read the Builtin.roc source file at runtime
     // NOTE: We must free this source manually; CommonEnv.deinit() does not free the source.
@@ -123,7 +123,7 @@ pub fn main(process_init: std.process.Init) !void {
     if (std.fs.path.dirname(builtin_indices_zig_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
-    if (std.fs.path.dirname(builtin_artifact_path)) |dir| {
+    if (std.fs.path.dirname(builtin_outputs_path)) |dir| {
         try std.Io.Dir.cwd().createDirPath(io, dir);
     }
 
@@ -134,9 +134,9 @@ pub fn main(process_init: std.process.Init) !void {
     // Serialize the single Builtin module
     try serializeModuleEnv(gpa, io, builtin_env, builtin_bin_path);
 
-    // Publish the type-checked Builtin to a CheckedModuleArtifact and serialize
+    // Publish the type-checked Builtin to a CheckedModule and serialize
     // it from the same prepared env that is embedded as Builtin.bin.
-    try serializeBuiltinArtifact(gpa, io, builtin_env, &compiled.inference, builtin_artifact_path);
+    try serializeBuiltinOutputs(gpa, io, builtin_env, &compiled.inference, builtin_outputs_path);
 
     // Validate that BuiltinIndices contains all type declarations under Builtin
     // before emitting the typed static data consumed by the compiler executable.
@@ -145,9 +145,9 @@ pub fn main(process_init: std.process.Init) !void {
     try writeBuiltinIndicesZig(io, builtin_indices, builtin_indices_zig_path);
 }
 
-/// Publish the prepared Builtin env to a CheckedModuleArtifact, then serialize
-/// the artifact to the output path.
-fn serializeBuiltinArtifact(
+/// Publish the prepared Builtin env to a CheckedModule, then serialize
+/// the module to the output path.
+fn serializeBuiltinOutputs(
     gpa: Allocator,
     io: std.Io,
     builtin_env: *ModuleEnv,
@@ -159,17 +159,17 @@ fn serializeBuiltinArtifact(
     });
     defer typed_modules.deinit();
 
-    // The baked artifact serves either strategy's programs and no
+    // The baked module serves either strategy's programs and no
     // compilation reopens it, so its evaluation completes every root.
     const finalizer_options: comptime_finalizer.Options = .{ .complete_baked_module = true };
-    var artifact = try check.CheckedArtifact.openCheckedModule(gpa, .{
+    var artifact = try check.Checked.openCheckedModule(gpa, .{
         .module_idx = 0,
         .module_env_storage = .{ .checked_source = builtin_env },
         .io = io,
         .outputs = .{ .checked = inference.* },
     });
     defer artifact.deinitRetainingModuleEnv(gpa);
-    try check.CheckedArtifact.evaluateOpenedModule(gpa, &artifact, comptime_finalizer.finalizerWithOptions(&finalizer_options), &.{}, &.{}, null);
+    try check.Checked.evaluateOpenedModule(gpa, &artifact, comptime_finalizer.finalizerWithOptions(&finalizer_options), &.{}, &.{}, null);
 
     var arena = collections.SingleThreadArena.init(gpa);
     defer arena.deinit();
@@ -181,16 +181,16 @@ fn serializeBuiltinArtifact(
     var writer = CompactWriter.init();
     defer writer.deinit(arena_alloc);
 
-    const hdr = try writer.appendAlloc(arena_alloc, CheckedModuleArtifact.Serialized);
+    const hdr = try writer.appendAlloc(arena_alloc, CheckedModule.Serialized);
     try hdr.serialize(&artifact, arena_alloc, &writer);
 
     try writer.writeGather(file, io);
 
     // Append the layout-version hash as a trailer after the serialized region.
-    // `CheckedModuleArtifact.splitVersionTrailer` validates and strips it before
+    // `CheckedModule.splitVersionTrailer` validates and strips it before
     // the runtime creates a static view, rejecting a blob whose layout differs
     // from the running compiler's instead of reading into a mismatched struct.
-    try file.writePositionalAll(io, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH, writer.total_bytes);
+    try file.writePositionalAll(io, &CheckedModule.SERIALIZED_VERSION_HASH, writer.total_bytes);
 }
 
 fn buildBuiltinIndices(gpa: Allocator, env: *const ModuleEnv) !BuiltinIndices {

@@ -14,8 +14,7 @@ const lir = @import("lir");
 const roc_target = @import("roc_target");
 
 const Allocator = std.mem.Allocator;
-const Checked = check.CheckedArtifact;
-const CheckedModule = check.CheckedModule;
+const Checked = check.Checked;
 const GuardedList = @import("collections").GuardedList;
 
 pub const StaticDataSymbolId = lir.Program.StaticDataSymbolId;
@@ -1995,7 +1994,7 @@ const StaticDataBuilder = struct {
         return @intCast(self.lowered.lir_result.static_data_values.items.len + self.lowered.lir_result.requested_layouts.items.len + index);
     }
 
-    fn requestedLayout(self: *StaticDataBuilder, const_locator: CheckedModule.ConstLocator) lir.Program.RequestedLayout {
+    fn requestedLayout(self: *StaticDataBuilder, const_locator: Checked.ConstLocator) lir.Program.RequestedLayout {
         for (self.lowered.lir_result.requested_layouts.items) |request| {
             const request_locator = request.const_locator orelse continue;
             if (std.meta.eql(request_locator, const_locator) and request.initializer != null) return request;
@@ -2256,7 +2255,7 @@ const StaticDataBuilder = struct {
     }
 };
 
-fn moduleHasProvidedData(module: *const Checked.CheckedModuleArtifact) Allocator.Error!bool {
+fn moduleHasProvidedData(module: *const Checked.CheckedModule) Allocator.Error!bool {
     for ((try module.providedExports()).exports) |provided| {
         switch (provided) {
             .data => return true,

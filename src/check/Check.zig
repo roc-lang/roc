@@ -94,7 +94,7 @@ const ExpectDispatchWatcher = struct {
 };
 
 /// How a type variable occurrence will be represented in the checked type
-/// artifact consumed by later compiler stages.
+/// module consumed by later compiler stages.
 const InspectTypePosition = enum(u2) {
     value,
     record_row,
@@ -494,7 +494,7 @@ platform_required_defs: collections.DenseMapUnmanaged(CIR.Def.Idx, PlatformRequi
 /// One row per platform requirement that resolved to an exported app def, in
 /// requires-clause order. The solved correspondence (requirement type and its
 /// identity bindings, as vars in this module's store) that publication
-/// materializes into the app artifact's `PlatformRequirementSolutionTable`.
+/// materializes into the app module's `PlatformRequirementSolutionTable`.
 /// Each row's `identity_vars` slice is checker-owned.
 platform_requirement_solutions: std.ArrayListUnmanaged(requirement_solution.SolutionInput) = .empty,
 /// Local block-statement (`s_decl`) function patterns whose body is currently
@@ -961,7 +961,7 @@ rejected_value_annotations: collections.DenseMapUnmanaged(CIR.Pattern.Idx, void)
 /// Default expressions rejected by a finalize judgment (effectful,
 /// parameter-constraining) with the problem already reported. Explicit
 /// evidence for `checkDefaultRestrictions`: the residue walk skips them and
-/// the retirement sweep replaces them before the artifact boundary. A
+/// the retirement sweep replaces them before the module boundary. A
 /// rejection is recorded here rather than by poisoning the default's var:
 /// unifying `.err` into a var that resolved to structure (or a
 /// constraint-carrying flex) is SUPPRESSED by the unifier, and marking the
@@ -997,12 +997,12 @@ hoist_binding_candidates: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Exp
 hoist_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Temporary checker-only provenance for local binders known to be available
 /// during compile-time finalization. This is scoped lexically and never
-/// published as checked-artifact metadata.
+/// published as checked-module metadata.
 hoist_known_values: collections.DenseMapUnmanaged(CIR.Pattern.Idx, HoistKnownValue) = .empty,
 /// Lexical scope stack for `hoist_known_values`.
 hoist_known_value_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
 /// Branch-local binders known only inside the enclosing match expression root.
-/// These are temporary checker facts, not checked-artifact metadata.
+/// These are temporary checker facts, not checked-module metadata.
 hoist_contextual_bindings: collections.DenseMapUnmanaged(CIR.Pattern.Idx, usize) = .empty,
 /// Lexical scope stack for `hoist_contextual_bindings`.
 hoist_contextual_binding_scope_patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
@@ -1082,7 +1082,7 @@ contextual_local_dispatch_exprs: collections.DenseMapUnmanaged(CIR.Expr.Idx, voi
 executable_root_defs: std.ArrayListUnmanaged(CIR.Def.Idx) = .empty,
 /// Executable roots whose zero-arg body is also an explicit compile-time root.
 /// This is producer metadata: checking uses it to reject effects before
-/// checked-artifact publication can schedule the body for evaluation.
+/// checked-module publication can schedule the body for evaluation.
 compile_time_executable_roots: std.ArrayListUnmanaged(struct {
     def: CIR.Def.Idx,
     lambda: CIR.Expr.Idx,
@@ -6204,7 +6204,7 @@ fn invalidateExprSubtreeMetadataWithScratch(
 fn retireInvalidatedRecordDefaults(self: *Self, root: ?CIR.Expr.Idx) void {
     // Replacing the root makes every construction in its old subtree
     // unreachable. Retire the omission plans attached to those constructions
-    // before checked-artifact publication consumes the surviving source tree.
+    // before checked-module publication consumes the surviving source tree.
     var retained: usize = 0;
     for (self.cir.record_omitted_defaults.items.items) |omitted| {
         if (omitted.expr == root or self.hoist_invalidated_exprs.contains(omitted.expr)) continue;
@@ -10369,7 +10369,7 @@ fn instantiateWhereMethodForUse(self: *Self, signature_var: Var, env: *Env, regi
 /// Persist the explicit callable relation for one per-use where-method
 /// instantiation. The instantiator copied structure while sharing every leaf,
 /// so its complete map proves the body dispatch callable's relation to the
-/// pristine signature. Checked-artifact construction reads this record—by
+/// pristine signature. Checked-module construction reads this record—by
 /// the raw callable, or by its settled root once generalized requirement
 /// deduplication has unified same-shape callables—and never INFERS the
 /// relation from a method name: a same-name match only nominates the evidence
@@ -13808,7 +13808,7 @@ fn withdrawSupersededLiteralDefaultWarnings(self: *Self) Allocator.Error!void {
 }
 
 /// Turn every provisional platform-requirement row into the explicit
-/// successful-binding or checked-error outcome consumed by artifact
+/// successful-binding or checked-error outcome consumed by module
 /// publication. This runs after all checker error poisoning, while the checker
 /// still owns the exact source def and solved vars.
 fn finalizePlatformRequirementSolutions(self: *Self) Allocator.Error!void {
@@ -17319,7 +17319,7 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
 /// The pinning-frontier judgment first classifies unresolved receivers as
 /// caller-pinnable, ambiguous, or default-materialized. This fixpoint consumes
 /// the latter classification and checks every exact callable edge against its
-/// selected owner before any checked artifact can be published.
+/// selected owner before any checked module can be published.
 ///
 /// The fixpoint returns once a round leaves no new dispatcher entry and no
 /// newly grounded pending requirement. It terminates structurally: a pending
@@ -38806,7 +38806,7 @@ fn bindRecordDestruct(self: *Self, pending: PendingRecordDestruct, env: *Env) st
 /// ever pinned it to either kind—to `required`, the zero-cost kind, by
 /// ordinary unification. After this sweep a MONOMORPHIC module-level type can
 /// no longer carry a literal-minted flex kind, so the read boundaries
-/// (TypeWriter rendering, checked-artifact publication, canonical-key
+/// (TypeWriter rendering, checked-module publication, canonical-key
 /// writing) read one committed fact instead of each re-applying a
 /// flex-means-required convention.
 ///
@@ -38892,7 +38892,7 @@ fn checkPendingDefaults(self: *Self, env: *Env) std.mem.Allocator.Error!void {
             // Diagnostic recovery after the reported problem: record the
             // rejection explicitly (see `rejected_default_exprs`), so the
             // residue walk skips this default and the retirement sweep in
-            // `checkDefaultRestrictions` replaces it before the artifact
+            // `checkDefaultRestrictions` replaces it before the module
             // boundary. The default is not unified against the field type:
             // it is already rejected, and the judgment below must not see
             // its residue as the field's.
@@ -39098,7 +39098,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // reaches the shared body through the ordinary reference edge.
             .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => {},
             // A where-method use carries a complete structural copy map, but
-            // only to relate callable identities during checked-artifact construction.
+            // only to relate callable identities during checked-module construction.
             // It has no child dispatch requirements and is not an edge in the default walk.
             .where_method_use => {},
         }
@@ -39183,7 +39183,7 @@ fn defaultWasRejected(self: *const Self, pending: PendingDefaultCheck) bool {
 }
 
 /// Error recovery for one rejected default (its problem is already
-/// reported): the checked-module pipeline still builds an artifact after
+/// reported): the checked-module pipeline still builds a module after
 /// type errors so it can render diagnostics, so the default expression must
 /// be replaced with a runtime error before that boundary—otherwise
 /// post-check lowering materializes the rejected default (forever for a
@@ -39378,7 +39378,7 @@ fn rejectDefaultParameterConstraint(
     } });
     // Explicit rejection evidence (see `rejected_default_exprs`): the
     // residue walk skips this default and the retirement sweep in
-    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    // `checkDefaultRestrictions` replaces it before the module boundary.
     try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
 }
 
@@ -39400,7 +39400,7 @@ fn rejectDefaultParameterAliasing(
     } });
     // Explicit rejection evidence (see `rejected_default_exprs`): the
     // residue walk skips this default and the retirement sweep in
-    // `checkDefaultRestrictions` replaces it before the artifact boundary.
+    // `checkDefaultRestrictions` replaces it before the module boundary.
     try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
 }
 
@@ -41892,9 +41892,9 @@ fn unifyEquivalentGeneralizedCallables(self: *Self, retained_fn_var: Var, duplic
     // existing `.err` stopped unification BEFORE the relation was established
     // (src/check/unify.zig:130-132), and is accepted for diagnostic recovery
     // only. Committing on it would make two callables one relation on the
-    // strength of a unification that never happened, and the checked-artifact
+    // strength of a unification that never happened, and the checked-module
     // side treats this probe's class as the equality authority
-    // (`where_method_use_by_fn_root`, src/check/checked_artifact.zig:17985).
+    // (`where_method_use_by_fn_root`, src/check/checked_module.zig:17985).
     if (result.isEstablished()) {
         try probe.commit();
         return true;
@@ -47119,7 +47119,7 @@ fn instantiateDispatchTargetMethodVar(
 
     // A target that reused an in-flight cycle var performed no instantiation,
     // but its checked scheme still owns the nested evidence contract. Publish
-    // an explicit zero-pair edge so checked-artifact construction receives the
+    // an explicit zero-pair edge so checked-module construction receives the
     // exact selected scheme root instead of attempting to infer it later.
     const record_scheme_root = cycle_method_expr_var orelse method_type_var;
     var target_requires_record = predeclared_annotation == null and
@@ -56312,7 +56312,7 @@ fn hasReusableGeneratedCodecCall(
 /// Instantiate a generated codec's selected method scheme while publishing the
 /// same explicit target-evidence edge that a source-level dispatch call would
 /// produce. `evidence_var` is the exact generated callable relation and is the
-/// durable key consumed by checked-artifact publication.
+/// durable key consumed by checked-module publication.
 fn instantiateGeneratedCodecMethodTarget(
     self: *Self,
     method_lookup: StaticDispatchMethodBinding,

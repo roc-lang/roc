@@ -28,7 +28,7 @@ const StoredFn = @import("stored_fn.zig");
 const ConstSchema = const_schema.ConstSchema;
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExprId = check.CheckedBodies.ExprId;
 const PatternId = check.CheckedBodies.PatternId;
 const checked_names = check.CheckedNames;

@@ -13,7 +13,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const AnyAll = collections.AnyAll;
 const names = check.CheckedNames;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const GuardedList = collections.GuardedList;
 

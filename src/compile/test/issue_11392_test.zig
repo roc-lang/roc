@@ -1,5 +1,5 @@
 //! Regression tests for issue #11392: `roc build` panicked demanding the
-//! executable root's checked artifact after import resolution rejected one of
+//! executable root's checked module after import resolution rejected one of
 //! that root's imports.
 //! repro for https://github.com/roc-lang/roc/issues/11392
 //!
@@ -88,7 +88,7 @@ const platform_files = [_]File{
 /// What finalization produced for one fixture.
 const Outcome = struct {
     gpa: std.mem.Allocator,
-    /// True when the app root published a complete checked artifact, which is
+    /// True when the app root published a complete checked module, which is
     /// exactly what the panic in this issue reported as missing.
     app_root_published: bool,
     report_titles: std.ArrayList([]const u8),
@@ -118,15 +118,15 @@ const Outcome = struct {
     }
 };
 
-/// Whether the app package's root module published a checked artifact. This is
-/// the exact fact `Coordinator.rootCheckedArtifact` panicked over when the app
+/// Whether the app package's root module published a checked module. This is
+/// the exact fact `Coordinator.rootCheckedModule` panicked over when the app
 /// module had been completed with failure instead of checked.
 fn appRootPublished(coord: *Coordinator) bool {
     const app_package_name = coord.app_package_name orelse return false;
     const pkg = coord.packages.get(app_package_name) orelse return false;
     const root_id = pkg.root_module_id orelse return false;
     const mod = pkg.getModule(root_id) orelse return false;
-    return mod.checkedArtifact() != null;
+    return mod.checkedModule() != null;
 }
 
 /// Stage `files` alongside the shared platform, compile `entry_rel` as an app,
@@ -173,7 +173,7 @@ fn compileApp(gpa: std.mem.Allocator, files: []const File, entry_rel: []const u8
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
     try coord.coordinatorLoop();
     // `.executable_artifacts` is the mode a build uses. It reaches the app
-    // root's checked artifact, which a failed app module would not have.
+    // root's checked module, which a failed app module would not have.
     try coord.finishCheckedProgram(.executable_artifacts);
 
     var report_titles = std.ArrayList([]const u8).empty;
@@ -218,7 +218,7 @@ test "issue 11392: a private package import leaves the app root published" {
     defer outcome.deinit();
 
     if (!outcome.app_root_published) {
-        std.debug.print("app root produced no checked artifact; reports:\n", .{});
+        std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
     try std.testing.expect(outcome.app_root_published);
@@ -257,7 +257,7 @@ test "issue 11392: a relative import escaping the package root leaves the app ro
     defer outcome.deinit();
 
     if (!outcome.app_root_published) {
-        std.debug.print("app root produced no checked artifact; reports:\n", .{});
+        std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
     try std.testing.expect(outcome.app_root_published);
@@ -289,7 +289,7 @@ test "issue 11392: a rejected import does not reject its own exposed items' type
     defer outcome.deinit();
 
     if (!outcome.app_root_published) {
-        std.debug.print("app root produced no checked artifact; reports:\n", .{});
+        std.debug.print("app root produced no checked module; reports:\n", .{});
         outcome.printTitles();
     }
     try std.testing.expect(outcome.app_root_published);

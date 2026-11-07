@@ -20,7 +20,7 @@ const body_mod = @import("body.zig");
 const match_tree = @import("../match_tree.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const CIR = can.CIR;
 const LIR = lir_core.LIR;
 const LocalId = LIR.LocalId;

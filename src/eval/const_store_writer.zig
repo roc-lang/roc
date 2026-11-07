@@ -17,7 +17,7 @@ const Allocator = std.mem.Allocator;
 
 /// Allocation failures and terminal invalid callable registry reports.
 pub const Error = Allocator.Error || error{RuntimeError};
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 const const_store = check.ConstStore;
 const LirProgram = lir.Program;
 const RocList = builtins.list.RocList;
@@ -88,7 +88,7 @@ pub const Writer = struct {
 
     pub fn init(
         allocator: Allocator,
-        module: *checked.CheckedModuleArtifact,
+        module: *checked.CheckedModule,
         program: *const LirProgram.Result,
     ) Writer {
         return initStore(allocator, &module.evaluation.const_store, &module.evaluation.const_store.type_names, program);
@@ -1356,7 +1356,7 @@ test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
-fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Error!checked.CheckedModuleArtifact {
+fn initTestModule(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Error!checked.CheckedModule {
     var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
     const module_name = try names.internModuleName("Test");
     return .{
@@ -1375,7 +1375,7 @@ fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.
     };
 }
 
-fn deinitTestArtifact(artifact: *checked.CheckedModuleArtifact, allocator: Allocator) void {
+fn deinitTestModule(artifact: *checked.CheckedModule, allocator: Allocator) void {
     artifact.evaluation.deinit(allocator);
     artifact.canonical_names.deinit();
 }
@@ -1406,8 +1406,8 @@ test "const store writer pointer memoization is scoped to one root" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
+    var artifact = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&artifact, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1452,8 +1452,8 @@ test "const store writer stores every NaN as Roc's one NaN" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
+    var artifact = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&artifact, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1486,8 +1486,8 @@ test "const store writer keeps the capacity a list and a heap string were evalua
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
+    var artifact = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&artifact, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();
@@ -1529,8 +1529,8 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     var module_env = try can.ModuleEnv.init(testing.allocator, "");
     defer module_env.deinit();
 
-    var artifact = try initTestArtifact(testing.allocator, &module_env);
-    defer deinitTestArtifact(&artifact, testing.allocator);
+    var artifact = try initTestModule(testing.allocator, &module_env);
+    defer deinitTestModule(&artifact, testing.allocator);
 
     var program = try LirProgram.Result.init(testing.allocator, .u64);
     defer program.deinit();

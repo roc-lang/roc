@@ -3471,7 +3471,7 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = build_env.displayNameForPackage(mod.package_name),
                 .source_env = mod.checked.env,
-                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
+                .source_identity = &mod.checked.checked_module.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             });
@@ -3489,7 +3489,7 @@ fn processDocsSnapshot(
                 .public_name = mod.name,
                 .package_name = display_pkg_name,
                 .source_env = mod.checked.env,
-                .source_identity = &mod.checked.checked_artifact.module_identity.stable_hash,
+                .source_identity = &mod.checked.checked_module.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = mod.public_order,
             } else null,
@@ -3717,9 +3717,9 @@ fn printHashMismatchTable(existing: []const u8, new: []const u8) void {
 }
 
 fn snapshotRootRequestByOrder(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
     order: u32,
-) std.mem.Allocator.Error!check.CheckedArtifact.RootRequest {
+) std.mem.Allocator.Error!check.Checked.RootRequest {
     for ((try root_artifact.rootRequests()).requests) |request| {
         if (request.order == order) return request;
     }
@@ -3727,8 +3727,8 @@ fn snapshotRootRequestByOrder(
 }
 
 fn snapshotProvidedEntrypointName(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    root: check.CheckedArtifact.RootRequest,
+    root_artifact: *const check.Checked.CheckedModule,
+    root: check.Checked.RootRequest,
 ) Allocator.Error![]const u8 {
     const def_idx = switch (root.source) {
         .def => |def| def,
@@ -3756,7 +3756,7 @@ fn snapshotProvidedEntrypointName(
 
 fn snapshotNativeEntrypoints(
     allocator: Allocator,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]backend.Entrypoint {
     const root_procs = lowered.lir_result.root_procs.items;
@@ -3812,7 +3812,7 @@ fn snapshotNativeEntrypoints(
 }
 
 fn snapshotHasProvidedProcedureExports(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
 ) Allocator.Error!bool {
     for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
@@ -3824,7 +3824,7 @@ fn snapshotHasProvidedProcedureExports(
 }
 
 fn snapshotHasProvidedDataExports(
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    root_artifact: *const check.Checked.CheckedModule,
 ) Allocator.Error!bool {
     for ((try root_artifact.providedExports()).exports) |provided| {
         switch (provided) {
@@ -3836,7 +3836,7 @@ fn snapshotHasProvidedDataExports(
 }
 
 /// Process a dev_object snapshot: parse multi-file source, compile with BuildEnv,
-/// lower through checked artifacts to LIR, cross-compile for all targets, and
+/// lower through checked modules to LIR, cross-compile for all targets, and
 /// record blake3 hashes.
 fn processDevObjectSnapshot(
     allocator: Allocator,
@@ -3881,10 +3881,10 @@ fn processDevObjectSnapshot(
         return false;
     }
 
-    const root_artifact = (try build_env.executableRootCheckedArtifact());
-    const imported_artifacts = try build_env.collectImportedArtifactViews(allocator, root_artifact);
+    const root_artifact = (try build_env.executableRootCheckedModule());
+    const imported_artifacts = try build_env.collectImportedModuleViews(allocator, root_artifact);
     defer allocator.free(imported_artifacts);
-    const relation_artifacts = try build_env.collectRelationArtifactViews(allocator, root_artifact);
+    const relation_artifacts = try build_env.collectRelationModuleViews(allocator, root_artifact);
     defer allocator.free(relation_artifacts);
 
     const has_procedure_exports = try snapshotHasProvidedProcedureExports(root_artifact);
@@ -3919,7 +3919,7 @@ fn processDevObjectSnapshot(
             var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
                 allocator,
                 .{
-                    .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 .{
@@ -3944,7 +3944,7 @@ fn processDevObjectSnapshot(
             const static_data_exports = compile.static_data_exports.buildStaticData(
                 allocator,
                 .{
-                    .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+                    .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_artifacts),
                     .imports = imported_artifacts,
                 },
                 &lowered,
@@ -4406,7 +4406,7 @@ fn compileSnapshotReplInspectedModule(
             .{
                 .env = bm.builtin_module.env,
                 .indices = bm.builtin_indices,
-                .artifact = &bm.checked_artifact,
+                .artifact = &bm.checked_module,
             },
             null,
         )

@@ -29,7 +29,7 @@ const Body = @import("body.zig");
 const layouts_mod = @import("layouts.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExprId = check.CheckedBodies.ExprId;
 const static_dispatch = check.StaticDispatchRegistry;
 const LIR = lir_core.LIR;

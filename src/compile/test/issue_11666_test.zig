@@ -49,7 +49,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
         var packages = coord.packages.iterator();
         while (packages.next()) |package| {
             for (package.value_ptr.*.modules.items) |*module| {
-                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedArtifact().?;
+                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedModule().?;
             }
         }
         return error.TestUnexpectedResult;

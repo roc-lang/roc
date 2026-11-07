@@ -59,9 +59,9 @@ pub const Field = struct {
 pub const CaptureField = struct {
     symbol: Common.Symbol,
     binder: ?check.CheckedBodies.BinderId,
-    capture_id: ?check.CheckedModule.CaptureId = null,
-    checked_capture_id: ?check.CheckedModule.CaptureId = null,
-    capture_kind: check.CheckedModule.ConstCaptureKind = .lexical,
+    capture_id: ?check.Checked.CaptureId = null,
+    checked_capture_id: ?check.Checked.CaptureId = null,
+    capture_kind: check.Checked.ConstCaptureKind = .lexical,
     /// Type the function body observes when it reads this capture.
     ty: TypeId,
     /// Type stored in the capture record field.

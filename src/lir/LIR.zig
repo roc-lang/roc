@@ -413,11 +413,11 @@ pub const ExpectSite = struct {
     region: base.Region,
 };
 
-pub const CheckedExhaustivenessSiteId = check.CheckedModule.CheckedExhaustivenessSiteId;
+pub const CheckedExhaustivenessSiteId = check.Checked.CheckedExhaustivenessSiteId;
 
 /// Dense id of one checked module inside a single lowering's module set.
 ///
-/// `check.CheckedModule.ModuleId` is a large structural key, and the
+/// `check.Checked.ModuleId` is a large structural key, and the
 /// module-local checked ids a post-check IR retains (compile-time roots,
 /// exhaustiveness sites) name nothing without their owner. Monotype lowering
 /// therefore publishes the lowering's checked modules once, as the
@@ -465,7 +465,7 @@ pub const LiteralRootId = enum(u32) { _ };
 /// The producer of one compile-time value: a checked compile-time root of its
 /// module, or a literal root of the lowered program.
 pub const ComptimeProducer = union(enum) {
-    checked: check.CheckedModule.ComptimeRootKey,
+    checked: check.Checked.ComptimeRootKey,
     literal: LiteralRootId,
 
     pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {

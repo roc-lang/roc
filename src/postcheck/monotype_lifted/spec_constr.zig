@@ -679,7 +679,7 @@ const NominalValue = struct {
 };
 
 const CaptureValue = struct {
-    id: check.CheckedModule.CaptureId,
+    id: check.Checked.CaptureId,
     value: Value,
 };
 
@@ -14998,7 +14998,7 @@ const Cloner = struct {
         return .{ .bytes = hasher.finalResult() };
     }
 
-    fn callableCaptureValueForId(values: []const CaptureValue, id: check.CheckedModule.CaptureId) ?Value {
+    fn callableCaptureValueForId(values: []const CaptureValue, id: check.Checked.CaptureId) ?Value {
         for (values) |capture_value| {
             if (capture_value.id == id) return capture_value.value;
         }
@@ -17729,7 +17729,7 @@ test "call-pattern scans direct call and function reference capture operands" {
         .target = unit_ty,
     } } });
     const captures = try program.addCaptureOperandSpan(&.{.{
-        .id = check.CheckedModule.CaptureId.generatedLift(0),
+        .id = check.Checked.CaptureId.generatedLift(0),
         .value = return_expr,
     }});
     const callee = try program.addFn(.{
@@ -19061,7 +19061,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
         .data = .{ .local = nested_capture_local },
     });
     const nested_operands = try program.addCaptureOperandSpan(&.{.{
-        .id = check.CheckedModule.CaptureId.fromBinder(nested_binder),
+        .id = check.Checked.CaptureId.fromBinder(nested_binder),
         .value = nested_capture_value,
     }});
     const nested_fn_ref = try program.addExpr(.{
@@ -19104,7 +19104,7 @@ test "issue 10168 SpecConstr clones every capture when nested cloning grows the 
     // independent of ArrayList's current growth policy.
     while (program.capture_operands.len() < program.capture_operands.capacity()) {
         _ = try program.addCaptureOperandSpan(&.{.{
-            .id = check.CheckedModule.CaptureId.generatedLift(3),
+            .id = check.Checked.CaptureId.generatedLift(3),
             .value = second_value,
         }});
     }

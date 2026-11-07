@@ -3872,7 +3872,7 @@ always carries an error-severity report. A build without error reports has
 therefore completed every module successfully, and successful completion always
 includes the module's CheckedModule. Post-build consumers of checked modules
 (documentation, public API extraction) run only for builds without error
-reports, and they read checked modules through `ModuleState.checkedModule`,
+reports, and they read checked modules through `ModuleState.checkedModuleData`,
 whose CheckedModule is not optional.
 
 Workers carry source-read and type-check operational errors through the existing
@@ -4204,7 +4204,7 @@ store, the inference output, and the evaluation output
 them through the same function that opens it after checking
 (`openCheckedModule`), against the same imports: its identity and key, its
 name store and its synthesized-type store are recreated, never read from the
-entry. Derived facts (canonical type keys, evidence, synthesized templates,
+entry. Derived data (canonical type keys, evidence, synthesized templates,
 demand vectors, layouts) are never cached; after a hit, each is recomputed on
 its first demand through its slot ("On-Demand Analyses And Write-Once
 Slots"). The baked Builtin module is the same three parts: its `ModuleEnv`
@@ -5142,6 +5142,18 @@ roots), and every reader is a view over the parts above:
   needs to know which;
 - an expression id is a CIR node id;
 - a template is a definition id or a promoted local procedure id.
+
+Every embedder (the build coordinator, the builtin compiler, the evaluation
+harness, the REPL and the playground) makes a checked module one way, by
+opening it (`openCheckedModule`) from its `ModuleEnv`, its imports and its
+inference and evaluation outputs: right after checking it, from a cache entry,
+or from the baked Builtin outputs. Opening computes the module's identity and
+key (`CheckedModuleIdentity`), interns its names, creates the synthesized types
+its sealed store's readers need and sets up its analyses; every other fact is
+a slot. Evaluating a freshly opened module's compile-time roots is a separate
+step that writes only the evaluation output: `evaluateOpenedModule` for an
+embedder that evaluates one module at a time, and program finalization for the
+build coordinator, which evaluates the roots its command demands.
 
 A checked module is either complete or unavailable to later stages. Later
 stages read checked modules but never mutate checked source data, the sealed
@@ -6425,9 +6437,10 @@ directly; they must not infer strictness from checked template references,
 rebuild it from CIR, or treat a missing relation as an empty one.
 
 A checked module must not permanently store a hoisted-root dependency graph or
-per-expression dependency metadata. The durable checked data is the compile-time
-roots, their sorted compile-time request order, their `ConstStore` payloads, and
-sparse root lookup indexes.
+per-expression dependency metadata. The durable checked data is the selected
+roots in `ModuleEnv` and their `ConstStore` payloads in the evaluation output;
+the compile-time root table, its sorted request order and its lookup indexes
+are slots computed from them.
 
 Checked module caches persist that same sorted selected-root list. On cache
 miss, checking computes the list once from explicit checked data while it is

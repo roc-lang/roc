@@ -203,23 +203,23 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
 
     // Defense in depth: even with no blocking reports, the artifact may be
     // missing in some unexpected state. Bail cleanly instead of trapping in
-    // the asserting variant (compile_build.zig:executableRootCheckedArtifact).
+    // the asserting variant (compile_build.zig:executableRootCheckedModule).
     const root_semantic = (try build_env.getExecutableRootSemanticData()) orelse {
-        diag.step("executableRootCheckedArtifact", error.CompilationFailed);
+        diag.step("executableRootCheckedModule", error.CompilationFailed);
         return error.CompilationFailed;
     };
-    const root_artifact = root_semantic.checked_artifact orelse {
-        diag.step("executableRootCheckedArtifact", error.CompilationFailed);
+    const root_artifact = root_semantic.checked_module orelse {
+        diag.step("executableRootCheckedModule", error.CompilationFailed);
         return error.CompilationFailed;
     };
 
-    const import_views = build_env.collectImportedArtifactViews(allocator, root_artifact) catch |err| {
-        diag.step("collectImportedArtifactViews", err);
+    const import_views = build_env.collectImportedModuleViews(allocator, root_artifact) catch |err| {
+        diag.step("collectImportedModuleViews", err);
         return err;
     };
     defer allocator.free(import_views);
-    const relation_views = build_env.collectRelationArtifactViews(allocator, root_artifact) catch |err| {
-        diag.step("collectRelationArtifactViews", err);
+    const relation_views = build_env.collectRelationModuleViews(allocator, root_artifact) catch |err| {
+        diag.step("collectRelationModuleViews", err);
         return err;
     };
     defer allocator.free(relation_views);
@@ -233,7 +233,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(
         allocator,
         .{
-            .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+            .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_views),
             .imports = import_views,
         },
         .{ .requests = lir_roots },
@@ -258,7 +258,7 @@ pub fn runEcho(opts: RunOptions) RunEchoError!u8 {
         return err;
     };
     const image_data = try eval.buildStaticDataForWidth(allocator, .{
-        .root = try check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_views),
+        .root = try check.Checked.loweringViewWithRelations(root_artifact, relation_views),
         .imports = import_views,
     }, &lowered, lowered.target_usize, .{});
     defer eval.deinitStaticData(allocator, image_data);

@@ -19,7 +19,7 @@ const roc_target = @import("roc_target");
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const RocTarget = roc_target.RocTarget;
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 
 /// Individual link item from a targets section.
 /// Can be a file path (relative to files/ directory) or a special identifier.
@@ -358,7 +358,7 @@ pub const TargetsConfigDiagnostic = union(enum) {
 };
 
 /// Link specification for a single target.
-/// Contains the artifact kind and the ordered list of items to link for this target.
+/// Contains the module kind and the ordered list of items to link for this target.
 pub const TargetLinkSpec = struct {
     target: RocTarget,
     output: OutputKind,
@@ -385,7 +385,7 @@ fn freeLinkSpec(allocator: Allocator, spec: TargetLinkSpec) void {
     allocator.free(spec.items);
 }
 
-/// Kind of artifact a target entry produces.
+/// Kind of module a target entry produces.
 pub const OutputKind = enum {
     /// Linked executable. For wasm32, a command module (has an entry).
     exe,
@@ -440,7 +440,7 @@ pub const TargetsConfig = struct {
     pub fn resolveCheckedConstants(
         self: TargetsConfig,
         allocator: Allocator,
-        checked_module: *const checked.CheckedModuleArtifact,
+        checked_module: *const checked.CheckedModule,
         diagnostic: *TargetConfigResolveDiagnostic,
     ) error{ TargetConfigInvalid, OutOfMemory }!void {
         try resolveLinkTypeCheckedConstants(allocator, checked_module, @constCast(self.targets), diagnostic);
@@ -894,7 +894,7 @@ pub const TargetFileValidationIssue = union(enum) {
 
 fn resolveLinkTypeCheckedConstants(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     specs: []TargetLinkSpec,
     diagnostic: *TargetConfigResolveDiagnostic,
 ) error{ TargetConfigInvalid, OutOfMemory }!void {
@@ -910,7 +910,7 @@ fn resolveLinkTypeCheckedConstants(
 
 fn resolveWasmCheckedConstants(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     wasm: *WasmTargetConfig,
@@ -925,7 +925,7 @@ fn resolveWasmCheckedConstants(
 
 fn resolveWasmImportMemoryField(
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
@@ -953,7 +953,7 @@ fn resolveWasmImportMemoryField(
 fn resolveWasmUnsignedField(
     comptime T: type,
     allocator: Allocator,
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     target: RocTarget,
     output: OutputKind,
     field_name: []const u8,
@@ -986,7 +986,7 @@ fn resolveWasmUnsignedField(
 }
 
 fn topLevelConstNode(
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     ident: []const u8,
     reason: *TargetConfigResolveReason,
 ) Allocator.Error!?checked.ConstNodeId {
@@ -1018,7 +1018,7 @@ fn topLevelConstNode(
     return null;
 }
 
-fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, node: checked.ConstNodeId) ?WasmImportMemory {
+fn constWasmImportMemory(checked_module: *const checked.CheckedModule, node: checked.ConstNodeId) ?WasmImportMemory {
     const value = checked_module.evaluation.const_store.get(node);
     if (value == .nominal) return constWasmImportMemory(checked_module, value.nominal.backing);
     if (value != .tag or value.tag.payloads.len != 0) return null;
@@ -1026,7 +1026,7 @@ fn constWasmImportMemory(checked_module: *const checked.CheckedModuleArtifact, n
 }
 
 fn constUnsigned(
-    checked_module: *const checked.CheckedModuleArtifact,
+    checked_module: *const checked.CheckedModule,
     node: checked.ConstNodeId,
     reason: *TargetConfigResolveReason,
 ) ?usize {

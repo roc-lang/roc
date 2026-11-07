@@ -145,7 +145,7 @@ test "issue 11236: independent valid code still lowers alongside a rejected bind
     }
 }
 
-fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArtifact) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
+fn expectRejectedBinding(artifact: *const check.Checked.CheckedModule) error{ TestUnexpectedResult, TestExpectedEqual, OutOfMemory }!void {
     var rejected: usize = 0;
     for ((try artifact.checkedTables()).top_level_procedure_bindings.bindings.items) |binding| {
         if (binding.body != .checked_error) continue;
@@ -211,9 +211,9 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
         if (std.mem.eql(u8, report.title, "Type Mismatch")) mismatch = true;
     };
     try std.testing.expect(mismatch);
-    const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(bad_path).?.semanticData().?.checked_module.?;
     try expectRejectedBinding(artifact);
-    const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_artifact.?;
+    const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_module.?;
     try std.testing.expectEqual(@as(usize, 1), (try alias.exportRows()).procedure_bindings.len);
     try std.testing.expect((try alias.exportRows()).procedure_bindings[0].body == .checked_error);
     // The alias's evaluation reaches the rejected binding and stores the crash.
@@ -221,7 +221,7 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
         try std.testing.expect(alias.evaluation.rootPayload(root.id) == .const_node);
         try std.testing.expect(alias.evaluation.const_store.get(alias.evaluation.rootPayload(root.id).const_node) == .checked_error);
     }
-    const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const importer = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_use = false;
     const importer_bodies = try importer.bodies();
     const importer_store = &importer.moduleEnvConst().store;
@@ -244,7 +244,7 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
     defer arena.deinit();
     const CompactWriter = collections.CompactWriter;
     var writer = CompactWriter.init();
-    const Serialized = check.CheckedArtifact.CheckedModuleArtifact.Serialized;
+    const Serialized = check.Checked.CheckedModule.Serialized;
     const header = try writer.appendAlloc(arena.allocator(), Serialized);
     try header.serialize(artifact, arena.allocator(), &writer);
     const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
@@ -252,12 +252,12 @@ test "issue 11236: rejection survives exports and stored outputs without callabl
     // `Bad` imports only Builtin, which its module set holds first.
     std.debug.assert(artifact.direct_import_module_keys.len == 1);
     const builtin_key = artifact.direct_import_module_keys[0];
-    const imports = [_]check.CheckedArtifact.PublishImportArtifact{.{
+    const imports = [_]check.Checked.CheckedImport{.{
         .module_idx = 0,
         .key = builtin_key,
         .view = build.moduleResolver().resolve(builtin_key.digest()).?,
     }};
-    var loaded = try check.CheckedArtifact.openCheckedModule(gpa, .{
+    var loaded = try check.Checked.openCheckedModule(gpa, .{
         .module_env_storage = artifact.module_env,
         .module_idx = artifact.module_identity.module_idx,
         .io = io,

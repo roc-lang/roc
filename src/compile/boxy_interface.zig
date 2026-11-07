@@ -19,8 +19,8 @@ const object_cache = @import("boxy_object_cache.zig");
 
 const Allocator = std.mem.Allocator;
 const Sha256 = base.Sha256;
-const CheckedArtifact = check.CheckedArtifact;
-const Artifact = CheckedArtifact.CheckedModuleArtifact;
+const Checked = check.Checked;
+const Artifact = Checked.CheckedModule;
 const ConstStore = check.ConstStore;
 const canonical = check.CanonicalNames;
 const ModuleNames = eval.CompileTimeFinalization.ModuleNames;
@@ -40,9 +40,9 @@ pub const Digests = struct {
 
     /// The digests of `artifacts`, every module of the link.
     pub fn init(gpa: Allocator, artifacts: []const *const Artifact) Allocator.Error!Digests {
-        const views = try gpa.alloc(CheckedArtifact.ImportedModuleView, artifacts.len);
+        const views = try gpa.alloc(Checked.ImportedModuleView, artifacts.len);
         defer gpa.free(views);
-        for (artifacts, views) |artifact, *view| view.* = CheckedArtifact.importedView(artifact);
+        for (artifacts, views) |artifact, *view| view.* = Checked.importedView(artifact);
         var digests: Digests = .{ .gpa = gpa, .names = try ModuleNames.fromViews(gpa, views) };
         errdefer digests.deinit();
         for (artifacts) |artifact| _ = try digests.add(artifact);
@@ -54,7 +54,7 @@ pub const Digests = struct {
         const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
         if (entry.found_existing) return false;
         entry.value_ptr.* = artifact;
-        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(CheckedArtifact.importedView(artifact)));
+        try self.module_names.put(self.gpa, artifact.key.bytes, self.names.of(Checked.importedView(artifact)));
         return true;
     }
 
@@ -157,7 +157,7 @@ pub const Digests = struct {
         hasher.update("roc.boxy.object_input.v1");
         hasher.update(&artifact.source_hash);
         hasher.update(&self.nameOf(artifact.key.bytes));
-        hasher.update(&CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity));
+        hasher.update(&Checked.checkingContextPolicyHash(artifact.checking_context_identity));
         try self.hashStoredValues(&hasher, artifact, .every_root);
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
@@ -186,7 +186,7 @@ pub const Digests = struct {
             &std.fmt.bytesToHex(digest[0..8], .lower),
             &std.fmt.bytesToHex(artifact.source_hash[0..8], .lower),
             &std.fmt.bytesToHex(self.nameOf(artifact.key.bytes)[0..8], .lower),
-            &std.fmt.bytesToHex(CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity)[0..8], .lower),
+            &std.fmt.bytesToHex(Checked.checkingContextPolicyHash(artifact.checking_context_identity)[0..8], .lower),
             &std.fmt.bytesToHex(values.finalResult()[0..8], .lower),
             &std.fmt.bytesToHex(imports.finalResult()[0..8], .lower),
             &std.fmt.bytesToHex(exports.finalResult()[0..8], .lower),
@@ -277,8 +277,8 @@ pub const Digests = struct {
 
     /// How an importer reads a constant: the value stored for it, or the
     /// entry procedure of one compile-time evaluation did not store.
-    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
-        const value = CheckedArtifact.ConstTemplateValue.of(template, &artifact.evaluation);
+    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: Checked.ConstTemplate) Allocator.Error!void {
+        const value = Checked.ConstTemplateValue.of(template, &artifact.evaluation);
         hashTag(hasher, @tagName(std.meta.activeTag(value)));
         switch (value) {
             .eval_template => |eval_template| try self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
@@ -310,7 +310,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
+    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: Checked.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
         const payload = artifact.evaluation.rootPayload(root.id);
         hashTag(hasher, @tagName(std.meta.activeTag(payload)));
@@ -331,7 +331,7 @@ const ValueContext = struct {
     digests: *const Digests,
     artifact: *const Artifact,
 
-    pub fn moduleDigest(self: ValueContext, module: check.CheckedArtifact.CheckedModuleDigest) Digest {
+    pub fn moduleDigest(self: ValueContext, module: check.Checked.CheckedModuleDigest) Digest {
         return self.digests.nameOf(module.bytes);
     }
 

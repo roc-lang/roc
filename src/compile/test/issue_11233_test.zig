@@ -1,6 +1,6 @@
 //! Regression test for issue #11233: a chained range under a unary operator must
 //! report the chained-range error instead of leaving an unresolved associated
-//! lookup for checked artifact publication.
+//! lookup for checked module publication.
 //! repro for https://github.com/roc-lang/roc/issues/11233
 
 const std = @import("std");

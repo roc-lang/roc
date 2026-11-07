@@ -55,7 +55,7 @@ const Common = @import("common.zig");
 const Allocator = std.mem.Allocator;
 /// The checked modules a lowering sees.
 pub const CheckedModules = Common.CheckedModules;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const checked_names = check.CanonicalNames;
 

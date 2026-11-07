@@ -19,12 +19,12 @@ const check = @import("check");
 const canonicalized_cache_entry = @import("canonicalized_cache_entry.zig");
 const Constants = @import("cache_config.zig").Constants;
 
-const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
-const PlatformPairing = check.CheckedArtifact.PlatformPairing;
+const CheckedModule = check.Checked.CheckedModule;
+const PlatformPairing = check.Checked.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One fully checked module: an env body and an artifact body.
+    /// One fully checked module: an env body and a module body.
     checked_module,
     /// Solved source and checker-owned publication inputs, before evaluation.
     inference,
@@ -58,12 +58,12 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout },
+            &.{ CheckedModule.SERIALIZED_VERSION_HASH, module_env_layout },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
+            &.{ CheckedModule.SERIALIZED_VERSION_HASH, PlatformPairing.SERIALIZED_VERSION_HASH },
         ),
         .canonicalized_module => compose(
             "roc-canonicalized-module-entry-v1",

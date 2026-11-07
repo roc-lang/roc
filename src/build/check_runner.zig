@@ -1225,7 +1225,7 @@ fn checkTestAssetCoverage(ctx: Context) !void {
 }
 
 fn checkBakes(ctx: Context) !void {
-    const names = [_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.artifact.bin" };
+    const names = [_][]const u8{ "Builtin.bin", "builtin_indices.zig", "Builtin.outputs.bin" };
     var baseline: [names.len][]const u8 = undefined;
     for (0..3) |bake| {
         for (names, 0..) |name, index| {

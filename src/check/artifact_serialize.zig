@@ -1,4 +1,4 @@
-//! Shared serialization helpers for `CheckedModuleArtifact` sub-stores.
+//! Shared serialization helpers for `CheckedModule` sub-stores.
 //!
 //! These let a store keep its in-memory `[]T` representation unchanged while
 //! still serializing via the CompactWriter offset-relocation scheme: a slice of
@@ -27,7 +27,7 @@ const CompactWriter = collections.CompactWriter;
 /// (such a type needs the transform-B side-list treatment instead).
 pub fn assertRelocatablePod(comptime T: type) void {
     comptime {
-        // CheckedModuleArtifact.Serialized is intentionally a large recursive
+        // CheckedModule.Serialized is intentionally a large recursive
         // union. Validate its complete shape rather than depending on Zig's
         // default comptime branch quota.
         @setEvalBranchQuota(1_000_000);

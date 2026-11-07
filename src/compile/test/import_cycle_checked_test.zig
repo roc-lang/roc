@@ -82,7 +82,7 @@ const CycleBuild = struct {
         const path = try self.tmp_dir.dir.realPathFileAlloc(std.testing.io, file_name, gpa);
         defer gpa.free(path);
         const mod = self.build_env.findModuleByPath(path) orelse return error.TestUnexpectedResult;
-        try std.testing.expect(mod.checkedModule() != null);
+        try std.testing.expect(mod.checkedModuleData() != null);
     }
 };
 

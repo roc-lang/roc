@@ -8,7 +8,7 @@ pub const SpecializationStrategy = enum(u8) {
     /// before producing LIR.
     lss,
     /// Box closures and type-variable values, pass descriptor/dictionary data
-    /// explicitly, and lower checked artifacts directly to LIR.
+    /// explicitly, and lower checked modules directly to LIR.
     boxy,
 
     pub fn fromCliValue(value: []const u8) ?SpecializationStrategy {

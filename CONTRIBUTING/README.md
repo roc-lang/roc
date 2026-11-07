@@ -155,7 +155,7 @@ separate, put the classification in one comptime-callable function next to the
 producer, make the consumer's arms check it at compile time, and add a parity
 test that drives the producer over every variant (enumerated from the type
 itself) and compares its answer with the classification, naming the variant
-that drifted. `checkedExprDivergence` in `src/check/checked_artifact.zig` and
+that drifted. `checkedExprDivergence` in `src/check/checked_module.zig` and
 its "checked divergence parity" tests are the reference example.
 
 ### Debugging tips

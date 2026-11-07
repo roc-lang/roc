@@ -990,7 +990,7 @@ source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualifie
 /// comparisons ("does this failed statement belong to the finalized
 /// module?") must use these, never names.
 source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identities"),
-/// Checked artifact key bytes of each `LoweringModuleId`, written only through
+/// Checked module key bytes of each `LoweringModuleId`, written only through
 /// `Program.Result`'s lowering-module table, so code generation can name a
 /// statement's owning module in identities that stay meaningful in every
 /// compilation.
@@ -1337,7 +1337,7 @@ pub fn failureMeaning(self: *const Self, stmt: CFStmtId) ?lir_defs.FailureMeanin
     };
 }
 
-/// Checked artifact key bytes of one lowering module.
+/// Checked module key bytes of one lowering module.
 pub fn loweringModuleKey(self: *const Self, module: lir_defs.LoweringModuleId) [32]u8 {
     if (self.body_coordinator) |coordinator| return coordinator.loweringModuleKey(module);
     return self.lowering_module_keys.get(@backingInt(module));

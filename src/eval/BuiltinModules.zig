@@ -15,33 +15,33 @@ const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinModuleView = builtin_static.BuiltinModuleView;
 const BuiltinIndices = CIR.BuiltinIndices;
-const CheckedModuleArtifact = check.CheckedArtifact.CheckedModuleArtifact;
+const CheckedModule = check.Checked.CheckedModule;
 
 /// The Builtin module `env` (the embedded builtin module), opened with the
 /// inference and evaluation outputs the builtin compiler baked: every
 /// compile-time root of Builtin is already complete, so no embedder
 /// evaluates one again. Every thread that reads the module's key slots waits
 /// on them through `io`.
-pub fn bakedArtifact(allocator: Allocator, io: std.Io, env: *can.ModuleEnv) check.CheckedArtifact.OpenBakedBuiltinError!CheckedModuleArtifact {
-    return check.CheckedArtifact.openBakedBuiltin(allocator, io, env, compiled_builtins.builtin_artifact_bin[0..]);
+pub fn bakedBuiltin(allocator: Allocator, io: std.Io, env: *can.ModuleEnv) check.Checked.OpenBakedBuiltinError!CheckedModule {
+    return check.Checked.openBakedBuiltin(allocator, io, env, compiled_builtins.builtin_outputs_bin[0..]);
 }
 
 /// Centralized container for all builtin modules
 pub const BuiltinModules = struct {
     allocator: Allocator,
     /// NON-OWNING handle to the builtin module env. The env wrapper is owned by
-    /// `checked_artifact` through `.static_builtin`; the bytes it views are the
+    /// `checked_module` through `.static_builtin`; the bytes it views are the
     /// compiler executable's static data.
     builtin_module: BuiltinModuleView,
     builtin_indices: BuiltinIndices,
     /// The live Builtin module, whose inference and evaluation outputs alias
     /// static embedded bytes. `deinit` never frees that static backing.
-    checked_artifact: CheckedModuleArtifact,
+    checked_module: CheckedModule,
 
-    pub const InitError = check.CheckedArtifact.OpenBakedBuiltinError || error{ StaleEmbeddedBuiltins, CorruptEmbeddedBuiltins };
+    pub const InitError = check.Checked.OpenBakedBuiltinError || error{ StaleEmbeddedBuiltins, CorruptEmbeddedBuiltins };
 
-    /// Initialize builtin handles over the baked static ModuleEnv and artifact.
-    /// Every thread that reads the builtin artifact's key slots waits on them
+    /// Initialize builtin handles over the baked static ModuleEnv and module.
+    /// Every thread that reads the builtin module's key slots waits on them
     /// through `io`.
     pub fn init(allocator: Allocator, io: std.Io) InitError!BuiltinModules {
         const indices = compiled_builtins.builtinIndices(CIR);
@@ -59,19 +59,19 @@ pub const BuiltinModules = struct {
             try builtin_static.validateBuiltinIndices(builtin_module.env, indices);
         }
 
-        const checked_artifact = try bakedArtifact(allocator, io, builtin_module.env);
+        const checked_module = try bakedBuiltin(allocator, io, builtin_module.env);
 
         return BuiltinModules{
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = indices,
-            .checked_artifact = checked_artifact,
+            .checked_module = checked_module,
         };
     }
 
     /// Clean up the small view objects. Static builtin bytes remain owned by the
     /// compiler executable for the process lifetime.
     pub fn deinit(self: *BuiltinModules) void {
-        self.checked_artifact.deinit(self.allocator);
+        self.checked_module.deinit(self.allocator);
     }
 };

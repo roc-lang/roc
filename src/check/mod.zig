@@ -31,7 +31,8 @@ pub const CheckedTraverse = @import("checked_traverse.zig");
 pub const HoistRoots = @import("can").HoistRoots;
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
-pub const CheckedArtifact = @import("checked_artifact.zig");
+/// The live checked module and the readers and analyses over it.
+pub const Checked = @import("checked_module.zig");
 /// The reader over a checked module's bodies.
 pub const CheckedBodies = @import("checked_bodies.zig");
 /// The body facts a checked module computes on first demand.
@@ -46,8 +47,6 @@ pub const InferenceOutput = @import("inference_output.zig");
 pub const rootLayoutVersionHash = @import("artifact_serialize.zig").rootLayoutVersionHash;
 /// Bounds-check every relocatable marker of a serialized store.
 pub const validateSerialized = @import("artifact_serialize.zig").validateSerialized;
-/// Checked module data exported under the post-check-facing name.
-pub const CheckedModule = CheckedArtifact;
 
 pub const Check = @import("Check.zig");
 pub const TestEnv = @import("test/TestEnv.zig");
@@ -76,7 +75,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("codec_identity.zig"));
     std.testing.refAllDecls(@import("const_store.zig"));
     std.testing.refAllDecls(@import("artifact_serialize.zig"));
-    std.testing.refAllDecls(@import("checked_artifact.zig"));
+    std.testing.refAllDecls(@import("checked_module.zig"));
     std.testing.refAllDecls(@import("checked_bodies.zig"));
     std.testing.refAllDecls(@import("body_analyses.zig"));
     std.testing.refAllDecls(@import("sealed_type_view.zig"));

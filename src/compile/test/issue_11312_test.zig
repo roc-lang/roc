@@ -58,7 +58,7 @@ fn expectRecovery(source: []const u8, imported_source: ?[]const u8, blocked_expr
     }
     try std.testing.expectEqual(@as(usize, 1), mismatches);
 
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_blocked = false;
     var found_good = false;
     var found_fine = false;

@@ -21,7 +21,7 @@ const Type = @import("type.zig");
 
 const Allocator = std.mem.Allocator;
 const GuardedList = collections.GuardedList;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const Ident = base.Ident;

@@ -1,10 +1,10 @@
-//! Builds a `PackageApi` from checked compiler artifacts.
+//! Builds a `PackageApi` from checked compiler modules.
 //!
 //! Public items are enumerated from CIR structure (top-level defs and type
 //! declaration statements carry dotted names like "Taxonomy.Domain.Kingdom"),
 //! applying the type-module visibility rule: in a type module only the type
 //! matching the module name and its associated items are public. Every item's
-//! type comes from the checked artifact—the canonical scheme/root published
+//! type comes from the checked module—the canonical scheme/root published
 //! at check time—never from source annotations or rendered strings.
 //!
 //! Extraction has no fallbacks: missing checked data for a public item, an
@@ -20,20 +20,20 @@ const check = @import("check");
 const PackageApi = @import("PackageApi.zig");
 
 const ModuleEnv = can.ModuleEnv;
-const CheckedArtifact = check.CheckedArtifact;
+const Checked = check.Checked;
 const canonical_type_keys = check.CanonicalTypeKeys;
 
 const Allocator = std.mem.Allocator;
-const CheckedTypeId = CheckedArtifact.CheckedTypeId;
-const CheckedModuleArtifact = CheckedArtifact.CheckedModuleArtifact;
-const CheckedTypeStoreView = CheckedArtifact.CheckedTypeStoreView;
+const CheckedTypeId = Checked.CheckedTypeId;
+const CheckedModule = Checked.CheckedModule;
+const CheckedTypeStoreView = Checked.CheckedTypeStoreView;
 
 /// One exact public namespace used for API extraction or reference routing.
 pub const ModuleInput = struct {
     /// The public namespace name, e.g. "Parser" or a platform root's name.
     exposed_name: []const u8,
     module_env: *const ModuleEnv,
-    artifact: *const CheckedModuleArtifact,
+    artifact: *const CheckedModule,
     /// Restrict a non-type root module to these names and their children.
     exposed_names: ?[]const []const u8 = null,
     /// Exact source type represented by this public namespace.
@@ -52,10 +52,10 @@ pub const OriginMap = struct {
         /// they stay stable when the root package renames a dependency alias.
         /// Platform roots use an empty name because their items are unqualified.
         module_name: []const u8,
-        /// Checked artifact for this compilation, used only while extracting a
+        /// Checked module for this compilation, used only while extracting a
         /// default literal from the identity that owns it. PackageApi copies
         /// canonical source into its arena and never retains this pointer.
-        artifact: ?*const CheckedModuleArtifact = null,
+        artifact: ?*const CheckedModule = null,
 
         pub const Kind = union(enum) {
             /// A module of the package being extracted.
@@ -165,7 +165,7 @@ const Extractor = struct {
     /// The PackageApi module that receives each namespace's items, parallel
     /// to `inputs`; null for namespaces used only to route references.
     input_modules: std.ArrayList(?usize) = .empty,
-    /// Public namespaces sorted by owning checked artifact for binary routing.
+    /// Public namespaces sorted by owning checked module for binary routing.
     public_input_order: std.ArrayList(usize) = .empty,
     /// Public alias declarations whose nominal type is extracted in their
     /// place, under the alias's path.
@@ -189,9 +189,9 @@ const Extractor = struct {
     };
 
     const Rename = struct {
-        nominal: CheckedArtifact.CheckedNominalType,
-        /// The checked artifact recorded for the nominal's declaring module.
-        artifact: ?*const CheckedModuleArtifact,
+        nominal: Checked.CheckedNominalType,
+        /// The checked module recorded for the nominal's declaring module.
+        artifact: ?*const CheckedModule,
         alias: RenamingAlias,
         path: []const u8,
     };
@@ -243,7 +243,7 @@ const Extractor = struct {
             for (renames.values()) |rename| {
                 const artifact = rename.artifact orelse {
                     self.current_item = rename.path;
-                    return self.fail(.unpublished_public_type, "renamed nominal type's declaring module has no checked artifact");
+                    return self.fail(.unpublished_public_type, "renamed nominal type's declaring module has no checked module");
                 };
                 std.debug.assert(std.mem.eql(u8, &artifact.key.bytes, &rename.nominal.owner_module.bytes));
                 try self.renaming_aliases.put(self.gpa, rename.alias, {});
@@ -322,7 +322,7 @@ const Extractor = struct {
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         id: CheckedTypeId,
-    ) ?CheckedArtifact.CheckedNominalType {
+    ) ?Checked.CheckedNominalType {
         var current = id;
         while (true) {
             switch (view.payload(current)) {
@@ -588,7 +588,7 @@ const Extractor = struct {
                 }
                 const ret = try self.convertType(view, names, function.ret, memo);
                 const api_id = try self.api.addType(.{ .function = .{
-                    .effectful = CheckedArtifact.finalizedFunctionKind(function.kind) == .effectful,
+                    .effectful = Checked.finalizedFunctionKind(function.kind) == .effectful,
                     .args = args,
                     .ret = ret,
                 } });
@@ -631,7 +631,7 @@ const Extractor = struct {
         self: *Extractor,
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
-        kind: CheckedArtifact.CheckedFieldKind,
+        kind: Checked.CheckedFieldKind,
         memo: *ConvertMemo,
     ) ExtractError!PackageApi.Field.Kind {
         return switch (kind.tag) {
@@ -659,7 +659,7 @@ const Extractor = struct {
     fn defaultLiteralSource(
         self: *Extractor,
         names: *const check.CanonicalNames.CanonicalNameStore,
-        kind: CheckedArtifact.CheckedFieldKind,
+        kind: Checked.CheckedFieldKind,
     ) ExtractError![]const u8 {
         const default = kind.defaultIdentity() orelse
             return self.fail(.unpublished_public_type, "defaulted record field has no default identity");
@@ -673,7 +673,7 @@ const Extractor = struct {
             return self.fail(.unknown_origin_module, detail);
         };
         const artifact = origin.artifact orelse
-            return self.fail(.unpublished_public_type, "default literal's declaring module has no checked artifact");
+            return self.fail(.unpublished_public_type, "default literal's declaring module has no checked module");
         const module_env = artifact.moduleEnvConst();
         if (default.expr_node >= module_env.store.nodes.len()) {
             return self.fail(.unpublished_public_type, "default literal's source node is outside its declaring module");
@@ -695,7 +695,7 @@ const Extractor = struct {
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         ext: CheckedTypeId,
-        closed_tag: std.meta.Tag(CheckedArtifact.CheckedTypePayload),
+        closed_tag: std.meta.Tag(Checked.CheckedTypePayload),
         memo: *ConvertMemo,
     ) ExtractError!?PackageApi.TypeId {
         if (view.payload(ext) == closed_tag) return null;
@@ -710,7 +710,7 @@ const Extractor = struct {
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
         origin_module: check.CanonicalNames.ModuleIdentityId,
-        owner_module: CheckedArtifact.ModuleId,
+        owner_module: Checked.ModuleId,
         source_decl: ?u32,
         type_name: []const u8,
         is_builtin: bool,
@@ -772,7 +772,7 @@ const Extractor = struct {
 
     fn publicReferencePath(
         self: *Extractor,
-        owner_module: CheckedArtifact.ModuleId,
+        owner_module: Checked.ModuleId,
         source_decl: ?u32,
     ) Allocator.Error!?[]const u8 {
         const input = self.publicOwner(owner_module, source_decl) orelse return null;
@@ -784,7 +784,7 @@ const Extractor = struct {
     /// The public namespace that names a type declaration, if any.
     fn publicOwner(
         self: *const Extractor,
-        owner_module: CheckedArtifact.ModuleId,
+        owner_module: Checked.ModuleId,
         source_decl: ?u32,
     ) ?ModuleInput {
         const raw_statement = source_decl orelse return null;
@@ -878,7 +878,7 @@ fn publicTypeDeclName(input: ModuleInput, root_statement: can.CIR.Statement.Idx)
 
 fn publicInputOwnsType(
     input: ModuleInput,
-    owner_module: CheckedArtifact.ModuleId,
+    owner_module: Checked.ModuleId,
     statement: can.CIR.Statement.Idx,
 ) bool {
     if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) return false;

@@ -10,7 +10,7 @@ const std = @import("std");
 const can = @import("can");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
-const checked_artifact = @import("../checked_artifact.zig");
+const checked_module = @import("../checked_module.zig");
 const types = @import("types");
 const ModuleEnv = can.ModuleEnv;
 const TestEnv = @import("./TestEnv.zig");
@@ -128,7 +128,7 @@ test "concrete recursive dispatch records a shared method instance without copyi
 }
 
 fn assertBuiltinIterExtremum(
-    artifact: *const checked_artifact.CheckedModuleArtifact,
+    artifact: *const checked_module.CheckedModule,
     method_name: []const u8,
 ) (std.mem.Allocator.Error || error{ NoSpaceLeft, TestUnexpectedResult })!void {
     const env = artifact.moduleEnvConst();
@@ -209,7 +209,7 @@ test "scheme use evidence resolves Builtin Iter min and max through exact raw wh
     var artifact_owns_module = false;
     errdefer if (!artifact_owns_module) builtin_module.deinit();
 
-    var artifact = try checked_artifact.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
+    var artifact = try checked_module.openBakedBuiltin(gpa, std.testing.io, builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
     artifact_owns_module = true;
     defer artifact.deinit(gpa);
 

@@ -524,7 +524,7 @@ const FnBodyTaskContext = struct {
 
 const RootEntry = struct {
     fn_id: Type.FnId,
-    request: check.CheckedModule.RootRequest,
+    request: check.Checked.RootRequest,
     /// See `Lifted.Root.owner`.
     owner: Common.LoweringModuleId,
     /// Position of this root in the producer's root plan. A consumer that
@@ -537,15 +537,15 @@ const RootEntry = struct {
 const LiteralRootEntry = struct {
     id: Common.LiteralRootId,
     fn_id: Type.FnId,
-    module: check.CheckedModule.ModuleId,
+    module: check.Checked.ModuleId,
     site: Common.LiteralRejectionSite,
 };
 
 const LayoutRequest = struct {
-    checked_type: check.CheckedModule.CheckedTypeId,
+    checked_type: check.Checked.CheckedTypeId,
     ty: Type.TypeId,
     initializer: ?Type.FnId,
-    const_locator: ?check.CheckedModule.ConstLocator,
+    const_locator: ?check.Checked.ConstLocator,
 };
 
 const StaticInitializerRequest = struct {
@@ -554,7 +554,7 @@ const StaticInitializerRequest = struct {
 };
 
 const ComptimeValueRequest = struct {
-    module: check.CheckedModule.ModuleId,
+    module: check.Checked.ModuleId,
     root: LIR.ComptimeProducer,
     ty: Type.TypeId,
     layout_idx: layout.Idx,
@@ -567,7 +567,7 @@ const ComptimeValueRequest = struct {
 /// same demand. The structural digest selects the candidate and exact
 /// representation equivalence confirms it.
 const ComptimeRootKey = struct {
-    module: check.CheckedModule.ModuleId,
+    module: check.Checked.ModuleId,
     root: LIR.ComptimeProducer,
     ty: check.CanonicalNames.TypeDigest,
 };
@@ -886,7 +886,7 @@ const Lowerer = struct {
     capture_types: std.AutoHashMap(CaptureSpanKey, Type.TypeId),
     captures: collections.DenseMap(Lifted.LocalId, CaptureBinding),
     recursive_value_locals: collections.DenseMap(Lifted.LocalId, void),
-    recursive_value_capture_ids: collections.DenseMap(check.CheckedModule.CaptureId, void),
+    recursive_value_capture_ids: collections.DenseMap(check.Checked.CaptureId, void),
     recursive_slot_types: collections.DenseMap(Type.TypeId, Type.TypeId),
     own_captures: std.ArrayList(SolvedType.Capture),
     /// Each lifted function's own capture span, or `CaptureSpanId.unset`.
@@ -1218,7 +1218,7 @@ const Lowerer = struct {
 
         var recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(allocator);
         errdefer recursive_value_locals.deinit();
-        var recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(allocator);
+        var recursive_value_capture_ids = collections.DenseMap(check.Checked.CaptureId, void).init(allocator);
         errdefer recursive_value_capture_ids.deinit();
         try Lowerer.collectRecursiveValueLocals(&solved.lifted, &recursive_value_locals, &recursive_value_capture_ids);
 
@@ -1555,7 +1555,7 @@ const Lowerer = struct {
         self.own_capture_spans = &.{};
         self.own_captures = .empty;
         self.recursive_slot_types = collections.DenseMap(Type.TypeId, Type.TypeId).init(self.allocator);
-        self.recursive_value_capture_ids = collections.DenseMap(check.CheckedModule.CaptureId, void).init(self.allocator);
+        self.recursive_value_capture_ids = collections.DenseMap(check.Checked.CaptureId, void).init(self.allocator);
         self.recursive_value_locals = collections.DenseMap(Lifted.LocalId, void).init(self.allocator);
         self.typed_local_map = TypedLocalMap.init(self.allocator);
         self.local_types = collections.DenseMap(LIR.LocalId, Type.TypeId).init(self.allocator);
@@ -1844,7 +1844,7 @@ const Lowerer = struct {
     fn collectRecursiveValueLocals(
         lifted: *const Lifted.Program,
         locals: *collections.DenseMap(Lifted.LocalId, void),
-        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
+        capture_ids: *collections.DenseMap(check.Checked.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         for (lifted.stmtsView()) |stmt| {
             if (stmt == .let_ and stmt.let_.recursive) {
@@ -1857,7 +1857,7 @@ const Lowerer = struct {
         lifted: *const Lifted.Program,
         pat_id: Lifted.PatId,
         locals: *collections.DenseMap(Lifted.LocalId, void),
-        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
+        capture_ids: *collections.DenseMap(check.Checked.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         switch (lifted.getPat(pat_id).data) {
             .bind => |local| try collectRecursiveValueBind(lifted, local, locals, capture_ids),
@@ -1877,7 +1877,7 @@ const Lowerer = struct {
         lifted: *const Lifted.Program,
         local: Lifted.LocalId,
         locals: *collections.DenseMap(Lifted.LocalId, void),
-        capture_ids: *collections.DenseMap(check.CheckedModule.CaptureId, void),
+        capture_ids: *collections.DenseMap(check.Checked.CaptureId, void),
     ) std.mem.Allocator.Error!void {
         try locals.put(local, {});
         if (lifted.getLocal(local).identity.captureId()) |capture_id| try capture_ids.put(capture_id, {});
@@ -6365,7 +6365,7 @@ const Lowerer = struct {
                     .initializer = null,
                     .layout_idx = layout_idx,
                     .stored = .{
-                        .module = check.CheckedModule.constModuleId(stored_request.const_locator),
+                        .module = check.Checked.constModuleId(stored_request.const_locator),
                         .node = stored_request.node orelse Common.invariant("a stored list's static data request named no stored node"),
                         .plan = try self.constPlanOfType(ty),
                     },

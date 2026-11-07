@@ -5,7 +5,7 @@
 # clone is discarded), and the classification maps the clone back to the
 # template root through the store's identity origins, so the recursive plan
 # is `direct_parametric`. The substitution direction itself is pinned by the
-# checked_artifact.zig unit test "direct dispatch classification follows
+# checked_module.zig unit test "direct dispatch classification follows
 # instantiation clones to the scheme that quantifies them", not here.
 OpenMethodRecursiveMethod := {}
 

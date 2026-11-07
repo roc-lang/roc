@@ -128,14 +128,14 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
         @panic("generated build fuzz app finished checking without a program");
     }
 
-    const root_checked = build_env.executableRootCheckedArtifact() catch |err| switch (err) {
+    const root_checked = build_env.executableRootCheckedModule() catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while loading the generated app's checked module"),
     };
-    const imported = build_env.collectImportedArtifactViews(gpa, root_checked) catch |err| switch (err) {
+    const imported = build_env.collectImportedModuleViews(gpa, root_checked) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while collecting imported checked modules"),
     };
     defer gpa.free(imported);
-    const relations = build_env.collectRelationArtifactViews(gpa, root_checked) catch |err| switch (err) {
+    const relations = build_env.collectRelationModuleViews(gpa, root_checked) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while collecting relation checked modules"),
     };
     defer gpa.free(relations);
@@ -148,7 +148,7 @@ pub fn run(buf: [*]u8, len: isize, debug: bool, mode: Mode) void {
     };
     defer gpa.free(lir_roots);
 
-    const root_view = check.CheckedArtifact.loweringViewWithRelations(root_checked, relations) catch |err| switch (err) {
+    const root_view = check.Checked.loweringViewWithRelations(root_checked, relations) catch |err| switch (err) {
         error.OutOfMemory => @panic("OOM while viewing the generated app's checked module"),
     };
     var lowered = lir.CheckedPipeline.lowerCheckedModulesToLir(

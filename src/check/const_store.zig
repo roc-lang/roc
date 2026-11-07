@@ -97,8 +97,8 @@ pub const CaptureId = checked_ids.CaptureId;
 
 /// Primitive type stored at the ConstStore boundary. Aliased to the checked
 /// artifact's `CheckedPrimitive` so the two cannot drift; Zig permits the
-/// circular file import (`checked_artifact.zig` itself imports this file).
-pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
+/// circular file import (`checked_module.zig` itself imports this file).
+pub const Primitive = @import("checked_module.zig").CheckedPrimitive;
 
 /// Checker-authored identities for the public iterator representation.
 pub const IteratorTopology = struct {

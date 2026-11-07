@@ -1,6 +1,6 @@
 //! Cache manager for opaque compiler cache entries.
 //!
-//! Checked artifacts use the explicit target-independent key model in
+//! Checked modules use the explicit target-independent key model in
 //! `cache_key.zig`. This manager deliberately does not know how to serialize or
 //! restore `ModuleEnv`; callers may only store and load raw bytes for artifacts
 //! that already have a published cache key.

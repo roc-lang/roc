@@ -1141,7 +1141,7 @@ pub const StaticDispatchConstraint = struct {
     /// user's own expression without reconstructing var->expr maps after the
     /// fact. Copied verbatim by instantiation and cross-module import. This is
     /// METADATA: it is deliberately excluded from type identity—canonical type
-    /// keys (the checked artifact's type-key writer) and unification content-equality never read it,
+    /// keys (the checked module's type-key writer) and unification content-equality never read it,
     /// so two structurally identical constraints with different provenance stay
     /// equal.
     provenance: Provenance = .{},
@@ -1325,7 +1325,7 @@ pub const StaticDispatchConstraint = struct {
 
 /// Source-type identity for the payload slot selected by derived mapping.
 /// The type store keeps one for each class of relation callables
-/// (`Store.derived_map_plans`). The checked artifact translates `tag_name`
+/// (`Store.derived_map_plans`). The checked module translates `tag_name`
 /// into its canonical tag name.
 pub const DerivedMapPlan = struct {
     tag_name: Ident.Idx,

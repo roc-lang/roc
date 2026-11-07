@@ -13,7 +13,7 @@ const collections = @import("collections");
 const Common = @import("../common.zig");
 const Type = @import("type.zig");
 
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const names = check.CheckedNames;
 const static_dispatch = check.StaticDispatchRegistry;
 const GuardedList = collections.GuardedList;
@@ -3378,14 +3378,14 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const local = try source.addLocal(@fromBackingInt(@intCast(1)), ty);
     try source.setLocalName(local, "value");
     const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
-    var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
+    var owner_key = std.mem.zeroes(check.Checked.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
     const site = try source.addComptimeSite(.match, owner, .zero(), null);
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@fromBackingInt(@intCast(1)), name);
     const root_a: Common.ComptimeValueRoot = .{
-        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .module = std.mem.zeroes(check.Checked.ModuleId),
         .root = .{ .checked = @fromBackingInt(@intCast(7)) },
         .const_locator = null,
     };
@@ -3395,7 +3395,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
         .artifact = root_b.module,
         .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
-        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+        .source_scheme = std.mem.zeroes(@FieldType(check.Checked.ConstLocator, "source_scheme")),
     };
     const root_a_id = try source.addComptimeValueRoot(root_a);
     const root_b_id = try source.addComptimeValueRoot(root_b);

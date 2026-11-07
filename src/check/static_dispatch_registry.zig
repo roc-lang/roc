@@ -137,7 +137,7 @@ fn topLevelExprIsAlreadyProcedure(module: TypedCIR.Module, def_idx: CIR.Def.Idx,
 
 /// What a method binding's registry entry targets, decided from the module's
 /// checked source alone: the registry (`MethodRegistry.fromModule`) builds its
-/// entries from it and type publication (`forEachCheckedSourceTypeRoot`)
+/// entries from it and type-root enumeration (`forEachCheckedSourceTypeRoot`)
 /// reaches its callable types from it, so the two cannot disagree on which
 /// source types the registry names.
 pub const MethodBindingClass = union(enum) {
@@ -1866,7 +1866,7 @@ pub const SiteEvidenceEntry = extern struct {
 };
 
 /// Public `EvidencePathStep` declaration: one semantic step from a type to a
-/// component, in the artifact's canonical names (`data` is a positional index,
+/// component, in the module's canonical names (`data` is a positional index,
 /// a `canonical.RecordFieldLabelId`, or a `canonical.TagNameId` per kind).
 pub const EvidencePathStep = dispatch_evidence.PathStep;
 
@@ -1993,7 +1993,7 @@ pub const DirectCall = struct {
 /// Public checked call classification. CheckedModule construction first records
 /// `direct_pending` while solving evidence, then replaces every such value with
 /// one of the two durable direct categories after the exact target callable has
-/// been instantiated. A serialized artifact can never contain
+/// been instantiated. A serialized module can never contain
 /// `direct_pending`.
 pub const CheckedCallResolution = union(enum) {
     direct_pending: EvidenceNodeId,
@@ -3400,10 +3400,10 @@ pub fn lookupCheckedMethodTarget(
     return null;
 }
 
-/// Rebase a method owner into an imported artifact's store: the module
+/// Rebase a method owner into an imported module's store: the module
 /// component crosses by 32-byte content identity (one map probe, full-value
 /// comparison); the declaring statement is the same in every store. This is
-/// the single cross-artifact owner resolution point—no name text.
+/// the single cross-module owner resolution point—no name text.
 pub fn methodOwnerInImportedStore(
     source_names: *const canonical.CanonicalNameStore,
     imported_names: *const canonical.CanonicalNameStore,

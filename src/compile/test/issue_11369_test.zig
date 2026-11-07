@@ -42,7 +42,7 @@ fn expectReportsAndPublication(source: []const u8, expected_titles: []const []co
         }
     }
 
-    try std.testing.expect(build.findModuleByPath(path).?.semanticData().?.checked_artifact != null);
+    try std.testing.expect(build.findModuleByPath(path).?.semanticData().?.checked_module != null);
 }
 
 test "issue 11369: erroneous where-method signature used at a concrete type publishes" {

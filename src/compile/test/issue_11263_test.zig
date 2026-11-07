@@ -134,7 +134,7 @@ test "issue 11263: a rejected field access preserves independent compile-time ro
     }
     try std.testing.expectEqual(@as(usize, 1), name_errors);
 
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
     var found_independent = false;

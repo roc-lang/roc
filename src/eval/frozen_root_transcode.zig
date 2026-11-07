@@ -643,7 +643,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[capture_offset + 11]);
 }
 
-fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootKey) Allocator.Error!lir.LIR.StaticDataId {
+fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").Checked.ComptimeRootKey) Allocator.Error!lir.LIR.StaticDataId {
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
@@ -657,7 +657,7 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const checked = @import("check").CheckedArtifact;
+    const checked = @import("check").Checked;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
     const root_id = checked.ComptimeRootKey.ofSource(.def, @intCast(roots.items.len));
@@ -807,7 +807,7 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     // transcodeValueSlot checks that the paired slots name the same checked
     // root, so both are published against one real entry rather than a
     // placeholder index.
-    const checked = @import("check").CheckedArtifact;
+    const checked = @import("check").Checked;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
     const root_id = checked.ComptimeRootKey.ofSource(.def, @intCast(roots.items.len));
@@ -857,7 +857,7 @@ fn boxedValueSlot(
     program: *Program.Result,
     box_idx: layout.Idx,
     plan: Program.ConstPlanId,
-    root: @import("check").CheckedArtifact.ComptimeRootKey,
+    root: @import("check").Checked.ComptimeRootKey,
 ) Allocator.Error!lir.LIR.StaticDataId {
     const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });

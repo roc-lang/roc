@@ -6,7 +6,7 @@ const check = @import("check");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
 
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const LIR = lir_core.LIR;
 const LiteralDemand = @import("literal_demand.zig");
 

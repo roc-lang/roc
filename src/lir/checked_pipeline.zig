@@ -37,7 +37,7 @@ const LirProgram = core.Program;
 const postcheck = @import("postcheck");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 
 /// Committed ordinary-data layouts for checked source ABI requests.
 pub const CheckedAbiLayouts = struct {
@@ -2079,7 +2079,7 @@ fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Alloca
 /// already failed by the time lowering starts; this stops it there instead of
 /// lowering a call that names no host function.
 ///
-/// A platform module publishes its bindings when its checked artifact is
+/// A platform module publishes its bindings when its checked module is
 /// published, so a module still being checked has none to bind against and
 /// this reads nothing into their absence.
 /// A complete program binds every hosted procedure its modules declare.
@@ -2427,7 +2427,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
         }
     }
 
-    const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModuleArtifact, undefined).moduleEnvConst());
+    const ModuleEnvPtr = @TypeOf(@as(*const checked.CheckedModule, undefined).moduleEnvConst());
 
     const ModuleInfo = struct {
         key: [32]u8,

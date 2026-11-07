@@ -1,5 +1,5 @@
 //! Regression tests for issue #12455: public-module queries return only
-//! modules that completed successfully, each with its checked artifact.
+//! modules that completed successfully, each with its checked module.
 
 const std = @import("std");
 const roc_target = @import("roc_target");
@@ -63,7 +63,7 @@ test "issue 12455: a public module that completed with failure is not a compiled
     try std.testing.expectEqual(@as(usize, 0), public_modules.len);
 }
 
-test "issue 12455: documentation modules carry the checked artifact of each public module" {
+test "issue 12455: documentation modules carry the checked module of each public module" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 

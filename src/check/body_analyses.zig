@@ -21,7 +21,7 @@ const can = @import("can");
 const collections = @import("collections");
 
 const canonical = @import("canonical_names.zig");
-const checked_artifact = @import("checked_artifact.zig");
+const checked_module = @import("checked_module.zig");
 const checked_bodies = @import("checked_bodies.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
@@ -797,7 +797,7 @@ const ExhaustivenessIndex = struct {
     const Entry = struct {
         node: u32,
         source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
-        site: checked_artifact.CheckedExhaustivenessSiteId,
+        site: checked_module.CheckedExhaustivenessSiteId,
 
         fn lessThan(_: void, left: Entry, right: Entry) bool {
             if (left.node != right.node) return left.node < right.node;
@@ -839,7 +839,7 @@ const ExhaustivenessIndex = struct {
     }
 
     /// The first check, in site order, of `source` kind at `raw_node`.
-    fn find(self: *const ExhaustivenessIndex, raw_node: u32, source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source)) ?checked_artifact.CheckedExhaustivenessSiteId {
+    fn find(self: *const ExhaustivenessIndex, raw_node: u32, source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source)) ?checked_module.CheckedExhaustivenessSiteId {
         for (self.atNode(raw_node)) |entry| {
             if (entry.source == source) return entry.site;
         }
@@ -864,7 +864,7 @@ pub const BodyAnalyses = struct {
     single_source_templates: collections.OnceSlot(*SingleSourceTemplates, .body_single_source_calls) = .empty,
     single_source_sites: collections.OnceSlot(*SingleSourceSites, .body_single_source_sites) = .empty,
     exhaustiveness_index: collections.OnceSlot(*ExhaustivenessIndex, .body_exhaustiveness_index) = .empty,
-    /// Set once the module is published (`CheckedModuleArtifact.openToAnalyses`):
+    /// Set once the module is published (`CheckedModule.openToAnalyses`):
     /// no slot of the module runs before it.
     published: std.atomic.Value(bool) = .init(false),
 
@@ -1017,7 +1017,7 @@ pub const BodyAnalyses = struct {
         bodies: CheckedBodies,
         raw_node: u32,
         source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
-    ) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+    ) Allocator.Error!?checked_module.CheckedExhaustivenessSiteId {
         const index = try self.exhaustiveness_index.getOrCompute(self.io, Allocator.Error, ExhaustivenessIndexRequest{ .analyses = self, .bodies = bodies }, ExhaustivenessIndexRequest.compute);
         return index.find(raw_node, source);
     }
@@ -1030,7 +1030,7 @@ pub const BodyAnalyses = struct {
         raw_node: u32,
         source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
         allocator: Allocator,
-        found: *std.ArrayList(checked_artifact.CheckedExhaustivenessSiteId),
+        found: *std.ArrayList(checked_module.CheckedExhaustivenessSiteId),
     ) Allocator.Error!void {
         const index = try self.exhaustiveness_index.getOrCompute(self.io, Allocator.Error, ExhaustivenessIndexRequest{ .analyses = self, .bodies = bodies }, ExhaustivenessIndexRequest.compute);
         for (index.atNode(raw_node)) |entry| {
@@ -2557,7 +2557,7 @@ fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) All
     // neither exposed nor methods.
     var public_defs = collections.DenseMap(CIR.Def.Idx, void).init(allocator);
     defer public_defs.deinit();
-    const exported_defs = try checked_artifact.collectPublishedExportDefs(allocator, env);
+    const exported_defs = try checked_module.collectPublishedExportDefs(allocator, env);
     defer allocator.free(exported_defs);
     for (exported_defs) |def| try public_defs.put(def, {});
     for (env.method_defs.entries.items) |entry| try public_defs.put(entry.value.def_idx, {});
@@ -2637,7 +2637,7 @@ fn computeSingleSourceTemplates(allocator: Allocator, bodies: CheckedBodies) All
         };
         const binding = switch (procedure.binding) {
             .top_level => |binding| binding,
-            .platform_required => |required| checked_artifact.ArtifactTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
+            .platform_required => |required| checked_module.ModuleTopLevelProcedureBindingRef{ .artifact = required.artifact, .binding = required.procedure_binding },
             .imported, .hosted => continue,
         };
         if (!binding.artifact.eql(module)) continue;
@@ -2748,7 +2748,7 @@ const SourceCallShapes = struct {
 /// per owner, so neither qualifies.
 fn singleSourceSites(
     allocator: Allocator,
-    sites: *const checked_artifact.ModuleNestedProcSites,
+    sites: *const checked_module.ModuleNestedProcSites,
     shapes: *const SourceCallShapes,
 ) Allocator.Error![]u32 {
     // Each pattern's references, and how many of them are a call's function.

@@ -3163,7 +3163,7 @@ test "findCoreError extracts a Zig compile error region" {
         \\build-ci
         \\+- build-test-zig
         \\   +- compile test check Debug native 1 errors
-        \\src/check/checked_artifact.zig:28167:9: error: expected type 'A', found 'B'
+        \\src/check/checked_module.zig:28167:9: error: expected type 'A', found 'B'
         \\        module_name,
         \\        ^~~~~~~~~~~
         \\src/check/canonical_names.zig:28:26: note: enum declared here

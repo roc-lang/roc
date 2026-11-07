@@ -1,4 +1,4 @@
-//! Stable ids for checked artifact payload stores.
+//! Stable ids for checked module payload stores.
 
 const std = @import("std");
 const can = @import("can");
@@ -30,8 +30,8 @@ pub const CheckedTypeSchemeId = enum(u32) { _ };
 /// statement, a literal conversion root by its literal, or a literal argument
 /// root by the edge that fixes its type and the callee requirement it
 /// converts. The top three bits say which; the literal encodings live with
-/// the literal identities (`checked_artifact.literalConversionRootId`,
-/// `checked_artifact.literalArgumentRootId`). No kind encodes as zero, so a
+/// the literal identities (`checked_module.literalConversionRootId`,
+/// `checked_module.literalArgumentRootId`). No kind encodes as zero, so a
 /// root's identity is never a template table row
 /// (`CheckedProcedureTemplateId`).
 pub const ComptimeRootKey = enum(u128) {
@@ -150,7 +150,7 @@ test "OptionalId round-trips none and some" {
     comptime std.debug.assert(@sizeOf(Opt) == 4);
 }
 
-/// One explicit identity for a closure capture. Checked artifacts and active
+/// One explicit identity for a closure capture. Checked modules and active
 /// Monotype instantiation use the checked identities below; final Monotype
 /// publication replaces every materialized capturable local's provisional
 /// identity with a program-global lift identity. Operand↔slot joins therefore
@@ -162,7 +162,7 @@ test "OptionalId round-trips none and some" {
 ///  - **canonical** (high bit clear, `[0, 2^31)`): the identity of a captured
 ///    checked binding. The index is exactly the CIR node of the binder's
 ///    pattern, so a canonical id is a pure function of (module name, source
-///    bytes) and is cache-safe to serialize in checked artifacts. Because the
+///    bytes) and is cache-safe to serialize in checked modules. Because the
 ///    mapping is the identity function, the originating binder is always
 ///    recoverable via `binder()`.
 ///  - **generated** (high bit set, `[2^31, 2^32)`): the identity of a
@@ -177,7 +177,7 @@ test "OptionalId round-trips none and some" {
 ///        captures.
 ///      - **lift** (`0xC000_0000` | index): closure lifting / spec_constr after
 ///        checking. The index is a per-Lifted-program counter. These ids never
-///        enter checked artifacts (post-check IRs are not cached).
+///        enter checked modules (post-check IRs are not cached).
 pub const CaptureId = enum(u32) {
     _,
 

@@ -15,7 +15,7 @@ const types = @import("types");
 
 const body_analyses = @import("body_analyses.zig");
 const canonical = @import("canonical_names.zig");
-const checked_artifact = @import("checked_artifact.zig");
+const checked_module = @import("checked_module.zig");
 const checked_type_ids = @import("checked_type_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 
@@ -26,10 +26,10 @@ const Region = base.Region;
 const Var = types.Var;
 
 const Allocator = std.mem.Allocator;
-const CheckedTypeId = checked_artifact.CheckedTypeId;
-const ComptimeRootKey = checked_artifact.ComptimeRootKey;
-const ResolvedValueId = checked_artifact.ResolvedValueId;
-const ResolvedValueRefId = checked_artifact.ResolvedValueRefId;
+const CheckedTypeId = checked_module.CheckedTypeId;
+const ComptimeRootKey = checked_module.ComptimeRootKey;
+const ResolvedValueId = checked_module.ResolvedValueId;
+const ResolvedValueRefId = checked_module.ResolvedValueRefId;
 const StaticDispatchPlanId = static_dispatch.StaticDispatchPlanId;
 const IteratorForPlanId = static_dispatch.IteratorForPlanId;
 
@@ -248,7 +248,7 @@ pub const ExprData = union(enum) {
     return_: struct {
         expr: ExprId,
         lambda: ExprId,
-        context: checked_artifact.CheckedReturnContext,
+        context: checked_module.CheckedReturnContext,
     },
     /// A `for` expression (`iteratorForPlan`).
     for_: ForData,
@@ -286,7 +286,7 @@ pub const PatternData = union(enum) {
     record_destructure: []const CIR.Pattern.RecordDestruct.Idx,
     list: struct {
         patterns: []const PatternId,
-        rest: ?checked_artifact.CheckedListRestPattern,
+        rest: ?checked_module.CheckedListRestPattern,
     },
     tuple: []const PatternId,
     /// Any numeric literal pattern (`numeralLiteral`,
@@ -297,7 +297,7 @@ pub const PatternData = union(enum) {
     str_interpolation: struct {
         prefix: base.StringLiteral.Idx,
         steps: CIR.Pattern.StrPatternStep.Span,
-        end: checked_artifact.CheckedStrPatternEnd,
+        end: checked_module.CheckedStrPatternEnd,
     },
     underscore,
     runtime_error,
@@ -373,14 +373,14 @@ pub const FieldAccessSegment = struct {
     field_name: canonical.RecordFieldLabelId,
     success_ty: CheckedTypeId,
     source_region: Region,
-    mode: checked_artifact.CheckedFieldAccessMode,
+    mode: checked_module.CheckedFieldAccessMode,
 };
 
 /// One capture of a closure and its canonical capture identity.
 pub const Capture = struct {
     pattern: PatternId,
     scope_depth: u32,
-    capture_id: checked_artifact.CaptureId,
+    capture_id: checked_module.CaptureId,
 };
 
 /// How a record destructure binds one field.
@@ -420,16 +420,16 @@ pub const Tables = struct {
     /// The identity of the checked module the bodies belong to.
     module: ?canonical.CheckedModuleDigest = null,
     plans: ?*const static_dispatch.StaticDispatchPlanTable = null,
-    refs: ?*const checked_artifact.ResolvedValueRefTable = null,
-    roots: ?*const checked_artifact.CompileTimeRootTable = null,
-    const_templates: ?*const checked_artifact.ConstTemplateTable = null,
-    templates: ?*const checked_artifact.CheckedProcedureTemplateTable = null,
-    top_level_procedure_bindings: ?*const checked_artifact.TopLevelProcedureBindingTable = null,
+    refs: ?*const checked_module.ResolvedValueRefTable = null,
+    roots: ?*const checked_module.CompileTimeRootTable = null,
+    const_templates: ?*const checked_module.ConstTemplateTable = null,
+    templates: ?*const checked_module.CheckedProcedureTemplateTable = null,
+    top_level_procedure_bindings: ?*const checked_module.TopLevelProcedureBindingTable = null,
     /// The module's analyses, which hold its nested procedure sites and
     /// exhaustiveness sites.
-    module_analyses: ?*checked_artifact.ModuleAnalyses = null,
+    module_analyses: ?*checked_module.ModuleAnalyses = null,
     /// The reader over the module's dispatch resolution.
-    dispatch: ?checked_artifact.CheckedDispatch = null,
+    dispatch: ?checked_module.CheckedDispatch = null,
 };
 
 /// The value a custom literal pattern converts its literal to before
@@ -465,7 +465,7 @@ pub const CheckedBodies = struct {
     names: *const canonical.CanonicalNameStore,
     /// The module's checked type view, under the module's platform/app
     /// pairing when it is read under one.
-    types: checked_artifact.CheckedTypeStoreView,
+    types: checked_module.CheckedTypeStoreView,
     analyses: *body_analyses.BodyAnalyses,
     tables: Tables = .{},
 
@@ -796,7 +796,7 @@ pub const CheckedBodies = struct {
     /// it concatenates its parts directly. An open target can instantiate at
     /// a custom `from_interpolation` type and keeps its dispatch.
     pub fn interpolationIsBuiltinStr(self: CheckedBodies, id: ExprId) bool {
-        return checked_artifact.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
+        return checked_module.checkedConcreteBuiltinForLiteralTarget(self.types, self.typeOfVar(ModuleEnv.varFrom(id))) == .str;
     }
 
     /// The tag a structural equality compares by discriminant alone: a
@@ -946,7 +946,7 @@ pub const CheckedBodies = struct {
             .pattern = pattern_id,
             .conversion = try self.literalConversion(raw),
             .equality_plan = self.dispatchPlan(raw),
-            .equality_ty = checked_artifact.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
+            .equality_ty = checked_module.checkedFunctionPayload(self.types, equality_fn_ty, "literal pattern equality").ret,
         };
     }
 
@@ -971,13 +971,13 @@ pub const CheckedBodies = struct {
     }
 
     /// One omitted default in the checked module's names.
-    pub fn recordOmittedDefault(self: CheckedBodies, omitted: ModuleEnv.RecordOmittedDefault) checked_artifact.CheckedRecordOmittedDefault {
+    pub fn recordOmittedDefault(self: CheckedBodies, omitted: ModuleEnv.RecordOmittedDefault) checked_module.CheckedRecordOmittedDefault {
         const origin = self.names.lookupModuleIdentity(self.env.moduleIdentityHash(omitted.origin_module)) orelse
             invariant("an omitted default's origin module was not interned");
         return .{
             .expr = omitted.expr,
             .field_name = self.recordFieldLabel(omitted.field_name),
-            .default = checked_artifact.CheckedFieldDefault.fromParts(origin, omitted.default_expr_node),
+            .default = checked_module.CheckedFieldDefault.fromParts(origin, omitted.default_expr_node),
         };
     }
 
@@ -1014,7 +1014,7 @@ pub const CheckedBodies = struct {
     /// hoisted pattern root matches it against, or the literal a literal
     /// conversion root converts. A root that crashes for a
     /// rejected destructure binder always does.
-    pub fn rootContainsDiagnosticError(self: CheckedBodies, root: checked_artifact.CompileTimeRoot) Allocator.Error!bool {
+    pub fn rootContainsDiagnosticError(self: CheckedBodies, root: checked_module.CompileTimeRoot) Allocator.Error!bool {
         if (root.hoisted_body) |body| if (body == .pattern_error) return true;
         const parts = root.bodyParts();
         if (parts.expr) |body_expr| if (try self.exprContainsDiagnosticError(body_expr)) return true;
@@ -1057,39 +1057,39 @@ pub const CheckedBodies = struct {
         return self.analyses.nestedProcSiteIsSingleSourceCall(self, site);
     }
 
-    fn moduleAnalyses(self: CheckedBodies) *checked_artifact.ModuleAnalyses {
+    fn moduleAnalyses(self: CheckedBodies) *checked_module.ModuleAnalyses {
         return self.tables.module_analyses orelse invariant("nested procedure or exhaustiveness sites were read from bodies without module analyses");
     }
 
     /// The nested procedure sites of `owner`'s body.
-    pub fn nestedProcSites(self: CheckedBodies, owner: checked_artifact.NestedProcSiteOwner) Allocator.Error!*const checked_artifact.OwnerNestedProcSites {
+    pub fn nestedProcSites(self: CheckedBodies, owner: checked_module.NestedProcSiteOwner) Allocator.Error!*const checked_module.OwnerNestedProcSites {
         return self.moduleAnalyses().nestedProcSites(self, owner);
     }
 
     /// Site `site` of `owner`, which `owner`'s body constructs.
-    pub fn nestedProcSite(self: CheckedBodies, owner: checked_artifact.NestedProcSiteOwner, site: canonical.NestedProcSiteId) Allocator.Error!checked_artifact.NestedProcSite {
+    pub fn nestedProcSite(self: CheckedBodies, owner: checked_module.NestedProcSiteOwner, site: canonical.NestedProcSiteId) Allocator.Error!checked_module.NestedProcSite {
         return (try self.nestedProcSites(owner)).find(site) orelse
             invariant("a nested procedure site was read from an owner whose body does not construct it");
     }
 
     /// The defaulted-field default whose expression contains nested
     /// procedure site `site`.
-    pub fn nestedProcSiteDefaultOwner(self: CheckedBodies, site: canonical.NestedProcSiteId) checked_artifact.NestedProcSiteOwner {
+    pub fn nestedProcSiteDefaultOwner(self: CheckedBodies, site: canonical.NestedProcSiteId) checked_module.NestedProcSiteOwner {
         const module_index = self.index();
-        const unit = module_index.unit(module_index.unitOf(@backingInt(checked_artifact.nestedProcSiteExpr(site))));
+        const unit = module_index.unit(module_index.unitOf(@backingInt(checked_module.nestedProcSiteExpr(site))));
         if (unit.kind != .default) invariant("a default-root nested procedure site lies outside every defaulted-field default");
         return .{ .default_root = @fromBackingInt(unit.root) };
     }
 
     /// The module's nested procedure sites by expression.
-    pub fn moduleNestedProcSites(self: CheckedBodies) Allocator.Error!*const checked_artifact.ModuleNestedProcSites {
+    pub fn moduleNestedProcSites(self: CheckedBodies) Allocator.Error!*const checked_module.ModuleNestedProcSites {
         return self.moduleAnalyses().moduleNestedProcSites(self);
     }
 
     /// The binders of enclosing frames whose values the procedure
     /// constructed at `site_expr` (a nested procedure site's expression or a
     /// closure site's lambda) needs at runtime.
-    pub fn nestedProcRuntimeCaptures(self: CheckedBodies, site_expr: ExprId) Allocator.Error![]const checked_artifact.CheckedCapture {
+    pub fn nestedProcRuntimeCaptures(self: CheckedBodies, site_expr: ExprId) Allocator.Error![]const checked_module.CheckedCapture {
         return (try self.moduleNestedProcSites()).runtimeCaptures(site_expr) orelse
             invariant("runtime captures were read for an expression that constructs no nested procedure");
     }
@@ -1105,7 +1105,7 @@ pub const CheckedBodies = struct {
 
     /// The exhaustiveness check of match expression `match_expr`, if checking
     /// left one to evaluation.
-    pub fn matchExhaustivenessSite(self: CheckedBodies, match_expr: ExprId) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+    pub fn matchExhaustivenessSite(self: CheckedBodies, match_expr: ExprId) Allocator.Error!?checked_module.CheckedExhaustivenessSiteId {
         return self.analyses.exhaustivenessSiteOf(self, @backingInt(match_expr), .match_expr);
     }
 
@@ -1116,14 +1116,14 @@ pub const CheckedBodies = struct {
         raw_node: u32,
         source: std.meta.Tag(ModuleEnv.ExhaustivenessObligation.Source),
         allocator: Allocator,
-        found: *std.ArrayList(checked_artifact.CheckedExhaustivenessSiteId),
+        found: *std.ArrayList(checked_module.CheckedExhaustivenessSiteId),
     ) Allocator.Error!void {
         return self.analyses.appendExhaustivenessSitesAt(self, raw_node, source, allocator, found);
     }
 
     /// The exhaustiveness check of destructuring pattern `destructure`, if
     /// checking left one to evaluation.
-    pub fn destructureExhaustivenessSite(self: CheckedBodies, destructure: PatternId) Allocator.Error!?checked_artifact.CheckedExhaustivenessSiteId {
+    pub fn destructureExhaustivenessSite(self: CheckedBodies, destructure: PatternId) Allocator.Error!?checked_module.CheckedExhaustivenessSiteId {
         return self.analyses.exhaustivenessSiteOf(self, @backingInt(destructure), .destructure_pattern);
     }
 
@@ -1182,7 +1182,7 @@ pub const CheckedBodies = struct {
         return .{
             .pattern = source.pattern_idx,
             .scope_depth = source.scope_depth,
-            .capture_id = checked_artifact.CaptureId.fromBinder(source.pattern_idx),
+            .capture_id = checked_module.CaptureId.fromBinder(source.pattern_idx),
         };
     }
 
@@ -1270,7 +1270,7 @@ pub const CheckedBodies = struct {
         allocator: std.mem.Allocator,
         representative: PatternId,
         candidate: PatternId,
-        out: *std.ArrayList(checked_artifact.AlternativeBinderRemap),
+        out: *std.ArrayList(checked_module.AlternativeBinderRemap),
     ) std.mem.Allocator.Error!void {
         var representatives: std.ArrayList(NamedBinder) = .empty;
         defer representatives.deinit(allocator);

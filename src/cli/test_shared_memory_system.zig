@@ -14,14 +14,14 @@ const SharedMemorySystemTestError = test_helpers.TestHelperError || eval.Builtin
 
 var shared_test_builtins: ?eval.BuiltinModules = null;
 
-fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePublishedBuiltin {
+fn sharedPreOpenedBuiltin() SharedMemorySystemTestError!test_helpers.PreOpenedBuiltin {
     if (shared_test_builtins == null) {
         shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
     return .{
         .env = shared_test_builtins.?.builtin_module.env,
         .indices = shared_test_builtins.?.builtin_indices,
-        .artifact = &shared_test_builtins.?.checked_artifact,
+        .artifact = &shared_test_builtins.?.checked_module,
     };
 }
 
@@ -46,7 +46,7 @@ fn compileLirImageForSharedTestTarget(
         source,
         imports,
         target_usize,
-        try sharedPrePublishedBuiltin(),
+        try sharedPreOpenedBuiltin(),
     );
 }
 
@@ -67,7 +67,7 @@ fn expectLirImageCanBeViewedFromMappedHeader(compiled: *const test_helpers.Compi
     try testing.expectEqual(compiled.lowered.view.layouts.layouts.items.items.len, child_view.layouts.layouts.items.items.len);
 }
 
-fn expectPublishedImportArtifactCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) SharedMemorySystemTestError!void {
+fn expectOpenedImportModuleCount(compiled: *const test_helpers.CompiledTargetProgram, expected: usize) SharedMemorySystemTestError!void {
     const borrowed_builtin_count: usize = if (compiled.resources.borrowed_builtin_artifact != null) 1 else 0;
     try testing.expectEqual(expected, compiled.resources.import_artifacts.len + borrowed_builtin_count);
 }
@@ -161,7 +161,7 @@ test "integration - automatic module dependency ordering" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try expectPublishedImportArtifactCount(&compiled, 3);
+    try expectOpenedImportModuleCount(&compiled, 3);
 }
 
 test "integration - transitive module imports (module A imports module B)" {
@@ -177,7 +177,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try expectPublishedImportArtifactCount(&compiled, 3);
+    try expectOpenedImportModuleCount(&compiled, 3);
 }
 
 test "integration - diamond dependency pattern (A imports B and C, both import D)" {
@@ -195,7 +195,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try expectPublishedImportArtifactCount(&compiled, 5);
+    try expectOpenedImportModuleCount(&compiled, 5);
 }
 
 test "integration - direct Core and Utils calls from app" {
@@ -211,5 +211,5 @@ test "integration - direct Core and Utils calls from app" {
     defer compiled.deinit(testing.allocator);
 
     try expectLirImageCanBeViewedFromMappedHeader(&compiled);
-    try expectPublishedImportArtifactCount(&compiled, 3);
+    try expectOpenedImportModuleCount(&compiled, 3);
 }

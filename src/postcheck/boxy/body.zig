@@ -30,7 +30,7 @@ const Match = @import("match.zig");
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const NumeralLiteral = can.ModuleEnv.NumeralLiteral;
 const LIR = lir_core.LIR;

@@ -50,8 +50,8 @@ my @RULES = (
     { category => 'shared-memory-fallback', regex => qr/\bcreateSharedMemoryWithFallback\b/, allowed => {} },
     { category => 'shared-memory-fallback', regex => qr/\bSHARED_MEMORY_FALLBACK_SIZE\b/, allowed => {} },
     { category => 'lir-module-env-boundary', regex => qr/\bcollectModuleEnvViews\b/, allowed => {} },
-    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_artifact.zig' => 1, 'src/check/Check.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
-    { category => 'raw-const-template-mir-value', regex => qr/\bconst_ref:\s*(?:check\.CheckedArtifact\.|checked_artifact\.)ConstRef\b/, allowed => {} },
+    { category => 'raw-provides-scan-after-publication', regex => qr/\bprovides_entries\.items\.items\b/, allowed => { 'src/check/checked_module.zig' => 1, 'src/check/Check.zig' => 1, 'src/canonicalize/test/exposed_shadowing_test.zig' => 1 } },
+    { category => 'raw-const-template-mir-value', regex => qr/\bconst_ref:\s*(?:check\.Checked\.|checked_module\.)ConstRef\b/, allowed => {} },
     { category => 'text-method-lookup-outside-typed-cir', regex => qr/\bresolveAttachedMethodTargetByText\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },
     { category => 'text-ident-lookup-outside-typed-cir', regex => qr/\bfindCommonIdent\b/, allowed => { 'src/check/typed_cir.zig' => 1 } },
     { category => 'nullable-recorded-dispatch-lowering', regex => qr/\)\s*std\.mem\.Allocator\.Error!\?LoweredCall\s*\{/, allowed => {} },
@@ -211,7 +211,26 @@ my @RULES = (
         regex => qr/(?:typeStore(?:Const)?\(\)|\.types|types_store|type_store)\.(?:setVarContent|dangerousSetVarDesc|dangerousSetVarRedirect|fresh\w*|append(?:Vars|RecordFields|Tags|StaticDispatchConstraints\w*|InterpolationParts)|canonicalizeAndSeal|seal|setNominalDecl|markNominalDeclInvalid|setDerivedMapPlan|union_|setRank|resolveVarAndCompressPath)\(/,
         scope => qr{\Asrc/postcheck/},
         allowed => {},
-    },
+    },    # A checked module is live data that every embedder opens through one
+    # function (`openCheckedModule`), right after checking it and from its
+    # stored outputs. No pass publishes a frozen copy of it, no table of a
+    # publication survives, and its cache payload beside the `ModuleEnv` is
+    # its inference output and its evaluation output alone
+    # (`check_checked_cache_payload` below pins the payload's fields).
+    { category => 'checked-publication', regex => qr/\bpublishFromTypedModule\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedModuleArtifact\w*\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedArtifact\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bPublishInputs\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bPublishImportArtifact\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bCheckedTypePublication\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishMethodCallableType\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishCheckedArtifact\w*\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bpublishFromPrebuiltModules\b/, allowed => {} },
+    { category => 'checked-publication', regex => qr/\bevaluation_phase\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bModuleIdentitySerialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bCheckingContextIdentity\.Serialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bCheckedTypeStore\.Serialized\b/, allowed => {} },
+    { category => 'checked-cache-payload', regex => qr/\bdeserializeStatic\b/, allowed => {} },
 );
 
 sub iter_zig_files {
@@ -766,6 +785,48 @@ sub check_monotype_same_type_assertions_debug_only {
 }
 
 check_monotype_same_type_assertions_debug_only();
+
+# A checked module's cache payload beside its `ModuleEnv`
+# (`CheckedModule.Serialized`) is its inference output and its evaluation
+# output, in that order, and nothing else.
+sub check_checked_cache_payload {
+    my $rel = 'src/check/checked_module.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+    my @lines = <$fh>;
+    close $fh or die "failed to close $rel: $!\n";
+    chomp @lines;
+
+    my $in_module = 0;
+    my $in_payload = 0;
+    my @fields;
+    my $payload_line = 0;
+    for my $index (0 .. $#lines) {
+        my $code = zig_code_line($lines[$index]);
+        if ($code =~ /^pub const CheckedModule = struct \{/) {
+            $in_module = 1;
+            next;
+        }
+        next unless $in_module;
+        last if $code =~ /^\};/;
+        if (!$in_payload && $code =~ /^    pub const Serialized = extern struct \{/) {
+            $in_payload = 1;
+            $payload_line = $index + 1;
+            next;
+        }
+        next unless $in_payload;
+        last if $code =~ /^    \};/;
+        push @fields, $1 if $code =~ /^        ([a-z_][a-z0-9_]*)\s*:/;
+    }
+    my $found = join(',', @fields);
+    if (!$payload_line) {
+        push @violations, "$rel: checked-cache-payload: CheckedModule.Serialized not found";
+    } elsif ($found ne 'inference,evaluation') {
+        push @violations, "$rel:$payload_line: checked-cache-payload: CheckedModule.Serialized holds [$found], not [inference,evaluation]";
+    }
+}
+
+check_checked_cache_payload();
 
 if (@violations) {
     print "Post-check architecture violations found:\n";

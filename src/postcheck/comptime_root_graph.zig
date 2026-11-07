@@ -21,7 +21,7 @@ const Lifted = @import("monotype_lifted/ast.zig");
 const Common = @import("common.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 
 /// One producer: the function its evaluation runs and the value it produces.
 pub const Producer = struct {

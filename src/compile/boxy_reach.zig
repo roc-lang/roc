@@ -12,7 +12,7 @@ const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const Allocator = std.mem.Allocator;
-const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+const Artifact = check.Checked.CheckedModule;
 const TemplateKey = eval.checked_root_graph.TemplateKey;
 
 /// The modules of one link, each with the name its workers are digested

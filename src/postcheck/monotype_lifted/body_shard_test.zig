@@ -18,7 +18,7 @@ test "body shards borrow compile-time descriptors through publication and rollba
     var source = try prefix(testing.allocator, 0, &ids);
     defer source.deinit();
     const root_a: Common.ComptimeValueRoot = .{
-        .module = std.mem.zeroes(check.CheckedModule.ModuleId),
+        .module = std.mem.zeroes(check.Checked.ModuleId),
         .root = .{ .checked = @fromBackingInt(@intCast(9)) },
         .const_locator = null,
     };
@@ -28,7 +28,7 @@ test "body shards borrow compile-time descriptors through publication and rollba
         .artifact = root_b.module,
         .owner = .{ .hoisted_root = .{ .module_idx = 1, .root = @fromBackingInt(@intCast(2)) } },
         .template = @fromBackingInt(@intCast(3)),
-        .source_scheme = std.mem.zeroes(@FieldType(check.CheckedModule.ConstLocator, "source_scheme")),
+        .source_scheme = std.mem.zeroes(@FieldType(check.Checked.ConstLocator, "source_scheme")),
     };
     const a = try source.addComptimeValueRoot(root_a);
     const b = try source.addComptimeValueRoot(root_b);

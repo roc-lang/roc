@@ -8,7 +8,7 @@ const build_options = @import("build_options");
 const eval = @import("eval");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
-const CheckedArtifact = @import("check").CheckedArtifact;
+const Checked = @import("check").Checked;
 const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
@@ -51,8 +51,8 @@ fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) (std.Io.Dir.CreateDirPathError
 /// completed value for.
 fn materializedAmong(
     stages: *const CompletedStages,
-    module: CheckedArtifact.ModuleId,
-    requests: []const CheckedArtifact.RootRequest,
+    module: Checked.ModuleId,
+    requests: []const Checked.RootRequest,
 ) error{TestUnexpectedResult}!usize {
     var count: usize = 0;
     for (requests) |request| {
@@ -61,11 +61,11 @@ fn materializedAmong(
     return count;
 }
 
-fn moduleArtifactNamed(coord: *Coordinator, name: []const u8) ?*CheckedArtifact.CheckedModuleArtifact {
+fn moduleArtifactNamed(coord: *Coordinator, name: []const u8) ?*Checked.CheckedModule {
     var packages = coord.packages.iterator();
     while (packages.next()) |package| {
         for (package.value_ptr.*.modules.items) |*mod| {
-            if (std.mem.eql(u8, mod.name, name)) return mod.checkedArtifact();
+            if (std.mem.eql(u8, mod.name, name)) return mod.checkedModule();
         }
     }
     return null;
@@ -75,8 +75,8 @@ fn moduleArtifactNamed(coord: *Coordinator, name: []const u8) ?*CheckedArtifact.
 /// checked identity rather than by any store-local id.
 fn valueSlotsForRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
-    module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootKey,
+    module: Checked.ModuleId,
+    root: Checked.ComptimeRootKey,
 ) usize {
     var count: usize = 0;
     for (program.lir_result.static_data_values.items) |value| {
@@ -91,8 +91,8 @@ fn valueSlotsForRoot(
 /// The one slot holding an evaluated root's completed value, if it has one.
 fn valueSlotForRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
-    module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootKey,
+    module: Checked.ModuleId,
+    root: Checked.ComptimeRootKey,
 ) ?lir.LIR.StaticDataId {
     for (program.lir_result.static_data_values.items, 0..) |value, index| {
         const owner = value.compile_time_root orelse continue;
@@ -107,8 +107,8 @@ fn valueSlotForRoot(
 /// value is published into.
 fn materializesRoot(
     program: *const lir.CheckedPipeline.LoweredProgram,
-    module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootKey,
+    module: Checked.ModuleId,
+    root: Checked.ComptimeRootKey,
 ) bool {
     const slot = valueSlotForRoot(program, module, root) orelse return false;
     for (program.lir_result.const_roots.items) |const_root| {
@@ -120,8 +120,8 @@ fn materializesRoot(
 /// The stage whose program evaluates the root into the slot it declares.
 fn materializingStage(
     stages: *const CompletedStages,
-    module: CheckedArtifact.ModuleId,
-    root: CheckedArtifact.ComptimeRootKey,
+    module: Checked.ModuleId,
+    root: Checked.ComptimeRootKey,
 ) ?usize {
     for (stages.programs(), 0..) |program, index| {
         if (materializesRoot(program, module, root)) return index;
@@ -149,12 +149,12 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     return count;
 }
 
-fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootKey {
+fn rootIdentity(request: Checked.RootRequest) error{TestUnexpectedResult}!Checked.ComptimeRootKey {
     return request.compile_time_root orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
-fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) error{TestUnexpectedResult}!CheckedArtifact.RootRequest {
+fn rootWithOrder(requests: []const Checked.RootRequest, order: u32) error{TestUnexpectedResult}!Checked.RootRequest {
     for (requests) |request| {
         if (request.order == order) return request;
     }
@@ -521,8 +521,8 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     try coord.coordinatorLoop();
     try std.testing.expect(!coord.hasUserErrors());
 
-    const app = coord.appRootCheckedArtifact();
-    var expects = std.ArrayList(CheckedArtifact.RootRequest).empty;
+    const app = coord.appRootCheckedModule();
+    var expects = std.ArrayList(Checked.RootRequest).empty;
     defer expects.deinit(allocator);
     for ((try app.rootRequests()).requests) |request| {
         if (request.kind == .test_expect) try expects.append(allocator, request);

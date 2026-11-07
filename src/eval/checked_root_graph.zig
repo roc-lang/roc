@@ -19,7 +19,7 @@ const base = @import("base");
 const check = @import("check");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedArtifact;
+const checked = check.Checked;
 const canonical = check.CanonicalNames;
 const static_dispatch = check.StaticDispatchRegistry;
 
@@ -59,7 +59,7 @@ pub const Start = union(enum) {
 /// Like a root's dependencies, the set over-approximates what a run of the
 /// program calls: a reference inside a function value the program never
 /// calls is still followed.
-pub fn reachTemplates(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, starts: []const Start) Allocator.Error![]TemplateKey {
+pub fn reachTemplates(allocator: Allocator, modules: []const *const checked.CheckedModule, starts: []const Start) Allocator.Error![]TemplateKey {
     var walker = try Walker.init(allocator, modules, &.{});
     defer walker.deinit();
     walker.visit += 1;
@@ -80,11 +80,11 @@ pub fn reachTemplates(allocator: Allocator, modules: []const *const checked.Chec
     return try out.toOwnedSlice(allocator);
 }
 
-/// Build the graph of `roots` over `modules`, the artifacts the finalization
+/// Build the graph of `roots` over `modules`, the modules the finalization
 /// completes. A value a root reads that no listed root produces was completed
 /// earlier (an import finalized before this program, or a root this
 /// finalization does not evaluate), so it depends on nothing here.
-pub fn build(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Graph {
+pub fn build(allocator: Allocator, modules: []const *const checked.CheckedModule, roots: []const Root) Allocator.Error!Graph {
     var walker = try Walker.init(allocator, modules, roots);
     defer walker.deinit();
     const deps = try allocator.alloc([]const u32, roots.len);
@@ -111,7 +111,7 @@ const DirectDependencies = struct {
 
 const Walker = struct {
     allocator: Allocator,
-    modules: []const *const checked.CheckedModuleArtifact,
+    modules: []const *const checked.CheckedModule,
     /// The first listed module of each checked identity.
     by_key: std.AutoHashMapUnmanaged([32]u8, u32),
     root_ordinals: std.AutoHashMapUnmanaged(RootKey, u32),
@@ -139,7 +139,7 @@ const Walker = struct {
     nodes: std.ArrayList(static_dispatch.EvidenceNodeId) = .empty,
     derivations: std.ArrayList(static_dispatch.GeneratedCodecDerivationId) = .empty,
 
-    fn init(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, roots: []const Root) Allocator.Error!Walker {
+    fn init(allocator: Allocator, modules: []const *const checked.CheckedModule, roots: []const Root) Allocator.Error!Walker {
         var by_key = std.AutoHashMapUnmanaged([32]u8, u32).empty;
         errdefer by_key.deinit(allocator);
         for (modules, 0..) |module, index| {
@@ -153,13 +153,13 @@ const Walker = struct {
             if (!entry.found_existing) entry.value_ptr.* = @intCast(ordinal);
         }
         const visited = try walkStamps(allocator, modules, struct {
-            fn count(module: *const checked.CheckedModuleArtifact) Allocator.Error!usize {
+            fn count(module: *const checked.CheckedModule) Allocator.Error!usize {
                 return (try module.checkedTables()).checked_procedure_templates.templates.items.len;
             }
         }.count);
         errdefer freeStamps(allocator, visited);
         const visited_derivations = try walkStamps(allocator, modules, struct {
-            fn count(module: *const checked.CheckedModuleArtifact) Allocator.Error!usize {
+            fn count(module: *const checked.CheckedModule) Allocator.Error!usize {
                 return (try module.checkedTables()).static_dispatch_plans.recorded_codec_derivations.len;
             }
         }.count);
@@ -168,7 +168,7 @@ const Walker = struct {
     }
 
     /// Per module, a zeroed walk stamp per item `count` counts.
-    fn walkStamps(allocator: Allocator, modules: []const *const checked.CheckedModuleArtifact, count: fn (*const checked.CheckedModuleArtifact) Allocator.Error!usize) Allocator.Error![][]u32 {
+    fn walkStamps(allocator: Allocator, modules: []const *const checked.CheckedModule, count: fn (*const checked.CheckedModule) Allocator.Error!usize) Allocator.Error![][]u32 {
         const out = try allocator.alloc([]u32, modules.len);
         var allocated: usize = 0;
         errdefer {
@@ -446,7 +446,7 @@ const Walker = struct {
             },
             .hosted => {},
             // The app's top-level procedure binding the requirement is
-            // bound to, in the app artifact the reference names: what the
+            // bound to, in the app module the reference names: what the
             // lowering calls for the requirement.
             .platform_required => |required| try self.topLevelBinding(self.moduleOf(required.artifact) orelse return, required.procedure_binding),
         }
@@ -487,7 +487,7 @@ pub fn rootHoldsFunction(
     allocator: Allocator,
     program_root: checked.LoweringModuleView,
     imports: []const checked.ImportedModuleView,
-    artifact: *const checked.CheckedModuleArtifact,
+    artifact: *const checked.CheckedModule,
     request: checked.RootRequest,
 ) Allocator.Error!bool {
     if ((try artifact.compileTimeRoot(request.compile_time_root.?)).kind == .callable_binding) return true;
@@ -606,8 +606,8 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         , &.{.{ .name = "Holder", .source = case.source }}, .{ .io = std.testing.io, .roots = .published_only });
         defer parsed.deinit(allocator);
         try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
-        const consumer = &parsed.checked_artifact;
-        // The import artifacts list the builtin module, then the program's
+        const consumer = &parsed.checked_module;
+        // The import modules list the builtin module, then the program's
         // imports in order; `Holder` is the program's only import.
         try std.testing.expectEqual(@as(usize, 2), parsed.import_artifacts.len);
         const holder = &parsed.import_artifacts[1];
@@ -627,9 +627,9 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     var parsed = try @import("inspected.zig").parseProgram(allocator, .module, source, imports, .{ .io = std.testing.io, .roots = .published_only });
     defer parsed.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 0), parsed.checker.problems.problems.items.len);
-    var modules = std.ArrayList(*checked.CheckedModuleArtifact).empty;
+    var modules = std.ArrayList(*checked.CheckedModule).empty;
     defer modules.deinit(allocator);
-    try modules.append(allocator, &parsed.checked_artifact);
+    try modules.append(allocator, &parsed.checked_module);
     for (parsed.import_artifacts) |*artifact| try modules.append(allocator, artifact);
     var roots = std.ArrayList(Root).empty;
     defer roots.deinit(allocator);

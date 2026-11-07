@@ -2,7 +2,7 @@
 //! intact for lowering; only equivalent contracts share specialization identity.
 
 const std = @import("std");
-const checked = @import("checked_artifact.zig");
+const checked = @import("checked_module.zig");
 const dispatch = @import("static_dispatch_registry.zig");
 const Allocator = std.mem.Allocator;
 const TypeId = checked.CheckedTypeId;
@@ -58,7 +58,7 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
 
 /// Give each contract the content digest of its proof graph. Contracts that
 /// `intern` placed in one class share the digest of the class's first member.
-/// `owner` is the artifact recording the table. Must run after `intern`.
+/// `owner` is the module recording the table. Must run after `intern`.
 pub fn digestContents(
     allocator: Allocator,
     owner: checked.ModuleId,
@@ -99,7 +99,7 @@ const unassigned = std.math.maxInt(u32);
 /// contract rather than once per contract above it. A type encodes as its
 /// canonical key plus the joint first-visit numbers of its variables in key
 /// order, so variables shared between roots stay shared. Methods encode by
-/// name and targets by their owning artifacts; no module-local id is written.
+/// name and targets by their owning modules; no module-local id is written.
 const ContentDigester = struct {
     allocator: Allocator,
     owner: checked.ModuleId,
@@ -342,12 +342,12 @@ const ContentDigester = struct {
         }
     }
 
-    /// A target is named by what identifies it in every artifact. Its
-    /// `module_idx` and `def_idx` index the module list of whichever artifact
+    /// A target is named by what identifies it in every module. Its
+    /// `module_idx` and `def_idx` index the module list of whichever module
     /// registered it, and its `callable_ty` is its own declared type in the
     /// target module's store, so none of them is written. A procedure is named
-    /// by its owning artifact's refs, a local procedure by its lexical site in
-    /// the recording artifact, and a structural target by its kind, which with
+    /// by its owning module's refs, a local procedure by its lexical site in
+    /// the recording module, and a structural target by its kind, which with
     /// the edge's dispatcher fixes its implementation.
     fn writeTarget(self: *ContentDigester, target: dispatch.MethodTarget) void {
         self.writeU8(@backingInt(std.meta.activeTag(target.kind)));

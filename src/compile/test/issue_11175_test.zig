@@ -93,7 +93,7 @@ fn expectPublishedPatterns(body: []const u8, expected_error: ?[]const u8) Patter
     try std.testing.expectEqual(expected_error != null, found_error);
 
     // A failed pattern cannot discard an independent definition's checked body.
-    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+    const artifact = build.findModuleByPath(path).?.semanticData().?.checked_module.?;
     var found_good = false;
     const bodies = try artifact.bodies();
     const store = &artifact.moduleEnvConst().store;
@@ -238,7 +238,7 @@ test "issue 11175: importers can consume rejected and independent destructure ex
     var build = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build.deinit();
     try build.build(path);
-    try std.testing.expect(build.findModuleByPath(path).?.semanticData().?.checked_artifact != null);
+    try std.testing.expect(build.findModuleByPath(path).?.semanticData().?.checked_module != null);
     const reports = try build.drainReports();
     defer build.freeDrainedReports(reports);
     var found_error = false;

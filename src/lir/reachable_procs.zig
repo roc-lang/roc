@@ -90,7 +90,7 @@ const Pass = struct {
 
     const OwnValue = struct { module: [32]u8, tag: u8, index: u128 };
 
-    fn ownValue(module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
+    fn ownValue(module: @import("check").Checked.ModuleId, producer: LIR.ComptimeProducer) OwnValue {
         return switch (producer) {
             .checked => |id| .{ .module = module.bytes, .tag = 0, .index = @backingInt(id) },
             .literal => |id| .{ .module = module.bytes, .tag = 1, .index = @backingInt(id) },
@@ -98,7 +98,7 @@ const Pass = struct {
     }
 
     /// Whether one of this program's own roots produces `root`'s value.
-    fn evaluatesItself(self: *Pass, module: @import("check").CheckedModule.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
+    fn evaluatesItself(self: *Pass, module: @import("check").Checked.ModuleId, producer: LIR.ComptimeProducer) Allocator.Error!bool {
         if (self.own_values == null) {
             var own = std.AutoHashMapUnmanaged(OwnValue, void).empty;
             errdefer own.deinit(self.allocator);

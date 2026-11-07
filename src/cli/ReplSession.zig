@@ -255,11 +255,11 @@ pub fn replaceVirtualModules(self: *ReplSession, modules: []const ModuleSource) 
     self.clear();
 }
 
-fn prePublishedBuiltin(self: *ReplSession) eval.Inspected.PrePublishedBuiltin {
+fn preOpenedBuiltin(self: *ReplSession) eval.Inspected.PreOpenedBuiltin {
     return .{
         .env = self.builtin_modules.builtin_module.env,
         .indices = self.builtin_modules.builtin_indices,
-        .artifact = &self.builtin_modules.checked_artifact,
+        .artifact = &self.builtin_modules.checked_module,
     };
 }
 
@@ -901,7 +901,7 @@ pub fn inspectExpressionType(
         .module,
         source,
         import_sources,
-        self.prePublishedBuiltin(),
+        self.preOpenedBuiltin(),
         self.roc_ctx,
     ) catch |err| switch (err) {
         error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
@@ -1153,7 +1153,7 @@ fn initParsedResources(self: *ReplSession) ReplStepError!eval.Inspected.ParsedRe
         .module,
         source,
         import_sources,
-        self.prePublishedBuiltin(),
+        self.preOpenedBuiltin(),
         self.roc_ctx,
     );
 }
@@ -1372,7 +1372,7 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         .module,
         source,
         import_sources,
-        self.prePublishedBuiltin(),
+        self.preOpenedBuiltin(),
         self.roc_ctx,
     )) |parsed_value| {
         var parsed = parsed_value;
@@ -1437,7 +1437,7 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
         .module,
         source,
         import_sources,
-        self.prePublishedBuiltin(),
+        self.preOpenedBuiltin(),
         self.roc_ctx,
         .{
             .context = @ptrCast(&event_collector),
@@ -2125,7 +2125,7 @@ fn expectAllNative(expr: []const u8, expected: []const u8) ReplTestError!void {
         source,
         &.{},
         .native,
-        repl.prePublishedBuiltin(),
+        repl.preOpenedBuiltin(),
         repl.roc_ctx,
         repl.specialization_strategy,
     );
@@ -2151,7 +2151,7 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
         .module,
         source,
         &.{},
-        repl.prePublishedBuiltin(),
+        repl.preOpenedBuiltin(),
         repl.roc_ctx,
     );
     defer compiled.deinit(testing.allocator);

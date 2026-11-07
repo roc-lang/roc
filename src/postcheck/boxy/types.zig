@@ -23,7 +23,7 @@ const check = @import("check");
 const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const static_dispatch = check.StaticDispatchRegistry;
 const names = check.CheckedNames;
 

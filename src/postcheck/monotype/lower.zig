@@ -36,7 +36,7 @@ const FunctionNodes = solve.FunctionNodes;
 const ArgumentClassSnapshot = solve.InstGraph.ArgumentClassSnapshot;
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExhaustivenessContext = check.ExhaustivenessContext;
 const exact_numeral = checked.exact_numeral;
 const names = check.CheckedNames;
@@ -1472,7 +1472,7 @@ const ModuleViewData = struct {
     tables: *const checked.CheckedTables,
     /// The reader over the module's dispatch resolution and schemas.
     dispatch: checked.CheckedDispatch,
-    direct_import_module_keys: []const checked.CheckedModuleArtifactKey,
+    direct_import_module_keys: []const checked.CheckedModuleKey,
     /// The module's resolved value references (`ImportedModuleView.valueRefs`).
     resolved_refs: *const checked.ResolvedValueTable,
     /// The checked module the view reads, whose slots answer what the view
@@ -46708,7 +46708,7 @@ const BodyContext = struct {
     /// Whether lowering `ty` takes no input from the enclosing specialization:
     /// it is closed by digest, or every variable it reaches seals to its row
     /// default (`CheckedTypePayload.variableSealsToRowDefault`, the same
-    /// variable decision the checked artifact's direct-dispatch classification
+    /// variable decision the checked module's direct-dispatch classification
     /// makes). This is the sealing half of the `direct_closed` rule (design.md
     /// "Static Dispatch In Monotype").
     ///
@@ -59586,7 +59586,7 @@ const BodyContext = struct {
         };
     }
 
-    /// Resolve a generated call's exact checked target in the artifact view
+    /// Resolve a generated call's exact checked target in the module view
     /// that owns it. The consuming BodyContext can belong to a different
     /// module (for example, a generic encoder boundary calling an app-defined
     /// nominal encoder), so local-procedure context is resolved there too.

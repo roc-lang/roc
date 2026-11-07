@@ -13,7 +13,7 @@
 //! What a payload needs besides the store lives in four columns of the
 //! module's checked type store, filled when the module is published: the
 //! canonical names its identifiers stand for, the checked identity and owning
-//! artifact of every module its named types come from, the checked facts of
+//! module of every module its named types come from, the checked facts of
 //! every nominal declaration it holds, and per variable whether publication
 //! reached it and through which row-tail positions. A variable's row default
 //! is the one rendering decision that depends on more than the variable: it
@@ -27,7 +27,7 @@ const collections = @import("collections");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
-const checked_artifact = @import("checked_artifact.zig");
+const checked_module = @import("checked_module.zig");
 const type_ids = @import("checked_type_ids.zig");
 
 const Allocator = std.mem.Allocator;
@@ -35,21 +35,21 @@ const Ident = base.Ident;
 const ModuleEnv = can.ModuleEnv;
 const Var = types.Var;
 
-const CheckedTypeId = checked_artifact.CheckedTypeId;
-const CheckedTypeStore = checked_artifact.CheckedTypeStore;
-const CheckedTypePayload = checked_artifact.CheckedTypePayload;
-const CheckedRecordField = checked_artifact.CheckedRecordField;
-const CheckedTag = checked_artifact.CheckedTag;
-const CheckedStaticDispatchConstraint = checked_artifact.CheckedStaticDispatchConstraint;
-const CheckedFunctionKind = checked_artifact.CheckedFunctionKind;
-const CheckedBuiltinNominal = checked_artifact.CheckedBuiltinNominal;
-const CheckedNominalRepresentationRef = checked_artifact.CheckedNominalRepresentationRef;
-const CheckedImportViews = checked_artifact.CheckedImportViews;
-const ImportedOriginIndex = checked_artifact.ImportedOriginIndex;
-const LocalNominalDeclarationIds = checked_artifact.LocalNominalDeclarationIds;
-const ModuleId = checked_artifact.ModuleId;
-const RowDefault = checked_artifact.RowDefault;
-const invariant = checked_artifact.checkedArtifactInvariant;
+const CheckedTypeId = checked_module.CheckedTypeId;
+const CheckedTypeStore = checked_module.CheckedTypeStore;
+const CheckedTypePayload = checked_module.CheckedTypePayload;
+const CheckedRecordField = checked_module.CheckedRecordField;
+const CheckedTag = checked_module.CheckedTag;
+const CheckedStaticDispatchConstraint = checked_module.CheckedStaticDispatchConstraint;
+const CheckedFunctionKind = checked_module.CheckedFunctionKind;
+const CheckedBuiltinNominal = checked_module.CheckedBuiltinNominal;
+const CheckedNominalRepresentationRef = checked_module.CheckedNominalRepresentationRef;
+const CheckedImportViews = checked_module.CheckedImportViews;
+const ImportedOriginIndex = checked_module.ImportedOriginIndex;
+const LocalNominalDeclarationIds = checked_module.LocalNominalDeclarationIds;
+const ModuleId = checked_module.ModuleId;
+const RowDefault = checked_module.RowDefault;
+const invariant = checked_module.checkedModuleInvariant;
 
 /// The canonical names one identifier of the module stands for, one per name
 /// space a checked type uses identifiers in. A name space the module's types
@@ -64,7 +64,7 @@ pub const SealedNameRow = extern struct {
 };
 
 /// The checked identity of one module identity the module's types name, and
-/// the artifact owning that module's checked declarations when one is
+/// the module owning that module's checked declarations when one is
 /// available to the module.
 pub const SealedOriginRow = extern struct {
     owner: ModuleId = .{},
@@ -178,9 +178,9 @@ pub const SealedTypeView = struct {
                 .optional => .optional,
             } },
             .flex => |flex| {
-                const variable_facts = checked_artifact.flexVariableFacts(env, flex, resolved.desc.flags.bounded_row_ext);
+                const variable_facts = checked_module.flexVariableFacts(env, flex, resolved.desc.flags.bounded_row_ext);
                 return .{ .flex = .{
-                    .name = if (flex.name) |name| checked_artifact.checkedVariableNameText(env, name) else null,
+                    .name = if (flex.name) |name| checked_module.checkedVariableNameText(env, name) else null,
                     .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(flex.constraints), .view = self } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, resolved.desc.content),
@@ -189,9 +189,9 @@ pub const SealedTypeView = struct {
                 } };
             },
             .rigid => |rigid| {
-                const variable_facts = checked_artifact.rigidVariableFacts(env, rigid);
+                const variable_facts = checked_module.rigidVariableFacts(env, rigid);
                 return .{ .rigid = .{
-                    .name = checked_artifact.checkedVariableNameText(env, rigid.name),
+                    .name = checked_module.checkedVariableNameText(env, rigid.name),
                     .constraints = .{ .sealed = .{ .constraints = type_store.sliceStaticDispatchConstraints(rigid.constraints), .view = self } },
                     .numeric_default_phase = variable_facts.numeric_default_phase,
                     .row_default = self.rowDefault(var_, resolved.desc.content),
@@ -212,7 +212,7 @@ pub const SealedTypeView = struct {
                 .empty_record => return .empty_record,
                 .empty_tag_union => return .empty_tag_union,
                 .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
+                    if (record.fields.len() == 0 and checked_module.checkedRecordExtIsEmpty(env, record.ext)) return .empty_record;
                     return .{ .record = .{
                         .fields = .{ .sealed = .{ .fields = type_store.getRecordFieldsSlice(record.fields), .view = self } },
                         .ext = type_ids.fromVar(record.ext),
@@ -220,7 +220,7 @@ pub const SealedTypeView = struct {
                 },
                 .tuple => |tuple| return .{ .tuple = type_ids.fromVars(type_store.sliceVars(tuple.elems)) },
                 .nominal_type => |nominal| {
-                    checked_artifact.debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
+                    checked_module.debugAssertNominalOpacityMatchesDeclaration(type_store, nominal);
                     const declaration = type_store.lookupNominalDecl(nominal) orelse
                         invariant("a sealed nominal type has no declaration in its store", .{});
                     const row = self.nominals[@backingInt(declaration)];
@@ -239,7 +239,7 @@ pub const SealedTypeView = struct {
                 .fn_pure, .fn_unbound => |func| return .{ .function = functionType(type_store, .pure, func) },
                 .fn_effectful => |func| return .{ .function = functionType(type_store, .effectful, func) },
                 .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
+                    if (tag_union.tags.len() == 0 and checked_module.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return .empty_tag_union;
                     return .{ .tag_union = .{
                         .tags = .{ .sealed = .{ .tags = type_store.getTagsSlice(tag_union.tags), .view = self } },
                         .ext = type_ids.fromVar(tag_union.ext),
@@ -249,9 +249,9 @@ pub const SealedTypeView = struct {
         }
     }
 
-    fn functionType(type_store: *const types.Store, kind: CheckedFunctionKind, func: types.Func) checked_artifact.CheckedFunctionType {
+    fn functionType(type_store: *const types.Store, kind: CheckedFunctionKind, func: types.Func) checked_module.CheckedFunctionType {
         return .{
-            .kind = checked_artifact.finalizedFunctionKind(kind),
+            .kind = checked_module.finalizedFunctionKind(kind),
             .args = type_ids.fromVars(type_store.sliceVars(func.args)),
             .ret = type_ids.fromVar(func.ret),
         };
@@ -262,7 +262,7 @@ pub const SealedTypeView = struct {
     fn rowDefault(self: SealedTypeView, var_: Var, content: types.Content) ?RowDefault {
         const var_facts = self.facts(var_);
         const candidate: ?RowDefault = if (var_facts.record_tail) .empty_record else if (var_facts.tag_tail) .empty_tag_union else null;
-        return checked_artifact.checkedRowDefaultForContent(self.env, content, candidate);
+        return checked_module.checkedRowDefaultForContent(self.env, content, candidate);
     }
 };
 
@@ -398,7 +398,7 @@ pub fn buildColumns(
         const builtin = try builder.origins.builtinNominal(env, imports, application);
         columns.nominals.appendAssumeCapacity(.{
             .builtin = builtin,
-            .representation = try checked_artifact.checkedNominalRepresentationIfAvailable(
+            .representation = try checked_module.checkedNominalRepresentationIfAvailable(
                 env,
                 imports,
                 &builder.origins,
@@ -524,7 +524,7 @@ const ReachWalker = struct {
             .empty_tag_union => var_facts.tag_tail = true,
         }
         if (std.debug.runtime_safety and var_facts.record_tail and var_facts.tag_tail and
-            checked_artifact.checkedRowDefaultForContent(self.env, resolved.desc.content, .empty_record) != null)
+            checked_module.checkedRowDefaultForContent(self.env, resolved.desc.content, .empty_record) != null)
         {
             invariant("checked row variable {d} received incompatible defaults", .{@backingInt(resolved.var_)});
         }
@@ -548,7 +548,7 @@ const ReachWalker = struct {
             .structure => |flat| switch (flat) {
                 .empty_record, .empty_tag_union => {},
                 .record => |record| {
-                    if (record.fields.len() == 0 and checked_artifact.checkedRecordExtIsEmpty(env, record.ext)) return;
+                    if (record.fields.len() == 0 and checked_module.checkedRecordExtIsEmpty(env, record.ext)) return;
                     for (type_store.getRecordFieldsSlice(record.fields).items(.presence)) |presence| {
                         switch (presence.decode()) {
                             .required => |type_var| try self.reach(allocator, type_var, null),
@@ -571,7 +571,7 @@ const ReachWalker = struct {
                     try self.reach(allocator, func.ret, null);
                 },
                 .tag_union => |tag_union| {
-                    if (tag_union.tags.len() == 0 and checked_artifact.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
+                    if (tag_union.tags.len() == 0 and checked_module.checkedTagUnionExtIsEmpty(env, tag_union.ext)) return;
                     for (type_store.getTagsSlice(tag_union.tags).items(.args)) |args| {
                         for (type_store.sliceVars(args)) |arg| try self.reach(allocator, arg, null);
                     }
@@ -583,7 +583,7 @@ const ReachWalker = struct {
 };
 
 /// Check `source` against the builtin module, publish it, and render every
-/// source type publication reached through the sealed type view, asserting
+/// source type-root enumeration reached through the sealed type view, asserting
 /// that each child is a reached checked representative and each row is flat.
 const ViewTestError = @import("test/TestEnv.zig").TestEnvError || error{ CorruptArtifact, CorruptBuiltinArtifact, BuiltinArtifactVersionMismatch };
 
@@ -597,7 +597,7 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     try test_env.assertNoErrors();
     try std.testing.expect(test_env.module_env.types.isSealed());
 
-    var builtin_artifact = try checked_artifact.openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_artifact_bin[0..]);
+    var builtin_artifact = try checked_module.openBakedBuiltin(allocator, std.testing.io, test_env.builtin_module.env, compiled_builtins.builtin_outputs_bin[0..]);
     defer builtin_artifact.deinitRetainingModuleEnv(allocator);
 
     const sources = [_]TypedCIR.Modules.SourceModule{
@@ -607,17 +607,17 @@ fn expectViewRendersPublishedTypes(source: []const u8) ViewTestError!void {
     var modules = try TypedCIR.Modules.init(allocator, &sources);
     defer modules.deinit();
     const module = modules.module(1);
-    const imports = [_]checked_artifact.PublishImportArtifact{.{
+    const imports = [_]checked_module.CheckedImport{.{
         .module_idx = 0,
         .key = builtin_artifact.key,
-        .view = checked_artifact.importedView(&builtin_artifact),
+        .view = checked_module.importedView(&builtin_artifact),
     }};
 
     var names = canonical.CanonicalNameStore.init(allocator);
     defer names.deinit();
-    var module_index = try checked_artifact.ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
+    var module_index = try checked_module.ModuleIndex.build(allocator, module.moduleEnvConst(), &.{});
     defer module_index.deinit(allocator);
-    const publication_keys = try checked_artifact.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
+    const publication_keys = try checked_module.SealedTypeKeys.create(allocator, std.testing.io, module.moduleEnvConst());
     defer publication_keys.destroy();
     var publication = try CheckedTypeStore.fromModule(allocator, module, &names, ModuleId{}, &imports, &.{}, &module_index, &.{}, &.{}, publication_keys);
     defer publication.deinit(allocator);

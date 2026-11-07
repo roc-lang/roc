@@ -32,7 +32,7 @@ const Codec = @import("codec.zig");
 const body = @import("body.zig");
 
 const Allocator = std.mem.Allocator;
-const checked = check.CheckedModule;
+const checked = check.Checked;
 const ExprId = check.CheckedBodies.ExprId;
 const LIR = lir_core.LIR;
 const LirProgram = lir_core.Program;

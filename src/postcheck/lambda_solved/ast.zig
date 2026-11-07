@@ -25,10 +25,10 @@ pub const FnBody = union(enum) {
 
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
-    checked_type: @import("check").CheckedModule.CheckedTypeId,
+    checked_type: @import("check").Checked.CheckedTypeId,
     ty: Type.TypeVarId,
     fn_id: ?Lifted.FnId = null,
-    const_locator: ?@import("check").CheckedModule.ConstLocator = null,
+    const_locator: ?@import("check").Checked.ConstLocator = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
