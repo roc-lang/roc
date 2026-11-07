@@ -17281,13 +17281,18 @@ store. A dispatch calls the value exactly as a call of the binding by name
 does: Monotype restores the stored value at the call (a value call, which a
 capture-free value makes a call of a known function), or lowers the root's
 wrapper body in place where this program evaluated no root; Boxy restores it
-through `restore_callable_eval` and makes an erased call. The root is ordered
-before its readers as any read is: Monotype's producer graph records the
-restore, and Boxy's checked root graph reads the root at the dispatch. Such a
-method is an inspect override when its instance qualifies, since a stored
-top-level value needs no declaration context. A Boxy descriptor whose type's
-method requirements resolve to such a value is composed in a body, never
-emitted as static data.
+through `restore_callable_eval` and makes an erased call. A Boxy dictionary
+or descriptor that names such a method holds its erased entry worker
+(`WorkerKey.callable_eval_entry`), which restores the value when called,
+never the value itself: the value may hold the owner's descriptor (a computed
+callable over a type variable takes its descriptor), and the descriptor holds
+the method, so restoring while composing would evaluate the binding's root to
+build what the root's evaluation needs. The entry has no captures, so a
+descriptor holding it may still be static data. The root is ordered before
+its readers as any read is: Monotype's producer graph records the restore,
+and Boxy's checked root graph reads the root at the dispatch. Such a method
+is an inspect override when its instance qualifies, since a stored top-level
+value needs no declaration context.
 
 ### Static Dispatch In Monotype
 

@@ -33489,13 +33489,19 @@ const MethodBindingTargets = struct {
                     return self.procedureTarget(body.view, direct.proc_value, template, use, method_owner);
                 },
                 // A reference to a computed callable is not a forward: the
-                // method's own value is that callable, evaluated.
+                // method calls that binding's evaluated value.
                 .callable_eval_template => |template_id| {
                     const template = if (body.view) |imported|
                         imported.callable_eval_templates.templates[@backingInt(template_id)]
                     else
                         self.callable_eval_templates.get(template_id);
-                    expr = template.forwarded_lookup orelse return self.computedCallableTarget(binding);
+                    expr = template.forwarded_lookup orelse return .{ .target = .{
+                        .kind = .{ .callable_binding = .{
+                            .module = if (body.view) |imported| imported.key.digest() else self.artifact_key.digest(),
+                            .template = template_id,
+                        } },
+                        .callable = .{ .template_root = template.checked_fn_root },
+                    } };
                     view = body.view;
                 },
                 .checked_error => return .rejected,
@@ -33504,11 +33510,11 @@ const MethodBindingTargets = struct {
     }
 
     /// The method's own callable-eval template, for a top-level binding whose
-    /// callable no procedure stands behind. Checking forwards a top-level
-    /// binding only to a directly callable procedure, so a binding reached
-    /// here has no forward. A binding that is not function-typed, or one in
-    /// a function body, is an associated value, not a method target
-    /// (design.md "Methods Never Capture").
+    /// value is not a reference and whose callable no procedure stands behind.
+    /// Checking forwards a top-level binding only to a directly callable
+    /// procedure, so a binding reached here has no forward. A binding that is
+    /// not function-typed, or one in a function body, is an associated value,
+    /// not a method target (design.md "Methods Never Capture").
     fn computedCallableTarget(self: *const MethodBindingTargets, binding: ModuleEnv.MethodBinding) ?static_dispatch.ReferencedMethodTarget {
         if (self.module.nodeTag(binding.type_node_idx) != .def) return null;
         const top_level = self.top_level_values.lookupByDef(binding.def_idx) orelse return null;

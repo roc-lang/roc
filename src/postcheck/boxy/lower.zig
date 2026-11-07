@@ -255,6 +255,13 @@ pub const WorkerKey = union(enum) {
     /// to a crash: a dispatch checking rejected, or one no value can reach
     /// (design.md "Static Dispatch In Monotype"). Calling it crashes.
     crash_dictionary: CrashDictionary,
+    /// The erased entry of a method bound to a computed callable
+    /// (`MethodTargetKind.callable_binding`): it takes the method's
+    /// arguments as its argument record, restores the binding's function
+    /// value, and calls it. A dictionary or descriptor holds this entry, so
+    /// composing one never evaluates the binding's root (design.md
+    /// "Procedure Aliases").
+    callable_eval_entry: CallableEvalBinding,
     /// The static row conversion of `module` from the closed type `from` to
     /// the closed type `to`, whose rows widen `from`'s along the coercion's
     /// reach (design.md "Sealed Result Rows"). Each module converting a pair
@@ -427,18 +434,11 @@ pub const NominalOverride = union(enum) {
     /// function value, at the method's interface `interface`, which only a
     /// body the declaring body encloses can build.
     local: struct { module: ModuleIndex, binding: checked.LocalProcedureBinding, interface: TypeId },
-    /// A method bound to a computed callable: the function value its
-    /// compile-time root evaluated, at the method's interface `interface`.
-    callable_eval: struct { binding: CallableEvalBinding, interface: TypeId },
 };
 
 /// A callable-eval binding of module `module`: a function-valued top-level
 /// binding whose compile-time root evaluates its callable.
 pub const CallableEvalBinding = struct { module: ModuleIndex, template: checked.CallableEvalTemplateId };
-
-/// A nominal type by its declaring module and its declaration there, in that
-/// module's names.
-const ComputedCallableOwner = struct { module: ModuleIndex, identity: check.CanonicalNames.ModuleIdentityId, decl: u32 };
 
 /// A dispatch requirement resolved from its dispatcher's type: the method
 /// named `method` (of module `module`'s names) on `dispatcher`, at the
@@ -463,9 +463,9 @@ pub const RequirementResolution = union(enum) {
     crash: CrashDictionary,
     /// The dictionary a body's scope holds for scope variable `index`.
     scope_variable: u32,
-    /// The function value of a method bound to a computed callable, which
-    /// its compile-time root evaluated.
-    callable_eval: CallableEvalBinding,
+    /// The erased entry of a method bound to a computed callable
+    /// (`WorkerKey.callable_eval_entry`), composed with no captures.
+    callable_eval: WorkerId,
     /// A derived codec or map, which checking selects with its plan at the
     /// dispatch it serves: a requirement resolved from a type alone only
     /// names it.
@@ -582,10 +582,6 @@ pub const Program = struct {
     nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
-    /// The nominal types that declare a method bound to a computed callable
-    /// (`MethodTargetKind.callable_binding`), whose function value only a
-    /// body restores.
-    computed_callable_owners: std.AutoHashMapUnmanaged(ComputedCallableOwner, void) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
     /// Modules by their stable identity hash.
@@ -639,7 +635,7 @@ pub const Program = struct {
                 hasher.update(&self.modules.linkName(default.module));
                 hasher.update(std.mem.asBytes(&self.defaultOrdinal(default.module, default.expr)));
             },
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker no module's object exports has no content identity"),
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker no module's object exports has no content identity"),
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -658,7 +654,7 @@ pub const Program = struct {
     pub fn exportableKind(key: WorkerKey) bool {
         return switch (key) {
             .template, .lambda, .method_entry, .default => true,
-            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => false,
+            .adapter, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => false,
         };
     }
 
@@ -835,7 +831,6 @@ pub const Program = struct {
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
-        self.computed_callable_owners.deinit(self.allocator);
         self.omitted_defaults.deinit(self.allocator);
         self.codec.deinit(self.allocator);
         self.arena.deinit();
@@ -862,6 +857,23 @@ pub const Program = struct {
     /// The callable-eval binding a method bound to a computed callable names.
     pub fn callableEvalBinding(self: *const Program, binding: static_dispatch.CallableBindingTarget) CallableEvalBinding {
         return .{ .module = self.moduleByKey(binding.module).index, .template = binding.template };
+    }
+
+    /// The erased entry of the method bound to the computed callable
+    /// `binding` (`WorkerKey.callable_eval_entry`), emitted with module
+    /// `module_index`'s workers. The binding is monomorphic, so the entry
+    /// takes exactly its function type's parameters.
+    pub fn callableEvalEntryWorker(self: *Program, module_index: ModuleIndex, binding: CallableEvalBinding) Allocator.Error!WorkerId {
+        const key: WorkerKey = .{ .callable_eval_entry = binding };
+        if (self.worker_ids.get(key)) |existing| return existing;
+        const template = self.module(binding.module).view.callable_eval_templates.templates[@backingInt(binding.template)];
+        const fn_ty = try self.converter().convert(binding.module, template.checked_fn_root, .{ .module = binding.module, .vars = &.{}, .bound = &.{} });
+        const function = switch (self.store.get(fn_ty)) {
+            .function => |function| function,
+            .primitive, .empty_record, .record, .tuple, .tag_union, .list, .box, .nominal, .variable => invariant("a method bound to a computed callable has no function type"),
+        };
+        const params = try self.arena.allocator().dupe(TypeId, self.store.span(function.args));
+        return try self.addErasedWorker(key, module_index, &.{}, params, function.ret, "boxy.callable_eval_entry");
     }
 
     pub fn moduleByIdx(self: *const Program, idx: u32) *const types.ModuleView {
@@ -1475,19 +1487,6 @@ pub const Program = struct {
         return done.get(root).?;
     }
 
-    /// Whether the nominal type `nominal` declares a method bound to a
-    /// computed callable.
-    fn declaresComputedCallableMethod(self: *Program, nominal: types.Nominal) bool {
-        if (self.computed_callable_owners.count() == 0) return false;
-        const view = self.module(nominal.decl.module);
-        const declaration = view.types().nominalDeclarationById(nominal.decl.decl);
-        return self.computed_callable_owners.contains(.{
-            .module = nominal.decl.module,
-            .identity = declaration.nominal.module,
-            .decl = declaration.nominal.source_decl,
-        });
-    }
-
     /// The override method entries a nominal type's descriptor carries, in
     /// `Methods` order (`is_eq`, `to_hash`, `to_inspect`): each method's
     /// dictionary entry and the types its scheme takes at `nominal_ty`.
@@ -1559,11 +1558,12 @@ pub const Program = struct {
                         } };
                         continue;
                     },
+                    // The entry restores the value when called, so the
+                    // descriptor holds the entry: composing a descriptor
+                    // never evaluates the binding's root.
                     .callable_binding => |binding| {
-                        slot.* = .{ .callable_eval = .{
-                            .binding = self.callableEvalBinding(binding),
-                            .interface = try self.overrideInterface(method_index, nominal_ty),
-                        } };
+                        const entry = try self.callableEvalEntryWorker(nominal.decl.module, self.callableEvalBinding(binding));
+                        slot.* = .{ .procedure = .{ .entry = entry, .target = entry, .bound = &.{}, .dicts = &.{} } };
                         continue;
                     },
                 };
@@ -1643,13 +1643,8 @@ pub const Program = struct {
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .nominal => |nominal| {
                     for (try self.nominalOverrides(ty)) |maybe| {
-                        if (maybe) |override| if (override == .local or override == .callable_eval) break :walk true;
+                        if (maybe) |override| if (override == .local) break :walk true;
                     }
-                    // An override's requirement on a method bound to a
-                    // computed callable resolves to that callable's value
-                    // (`RequirementResolution.callable_eval`), which only a
-                    // body restores.
-                    if (self.declaresComputedCallableMethod(nominal)) break :walk true;
                     try pending.appendSlice(self.allocator, store.nominalArgs(nominal));
                     if (nominal.has_backing) try pending.append(self.allocator, try self.converter().backing(ty));
                 },
@@ -1679,7 +1674,7 @@ pub const Program = struct {
         if (requirements.len == 0) return .{ .bound = bound, .requirements = requirements };
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1835,7 +1830,7 @@ pub const Program = struct {
         if (target_worker.dictionary_params.len == 0) return;
         const key = switch (target_worker.key) {
             .template => |key| key,
-            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a worker with dictionary parameters is not a template's"),
+            .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => invariant("a worker with dictionary parameters is not a template's"),
         };
         const templates = self.module(key.module).view.checked_procedure_templates;
         const all_params = poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, templates.templates.items[@backingInt(key.template)].evidence_params);
@@ -1951,7 +1946,7 @@ pub const Program = struct {
                 .target => |target| switch (target.kind) {
                     .procedure => |procedure| return .{ .target = try self.templateRefWorker(procedure.template) },
                     .structural => |kind| return structuralResolution(kind, requirement.dispatcher),
-                    .callable_binding => |binding| return .{ .callable_eval = self.callableEvalBinding(binding) },
+                    .callable_binding => |binding| return .{ .callable_eval = try self.callableEvalEntryWorker(requirement.module, self.callableEvalBinding(binding)) },
                     .local_proc => invariant("a method a local procedure implements belongs to a type declared in a function body, which no type-resolved requirement outside that body names"),
                 },
             };
@@ -2209,7 +2204,7 @@ pub const Program = struct {
             const scoped = self.worker(current).*;
             const outer: ?WorkerId = switch (scoped.key) {
                 .lambda => |lambda| lambda.outer,
-                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => null,
+                .template, .adapter, .default, .method_entry, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => null,
             };
             const own = if (outer) |o| scoped.literal_scopes.len != self.worker(o).literal_scopes.len else scoped.literal_scopes.len != 0;
             if (own) try owners.append(allocator, current);
@@ -2608,11 +2603,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                     }
                 },
-                .callable_binding => switch (entry.key.owner) {
-                    .nominal => |owner| try program.computed_callable_owners.put(allocator, .{ .module = view.index, .identity = owner.module, .decl = owner.source_decl }, {}),
-                    .builtin => invariant("a builtin type declares a method bound to a computed callable"),
-                },
-                .procedure, .structural => {},
+                .procedure, .structural, .callable_binding => {},
             }
         }
         // A local procedure's uses all reach it through its binding, so its
@@ -2737,7 +2728,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
                     const export_name = names.procBase(template.proc_base).export_name orelse break :blk "boxy.template";
                     break :blk names.exportNameText(export_name);
                 },
-                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => |_, kind| "boxy." ++ @tagName(kind),
+                inline .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot, .callable_eval_entry => |_, kind| "boxy." ++ @tagName(kind),
             };
             try program.result.store.setProcDebugName(worker.proc, name);
         }

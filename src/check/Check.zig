@@ -46750,14 +46750,39 @@ fn rejectRecursiveStaticDispatch(
 }
 
 /// Whether a selected method binding is an associated value of a type
-/// declared in a function body that is not a local procedure (a lambda, a
-/// closure, or a chain of local bindings reaching one). A rejected
-/// declaration counts as a local procedure: its dispatches are checked errors
-/// of their own.
+/// declared in a function body: one whose value reaches no function. A
+/// function is a lambda or closure, a declaration with no body, or a
+/// top-level binding of function type, which has a compile-time root
+/// whatever its right-hand side; a chain of local bindings is followed to
+/// what it reaches. A rejected declaration is a method whose dispatches are
+/// checked errors of their own.
 fn localValueMethodBinding(self: *Self, method_lookup: StaticDispatchMethodBinding) Allocator.Error!bool {
     if (!method_lookup.is_this_module) return false;
     if (self.cir.store.nodes.get(method_lookup.binding.type_node_idx).tag != .statement_decl) return false;
-    return (try self.localProcedureTargetPattern(method_lookup.env, method_lookup.binding)) == null;
+    const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(method_lookup.binding.type_node_idx)))).s_decl;
+    var expr = decl.expr;
+    // Each hop follows one local binding, and a chain can visit each at most
+    // once before repeating, so the node count bounds the walk.
+    var remaining: usize = self.cir.store.nodes.len();
+    while (remaining > 0) : (remaining -= 1) {
+        switch (self.cir.store.getExpr(expr)) {
+            .e_lambda, .e_closure, .e_anno_only, .e_hosted_lambda, .e_derived_method, .e_runtime_error => return false,
+            .e_lookup_local => |lookup| {
+                if (self.patternIsTopLevel(lookup.pattern_idx)) {
+                    return self.types.resolveThroughAliases(ModuleEnv.varFrom(lookup.pattern_idx)).desc.content.unwrapFunc() == null;
+                }
+                expr = (try self.localDeclExprForPattern(lookup.pattern_idx)) orelse return true;
+            },
+            .e_lookup_external, .e_lookup_associated_resolved => {
+                const def = (try self.hoistedCallableDefForExpr(self.cir, expr)) orelse return true;
+                const def_pattern = def.module.store.getDef(def.def).pattern;
+                const def_types: *const types_mod.Store = if (def.module == self.cir) self.types else &def.module.types;
+                return def_types.resolveThroughAliases(ModuleEnv.varFrom(def_pattern)).desc.content.unwrapFunc() == null;
+            },
+            .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_deferred_import_ref, .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_record, .e_empty_record, .e_block, .e_tag, .e_nominal, .e_nominal_external, .e_zero_argument_tag, .e_call, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_return, .e_break, .e_for, .e_run_low_level => return true,
+        }
+    }
+    return true;
 }
 
 fn rejectLocalValueMethodDispatch(

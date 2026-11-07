@@ -75,7 +75,7 @@ pub fn captureShape(program: *Program, id: WorkerId) CaptureShape {
             };
         },
         .structural, .structural_map => .{ .values = &.{}, .descs = worker.structural_descs, .dicts = 0, .composed = true },
-        .crash_dictionary, .literal_thunk, .root_slot => .{ .values = &.{}, .descs = 0, .dicts = 0, .composed = true },
+        .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry => .{ .values = &.{}, .descs = 0, .dicts = 0, .composed = true },
         .codec => |index| .{
             .values = worker.capture_types,
             .descs = @intCast(worker.scheme_vars.len),
@@ -177,7 +177,7 @@ pub const Retained = struct {
         // from the types rather than stored as a cycle.
         const rebuilt = switch (program.worker(worker_id).key) {
             .method_entry => |target| try program.dictionaryCapturesItself(target, bound),
-            .lambda, .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec, .template, .default, .root, .static_data, .convert => false,
+            .lambda, .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .callable_eval_entry, .codec, .template, .default, .root, .static_data, .convert => false,
         };
         try recipe.bytes.append(allocator, @intFromBool(rebuilt));
         if (rebuilt) return .{ .recipe = try recipe.finish(), .captures = &.{} };
@@ -275,6 +275,7 @@ const Tag = enum(u8) {
     structural_map,
     crash_dictionary,
     codec,
+    callable_eval_entry,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -533,6 +534,12 @@ const Encoder = struct {
                 try self.module(record.module);
                 try self.bytes.append(self.allocator, @backingInt(kind));
             },
+            .callable_eval_entry => |binding| {
+                try self.tag(.callable_eval_entry);
+                try self.module(record.module);
+                try self.module(binding.module);
+                try self.word(@backingInt(binding.template));
+            },
             .codec => |index| {
                 try self.tag(.codec);
                 try self.module(record.module);
@@ -744,6 +751,12 @@ const Decoder = struct {
             .crash_dictionary => {
                 const module_index = self.module();
                 return try program.crashDictionaryWorker(module_index, @fromBackingInt(@intCast(self.byte())));
+            },
+            .callable_eval_entry => {
+                const module_index = self.module();
+                const binding_module = self.module();
+                const template: checked.CallableEvalTemplateId = @fromBackingInt(self.word());
+                return try program.callableEvalEntryWorker(module_index, .{ .module = binding_module, .template = template });
             },
             .codec => {
                 const module_index = self.module();

@@ -78,3 +78,48 @@ test "a top-level type's method may be a computed callable" {
         \\run = |n| Counter.{ count: n }.value()
     );
 }
+
+test "a method bound to a top-level function is a method of a type declared in a function body" {
+    try expectNoErrors(
+        \\bump : { count : U64 } -> U64
+        \\bump = |counter| counter.count + 1
+        \\
+        \\run = |n| {
+        \\    Counter := { count : U64 }.{
+        \\        value = bump
+        \\    }
+        \\    Counter.{ count: n }.value()
+        \\}
+    );
+}
+
+test "a method bound to a top-level computed callable is a method of a type declared in a function body" {
+    try expectNoErrors(
+        \\make : () -> ({ count : U64 } -> U64)
+        \\make = || |counter| counter.count + 1
+        \\
+        \\bump = make()
+        \\
+        \\run = |n| {
+        \\    Counter := { count : U64 }.{
+        \\        value = bump
+        \\    }
+        \\    Counter.{ count: n }.value()
+        \\}
+    );
+}
+
+test "a method bound through a local alias to a value computed in the body is reported" {
+    try expectLocalValueMethod(
+        \\make : () -> ({ count : U64 } -> U64)
+        \\make = || |counter| counter.count + 1
+        \\
+        \\run = |n| {
+        \\    bump = make()
+        \\    Counter := { count : U64 }.{
+        \\        value = bump
+        \\    }
+        \\    Counter.{ count: n }.value()
+        \\}
+    , "value");
+}

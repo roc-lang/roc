@@ -269,7 +269,6 @@ pub const StaticDescs = struct {
             const callable = switch (override) {
                 .procedure => |procedure| try self.staticCallable(owner, @intCast(4 + index), procedure),
                 .local => types.invariant("a static descriptor's type holds a local-procedure override, which only a body composes"),
-                .callable_eval => types.invariant("a static descriptor's type holds a computed-callable override, which only a body composes"),
             };
             try pointers.append(self.allocator, .{ .offset = methods_layout.of(field), .target = callable, .addend = static_callable_header });
         };
@@ -340,7 +339,10 @@ pub const StaticDescs = struct {
                     },
                     .derived => types.invariant("a closed nominal's override requirement names a derived codec or map, which checking records with its plan at the dispatch it serves"),
                     .scope_variable => types.invariant("a closed nominal's override names a scope variable"),
-                    .callable_eval => types.invariant("a static descriptor's override requirement names a computed callable, which only a body restores"),
+                    .callable_eval => |entry| {
+                        self.extra_nodes += 1;
+                        nodes[position] = try self.staticCallableOf(owner, 16 + self.extra_nodes, program_.worker(entry).proc, &.{});
+                    },
                     .target => types.invariant("a dictionary's target requirement is not a resolved node"),
                 },
                 .back_edge => |head| nodes[position] = nodes[head],
