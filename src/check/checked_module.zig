@@ -2208,6 +2208,9 @@ const ConcreteRootProofs = struct {
     proven: std.AutoHashMapUnmanaged(ConcreteRootScan.Entered, void) = .empty,
     /// The types the current walk has entered.
     entered: std.AutoHashMapUnmanaged(ConcreteRootScan.Entered, void) = .empty,
+    /// The types (`WalkModules.key`) a walk that found its root reaches no
+    /// callable slot visited: none of them reaches one either.
+    callable_free: std.AutoHashMapUnmanaged(u64, void) = .empty,
 
     fn init(allocator: Allocator, module: ModuleId, checked_types: CheckedTypeStoreView, resolver: ModuleResolver) Allocator.Error!ConcreteRootProofs {
         return .{ .allocator = allocator, .modules = try WalkModules.init(allocator, module, checked_types, resolver) };
@@ -2217,6 +2220,7 @@ const ConcreteRootProofs = struct {
         self.modules.deinit(self.allocator);
         self.proven.deinit(self.allocator);
         self.entered.deinit(self.allocator);
+        self.callable_free.deinit(self.allocator);
     }
 
     fn isConcrete(self: *ConcreteRootProofs, root: CheckedTypeId) Allocator.Error!bool {
@@ -2239,9 +2243,8 @@ const ConcreteRootProofs = struct {
         // A callable root or an annotated data producer fixes its callable graph at
         // the producer. An unannotated data root can instead receive callable type
         // relations from a use site, so it must not seal a context-free graph first.
-        const own = self.modules.entries.items[0];
         return producer_callable_type_is_fixed or
-            try checkedTypeHasNoReachableCallableSlots(self.allocator, own.module, own.types, self.modules.resolver, root);
+            try checkedTypeHasNoReachableCallableSlots(self.allocator, &self.modules, &self.callable_free, root);
     }
 };
 
@@ -25322,22 +25325,24 @@ const WalkChildren = struct {
     }
 };
 
+/// Whether `root`, a type of `modules`' first module, reaches no callable
+/// slot. Each type in `callable_free` reaches none; when `root` reaches
+/// none, every type its walk visited joins it.
 fn checkedTypeHasNoReachableCallableSlots(
     allocator: Allocator,
-    module: ModuleId,
-    checked_types: CheckedTypeStoreView,
-    resolver: ModuleResolver,
+    modules: *WalkModules,
+    callable_free: *std.AutoHashMapUnmanaged(u64, void),
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var modules = try WalkModules.init(allocator, module, checked_types, resolver);
-    defer modules.deinit(allocator);
     var visited = std.AutoHashMap(u64, void).init(allocator);
     defer visited.deinit();
     var pending: std.ArrayListUnmanaged(WalkItem) = .empty;
     defer pending.deinit(allocator);
     try pending.append(allocator, .{ .module = 0, .ty = root });
     while (pending.pop()) |item| {
-        if ((try visited.getOrPut(WalkModules.key(item.module, item.ty))).found_existing) continue;
+        const key = WalkModules.key(item.module, item.ty);
+        if (callable_free.contains(key)) continue;
+        if ((try visited.getOrPut(key)).found_existing) continue;
         var children = WalkChildren{ .allocator = allocator, .module = item.module, .pending = &pending };
 
         switch (modules.typesOf(item.module).payload(item.ty)) {
@@ -25432,6 +25437,9 @@ fn checkedTypeHasNoReachableCallableSlots(
             },
         }
     }
+    try callable_free.ensureUnusedCapacity(allocator, visited.count());
+    var proven = visited.keyIterator();
+    while (proven.next()) |key| callable_free.putAssumeCapacity(key.*, {});
     return true;
 }
 
