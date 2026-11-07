@@ -6301,7 +6301,7 @@ fn directDispatchPlanIsParametric(
     method: []const u8,
 ) TestError!bool {
     var found: ?bool = null;
-    for (0..resources.checked_artifact.static_dispatch_plans.plans.len) |raw| {
+    for (0..(try resources.checked_artifact.checkedTables()).static_dispatch_plans.plans.len) |raw| {
         const plan = try (try resources.checked_artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(u8, resources.checked_artifact.nameStore().methodNameText(plan.method), method)) continue;
         const parametric = switch (plan.resolution) {
@@ -9700,7 +9700,7 @@ test "W6a open where-method widening and nested evidence lower through explicit 
     // where-use complete map must preserve the enclosing slot's resolved
     // nested vector through checked-artifact construction and Monotype lowering.
     var found_requires_record_reuse = false;
-    for (0..compiled.resources.checked_artifact.static_dispatch_plans.plans.len) |raw| {
+    for (0..(try compiled.resources.checked_artifact.checkedTables()).static_dispatch_plans.plans.len) |raw| {
         const plan = try (try compiled.resources.checked_artifact.dispatch()).plan(@fromBackingInt(@intCast(raw)));
         if (!std.mem.eql(
             u8,
@@ -13820,7 +13820,7 @@ test "issue 12491 nested closure chain bound to a block local lowers under boxy"
 }
 
 /// The procedure template of `artifact` exported as `name`.
-fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{TestUnexpectedResult}!check.CheckedArtifact.CheckedProcedureTemplate {
+fn templateNamed(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, name: []const u8) error{ TestUnexpectedResult, OutOfMemory }!check.CheckedArtifact.CheckedProcedureTemplate {
     for ((try artifact.checkedTables()).checked_procedure_templates.templates.items) |template| {
         const def_name = check.CheckedArtifact.procBaseDefName(artifact.moduleEnvConst(), template.proc_base) orelse continue;
         if (std.mem.eql(u8, def_name, name)) return template;
