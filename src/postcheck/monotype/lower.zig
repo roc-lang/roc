@@ -25060,15 +25060,35 @@ const BodyContext = struct {
                 if (started) {
                     if (input) |rendered| parts.out = rendered.expr;
                 }
+                // The text parts between one child and the next (a
+                // separator, a label, and the label's separator) are one
+                // literal, so the rendering joins them in one append.
+                var text = std.ArrayList(u8).empty;
+                defer text.deinit(self.allocator);
                 while (parts.index < parts.parts.len) {
                     const part = parts.parts[parts.index];
-                    parts.index += 1;
-                    const text = switch (part) {
-                        .literal => |text| text,
-                        .label => |name| self.inspectLabelText(name),
-                        .child => |index| return .{ .child = try self.inspectPartChild(parts.out, parts.value, parts.source, index) },
+                    const child_index = switch (part) {
+                        .literal => |literal| {
+                            try text.appendSlice(self.allocator, literal);
+                            parts.index += 1;
+                            continue;
+                        },
+                        .label => |name| {
+                            try text.appendSlice(self.allocator, self.inspectLabelText(name));
+                            parts.index += 1;
+                            continue;
+                        },
+                        .child => |index| index,
                     };
-                    parts.out = try self.appendExpr(parts.out, try self.stringExpr(text, str_ty), str_ty);
+                    if (text.items.len != 0) {
+                        parts.out = try self.appendExpr(parts.out, try self.stringExpr(text.items, str_ty), str_ty);
+                        text.clearRetainingCapacity();
+                    }
+                    parts.index += 1;
+                    return .{ .child = try self.inspectPartChild(parts.out, parts.value, parts.source, child_index) };
+                }
+                if (text.items.len != 0) {
+                    parts.out = try self.appendExpr(parts.out, try self.stringExpr(text.items, str_ty), str_ty);
                 }
                 return .{ .done = .{ .expr = parts.out } };
             },

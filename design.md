@@ -15735,7 +15735,10 @@ it too. Each consumer reads its own representation into the shared
   its parent, and no rendering is built apart and copied in. Every piece
   (literal text, a label, a primitive's text, an override's result, a
   `<missing>` marker, a list separator) is joined with `str_append`, never
-  `str_concat`. A rendering of several pieces first reserves
+  `str_concat`. The text between one child and the next (a separator, a
+  label, and the label's separator) is one piece, so a record field or a
+  payload costs one join for its text and one for its value. A rendering of
+  several pieces first reserves
   (`str_reserve`) the byte length of the literal text it will append: a
   record's braces, labels, label separators, and field separators; a tuple's
   parentheses and separators; a variant's name, payload parentheses, and
