@@ -4,10 +4,11 @@
 //!
 //! ```text
 //! result = call(args...)
-//! out    = str_concat(acc, result)
+//! out    = join(acc, result)
 //! ```
 //!
-//! and rewrites it to:
+//! where `join` is either string join, `str_concat` or `str_append`, and
+//! rewrites it to:
 //!
 //! ```text
 //! out = call_append(acc, args...)
@@ -19,9 +20,17 @@
 //! call_append(acc: Str, args...) -> Str
 //! ```
 //!
+//! The variant joins onto the accumulator with the consumer's own join, so a
+//! variant made for a spelled `Str.concat` keeps `str_concat` and one made
+//! for a generated rendering keeps `str_append`; one variant exists per
+//! source proc and join.
+//!
 //! If the source proc directly returns `Str.concat(left, right)`, the append
-//! variant builds `Str.concat(Str.concat(acc, left), right)` so the source
-//! proc's intermediate returned string is not materialized.
+//! variant builds `Str.concat(join(acc, left), right)` so the source proc's
+//! intermediate returned string is not materialized; the source's own join
+//! stays the one it spelled. A source proc that starts its result from
+//! `Str.with_capacity` keeps that allocation: the variant joins the finished
+//! result onto the accumulator at the return.
 //!
 //! The fusion drops the call-result local (and any intervening `assign_ref
 //! .local` aliases of it): after the rewrite nothing assigns them. It therefore
@@ -51,7 +60,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     try body_clone.CallResultFusion(Spec).run(store, layouts);
 }
 
-/// The consumer this pass fuses: a `str_concat` whose right operand is the
+/// The consumer this pass fuses: a string join whose right operand is the
 /// call result.
 const Spec = struct {
     pub const name = "string-append";
@@ -60,6 +69,8 @@ const Spec = struct {
     pub const State = *const layout_mod.Store;
     pub const VariantKey = struct {
         source: LIR.LirProcSpecId,
+        /// The join the fused consumer performed.
+        op: LowLevelOp,
     };
 
     pub fn resultEligible(_: State, result_layout: layout_mod.Idx) bool {
@@ -76,7 +87,7 @@ const Spec = struct {
         const concat_stmt_node = store.getCFStmtImmediate(forwarded.next);
         if (concat_stmt_node.* != .assign_low_level) return null;
         const concat_stmt = concat_stmt_node.assign_low_level;
-        if (concat_stmt.op != .str_concat) return null;
+        if (!concat_stmt.op.isStrJoin()) return null;
         const concat_args = store.getLocalSpan(concat_stmt.args);
         if (concat_args.len != 2) return null;
         if (GuardedList.at(concat_args, 1) != forwarded.value) return null;
@@ -85,7 +96,7 @@ const Spec = struct {
         if (store.getLocal(accumulator).layout_idx != .str) return null;
 
         return .{
-            .key = .{ .source = call.proc },
+            .key = .{ .source = call.proc, .op = concat_stmt.op },
             .leading_arg = accumulator,
             .target = concat_stmt.target,
             .next = concat_stmt.next,
@@ -99,7 +110,7 @@ const Spec = struct {
             store,
             layouts,
             key.source,
-            .{ .accumulator = accumulator },
+            .{ .accumulator = accumulator, .op = key.op },
             .{ .leading_args = &.{accumulator}, .ret_layout = .str },
         );
     }
@@ -112,30 +123,36 @@ fn fuseOrigin(rewritten: LIR.StmtOrigin) LIR.StmtOrigin {
     return origin;
 }
 
-/// Return rewriter that turns each source return into an append onto the
-/// destination accumulator, folding a direct `Str.concat` return into two
-/// appends so the source's intermediate string is never materialized.
+/// Return rewriter that turns each source return into a join onto the
+/// destination accumulator, folding a direct string-join return into two
+/// joins so the source's intermediate string is never materialized.
 const AppendRewriter = struct {
     accumulator: LocalId,
+    /// The join the fused consumer performed, which every join onto the
+    /// accumulator this rewriter adds uses.
+    op: LowLevelOp,
 
     pub fn cloneRet(self: *AppendRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const fused = fuseOrigin(origin);
         const target = try cloner.addTemp(.str);
         const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = target } }, fused);
-        return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), fused, ret_stmt);
+        return try joinInto(cloner, target, self.op, self.accumulator, try cloner.mapLocal(value), fused, ret_stmt);
     }
 
     pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_low_level) {
             const s = stmt.assign_low_level;
-            if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
-                return .{ .done = try self.cloneConcatReturn(cloner, s, origin) };
+            if (s.op.isStrJoin() and cloner.directReturnOf(s.next, s.target)) {
+                return .{ .done = try self.cloneJoinReturn(cloner, s, origin) };
             }
         }
         return .none;
     }
 
-    fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+    /// `ret join(left, right)` becomes `ret join(op(acc, left), right)`: the
+    /// first join onto the accumulator is this rewriter's, the second is the
+    /// source's own.
+    fn cloneJoinReturn(self: *AppendRewriter, cloner: anytype, s: anytype, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const args = cloner.store.getLocalSpan(s.args);
         if (args.len != 2) return try self.cloneRet(cloner, s.target, origin);
 
@@ -143,12 +160,12 @@ const AppendRewriter = struct {
         const first_append = try cloner.addTemp(.str);
         const final = try cloner.mapLocal(s.target);
         const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = final } }, fused);
-        const second = try self.concatInto(cloner, final, first_append, try cloner.mapLocal(GuardedList.at(args, 1)), fused, ret_stmt);
-        return try self.concatInto(cloner, first_append, self.accumulator, try cloner.mapLocal(GuardedList.at(args, 0)), fused, second);
+        const second = try joinInto(cloner, final, s.op, first_append, try cloner.mapLocal(GuardedList.at(args, 1)), fused, ret_stmt);
+        return try joinInto(cloner, first_append, self.op, self.accumulator, try cloner.mapLocal(GuardedList.at(args, 0)), fused, second);
     }
 
-    fn concatInto(_: *AppendRewriter, cloner: anytype, target: LocalId, left: LocalId, right: LocalId, origin: LIR.StmtOrigin, next: CFStmtId) ResourceError!CFStmtId {
-        return try cloner.store.addLowLevelStmt(target, .str_concat, &.{ left, right }, next, origin);
+    fn joinInto(cloner: anytype, target: LocalId, op: LowLevelOp, left: LocalId, right: LocalId, origin: LIR.StmtOrigin, next: CFStmtId) ResourceError!CFStmtId {
+        return try cloner.store.addLowLevelStmt(target, op, &.{ left, right }, next, origin);
     }
 };
 
@@ -169,14 +186,37 @@ fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
     }, .none);
 }
 
-fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
+fn testJoin(store: *LirStore, op: LowLevelOp, target: LocalId, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
     return try store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
-        .op = .str_concat,
-        .rc_effect = try store.addRcEffect(LowLevelOp.str_concat.rcEffect()),
+        .op = op,
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);
+}
+
+fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
+    return try testJoin(store, .str_concat, target, args, next);
+}
+
+/// The straight-line low-level ops of `body`, in order, up to its return;
+/// any other statement fails the test.
+fn testLowLevelOps(store: *const LirStore, body: CFStmtId, buffer: []LowLevelOp) error{TestUnexpectedResult}![]LowLevelOp {
+    var count: usize = 0;
+    var current = body;
+    while (true) {
+        const stmt = store.getCFStmtImmediate(current);
+        switch (stmt.*) {
+            .assign_low_level => |s| {
+                buffer[count] = s.op;
+                count += 1;
+                current = s.next;
+            },
+            .ret => return buffer[0..count],
+            else => return error.TestUnexpectedResult,
+        }
+    }
 }
 
 test "str append fuses a single-use call result into a direct append call" {
@@ -429,4 +469,161 @@ test "str append does not fuse a multi-use call result" {
     try std.testing.expectEqual(callee, unchanged.proc);
     try std.testing.expectEqual(result, unchanged.target);
     try std.testing.expectEqual(before_proc_count, store.procSpecCount());
+}
+
+test "str append fuses a str_append consumer with a variant that appends with str_append" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+
+    const callee = try testStrCallee(&store);
+
+    const acc = try testStrLocal(&store);
+    const x = try testStrLocal(&store);
+    const result = try testStrLocal(&store);
+    const out = try testStrLocal(&store);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
+    const append = try testJoin(&store, .str_append, out, &.{ acc, result }, ret);
+    const call = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{x}),
+        .next = append,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(6),
+        .args = try store.addLocalSpan(&.{ acc, x }),
+        .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
+        .body = call,
+        .ret_layout = .str,
+    }, .none);
+
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
+
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
+    try std.testing.expect(rewritten.proc != callee);
+    try std.testing.expectEqual(out, rewritten.target);
+    try std.testing.expectEqual(ret, rewritten.next);
+
+    var ops: [4]LowLevelOp = undefined;
+    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.?, &ops);
+    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_append}, variant_ops);
+}
+
+test "str append keeps the source's own join when rooting a direct join return" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+
+    // `callee = |left, right| Str.concat(left, right)`
+    const left = try testStrLocal(&store);
+    const right = try testStrLocal(&store);
+    const joined = try testStrLocal(&store);
+    const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = joined } }, .test_fixture);
+    const callee_join = try testConcat(&store, joined, &.{ left, right }, callee_ret);
+    const callee = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(7),
+        .args = try store.addLocalSpan(&.{ left, right }),
+        .frame_locals = try store.addLocalSpan(&.{ left, right, joined }),
+        .body = callee_join,
+        .ret_layout = .str,
+    }, .none);
+
+    // `out = str_append(acc, callee(a, b))`, a generated rendering's join.
+    const acc = try testStrLocal(&store);
+    const a = try testStrLocal(&store);
+    const b = try testStrLocal(&store);
+    const result = try testStrLocal(&store);
+    const out = try testStrLocal(&store);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
+    const append = try testJoin(&store, .str_append, out, &.{ acc, result }, ret);
+    const call = try store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{ a, b }),
+        .next = append,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(8),
+        .args = try store.addLocalSpan(&.{ acc, a, b }),
+        .frame_locals = try store.addLocalSpan(&.{ acc, a, b, result, out }),
+        .body = call,
+        .ret_layout = .str,
+    }, .none);
+
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
+
+    const rewritten = store.getCFStmtImmediate(call).assign_call;
+    try std.testing.expect(rewritten.proc != callee);
+
+    // `ret str_concat(str_append(acc, left), right)`: the join onto the
+    // accumulator is the consumer's, the source's own join stays spelled.
+    var ops: [4]LowLevelOp = undefined;
+    const variant_ops = try testLowLevelOps(&store, store.getProcSpec(rewritten.proc).body.?, &ops);
+    try std.testing.expectEqualSlices(LowLevelOp, &.{ .str_append, .str_concat }, variant_ops);
+    const variant_body = store.getCFStmtImmediate(store.getProcSpec(rewritten.proc).body.?).assign_low_level;
+    const variant_args = store.getLocalSpan(store.getProcSpec(rewritten.proc).args);
+    try std.testing.expectEqual(GuardedList.at(variant_args, 0), GuardedList.at(store.getLocalSpan(variant_body.args), 0));
+}
+
+test "str append makes one variant per source and join" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+
+    const callee = try testStrCallee(&store);
+
+    const acc = try testStrLocal(&store);
+    const x = try testStrLocal(&store);
+    const y = try testStrLocal(&store);
+    const first_result = try testStrLocal(&store);
+    const second_result = try testStrLocal(&store);
+    const mid = try testStrLocal(&store);
+    const out = try testStrLocal(&store);
+
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
+    const second_join = try testJoin(&store, .str_append, out, &.{ mid, second_result }, ret);
+    const second_call = try store.addCFStmt(.{ .assign_call = .{
+        .target = second_result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{y}),
+        .next = second_join,
+    } }, .test_fixture);
+    const first_join = try testConcat(&store, mid, &.{ acc, first_result }, second_call);
+    const first_call = try store.addCFStmt(.{ .assign_call = .{
+        .target = first_result,
+        .proc = callee,
+        .args = try store.addLocalSpan(&.{x}),
+        .next = first_join,
+    } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(9),
+        .args = try store.addLocalSpan(&.{ acc, x, y }),
+        .frame_locals = try store.addLocalSpan(&.{ acc, x, y, first_result, second_result, mid, out }),
+        .body = first_call,
+        .ret_layout = .str,
+    }, .none);
+
+    const before_proc_count = store.procSpecCount();
+    var layouts = try layout_mod.Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    try run(&store, &layouts);
+
+    try std.testing.expectEqual(before_proc_count + 2, store.procSpecCount());
+    const first = store.getCFStmtImmediate(first_call).assign_call;
+    const second = store.getCFStmtImmediate(second_call).assign_call;
+    try std.testing.expect(first.proc != second.proc);
+
+    var ops: [4]LowLevelOp = undefined;
+    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_concat}, try testLowLevelOps(&store, store.getProcSpec(first.proc).body.?, &ops));
+    try std.testing.expectEqualSlices(LowLevelOp, &.{.str_append}, try testLowLevelOps(&store, store.getProcSpec(second.proc).body.?, &ops));
 }
