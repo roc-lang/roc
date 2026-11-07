@@ -54,8 +54,9 @@ pub const Recipe = union(enum) {
     desc: struct { ty: TypeId, scoped: []const ScopedOverride = &.{} },
     /// The descriptor of an erased call's packed argument record: `leading`
     /// pointer-sized words, then values of the types whose descriptors
-    /// `elems` are, in declared order.
-    args_desc: struct { leading: u32, elems: []const Operand },
+    /// `elems` are, in declared order. Capture-record purpose is explicit:
+    /// only those descriptors carry producer metadata in function-storing CTFE.
+    args_desc: struct { leading: u32, elems: []const Operand, capture_record: bool = false },
     /// An immortal erased callable of worker `entry` capturing `captures`.
     callable: struct { entry: WorkerId, captures: []const Operand },
     /// The table of `worker` at the inputs `inputs`.
@@ -276,7 +277,7 @@ pub const Recipes = struct {
                 }
                 break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped } };
             },
-            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbers, args.elems) } },
+            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try renumber.all(allocator, self, numbers, args.elems), .capture_record = args.capture_record } },
             .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try renumber.all(allocator, self, numbers, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try renumber.all(allocator, self, numbers, table.inputs) } },
             .tag_index => |tag| .{ .tag_index = .{ .desc = renumber.operand(self, numbers, tag.desc), .name = tag.name } },
@@ -296,7 +297,7 @@ pub const Recipes = struct {
         return switch (recipe) {
             .input => recipe,
             .desc => |desc| .{ .desc = .{ .ty = desc.ty, .scoped = try arena.dupe(ScopedOverride, desc.scoped) } },
-            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try arena.dupe(Operand, args.elems) } },
+            .args_desc => |args| .{ .args_desc = .{ .leading = args.leading, .elems = try arena.dupe(Operand, args.elems), .capture_record = args.capture_record } },
             .callable => |callable| .{ .callable = .{ .entry = callable.entry, .captures = try arena.dupe(Operand, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try arena.dupe(Operand, table.inputs) } },
             .tag_index, .field_index, .adapt_plan, .names_block => recipe,
@@ -528,7 +529,7 @@ pub const Evaluation = struct {
                     try self.appendScope(&entries, elem_word);
                 }
                 const scope = try program.static_descs.internScope(entries.items);
-                break :blk .{ .node = (try program.static_descs.argsDescriptor(args.leading, elems, scope)).node };
+                break :blk .{ .node = (try program.static_descs.argsDescriptor(args.leading, elems, scope, args.capture_record)).node };
             },
             .callable => |callable| blk: {
                 const words = try self.operandWords(callable.captures);
@@ -778,6 +779,7 @@ fn hashRecipe(hasher: *std.hash.Wyhash, recipe: Recipe) void {
         },
         .args_desc => |args| {
             hashWord(hasher, args.leading);
+            hashWord(hasher, @intFromBool(args.capture_record));
             hashOperands(hasher, args.elems);
         },
         .callable => |callable| {
@@ -833,7 +835,7 @@ fn recipesEqual(a: Recipe, b: Recipe) bool {
     return switch (a) {
         .input => |index| index == b.input,
         .desc => |desc| desc.ty == b.desc.ty and scopedEqual(desc.scoped, b.desc.scoped),
-        .args_desc => |args| args.leading == b.args_desc.leading and operandsEqual(args.elems, b.args_desc.elems),
+        .args_desc => |args| args.leading == b.args_desc.leading and args.capture_record == b.args_desc.capture_record and operandsEqual(args.elems, b.args_desc.elems),
         .callable => |callable| callable.entry == b.callable.entry and operandsEqual(callable.captures, b.callable.captures),
         .table => |table| table.worker == b.table.worker and operandsEqual(table.inputs, b.table.inputs),
         .tag_index => |tag| tag.name == b.tag_index.name and operandEqual(tag.desc, b.tag_index.desc),

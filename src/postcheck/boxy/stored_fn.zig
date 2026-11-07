@@ -4,10 +4,10 @@
 //! A function value under `.boxy` is an erased callable: a worker's code and
 //! what the worker captured, which is values, the descriptors of its scope's
 //! type variables, and dictionaries, themselves erased callables. A stored
-//! function records exactly that: a recipe naming the worker, the types the
-//! descriptors describe, and the captured values and dictionaries as nodes
-//! of the constant store. Restoring it rebuilds the worker from the recipe
-//! and embeds the captures as immutable data. No runtime constructor is emitted.
+//! function records exactly that: a worker recipe, value captures as constant
+//! store nodes, and an immutable graph of descriptors with their override
+//! scopes, callable captures, and table inputs. Restoring it reserves the graph
+//! before connecting its edges. No runtime constructor is emitted.
 //!
 //! The recipe is bytes the constant store keeps opaque but for its first
 //! table: the modules it names, by checked key, each once, which the store
@@ -15,8 +15,8 @@
 //! and to move it to the modules' current versions
 //! (`ConstStore.recipeModuleKeys`). Then come a table of the types the recipe
 //! names, generic where the worker's own types are, then the worker, then
-//! the closed type each captured descriptor describes; a module in those is
-//! an index into the first table.
+//! the capture graph and its table-input and capture-descriptor roots. Every
+//! module reference is an index into the first table.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -100,8 +100,231 @@ pub const Capture = struct {
 pub const Described = struct {
     /// Owned by the `allocator` `describe` was given.
     recipe: []const u8,
-    /// Its values, then its dictionaries. Owned by the same allocator.
+    /// Its value captures. Immutable table captures are explicit recipe edges.
+    /// Owned by the same allocator.
     captures: []const Capture,
+};
+
+/// A completed table's capture graph. These are producer records, not requests
+/// to resolve methods from types. References may point forward or form cycles.
+const CaptureNode = union(enum(u8)) {
+    desc: struct { ty: TypeId, scoped: []const CaptureOverride },
+    callable: struct { worker: CaptureWorker, captures: []const u32 },
+    table: struct { worker: CaptureWorker, inputs: []const u32 },
+    zero,
+};
+const CaptureOverride = struct { nominal: TypeId, methods: [3]?u32 };
+const CaptureWorker = union(enum) {
+    local: WorkerId,
+    encoded: struct { bytes: []const u8, modules: []const [32]u8, types: []const TypeId, link_names: bool },
+
+    fn reader(encoded: @FieldType(CaptureWorker, "encoded"), program: *Program) Decoder {
+        return .{ .program = program, .bytes = encoded.bytes, .modules = encoded.modules, .table = @constCast(encoded.types), .link_names = encoded.link_names };
+    }
+
+    fn resolve(self: CaptureWorker, program: *Program) Allocator.Error!WorkerId {
+        return switch (self) {
+            .local => |id| id,
+            .encoded => |encoded| blk: {
+                var input = reader(encoded, program);
+                break :blk try input.worker();
+            },
+        };
+    }
+};
+
+const CaptureGraphBuilder = struct {
+    retained: *Retained,
+    nodes: std.ArrayList(CaptureNode) = .empty,
+    words: std.HashMapUnmanaged(StaticDescs.CaptureWord, u32, StaticDescs.WordContext, std.hash_map.default_max_load_percentage) = .empty,
+
+    fn deinit(self: *CaptureGraphBuilder) void {
+        self.words.deinit(self.retained.allocator);
+        self.nodes.deinit(self.retained.allocator);
+    }
+
+    fn word(self: *CaptureGraphBuilder, value: StaticDescs.CaptureWord) Allocator.Error!u32 {
+        const allocator = self.retained.allocator;
+        const arena = self.retained.program.arena.allocator();
+        const entry = try self.words.getOrPut(allocator, value);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const index: u32 = @intCast(self.nodes.items.len);
+        entry.value_ptr.* = index;
+        try self.nodes.append(allocator, undefined);
+        const producer = &self.retained.program.static_descs;
+        const node: CaptureNode = switch (value) {
+            .desc => |ty| .{ .desc = .{ .ty = ty, .scoped = &.{} } },
+            .scoped_desc => |scoped| blk: {
+                const entries = producer.scopeEntries(scoped.scope);
+                const overrides = try arena.alloc(CaptureOverride, entries.len);
+                for (entries, overrides) |source, *override| {
+                    override.* = .{ .nominal = source.nominal, .methods = undefined };
+                    for (source.methods, &override.methods) |method, *out| out.* = if (method) |capture| try self.word(capture) else null;
+                }
+                break :blk .{ .desc = .{ .ty = scoped.ty, .scoped = overrides } };
+            },
+            .callable => |id| blk: {
+                const callable = producer.captured_callables.get(id) orelse invariant("an immutable capture has no callable producer record");
+                const worker = self.retained.workers.get(callable.identity) orelse invariant("an immutable capture has no worker producer record");
+                break :blk .{ .callable = .{ .worker = .{ .local = worker }, .captures = try self.span(callable.words) } };
+            },
+            .table => |id| blk: {
+                const ordinal = producer.captured_tables.get(id) orelse invariant("an immutable capture has no table producer record");
+                const table = producer.unfilled_tables.items[ordinal];
+                break :blk .{ .table = .{ .worker = .{ .local = table.worker }, .inputs = try self.span(table.inputs) } };
+            },
+            .zero => .zero,
+            .node, .int => invariant("a function table input captures neither a descriptor nor a callable"),
+        };
+        self.nodes.items[index] = node;
+        return index;
+    }
+
+    fn span(self: *CaptureGraphBuilder, values: []const StaticDescs.CaptureWord) Allocator.Error![]const u32 {
+        const refs = try self.retained.program.arena.allocator().alloc(u32, values.len);
+        for (refs, values) |*ref, value| ref.* = try self.word(value);
+        return refs;
+    }
+};
+
+fn encodeCaptureRefs(encoder: *Encoder, refs: []const u32) Allocator.Error!void {
+    try encoder.word(@intCast(refs.len));
+    for (refs) |ref| try encoder.word(ref);
+}
+
+fn encodeCaptureWorker(encoder: *Encoder, worker: CaptureWorker) Allocator.Error!void {
+    const size_at = encoder.bytes.items.len;
+    try encoder.word(0);
+    const start = encoder.bytes.items.len;
+    switch (worker) {
+        .local => |id| try encoder.worker(id),
+        .encoded => |encoded| {
+            var input = CaptureWorker.reader(encoded, encoder.program);
+            try encoder.importWorker(&input);
+        },
+    }
+    std.mem.writeInt(u32, encoder.bytes.items[size_at..][0..4], @intCast(encoder.bytes.items.len - start), .little);
+}
+
+fn encodeCaptureGraph(encoder: *Encoder, graph: []const CaptureNode) Allocator.Error!void {
+    try encoder.word(@intCast(graph.len));
+    for (graph) |node| {
+        try encoder.bytes.append(encoder.allocator, @backingInt(std.meta.activeTag(node)));
+        switch (node) {
+            .desc => |desc| {
+                try encoder.typeOf(desc.ty);
+                try encoder.word(@intCast(desc.scoped.len));
+                for (desc.scoped) |override| {
+                    try encoder.typeOf(override.nominal);
+                    for (override.methods) |method| {
+                        try encoder.bytes.append(encoder.allocator, @intFromBool(method != null));
+                        if (method) |ref| try encoder.word(ref);
+                    }
+                }
+            },
+            .callable => |callable| {
+                try encodeCaptureWorker(encoder, callable.worker);
+                try encodeCaptureRefs(encoder, callable.captures);
+            },
+            .table => |table| {
+                try encodeCaptureWorker(encoder, table.worker);
+                try encodeCaptureRefs(encoder, table.inputs);
+            },
+            .zero => {},
+        }
+    }
+}
+
+fn decodeCaptureRefs(input: *Decoder) Allocator.Error![]const u32 {
+    const refs = try input.program.arena.allocator().alloc(u32, input.word());
+    for (refs) |*ref| ref.* = input.word();
+    return refs;
+}
+
+fn decodeCaptureWorker(input: *Decoder, type_table: []const TypeId) CaptureWorker {
+    const len = input.word();
+    return .{ .encoded = .{ .bytes = input.take(len), .modules = input.modules, .types = type_table, .link_names = input.link_names } };
+}
+
+fn decodeCaptureGraph(input: *Decoder) Allocator.Error![]const CaptureNode {
+    const arena = input.program.arena.allocator();
+    const type_table = try arena.dupe(TypeId, input.table);
+    const nodes = try arena.alloc(CaptureNode, input.word());
+    for (nodes) |*node| {
+        const tag: std.meta.Tag(CaptureNode) = @fromBackingInt(input.byte());
+        node.* = switch (tag) {
+            .desc => blk: {
+                const ty = input.typeOf();
+                const scoped = try arena.alloc(CaptureOverride, input.word());
+                for (scoped) |*override| {
+                    override.* = .{ .nominal = input.typeOf(), .methods = undefined };
+                    for (&override.methods) |*method| method.* = if (input.byte() != 0) input.word() else null;
+                }
+                break :blk .{ .desc = .{ .ty = ty, .scoped = scoped } };
+            },
+            .callable => blk: {
+                const worker = decodeCaptureWorker(input, type_table);
+                break :blk .{ .callable = .{ .worker = worker, .captures = try decodeCaptureRefs(input) } };
+            },
+            .table => blk: {
+                const worker = decodeCaptureWorker(input, type_table);
+                break :blk .{ .table = .{ .worker = worker, .inputs = try decodeCaptureRefs(input) } };
+            },
+            .zero => .zero,
+        };
+    }
+    return nodes;
+}
+
+fn captureType(graph: []const CaptureNode, index: u32) TypeId {
+    return switch (graph[index]) {
+        .desc => |desc| desc.ty,
+        .callable, .table, .zero => invariant("a table descriptor input has no type"),
+    };
+}
+
+/// Keep only the completed value's reachable capture graph, in root order.
+/// Unrelated tables of a cached producer are not part of the stored value.
+const CaptureSelection = struct {
+    allocator: Allocator,
+    arena: Allocator,
+    source: []const CaptureNode,
+    domain: [32]u8 = @splat(0),
+    nodes: std.ArrayList(CaptureNode) = .empty,
+    indices: std.AutoHashMapUnmanaged(struct { domain: [32]u8, index: u32 }, u32) = .empty,
+
+    fn deinit(self: *CaptureSelection) void {
+        self.nodes.deinit(self.allocator);
+        self.indices.deinit(self.allocator);
+    }
+
+    fn ref(self: *CaptureSelection, old: u32) Allocator.Error!u32 {
+        const entry = try self.indices.getOrPut(self.allocator, .{ .domain = self.domain, .index = old });
+        if (entry.found_existing) return entry.value_ptr.*;
+        const index: u32 = @intCast(self.nodes.items.len);
+        entry.value_ptr.* = index;
+        try self.nodes.append(self.allocator, undefined);
+        const node: CaptureNode = switch (self.source[old]) {
+            .desc => |desc| blk: {
+                const scoped = try self.arena.dupe(CaptureOverride, desc.scoped);
+                for (scoped) |*override| for (&override.methods) |*method| {
+                    if (method.*) |id| method.* = try self.ref(id);
+                };
+                break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped } };
+            },
+            .callable => |callable| .{ .callable = .{ .worker = callable.worker, .captures = try self.span(callable.captures) } },
+            .table => |table| .{ .table = .{ .worker = table.worker, .inputs = try self.span(table.inputs) } },
+            .zero => .zero,
+        };
+        self.nodes.items[index] = node;
+        return index;
+    }
+
+    fn span(self: *CaptureSelection, refs: []const u32) Allocator.Error![]const u32 {
+        const out = try self.arena.alloc(u32, refs.len);
+        for (refs, out) |old, *new| new.* = try self.ref(old);
+        return out;
+    }
 };
 
 /// A lowered compile-time program's types and workers, kept for reading the
@@ -188,11 +411,17 @@ pub const Retained = struct {
             }
         }
 
-        // The table's inputs: the descriptors of the types the value is at,
-        // then its dictionaries, which the table holds as words.
+        // The table's producer supplies every immutable input and capture
+        // edge. Its scope is data, including override callables, not a type
+        // from which the receiving body can recover the original overrides.
         const table: ?[*]u8 = if (has_table) @ptrCast(@constCast(readWord(capture + offsets[shape.values.len]))) else null;
         const bound = try allocator.alloc(TypeId, shape.descs);
         defer allocator.free(bound);
+        var local_graph = CaptureGraphBuilder{ .retained = self };
+        defer local_graph.deinit();
+        var graph: []const CaptureNode = &.{};
+        var roots: []const u32 = &.{};
+        var domain: [32]u8 = @splat(0);
         if (table) |address| {
             const table_words = switch (source) {
                 .local => |id| (program.worker(id).needs orelse invariant("a captured table has no declared needs")).wordCount(),
@@ -200,18 +429,22 @@ pub const Retained = struct {
             };
             const offset = LIR.tableEntryOffset(table_words, program.static_descs.width.bytes());
             const origin = address[offset..][0..32];
+            domain = origin.*;
             const index = std.mem.readInt(u32, address[offset + 32 ..][0..4], @import("builtin").cpu.arch.endian());
             if (std.mem.allEqual(u8, origin, 0)) {
                 const tables = program.static_descs.unfilled_tables.items;
                 if (index >= tables.len) invariant("a captured table has no producer record");
                 const inputs = tables[index].inputs;
                 if (inputs.len != shape.descs + shape.dicts) invariant("a captured table has the wrong input arity");
-                for (bound, inputs[0..shape.descs]) |*ty, input| ty.* = descriptorType(input);
+                roots = try local_graph.span(inputs);
+                graph = local_graph.nodes.items;
             } else {
                 const metadata = try self.importMetadata(origin.*);
-                if (index >= metadata.tables.len or metadata.tables[index].len != bound.len) invariant("a cached table has no matching producer types");
-                @memcpy(bound, metadata.tables[index]);
+                if (index >= metadata.tables.len or metadata.tables[index].len != shape.descs + shape.dicts) invariant("a cached table has no matching producer inputs");
+                roots = metadata.tables[index];
+                graph = metadata.graph;
             }
+            for (bound, roots[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
         }
 
         var recipe = Encoder{ .allocator = allocator, .program = program };
@@ -223,21 +456,36 @@ pub const Retained = struct {
                 try recipe.importWorker(&reader);
             },
         }
-        try recipe.typeSpan(bound);
-        // The dictionaries of a method whose scheme requires itself capture
-        // one another. Record their closed types so restoration can reserve
-        // the complete immutable graph before connecting its references.
-        const recursive_dictionary = switch (source) {
-            .local => |worker_id| switch (program.worker(worker_id).key) {
-                .method_entry => |target| try program.dictionaryCapturesItself(target, bound),
-                .lambda, .adapter, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec, .template, .default, .root, .static_data, .convert => false,
-            },
-            .imported => |foreign| try foreign.metadata.recursiveDictionary(program, foreign.function, bound),
-        };
-        try recipe.bytes.append(allocator, @intFromBool(recursive_dictionary));
-        if (recursive_dictionary) return .{ .recipe = try recipe.finish(), .captures = &.{} };
+        var selected = CaptureSelection{ .allocator = allocator, .arena = program.arena.allocator(), .source = graph, .domain = domain };
+        defer selected.deinit();
+        const inputs = try selected.span(roots);
+        var capture_descs: []const u32 = &.{};
+        if (open) {
+            const address: [*]const u8 = @ptrCast(readWord(capture));
+            const offset = TypeDesc.layout(program.static_descs.width).size;
+            const origin = address[offset..][0..32];
+            const index = std.mem.readInt(u32, address[offset + 32 ..][0..4], @import("builtin").cpu.arch.endian());
+            selected.domain = origin.*;
+            const record: ImportedRecord = if (std.mem.allEqual(u8, origin, 0)) blk: {
+                const records = program.static_descs.captured_records.items;
+                if (index >= records.len) invariant("a capture record descriptor has no producer record");
+                const refs = try local_graph.span(records[index].elems);
+                selected.source = local_graph.nodes.items;
+                break :blk .{ .leading = records[index].leading, .elems = refs };
+            } else blk: {
+                const metadata = try self.importMetadata(origin.*);
+                if (index >= metadata.records.len) invariant("a cached capture record descriptor has no producer record");
+                selected.source = metadata.graph;
+                break :blk metadata.records[index];
+            };
+            if (record.leading != body.Builder.capture_record_leading_words + word_count or record.elems.len != shape.values.len) invariant("a captured record has the wrong producer shape");
+            capture_descs = try selected.span(record.elems);
+        }
+        try encodeCaptureGraph(&recipe, selected.nodes.items);
+        try encodeCaptureRefs(&recipe, inputs);
+        try encodeCaptureRefs(&recipe, capture_descs);
 
-        const captures = try allocator.alloc(Capture, shape.values.len + shape.dicts);
+        const captures = try allocator.alloc(Capture, shape.values.len);
         errdefer allocator.free(captures);
         for (shape.values, captures[0..shape.values.len], offsets[0..shape.values.len]) |generic, *slot, offset| {
             const concrete = try program.substitute(allocator, generic, bound);
@@ -245,15 +493,6 @@ pub const Retained = struct {
                 .plan = try const_schema.constPlanOf(program, concrete),
                 .layout_idx = try program.layouts.layoutOf(concrete),
                 .ptr = capture + offset,
-            };
-        }
-        const dictionary_ty = try program.anyFunction();
-        const word_bytes = program.static_descs.width.bytes();
-        for (captures[shape.values.len..], shape.descs..) |*slot, index| {
-            slot.* = .{
-                .plan = try const_schema.constPlanOf(program, dictionary_ty),
-                .layout_idx = try program.result.layouts.insertErasedCallable(),
-                .ptr = table.? + LIR.tableEntryOffset(@intCast(index), word_bytes),
             };
         }
         return .{ .recipe = try recipe.finish(), .captures = captures };
@@ -281,9 +520,16 @@ pub const MetadataView = struct {
             try input.typeEntry();
         }
         input.types = count;
+        const graph_count = try input.captureGraph();
         const tables = try input.word();
         if (tables > input.remaining() / 4) return error.InvalidMetadata;
-        for (0..tables) |_| try input.typeSpan();
+        for (0..tables) |_| try input.captureRefs(graph_count);
+        const records = try input.word();
+        if (records > input.remaining() / 8) return error.InvalidMetadata;
+        for (0..records) |_| {
+            _ = try input.word(); // leading opaque words
+            try input.captureRefs(graph_count);
+        }
         const function_count = try input.word();
         if (function_count > input.remaining() / 57) return error.InvalidMetadata;
         const at = input.at;
@@ -373,6 +619,42 @@ const MetadataReader = struct {
         const count = try self.word();
         if (count > self.remaining() / 4) return error.InvalidMetadata;
         for (0..count) |_| try self.typeRef();
+    }
+    fn captureRef(self: *MetadataReader, count: u32) error{InvalidMetadata}!void {
+        if (try self.word() >= count) return error.InvalidMetadata;
+    }
+    fn captureRefs(self: *MetadataReader, nodes: u32) error{InvalidMetadata}!void {
+        const count = try self.word();
+        if (count > self.remaining() / 4) return error.InvalidMetadata;
+        for (0..count) |_| try self.captureRef(nodes);
+    }
+    fn captureGraph(self: *MetadataReader) error{InvalidMetadata}!u32 {
+        const count = try self.word();
+        if (count > self.remaining()) return error.InvalidMetadata;
+        for (0..count) |_| switch (try self.tag(std.meta.Tag(CaptureNode))) {
+            .desc => {
+                try self.typeRef();
+                const scoped = try self.word();
+                if (scoped > self.remaining() / 7) return error.InvalidMetadata;
+                for (0..scoped) |_| {
+                    try self.typeRef();
+                    for (0..3) |_| {
+                        const present = try self.byte();
+                        if (present > 1) return error.InvalidMetadata;
+                        if (present != 0) try self.captureRef(count);
+                    }
+                }
+            },
+            .callable, .table => {
+                const len = try self.word();
+                var worker_input = MetadataReader{ .bytes = try self.take(len), .modules = self.modules, .types = self.types };
+                try worker_input.worker();
+                if (worker_input.remaining() != 0) return error.InvalidMetadata;
+                try self.captureRefs(count);
+            },
+            .zero => {},
+        };
+        return count;
     }
     fn ext(self: *MetadataReader) error{InvalidMetadata}!void {
         const id = try self.word();
@@ -523,23 +805,18 @@ const ImportedFunction = struct {
     table_words: u32,
 };
 
+const ImportedRecord = struct { leading: u32, elems: []const u32 };
+
 const ImportedMetadata = struct {
     modules: []const [32]u8,
     types: []const TypeId,
-    tables: []const []const TypeId = &.{},
+    graph: []const CaptureNode = &.{},
+    tables: []const []const u32 = &.{},
+    records: []const ImportedRecord = &.{},
     functions: std.AutoHashMapUnmanaged(LIR.ProcIdentity, ImportedFunction) = .empty,
 
     fn reader(self: *const ImportedMetadata, program: *Program, bytes: []const u8) Decoder {
         return .{ .program = program, .link_names = true, .bytes = bytes, .modules = self.modules, .table = @constCast(self.types) };
-    }
-
-    fn recursiveDictionary(self: *const ImportedMetadata, program: *Program, function: ImportedFunction, bound: []const TypeId) Allocator.Error!bool {
-        var input = self.reader(program, function.worker);
-        if (input.byte() != @backingInt(Tag.method_entry)) return false;
-        // Reconstitute the declared scope needed by the existing dictionary
-        // dependency rule. This creates no executable body and runs no lowering.
-        const target = try input.worker();
-        return try program.dictionaryCapturesItself(target, bound);
     }
 
     fn load(program: *Program, bytes: []const u8) Allocator.Error!*ImportedMetadata {
@@ -550,10 +827,17 @@ const ImportedMetadata = struct {
         defer program.allocator.free(input.table);
         const result = try arena.create(ImportedMetadata);
         result.* = .{ .modules = input.modules, .types = try arena.dupe(TypeId, input.table) };
+        result.graph = try decodeCaptureGraph(&input);
         const table_count = input.word();
-        const tables = try arena.alloc([]const TypeId, table_count);
-        for (tables) |*table| table.* = try input.typeSpan();
+        const tables = try arena.alloc([]const u32, table_count);
+        for (tables) |*table| table.* = try decodeCaptureRefs(&input);
         result.tables = tables;
+        const records = try arena.alloc(ImportedRecord, input.word());
+        for (records) |*record| {
+            const leading = input.word();
+            record.* = .{ .leading = leading, .elems = try decodeCaptureRefs(&input) };
+        }
+        result.records = records;
         const count = input.word();
         for (0..count) |_| {
             const identity: LIR.ProcIdentity = .{ .bytes = input.take(32)[0..32].* };
@@ -572,15 +856,7 @@ const ImportedMetadata = struct {
     }
 };
 
-fn descriptorType(input: StaticDescs.CaptureWord) TypeId {
-    return switch (input) {
-        .desc => |ty| ty,
-        .scoped_desc => |scoped| scoped.ty,
-        .callable, .table, .node, .zero, .int => invariant("a table descriptor input has no type"),
-    };
-}
-
-/// Record only callable workers the backend emitted and descriptor inputs of
+/// Record only callable workers the backend emitted and immutable inputs of
 /// the tables explicitly filled by their producer. Ordinary objects never request this table. `compiled`
 /// is the backend producer's procedure list, not a guessed reachability scan.
 pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled: []const CompiledFunction) Allocator.Error![]const u8 {
@@ -590,32 +866,38 @@ pub fn encodeMetadata(retained: *Retained, result: *LirProgram.Result, compiled:
     const allocator = program.allocator;
     var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true };
     defer encoder.deinit();
-    try encoder.word(@intCast(program.static_descs.unfilled_tables.items.len));
-    for (program.static_descs.unfilled_tables.items) |table| {
-        const count = program.descCount(table.worker);
-        try encoder.word(@intCast(count));
-        for (table.inputs[0..count]) |input| try encoder.typeOf(descriptorType(input));
+    var graph = CaptureGraphBuilder{ .retained = retained };
+    defer graph.deinit();
+    const tables = try program.arena.allocator().alloc([]const u32, program.static_descs.unfilled_tables.items.len);
+    for (program.static_descs.unfilled_tables.items, tables) |table, *inputs| inputs.* = try graph.span(table.inputs);
+    const records = try program.arena.allocator().alloc(ImportedRecord, program.static_descs.captured_records.items.len);
+    for (program.static_descs.captured_records.items, records) |record, *out| out.* = .{ .leading = record.leading, .elems = try graph.span(record.elems) };
+    try encodeCaptureGraph(&encoder, graph.nodes.items);
+    try encoder.word(@intCast(tables.len));
+    for (tables) |inputs| try encodeCaptureRefs(&encoder, inputs);
+    try encoder.word(@intCast(records.len));
+    for (records) |record| {
+        try encoder.word(record.leading);
+        try encodeCaptureRefs(&encoder, record.elems);
     }
     const count_at = encoder.bytes.items.len;
     try encoder.word(0);
-    var emitted: std.AutoHashMapUnmanaged(LIR.ProcIdentity, u32) = .empty;
-    defer emitted.deinit(allocator);
-    for (compiled) |function| try emitted.put(allocator, function.identity, function.symbol);
     var count: u32 = 0;
     // Lowering declares which workers can be function values. ARC may emit
     // additional direct-call ownership variants; those have no capture recipe
-    // and do not belong in this table. Dead workers have no emitted symbol.
-    for (program.workers.items, 0..) |record, index| {
+    // and do not belong in this table. Join the backend's emitted order with
+    // the stable identity relation retained before LIR procedure compaction;
+    // Worker.proc no longer indexes the same procedure in the finished store.
+    for (compiled) |function| {
+        const id = retained.workers.get(function.identity) orelse continue;
+        const record = program.worker(id);
         switch (record.key) {
             .template, .default, .root, .static_data, .convert => continue,
             .lambda, .adapter, .method_entry, .structural, .structural_map, .crash_dictionary, .literal_thunk, .root_slot, .codec => {},
         }
-        const identity = program.result.store.getProcSpec(record.proc).identity;
-        const symbol = emitted.get(identity) orelse continue;
-        const id: WorkerId = @fromBackingInt(@intCast(index));
         const shape = captureShape(program, id);
-        try encoder.bytes.appendSlice(allocator, &identity.bytes);
-        try encoder.word(symbol);
+        try encoder.bytes.appendSlice(allocator, &function.identity.bytes);
+        try encoder.word(function.symbol);
         try encoder.typeSpan(shape.values);
         try encoder.word(shape.descs);
         try encoder.word(shape.dicts);
@@ -1264,9 +1546,15 @@ const Decoder = struct {
 pub const Decoded = struct {
     worker: WorkerId,
     bound: []const TypeId,
-    /// A dictionary composed again from `bound`, with no stored captures.
-    recursive_dictionary: bool,
+    inputs: []const Tables.Operand,
+    capture_descs: []const Tables.Operand,
 };
+
+fn captureOperands(arena: Allocator, words: []const Tables.Operand, refs: []const u32) Allocator.Error![]const Tables.Operand {
+    const out = try arena.alloc(Tables.Operand, refs.len);
+    for (out, refs) |*operand, ref| operand.* = words[ref];
+    return out;
+}
 
 /// Read a stored function's recipe.
 pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
@@ -1275,8 +1563,35 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
     try decoder.readTable();
     defer b.allocator.free(decoder.table);
     const worker = try decoder.worker();
-    const bound = try decoder.typeSpan();
-    return .{ .worker = worker, .bound = bound, .recursive_dictionary = decoder.byte() != 0 };
+    const graph = try decodeCaptureGraph(&decoder);
+    const inputs = try decodeCaptureRefs(&decoder);
+    const capture_descs = try decodeCaptureRefs(&decoder);
+    const shape = captureShape(b.program, worker);
+    if (inputs.len != shape.descs + shape.dicts) invariant("a stored function's immutable inputs differ from its worker's");
+    const arena = b.program.arena.allocator();
+    const bound = try arena.alloc(TypeId, shape.descs);
+    for (bound, inputs[0..shape.descs]) |*ty, ref| ty.* = captureType(graph, ref);
+    const words = try arena.alloc(Tables.Operand, graph.len);
+    // Reserve before connecting any edge. Scoped descriptors can capture
+    // overrides that capture those descriptors, and dictionaries can cycle.
+    for (graph, words) |node, *word| word.* = if (node == .zero) .{ .static = .zero } else .{ .recipe = try b.recipes.reserve() };
+    for (graph, words) |node, word| {
+        const recipe_node: Tables.Recipe = switch (node) {
+            .desc => |desc| blk: {
+                const scoped = try arena.alloc(Tables.ScopedOverride, desc.scoped.len);
+                for (desc.scoped, scoped) |original, *override| {
+                    override.* = .{ .nominal = original.nominal, .methods = undefined };
+                    for (original.methods, &override.methods) |method, *out| out.* = if (method) |ref| words[ref] else null;
+                }
+                break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped } };
+            },
+            .callable => |callable| .{ .callable = .{ .entry = try callable.worker.resolve(b.program), .captures = try captureOperands(arena, words, callable.captures) } },
+            .table => |table| .{ .table = .{ .worker = try table.worker.resolve(b.program), .inputs = try captureOperands(arena, words, table.inputs) } },
+            .zero => continue,
+        };
+        try b.recipes.set(word.recipe, recipe_node);
+    }
+    return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
 }
 
 test "function unit metadata rejects truncated records and invalid type and module references" {
@@ -1294,9 +1609,32 @@ test "function unit metadata rejects truncated records and invalid type and modu
     try bytes.appendNTimes(allocator, 42, 32);
     try Write.word(&bytes, 1); // one type
     try bytes.append(allocator, @backingInt(std.meta.Tag(types.Node).empty_record));
+    try Write.word(&bytes, 3); // descriptor -> override -> table -> descriptor
+    try bytes.append(allocator, @backingInt(std.meta.Tag(CaptureNode).desc));
+    const descriptor_ref = bytes.items.len;
+    try Write.word(&bytes, 0); // its type
+    try Write.word(&bytes, 1); // one scoped override
+    try Write.word(&bytes, 0); // nominal type
+    try bytes.append(allocator, 1);
+    const scoped_ref = bytes.items.len;
+    try Write.word(&bytes, 1); // forward callable reference
+    try bytes.appendSlice(allocator, &.{ 0, 0 });
+    for ([_]std.meta.Tag(CaptureNode){ .callable, .table }, [_]u32{ 2, 0 }) |tag, ref| {
+        try bytes.append(allocator, @backingInt(tag));
+        try Write.word(&bytes, 6);
+        try bytes.append(allocator, @backingInt(Tag.structural));
+        try Write.word(&bytes, 0);
+        try bytes.append(allocator, @typeInfo(@FieldType(lower.WorkerKey, "structural")).@"enum".field_values[0]);
+        try Write.word(&bytes, 1);
+        try Write.word(&bytes, ref);
+    }
     try Write.word(&bytes, 1); // one producer table
     try Write.word(&bytes, 1); // one descriptor input
     const origin_ref = bytes.items.len;
+    try Write.word(&bytes, 0);
+    try Write.word(&bytes, 1); // one capture-record descriptor
+    try Write.word(&bytes, 3); // leading opaque words
+    try Write.word(&bytes, 1); // one element descriptor
     try Write.word(&bytes, 0);
     try Write.word(&bytes, 1); // one callable
     const identity: LIR.ProcIdentity = .{ .bytes = @splat(19) };
@@ -1318,9 +1656,15 @@ test "function unit metadata rejects truncated records and invalid type and modu
     try std.testing.expectEqual(CompiledFunction{ .identity = identity, .symbol = 23 }, functions.next().?);
     try std.testing.expectEqual(@as(?CompiledFunction, null), functions.next());
     for (0..bytes.items.len) |len| try std.testing.expectError(error.InvalidMetadata, MetadataView.init(bytes.items[0..len]));
-    bytes.items[origin_ref] = 1;
+    bytes.items[origin_ref] = 3;
     try std.testing.expectError(error.InvalidMetadata, MetadataView.init(bytes.items));
     bytes.items[origin_ref] = 0;
+    bytes.items[descriptor_ref] = 1;
+    try std.testing.expectError(error.InvalidMetadata, MetadataView.init(bytes.items));
+    bytes.items[descriptor_ref] = 0;
+    bytes.items[scoped_ref] = 3;
+    try std.testing.expectError(error.InvalidMetadata, MetadataView.init(bytes.items));
+    bytes.items[scoped_ref] = 1;
     bytes.items[module_ref] = 1;
     try std.testing.expectError(error.InvalidMetadata, MetadataView.init(bytes.items));
     bytes.items[module_ref] = 0;
@@ -1330,10 +1674,10 @@ test "function unit metadata rejects truncated records and invalid type and modu
 
 /// A worker's needs list (`tables.Needs`) as bytes another unit reads, in
 /// the encoding of a stored function's recipe: its types and workers named
-/// by their checked identities, never by this lowering's ids, so equal
-/// needs are equal bytes. Caller frees.
+/// by module link identities, never by this lowering's ids or a checked
+/// snapshot that can change while the native object stays reusable. Caller frees.
 pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs) Allocator.Error![]const u8 {
-    var encoder = Encoder{ .allocator = allocator, .program = program };
+    var encoder = Encoder{ .allocator = allocator, .program = program, .link_names = true };
     defer encoder.deinit();
     try encoder.word(needs.input_count);
     try encoder.word(needs.desc_count);
@@ -1355,6 +1699,7 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
             },
             .args_desc => |args| {
                 try encoder.word(args.leading);
+                try encoder.bytes.append(allocator, @intFromBool(args.capture_record));
                 try encodeOperands(&encoder, args.elems);
             },
             .callable => |callable| {
@@ -1417,11 +1762,11 @@ fn encodeOperand(encoder: *Encoder, operand: Tables.Operand) Allocator.Error!voi
 
 /// Read the needs list `encodeNeeds` wrote, its types and workers in this
 /// lowering, allocated in the program's arena. Its bytes are this
-/// compiler's: a cached entry's export records reach a lowering only once
-/// their digest checks (`boxy_object_cache.decodeView`).
+/// compiler's: complete entries are admitted by `boxy_object_cache.decodeView`.
+/// Link identities bind the records to the current checked module graph.
 pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.Needs {
     const arena = program.arena.allocator();
-    var decoder = Decoder{ .program = program, .bytes = bytes };
+    var decoder = Decoder{ .program = program, .link_names = true, .bytes = bytes };
     decoder.readModules();
     try decoder.readTable();
     defer program.allocator.free(decoder.table);
@@ -1443,7 +1788,8 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
             },
             .args_desc => blk: {
                 const leading = decoder.word();
-                break :blk .{ .args_desc = .{ .leading = leading, .elems = try decodeOperands(&decoder) } };
+                const capture_record = decoder.byte() != 0;
+                break :blk .{ .args_desc = .{ .leading = leading, .elems = try decodeOperands(&decoder), .capture_record = capture_record } };
             },
             .callable => blk: {
                 const entry = try decoder.worker();

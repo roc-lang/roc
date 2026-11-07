@@ -667,6 +667,8 @@ const CustomCase = enum {
     ctfe_cache_mixing,
     ctfe_cached_nominal_anchor,
     ctfe_cached_function_units,
+    ctfe_stored_scoped_captures,
+    ctfe_cached_needs_dependencies,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_12595_lambda_solved,
@@ -3366,7 +3368,10 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "recursive nominals holding a Dict compare equal (BoxyRecursiveDictEquality, boxy, dev)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveDictEquality.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "recursive nominals holding a Dict compare equal (BoxyRecursiveDictEquality, specialized)", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/BoxyRecursiveDictEquality.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "cached function units preserve new caller captures and producer edits", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cached_function_units } },
+    .{ .id = 0, .suite = .subcommands, .name = "cached table needs bind current checked dependencies", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_cached_needs_dependencies } },
+    .{ .id = 0, .suite = .subcommands, .name = "cached function metadata preserves identities through procedure compaction", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/boxy_compacted_function_metadata/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "cached function units preserve captures from multiple producers", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev" }, .roc_file = "test/cli/boxy_cached_function_units/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "stored local nominal overrides preserve captures cached and uncached", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_stored_scoped_captures } },
     .{ .id = 0, .suite = .subcommands, .name = "independent stored-function modules preserve capture types (one worker)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--jobs=1" }, .roc_file = "test/cli/boxy_parallel_stored_functions/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "independent stored-function modules preserve capture types (eight workers)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--jobs=8" }, .roc_file = "test/cli/boxy_parallel_stored_functions/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "independent stored-function modules preserve capture types (without object cache)", .body = .{ .command = .{ .args = &.{ "test", "--specialize=no", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/boxy_parallel_stored_functions/Main.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
@@ -6289,6 +6294,8 @@ fn runCustomCase(
         .ctfe_cache_mixing => customCtfeCacheMixing(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cached_nominal_anchor => customCtfeCachedNominalAnchor(io, allocator, &env, &timer, timeout_ms),
         .ctfe_cached_function_units => customCtfeCachedFunctionUnits(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_stored_scoped_captures => customCtfeStoredScopedCaptures(io, allocator, &env, &timer, timeout_ms),
+        .ctfe_cached_needs_dependencies => customCtfeCachedNeedsDependencies(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -12171,6 +12178,122 @@ fn customCtfeCachedFunctionUnits(
         })) |failure| return failure;
     }
     return null;
+}
+
+/// An unchanged generic module's cached needs bind to its current checked
+/// snapshot after an implementation-only edit in a nongeneric dependency.
+fn customCtfeCachedNeedsDependencies(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const dir = createWorkSubdir(io, allocator, env, "cached_needs_dependencies") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create the case directory: {}", .{err});
+    const cache = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the cache root: {}", .{err});
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate the entrypoint: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to clone the environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+        return customInfraFailure(allocator, timer, "failed to isolate the cache: {}", .{err});
+    if (writeCaseFile(io, allocator, timer, dir, "Factory.roc",
+        \\import Dependency
+        \\Factory := [].{
+        \\    make : a -> ({} -> a)
+        \\    make = |captured| |token| {
+        \\        _ = Dependency.touch(token)
+        \\        captured
+        \\    }
+        \\}
+        \\
+    )) |failure| return failure;
+    if (writeCaseFile(io, allocator, timer, dir, "Main.roc",
+        \\import Factory
+        \\saved = Factory.make("captured")
+        \\expect saved({}) == "captured"
+        \\
+    )) |failure| return failure;
+    const dependency =
+        \\Dependency := [].{
+        \\    touch : {} -> {}
+        \\    touch = |value| value
+        \\}
+        \\
+    ;
+    for ([_][]const u8{ dependency, dependency, dependency ++ "# A new checked identity, with the same exported interface.\n", dependency }) |source| {
+        if (writeCaseFile(io, allocator, timer, dir, "Dependency.roc", source)) |failure| return failure;
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color", "--jobs=2" },
+            .roc_file = main_path,
+            .contains = &.{.{ .stream = .stdout, .text = "All (1) tests passed" }},
+            .stderr_exact = "",
+        })) |failure| return failure;
+    }
+    return null;
+}
+
+/// Preserve local override callables through both table-producer domains,
+/// through a caller edit with a warm producer, and through uncached evaluation.
+fn customCtfeStoredScopedCaptures(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const dir = createWorkSubdir(io, allocator, env, "stored_scoped_captures") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create fixture directory: {}", .{err});
+    const cache = std.fs.path.join(allocator, &.{ dir, "cache" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate cache path: {}", .{err});
+    var isolated = CaseEnv{ .dirs = env.dirs, .env_map = env.env_map.clone(allocator) catch |err|
+        return customInfraFailure(allocator, timer, "failed to clone environment: {}", .{err}) };
+    defer isolated.env_map.deinit();
+    isolated.env_map.put("ROC_CACHE_DIR", cache) catch |err|
+        return customInfraFailure(allocator, timer, "failed to isolate cache: {}", .{err});
+    for ([_][]const u8{ "Factory.roc", "Direct.roc", "Main.roc" }) |name| {
+        const from = std.fs.path.join(allocator, &.{ project_root_path, "test/cli/boxy_stored_scoped_captures", name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate source path: {}", .{err});
+        defer allocator.free(from);
+        const source = std.Io.Dir.cwd().readFileAlloc(io, from, allocator, .limited(1024 * 1024)) catch |err|
+            return customInfraFailure(allocator, timer, "failed to read fixture: {}", .{err});
+        defer allocator.free(source);
+        if (writeCaseFile(io, allocator, timer, dir, name, source)) |failure| return failure;
+    }
+    const direct = std.fs.path.join(allocator, &.{ dir, "Direct.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate direct control path: {}", .{err});
+    if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color", "--jobs=2", "--no-cache" },
+        .roc_file = direct,
+        .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+        .stderr_exact = "",
+    })) |failure| return failure;
+    const main_path = std.fs.path.join(allocator, &.{ dir, "Main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate stored control path: {}", .{err});
+    for ([_]u32{ 7, 7, 11, 11 }) |captured| {
+        const source = std.fmt.allocPrint(
+            allocator,
+            "import Factory\nsaved = Factory.make({d}.U64)\nclosed_saved = Factory.closed({{}})\nexpect saved({{}}) == \"Local({d})\"\nexpect closed_saved({{}}) == \"Local(7)\"\n",
+            .{ captured, captured },
+        ) catch |err| return customInfraFailure(allocator, timer, "failed to format caller: {}", .{err});
+        defer allocator.free(source);
+        if (writeCaseFile(io, allocator, timer, dir, "Main.roc", source)) |failure| return failure;
+        if (runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+            .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color", "--jobs=2" },
+            .roc_file = main_path,
+            .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+            .stderr_exact = "",
+        })) |failure| return failure;
+    }
+    return runRocAndCheck(io, allocator, &isolated, timer, timeout_ms, .{
+        .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-color", "--jobs=2", "--no-cache" },
+        .roc_file = main_path,
+        .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }},
+        .stderr_exact = "",
+    });
 }
 
 fn customCtfeCachedNominalAnchor(

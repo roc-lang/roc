@@ -37,9 +37,10 @@ pub const Entry = enum {
 /// Layout fingerprint of `ModuleEnv.Serialized`.
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
-/// Version of the checked-module envelope: its magic, header layout, and body
-/// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 15;
+/// Version of the checked-module envelope and opaque body encodings not
+/// reflected in layout fingerprints. Version 16 stores Boxy callable capture
+/// graphs, including descriptor scopes. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 16;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.

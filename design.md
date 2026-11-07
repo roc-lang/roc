@@ -4233,6 +4233,16 @@ or replaces it. A failed write is an ordinary cache-write failure: the
 compilation continues with the live module. Pairings follow their own
 cache-write rule above.
 
+Submitting a checked-cache writer is transactional: failure accepts no task
+and produces no completion. The coordinator reserves wake-message capacity
+while holding the wake queue's lock, then queues the task and commits the
+wake message without another fallible operation. Workers release the wake
+queue's lock before taking a session queue's lock. On every exit, including
+submission failure, the publication owner drains all accepted tasks before
+ending the session or freeing the task contexts and checked data they borrow.
+Accepted writers may finish publishing their finalized entries while draining;
+the failed submission and later unsubmitted work publish nothing.
+
 `ModuleEnv` contains `CommonEnv.strings`, a `base.StringLiteral.Store`. That
 store is part of the checked module cache data. A cache hit materializes it as a
 view of its byte buffer and stops. Cache reads must not scan the string entries,
@@ -14110,7 +14120,10 @@ many tables.
 
 An imported worker's tables are filled in the importing unit, from the needs
 list the worker's object exports (`ExportRecord.table_needs`), in which types
-and workers are named by their checked identities. The exports digest covers
+and workers name their modules by the link's content-derived identities, bound
+to the current checked graph when read. A dependency implementation edit can
+change a module's checked key without changing its native object, so that
+object must not retain the old checked key in its needs list. The exports digest covers
 it, so an importer of a changed needs list is lowered again. This digest
 identifies semantic dependencies; it is not a payload-integrity checksum.
 A cached object's header records its total byte length. Loading compares it
@@ -15030,12 +15043,17 @@ code references of the evaluation and the transitive references of those units;
 merely being visible to the evaluator does not demand such an artifact.
 
 A compiler-only unit records the callable workers its code emits, their capture
-shapes and worker recipes, their exact native image symbol indices, and the
-closed descriptor-input types of its explicitly filled type tables, and the
-number of words preceding each worker table's producer trailer.
+shapes and worker recipes, their exact native image symbol indices, the
+immutable inputs of its explicitly filled type tables, and the number of
+words preceding each worker table's producer trailer. Descriptor inputs retain
+their nominal override scopes: each override is an explicit callable with its
+capture edges, not a method to resolve again from a type.
 Lowering's explicit callable-worker inventory is intersected with the backend's
 emitted procedure inventory: dead workers have no symbol, and direct-call
 ownership variants introduced by ARC have no function-value capture recipe.
+The intersection joins stable procedure identities recorded before LIR
+compaction, in the backend's emitted order. A retained worker's old procedure
+number must not index the compacted store when publishing its capture metadata.
 An emitted procedure is not necessarily a lowering worker.
 The records share a module-name table and a type table. Module references use the
 link's explicit module names, not checked-artifact keys from the producing build.
@@ -15048,15 +15066,25 @@ captures follow the same immutable constant-graph rules as uncached evaluation.
 Each table used to store function values ends with its producing unit's content
 key and its explicit table ordinal; a root program uses its local domain. This
 trailer exists only for function-storing evaluation, never ordinary runtime code.
-The unit metadata records the closed descriptor-input types at each ordinal.
+The unit metadata records the input capture graph at each ordinal: descriptors
+with scopes, callables with their worker recipes and captures, and tables with
+their inputs. It records neither derived table words nor lowered worker bodies.
 A returned function's table can belong to its caller rather than the unit that
 emitted its worker, so these identities remain separate. A reader uses the table's
-producer to interpret its input types and the callable's producer to interpret its
+producer to interpret its inputs and the callable's producer to interpret its
 capture shape and recipe. No process-local type or worker id crosses that boundary.
 Compilation-local addresses bind loaded callable code to the producer's explicit
-procedure identity. Captured dictionaries are read from the table's input words;
-completed captures and tables are emitted as immutable data, never reconstructed
-by runtime allocation instructions.
+procedure identity. Completed captures and tables are emitted as immutable data,
+never reconstructed by runtime allocation instructions.
+
+A dynamic function capture-record descriptor carries its own producer key and
+ordinal after its descriptor header, identifying its element descriptors with
+their scopes. Its producer can differ from both the callable's and its table's.
+The argument-descriptor recipe records capture-record purpose explicitly; a
+matching shape or leading-word count cannot confer that purpose. Only function-
+storing evaluation emits these records and trailers, and ordinary argument
+buffers emit none even in those units. Stored values keep only the capture graph
+reachable from their table inputs and capture-record element descriptors.
 
 #### Stored Function Values
 
@@ -15064,12 +15092,13 @@ A `.boxy` function value is an erased callable: a worker's code and what the
 worker captured, which is values and its type table, whose inputs are the
 descriptors of its scope's type variables and dictionaries, themselves
 erased callables ("Type Tables"). Compile-time evaluation under `.boxy`
-stores exactly that (`ConstValue.boxy_fn`): a recipe naming the worker and
-the type each descriptor input describes, with the captured values and the
-dictionaries as nodes of the constant store. Restoring the value rebuilds the
-worker from the recipe, each dictionary as the immortal callable its own
-recipe names, and packs the values with the worker's table at those inputs,
-so nothing is inferred about the value and no checked evidence is consulted.
+stores exactly that (`ConstValue.boxy_fn`): a recipe naming the worker and its
+immutable input capture graph, with value captures as nodes of the constant
+store. Scoped override callables and dictionaries retain their exact capture
+edges, including cycles. Restoration reserves the graph's recipe nodes before
+connecting them, then emits the completed callable, values, and tables as
+immutable data. It neither resolves overrides in the receiving body's scope
+nor re-infers dictionary requirements from stored types.
 
 The recipe begins with the table of the modules it names, by checked key, each
 once, which the constant store reads to name a stored function in an identity

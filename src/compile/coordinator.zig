@@ -3962,7 +3962,12 @@ pub const Coordinator = struct {
         if (stores.len == 0) return;
         if (self.hasWorkers()) {
             var session = try self.postCheckExecutor().begin();
-            defer session.end();
+            defer {
+                // Accepted writers borrow stores until their callbacks finish,
+                // including when a later submission fails.
+                while (session.outstanding != 0) _ = session.receive();
+                session.end();
+            }
             var next: usize = 0;
             var received: usize = 0;
             while (received < stores.len) {
@@ -4364,14 +4369,22 @@ pub const Coordinator = struct {
     fn submitPostCheckTask(context: *anyopaque, handle: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
         const box: *SessionBox = @ptrCast(@alignCast(handle));
-        box.tasks.send(task) catch base.invariant("{s}", .{"a post-check session's task queue refused a task within its window"});
-        if (!self.hasWorkers()) return;
-        // A token wakes a worker, which takes whatever task of the box is
-        // queued then; the owner may have run this one itself meanwhile.
-        self.task_channel.sendGrowable(.{ .post_check = box }) catch |err| switch (err) {
+        if (!self.hasWorkers()) {
+            box.tasks.send(task) catch base.invariant("{s}", .{"a post-check session's task queue refused a task within its window"});
+            return;
+        }
+        // Reserve under the wake queue's lock before accepting the task. An
+        // older token can take the task as soon as it is queued, so nothing
+        // after that point may fail. Workers release the wake queue's lock
+        // before taking the session queue's lock; this is the same lock order.
+        var wake = self.task_channel.reserveSendGrowable() catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.Closed => base.invariant("{s}", .{"a post-check task was submitted after the worker channel closed"}),
         };
+        defer wake.deinit();
+        // The session window guarantees room in this preallocated queue.
+        box.tasks.send(task) catch base.invariant("{s}", .{"a post-check session's task queue refused a task within its window"});
+        wake.commit(.{ .post_check = box });
     }
 
     /// Run `task` of `box` on this thread, on the lane of the current
@@ -13002,6 +13015,173 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
     try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
     try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
+}
+
+test "post-check publication submit OOM accepts no first task" {
+    try testPostCheckPublicationOOM(false, true);
+}
+
+test "post-check publication submit OOM preserves accepted tasks and session reuse" {
+    try testPostCheckPublicationOOM(false, false);
+}
+
+test "post-check publication store OOM before acceptance ends an empty session" {
+    try testPostCheckPublicationOOM(true, true);
+}
+
+test "post-check publication store OOM drains accepted writers before returning" {
+    try testPostCheckPublicationOOM(true, false);
+}
+
+/// Exercise the real coordinator queues with both workers occupied. Only the
+/// wake queue uses the failing allocator, armed after all fixture setup, so
+/// failure deterministically occurs at notification growth, without sleeps.
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) !void {
+    if (comptime !threads_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const previous_lanes = thread_lanes;
+    defer thread_lanes = previous_lanes;
+    var failing = std.testing.FailingAllocator.init(allocator, .{});
+    var coord = try Coordinator.init(
+        allocator,
+        .multi_threaded,
+        2,
+        roc_target.RocTarget.detectNative(),
+        undefined,
+        "test",
+        null,
+        CoreCtx.os(allocator, allocator, std.testing.io),
+    );
+    defer coord.deinit();
+    const wake_queue = try Channel(WorkerTask).init(failing.allocator(), 1, std.testing.io);
+    coord.task_channel.deinit();
+    coord.task_channel = wake_queue;
+    try coord.start();
+
+    const Gate = struct {
+        mutex: threading.Mutex = .init,
+        changed: threading.Condition = .init,
+        entered: usize = 0,
+        released: bool = false,
+
+        fn run(raw: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.mutex.lockUncancelable(std.testing.io);
+            defer self.mutex.unlock(std.testing.io);
+            self.entered += 1;
+            self.changed.broadcast(std.testing.io);
+            while (!self.released) self.changed.waitUncancelable(std.testing.io, &self.mutex);
+            return null;
+        }
+
+        fn waitFor(self: *@This(), count: usize) void {
+            self.mutex.lockUncancelable(std.testing.io);
+            defer self.mutex.unlock(std.testing.io);
+            while (self.entered < count) self.changed.waitUncancelable(std.testing.io, &self.mutex);
+        }
+
+        fn release(self: *@This()) void {
+            self.mutex.lockUncancelable(std.testing.io);
+            defer self.mutex.unlock(std.testing.io);
+            self.released = true;
+            self.changed.broadcast(std.testing.io);
+        }
+    };
+    var gate = Gate{};
+    const executor = coord.postCheckExecutor();
+    var held = try executor.begin();
+    defer {
+        gate.release();
+        while (held.outstanding != 0) _ = held.receive();
+        held.end();
+    }
+    for (0..2) |i| {
+        try held.submit(.{ .id = i, .context = &gate, .run = Gate.run });
+        gate.waitFor(i + 1);
+    }
+    try std.testing.expect(coord.task_channel.isEmpty());
+    // An older wake token is legitimate even when its tasks are already
+    // running. It fills the queue for the before-first-acceptance case.
+    if (before_first) try coord.task_channel.send(.{ .post_check = held.handle });
+    failing.fail_index = failing.alloc_index;
+    const accepted: usize = if (before_first) 0 else 1;
+
+    if (stores) {
+        var manager = CacheManager.init(allocator, .{ .enabled = true }, coord.roc_ctx);
+        defer manager.deinit();
+        manager.store_failure_warning_emitted = true;
+        coord.cache_manager = &manager;
+        defer coord.cache_manager = null;
+        // A missing cache directory records one store failure per callback
+        // before reading artifact data. No source, serialization or disk I/O
+        // is needed to observe actual PendingStore.run executions.
+        var mod: ModuleState = undefined;
+        mod.typing_storage_key = checkedModuleCacheTestKey(1);
+        mod.typing_metadata = .{ .bytes = &.{}, .owned = false };
+        const artifact: CheckedModuleArtifact = undefined;
+        var pending = [_]Coordinator.PendingStore{
+            .{ .coordinator = &coord, .mod = &mod, .artifact = &artifact },
+            .{ .coordinator = &coord, .mod = &mod, .artifact = &artifact },
+        };
+        try std.testing.expectError(error.OutOfMemory, coord.writePendingStores(&pending));
+        try std.testing.expectEqual(@as(u64, accepted), manager.stats.store_failures);
+        // The returned box must already be safe to reuse, before pending's
+        // stack storage goes away.
+        const returned = coord.free_session_boxes.tryRecv() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(returned.tasks.isEmpty());
+        try std.testing.expect(returned.completions.isEmpty());
+        try coord.free_session_boxes.send(returned);
+        while (coord.task_channel.tryRecv()) |token| try std.testing.expect(token == .post_check);
+        failing.fail_index = std.math.maxInt(usize);
+        try coord.writePendingStores(&pending);
+        try std.testing.expectEqual(@as(u64, accepted + pending.len), manager.stats.store_failures);
+    } else {
+        const Counter = struct {
+            fn run(raw: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
+                const count: *usize = @ptrCast(@alignCast(raw));
+                count.* += 1;
+                return null;
+            }
+        };
+        var runs = [_]usize{ 0, 0 };
+        var session = try executor.begin();
+        var ended = false;
+        defer if (!ended) {
+            while (session.outstanding != 0) _ = session.receive();
+            session.end();
+        };
+        const box: *SessionBox = @ptrCast(@alignCast(session.handle));
+        if (!before_first) try session.submit(.{ .id = 0, .context = &runs[0], .run = Counter.run });
+        const rejected: post_check_executor.Task = .{ .id = 1, .context = &runs[1], .run = Counter.run };
+        try std.testing.expectError(error.OutOfMemory, session.submit(rejected));
+        try std.testing.expectEqual(accepted, session.outstanding);
+        try std.testing.expectEqual(accepted, box.tasks.len());
+        try std.testing.expectEqual(@as(usize, 1), coord.task_channel.len());
+        try std.testing.expect(box.completions.isEmpty());
+        if (accepted != 0) try std.testing.expectEqual(@as(usize, 0), session.receive().id);
+        try std.testing.expectEqual(accepted, runs[0]);
+        try std.testing.expectEqual(@as(usize, 0), runs[1]);
+
+        while (coord.task_channel.tryRecv()) |token| try std.testing.expect(token == .post_check);
+        failing.fail_index = std.math.maxInt(usize);
+        try session.submit(rejected);
+        try std.testing.expectEqual(@as(usize, 1), session.receive().id);
+        try std.testing.expectEqual(@as(usize, 1), runs[1]);
+        session.end();
+        ended = true;
+
+        var reused = try executor.begin();
+        defer {
+            while (reused.outstanding != 0) _ = reused.receive();
+            reused.end();
+        }
+        try std.testing.expectEqual(session.handle, reused.handle);
+        try std.testing.expect(box.tasks.isEmpty() and box.completions.isEmpty());
+        try reused.submit(rejected);
+        try std.testing.expectEqual(@as(usize, 1), reused.receive().id);
+        try std.testing.expectEqual(@as(usize, 2), runs[1]);
+        try std.testing.expect(box.tasks.isEmpty() and box.completions.isEmpty());
+    }
 }
 
 test "aborting compile-time preparation joins submitted tasks and drops queued programs" {

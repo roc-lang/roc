@@ -180,7 +180,7 @@ pub const Task = union(enum) {
     /// the restored value's.
     /// Pop a stored function's captured values and pack them with its type
     /// table at `inputs` (`stored_fn.zig`).
-    finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId },
+    finish_stored_fn: struct { worker: WorkerId, shape: StoredFn.CaptureShape, inputs: []const Word, capture_types: []const TypeId, capture_descs: []const Word },
     finish_restore_closure: struct { worker: WorkerId, count: u32, descs: []const Word, dicts: []const Word, capture_types: []const TypeId, worker_ty: TypeId, ty: TypeId },
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
@@ -2043,7 +2043,7 @@ pub const Builder = struct {
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
-                if (static_inputs and self.constant_slots.contains(value)) return self.staticClosure(adapter, &.{value}, &.{from}, inputs, false);
+                if (static_inputs and self.constant_slots.contains(value)) return self.staticClosure(adapter, &.{value}, &.{from}, inputs, false, null);
                 return try self.packClosure(adapter, &.{value}, &.{from}, inputs);
             },
         }
@@ -2937,7 +2937,7 @@ pub const Builder = struct {
                     if (values.len != 0) invariant("a stored dictionary captures values");
                     try self.pushValue(try self.materialize(try self.composeDictionary(stored.worker, stored.inputs)));
                 } else {
-                    try self.pushValue(try self.staticClosure(stored.worker, values, stored.capture_types, stored.inputs, !try self.allClosed(stored.shape.values)));
+                    try self.pushValue(try self.staticClosure(stored.worker, values, stored.capture_types, stored.inputs, !try self.allClosed(stored.shape.values), stored.capture_descs));
                 }
             },
             .finish_restore_closure => |closure| {
@@ -2945,7 +2945,7 @@ pub const Builder = struct {
                 defer self.allocator.free(values);
                 const worker = self.program.worker(closure.worker).*;
                 const inputs: []const Word = if (self.program.perCall(closure.worker)) &.{} else try std.mem.concat(self.program.arena.allocator(), Word, &.{ closure.descs, closure.dicts });
-                const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types));
+                const packed_closure = try self.staticClosure(closure.worker, values, closure.capture_types, inputs, !try self.allClosed(worker.capture_types), null);
                 try self.pushValue(try self.adaptValue(packed_closure, closure.worker_ty, closure.ty));
             },
             .finish_restore_struct => |restore| {
@@ -5513,53 +5513,18 @@ pub const Builder = struct {
     /// Restore a completed function as immutable code and capture references.
     pub fn restoreStoredFn(self: *Builder, source: lower.ConstSource, recipe: []const u8, captures: []const checked.ConstNodeId) Allocator.Error!void {
         const decoded = try StoredFn.decode(self, recipe);
-        if (decoded.recursive_dictionary) return try self.pushValue(try self.materialize(try self.rebuiltDictionaryWord(decoded)));
         const shape = StoredFn.captureShape(self.program, decoded.worker);
         const arena = self.program.arena.allocator();
-        if (captures.len != shape.values.len + shape.dicts) invariant("a stored function's captures differ from its worker's");
-        // Its inputs: the descriptors of the types it was stored at, then
-        // its dictionaries, each restored as the word it was.
-        const inputs = try arena.alloc(Word, decoded.bound.len + shape.dicts);
-        for (decoded.bound, inputs[0..decoded.bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-        for (captures[shape.values.len..], inputs[decoded.bound.len..]) |node, *dict| dict.* = try self.storedDictionaryWord(source, node);
+        if (captures.len != shape.values.len) invariant("a stored function's captures differ from its worker's");
+        if (!try self.allClosed(shape.values) and decoded.capture_descs.len != captures.len) invariant("a stored dynamic capture record has the wrong descriptor arity");
         const capture_types = try arena.alloc(TypeId, shape.values.len);
         for (shape.values, capture_types) |generic, *concrete| concrete.* = try self.program.substitute(self.allocator, generic, decoded.bound);
-        try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .inputs = inputs, .capture_types = capture_types } });
+        try self.push(.{ .finish_stored_fn = .{ .worker = decoded.worker, .shape = shape, .inputs = decoded.inputs, .capture_types = capture_types, .capture_descs = decoded.capture_descs } });
         var index = shape.values.len;
         while (index > 0) {
             index -= 1;
             try self.push(.{ .restore = .{ .source = source, .node = captures[index], .ty = capture_types[index] } });
         }
-    }
-
-    /// The word of the stored dictionary `node`: an immortal callable,
-    /// which a stored function value captures, rebuilt from its recipe.
-    fn storedDictionaryWord(self: *Builder, source: lower.ConstSource, node: checked.ConstNodeId) Allocator.Error!Word {
-        const const_store = self.program.constStore(source);
-        const function = switch (const_store.get(node)) {
-            .boxy_fn => |function| function,
-            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => invariant("a stored function's dictionary is not a stored function value"),
-        };
-        const decoded = try StoredFn.decode(self, const_store.strBytes(function.recipe));
-        if (decoded.recursive_dictionary) return try self.rebuiltDictionaryWord(decoded);
-        const shape = StoredFn.captureShape(self.program, decoded.worker);
-        if (!shape.composed or shape.values.len != 0) invariant("a stored dictionary captures values");
-        if (function.captures.len != shape.dicts) invariant("a stored dictionary's captures differ from its worker's");
-        const inputs = try self.program.arena.allocator().alloc(Word, decoded.bound.len + shape.dicts);
-        for (decoded.bound, inputs[0..decoded.bound.len]) |ty, *desc| desc.* = try self.descWord(ty);
-        for (function.captures, inputs[decoded.bound.len..]) |child, *dict| dict.* = try self.storedDictionaryWord(source, child);
-        return try self.composeDictionary(decoded.worker, inputs);
-    }
-
-    /// The dictionary of a stored method whose scheme requires itself,
-    /// which captures itself: rebuilt from the types it was stored at.
-    fn rebuiltDictionaryWord(self: *Builder, decoded: StoredFn.Decoded) Allocator.Error!Word {
-        const target = switch (self.program.worker(decoded.worker).key) {
-            .method_entry => |target| target,
-            .template, .adapter, .default, .lambda, .structural, .structural_map, .root, .codec, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a rebuilt stored dictionary is not a method entry's"),
-        };
-        const instance = try self.program.targetRequirements(target, decoded.bound);
-        return try self.dictionaryOfTree(.{ .target = .{ .target = target, .instance = instance } });
     }
 
     /// The lambda worker of expression `lambda_expr` of the worker
@@ -7969,7 +7934,13 @@ pub const Builder = struct {
     /// allocation's capture capacity word, the descriptor and dictionary
     /// words, then the captured values.
     pub fn dynamicCaptureDesc(self: *Builder, capture_types: []const TypeId, word_count: usize) Allocator.Error!LocalId {
-        return try self.argsDesc(@intCast(capture_record_leading_words + word_count), try self.descWords(capture_types));
+        return try self.captureRecordDesc(@intCast(capture_record_leading_words + word_count), try self.descWords(capture_types));
+    }
+
+    /// A capture record's purpose is explicit, including when its fields
+    /// happen to match an ordinary argument buffer's fields.
+    fn captureRecordDesc(self: *Builder, leading: u32, elems: []const Word) Allocator.Error!LocalId {
+        return try self.materialize(.{ .recipe = try self.recipes.intern(.{ .args_desc = .{ .leading = leading, .elems = elems, .capture_record = true } }) });
     }
 
     /// The words before a dynamic capture record's descriptor and
@@ -8054,7 +8025,7 @@ pub const Builder = struct {
     /// Encode a completed callable and its captures as immutable target data.
     /// The layout follows the worker's declared ABI; no closure packing executes
     /// when the constant is read.
-    fn staticClosure(self: *Builder, worker: WorkerId, captured: []const LocalId, capture_types: []const TypeId, inputs: []const Word, dynamic: bool) Allocator.Error!LocalId {
+    fn staticClosure(self: *Builder, worker: WorkerId, captured: []const LocalId, capture_types: []const TypeId, inputs: []const Word, dynamic: bool, capture_descs: ?[]const Word) Allocator.Error!LocalId {
         const per_call = self.program.perCall(worker);
         if (per_call and inputs.len != 0) invariant("a completed per-call worker captures unexpected inputs");
         const table = if (per_call or (inputs.len == 0 and self.program.inputCount(worker) == 0)) null else table: {
@@ -8076,15 +8047,12 @@ pub const Builder = struct {
             const count = capture_record_leading_words + table_count + captured.len;
             const layouts = try self.allocator.alloc(layout.StructField, count);
             defer self.allocator.free(layouts);
-            const descriptors = try self.allocator.alloc(LIR.StaticDataId, count);
-            defer self.allocator.free(descriptors);
             const words = capture_record_leading_words + table_count;
-            for (layouts, descriptors, 0..) |*field, *descriptor, i| {
+            for (layouts, 0..) |*field, i| {
                 field.* = .{ .index = @intCast(i), .layout = if (i < words) .opaque_ptr else try self.program.layouts.layoutOf(capture_types[i - words]) };
-                descriptor.* = if (i < words) try self.program.static_descs.opaqueWordSlot() else try self.program.static_descs.descriptorSlot(capture_types[i - words]);
             }
             record_layout = try self.program.result.layouts.putNominalStructFields(layouts);
-            const record_desc = try self.staticRead(try self.program.static_descs.argumentRecordSlot(record_layout, descriptors));
+            const record_desc = try self.captureRecordDesc(@intCast(words), capture_descs orelse try self.descWords(capture_types));
             const capacity = try self.staticPartsLocal(.opaque_ptr, .{ .word = self.program.result.layouts.layoutSize(self.program.result.layouts.getLayout(record_layout)) }, &.{});
             try fields.appendSlice(self.allocator, &.{ record_desc, capacity });
             if (table) |local| try fields.append(self.allocator, local);
