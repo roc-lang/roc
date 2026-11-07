@@ -2262,12 +2262,30 @@ these identities to the current compilation's source environments and paths.
 A unit link interface is not a test reporting context: changing the former
 must not invalidate an observation whose checked test identity is unchanged.
 
-A checked module's cache entry stores its checking output and finalized
-compile-time constants together. Its identity covers the module's source and
-resolved dependencies, checking context and compatibility policy. Identical
-inputs share the entry across checkouts, independently of their source paths.
-An edit that changes this identity misses the entry and evaluates the new
-module's required roots. No source-location pointer selects an older module
+A module has two front-end cache files: canonicalization and one combined
+checking entry. The combined entry stores its solved source environment once,
+the checker's explicit publication/foreign-reference inputs, and one finalized
+checked artifact. Its address hashes source inputs, ordered checking interfaces
+and nominal-owner equality of dependencies, checking context and compiler
+compatibility. Its header separately names the full implementation identity of
+the finalized artifact and constants.
+
+Matching full implementation identity restores the complete checked module.
+Matching typing inputs alone restores only solved source and checking inputs;
+producer-owned reference slots bind those inputs to current dependency artifacts
+before publication. The old artifact, constants, root states and observations
+are not consumed. Publication and required evaluation use current implementation
+inputs. Binding rewrites no solver relation or stamped dispatch decision.
+
+There is no third inference file, duplicate solved environment, path index or
+payload checksum. Both identities depend only on content and checking inputs,
+so different checkout paths share them. Publication atomically replaces complete
+entries; readers keep their open mapping. Concurrent different implementations
+with the same typing inputs may replace each other's finalized snapshot. The
+header makes the losing implementation a typing-only hit, never a stale constant
+hit. One finalized snapshot is retained, not an implementation history. Only
+entries whose checking and evaluation add no diagnostics are published. No
+source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation
 certificate is persisted under a source placement.
 

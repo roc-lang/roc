@@ -24,7 +24,7 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One fully checked module: an env body and an artifact body.
+    /// One combined checking entry: source env, publication inputs, and artifact.
     checked_module,
     /// One exact platform/app composition's changed columns, written in the
     /// checked-module envelope with an empty env body.
@@ -39,7 +39,7 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 
 /// Version of the checked-module envelope: its magic, header layout, and body
 /// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 14;
+const checked_envelope_version: u32 = 15;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -51,7 +51,7 @@ pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1) },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",

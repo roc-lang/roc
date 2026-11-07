@@ -220,135 +220,37 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v12";
-
-// Header: magic, entry-version hash (32), artifact key (32), env-blob length
-// (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
-// up to the next multiple of the 16-byte serialization alignment. The env body
-// follows the header, then zero bytes up to the next aligned offset, then the
-// artifact body, so both bodies are 16-byte aligned wherever the entry is and
-// a cache hit relocates them in place. Checked-module and platform-pairing
-// entries share this envelope; the entry-version hash is
-// `cache_versioning.entryVersionHash` for the entry's kind, so a stale envelope
-// or body is rejected by one admission check.
-//
-// There is no body checksum: cache entries are written to a temp file and atomically
-// renamed into place (so a torn write never replaces a valid entry), the length fields
-// below reject any truncated/over-long entry, the magic+version+layout-hash+key reject
-// stale or wrong entries, and relocation bounds-checks every marker against the blob.
-// A corrupt-but-right-length body is the only residue, which for a recomputable local
-// cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
-const checked_module_cache_header_len: usize = std.mem.alignForward(usize, checked_module_cache_header_fields_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
-
-/// Zero bytes between an env body of `env_len` bytes and the artifact body.
-fn checkedModuleCacheEnvPadding(env_len: usize) usize {
-    return std.mem.alignForward(usize, env_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - env_len;
-}
-
-const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()]u8 = @splat(0);
-
-/// The cache entry kinds written in the checked-module envelope.
-const CheckedEnvelopeEntry = enum {
-    checked_module,
-    platform_pairing,
-
-    fn versioned(comptime self: CheckedEnvelopeEntry) cache_versioning.Entry {
-        return switch (self) {
-            .checked_module => .checked_module,
-            .platform_pairing => .platform_pairing,
-        };
-    }
-};
-
-/// A decoded checked-module cache entry's relocatable env and artifact bodies.
-const CheckedModuleCacheBodies = struct {
-    env_body: []const u8,
-    artifact_body: []const u8,
-    pin_validation_hash: [32]u8,
-};
-
-/// Write the fixed-size checked-module cache header into the first
-/// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the
-/// relocatable bodies (env blob then artifact blob) into `dest` after the header.
-fn writeCheckedModuleCacheHeader(
-    comptime entry: CheckedEnvelopeEntry,
-    dest: []u8,
-    key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    env_len: usize,
-    artifact_len: usize,
-    pin_validation_hash: [32]u8,
-) void {
-    var offset: usize = 0;
-    @memcpy(dest[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic);
-    offset += checked_module_cache_magic.len;
-    @memcpy(dest[offset..][0..32], &cache_versioning.entryVersionHash(entry.versioned()));
-    offset += 32;
-    @memcpy(dest[offset..][0..32], &key.bytes);
-    offset += 32;
-    std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
-    offset += 8;
-    std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
-    offset += 8;
-    @memcpy(dest[offset..][0..32], &pin_validation_hash);
-    offset += 32;
-    @memset(dest[offset..checked_module_cache_header_len], 0);
-}
-
-fn decodeCheckedCacheEnvelope(
-    comptime entry: CheckedEnvelopeEntry,
-    key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    bytes: []const u8,
-) ?CheckedModuleCacheBodies {
-    if (bytes.len < checked_module_cache_header_len) return null;
-    var offset: usize = 0;
-    if (!std.mem.eql(u8, bytes[offset..][0..checked_module_cache_magic.len], checked_module_cache_magic)) return null;
-    offset += checked_module_cache_magic.len;
-    // Reject (as a cache miss) an entry whose envelope or body layouts differ
-    // from this compiler's.
-    if (!std.mem.eql(u8, bytes[offset..][0..32], &cache_versioning.entryVersionHash(entry.versioned()))) return null;
-    offset += 32;
-    if (!std.mem.eql(u8, bytes[offset..][0..32], &key.bytes)) return null;
-    offset += 32;
-    // Cast the on-disk u64 lengths to usize up front: this both keeps every
-    // downstream index/slice in usize (so the cache compiles for 32-bit targets
-    // like wasm32) and rejects a corrupt entry whose length cannot fit the host
-    // address space as a cache miss rather than crashing.
-    const env_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
-    offset += 8;
-    const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
-    offset += 8;
-    const pin_validation_hash = bytes[offset..][0..32].*;
-    offset = checked_module_cache_header_len;
-
-    const remaining = bytes.len - offset;
-    if (env_len > remaining) return null;
-    const env_padding = checkedModuleCacheEnvPadding(env_len);
-    if (env_padding > remaining - env_len) return null;
-    if (artifact_len != remaining - env_len - env_padding) return null;
-
-    const env_body = bytes[offset..][0..env_len];
-    offset += env_len + env_padding;
-    const artifact_body = bytes[offset..][0..artifact_len];
-
-    return .{
-        .env_body = env_body,
-        .artifact_body = artifact_body,
-        .pin_validation_hash = pin_validation_hash,
-    };
-}
-
-fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactKey, bytes: []const u8) ?CheckedModuleCacheBodies {
-    const bodies = decodeCheckedCacheEnvelope(.checked_module, key, bytes) orelse return null;
-    if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
-    if (bodies.artifact_body.len < @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
-    return bodies;
-}
+const checked_cache_entry = @import("checked_cache_entry.zig");
+const checked_module_cache_magic = checked_cache_entry.checked_module_cache_magic;
+const checked_module_cache_header_len = checked_cache_entry.checked_module_cache_header_len;
+const checked_module_cache_zero_padding = checked_cache_entry.checked_module_cache_zero_padding;
+const checkedModuleCacheEnvPadding = checked_cache_entry.checkedModuleCacheEnvPadding;
+const writeCheckedModuleCacheHeader = checked_cache_entry.writeCheckedModuleCacheHeader;
+const decodeCheckedCacheEnvelope = checked_cache_entry.decodeCheckedCacheEnvelope;
+const decodeCheckedModuleCacheEntry = checked_cache_entry.decodeCheckedModuleCacheEntry;
 
 fn checkedModuleCacheTestKey(byte: u8) check.CheckedArtifact.CheckedModuleArtifactKey {
     var key = check.CheckedArtifact.CheckedModuleArtifactKey{};
     @memset(&key.bytes, byte);
     return key;
+}
+
+test "combined checked cache keeps typing and evaluated identities distinct" {
+    const typing_key = checkedModuleCacheTestKey(1);
+    const complete_key = checkedModuleCacheTestKey(2);
+    const env_len = @sizeOf(ModuleEnv.Serialized);
+    const metadata_len = @sizeOf(check.CheckingReuse.Serialized);
+    const artifact_len = @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized);
+    const size = checked_module_cache_header_len + env_len + checkedModuleCacheEnvPadding(env_len) + metadata_len + checkedModuleCacheEnvPadding(metadata_len) + artifact_len;
+    const bytes = try std.testing.allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, size);
+    defer std.testing.allocator.free(bytes);
+    @memset(bytes, 0);
+    checked_cache_entry.writeTypedHeader(.checked_module, bytes[0..checked_module_cache_header_len], typing_key, complete_key, env_len, metadata_len, artifact_len, @splat(0));
+    const bodies = decodeCheckedModuleCacheEntry(typing_key, bytes) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqualSlices(u8, &complete_key.bytes, &bodies.complete_key.bytes);
+    try std.testing.expectEqual(metadata_len, bodies.metadata_body.len);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(complete_key, bytes) == null);
+    try std.testing.expect(decodeCheckedModuleCacheEntry(typing_key, bytes[0 .. bytes.len - 1]) == null);
 }
 
 test "checked module cache header decodes bodies and rejects corrupt envelope" {
@@ -642,6 +544,8 @@ pub const LocalImportEdge = struct {
 
 /// State of a single module within a package
 pub const ModuleState = struct {
+    typing_storage_key: ?CheckedArtifact.CheckedModuleArtifactKey = null,
+    typing_metadata: ?checked_cache_entry.Metadata = null,
     /// Work performed for this module during its current checking task.
     inference_runs: u32 = 0,
     checking_cache_hits: u32 = 0,
@@ -849,6 +753,7 @@ pub const ModuleState = struct {
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.moduleEnv().?.gpa);
         if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: starting, semantic={}, ast={}\n", .{
                 self.name,
@@ -2505,6 +2410,7 @@ pub const Coordinator = struct {
                         t.cached_ast.deinit();
                     },
                     .type_check => |t| {
+                        if (t.typing_context) |context| context.deinit();
                         payload_alloc.free(t.imported_envs);
                         payload_alloc.free(t.deferred_imports);
                         payload_alloc.free(t.missing_public_types);
@@ -4919,8 +4825,10 @@ pub const Coordinator = struct {
     /// nothing else of the module's mutable state, so it runs on any thread.
     fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, staged_env: ?CacheManager.StagedPart) void {
         const manager = self.cache_manager orelse return;
-        if (!manager.config.enabled) return;
         defer if (staged_env) |part| manager.discardStagedPart(part);
+        if (!manager.config.enabled) return;
+        const storage_key = mod.typing_storage_key orelse return;
+        const metadata = mod.typing_metadata orelse return;
         // A released solver type store survives only in its staged part; a
         // staging failure was already counted when it happened.
         if (mod.solver_types_released and staged_env == null) return;
@@ -4958,11 +4866,13 @@ pub const Coordinator = struct {
         const artifact_len = artifact_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
-        writeCheckedModuleCacheHeader(
+        checked_cache_entry.writeTypedHeader(
             .checked_module,
             &header,
+            storage_key,
             artifact.key,
             env_len,
+            metadata.bytes.len,
             artifact_len,
             canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
         );
@@ -4971,6 +4881,8 @@ pub const Coordinator = struct {
             env_bytes: ?[]const u8,
             env: *const CompactWriter,
             env_padding: []const u8,
+            metadata: []const u8,
+            metadata_padding: []const u8,
             artifact: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
@@ -4978,15 +4890,18 @@ pub const Coordinator = struct {
                 try destination.writeAll(entry.header);
                 if (entry.env_bytes) |bytes| try destination.writeAll(bytes) else try entry.env.writeTo(destination);
                 try destination.writeAll(entry.env_padding);
+                try destination.writeAll(entry.metadata);
+                try destination.writeAll(entry.metadata_padding);
                 try entry.artifact.writeTo(destination);
             }
         };
         const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(env_len)];
-        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer };
+        const metadata_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(metadata.bytes.len)];
+        const entry = Entry{ .header = &header, .env_bytes = env_bytes, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer, .metadata = metadata.bytes, .metadata_padding = metadata_padding };
         manager.storeStream(
-            artifact.key.bytes,
+            storage_key.bytes,
             .{ .context = &entry, .write = Entry.write },
-            header.len + env_len + env_padding.len + artifact_len,
+            header.len + env_len + env_padding.len + metadata.bytes.len + metadata_padding.len + artifact_len,
             entries_dir,
             artifact.moduleEnvConst().module_name,
         );
@@ -4999,6 +4914,7 @@ pub const Coordinator = struct {
         imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact,
         platform_requirement_context: ?check.CheckedArtifact.PlatformRequirementContextKey,
         explicit_roots: []const check.CheckedArtifact.ExplicitRootRequestInput,
+        typing_context: *checked_cache_entry.Context,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -5013,7 +4929,7 @@ pub const Coordinator = struct {
             return false;
         };
 
-        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env);
+        return self.installCachedCheckedArtifact(pkg, mod, cache_key, current_env, typing_context);
     }
 
     /// True when `mod` is the registered platform's root module.
@@ -5031,6 +4947,7 @@ pub const Coordinator = struct {
         mod: *ModuleState,
         cache_key: check.CheckedArtifact.CheckedModuleArtifactKey,
         current_env: *ModuleEnv,
+        typing_context: *checked_cache_entry.Context,
     ) bool {
         const manager = self.cache_manager orelse return false;
         if (!manager.config.enabled) return false;
@@ -5051,18 +4968,27 @@ pub const Coordinator = struct {
         // owns the whole entry and releases it when the module is torn down, and
         // the artifact aliases its body without owning it. Writes made while
         // relocating stay private to this process.
-        const cache_data = manager.loadRawBytesMappedIn(module_alloc, .checked, cache_key.bytes, entries_dir) orelse return false;
+        const cache_data = manager.loadRawBytesMappedIn(module_alloc, .checked, typing_context.key.bytes, entries_dir) orelse return false;
         var entry_owned = true;
         defer if (entry_owned) cache_data.deinit(module_alloc);
         const entry = cache_data.data();
 
-        const bodies = decodeCheckedModuleCacheEntry(cache_key, entry) orelse {
+        const bodies = decodeCheckedModuleCacheEntry(typing_context.key, entry) orelse {
             manager.stats.recordInvalidation();
             return false;
         };
         const expected_pin_validation = canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version);
         if (!std.mem.eql(u8, &bodies.pin_validation_hash, &expected_pin_validation)) {
             manager.stats.recordMiss();
+            return false;
+        }
+        if (bodies.metadata_body.len < @sizeOf(check.CheckingReuse.Serialized)) {
+            manager.stats.recordInvalidation();
+            return false;
+        }
+        if (!std.mem.eql(u8, &bodies.complete_key.bytes, &cache_key.bytes)) {
+            typing_context.cached = cache_data;
+            entry_owned = false;
             return false;
         }
         const env_buffer = writableCacheBody(bodies.env_body);
@@ -5172,6 +5098,8 @@ pub const Coordinator = struct {
                 .retain_module_env = @intFromPtr(existing.moduleEnv()) == @intFromPtr(artifact_ptr.moduleEnv()),
             });
         }
+        if (mod.typing_metadata) |metadata| metadata.deinit(module_alloc);
+        mod.typing_metadata = .{ .bytes = @alignCast(bodies.metadata_body), .owned = false };
         semantic.module_env = cached_env;
         semantic.checked_artifact = artifact_ptr;
         self.registerReservedCheckedArtifact(pkg, mod);
@@ -5979,19 +5907,8 @@ pub const Coordinator = struct {
         const explicit_roots = try buildExplicitRootRequests(mod, task_payload_alloc);
         errdefer task_payload_alloc.free(explicit_roots);
 
-        // The checked-cache key needs only the direct imports, so the probe
-        // runs before the availability walk, which only checking consumes.
-        // Earlier-stage diagnostics are a function of the same source the
-        // cache key names, so they never prevent reuse. A stored entry is one
-        // whose checking and evaluation reported nothing further.
+        // Canonicalization diagnostics are already replayed before admission.
         mod.pre_check_report_count = mod.reports.items.len;
-        if (self.tryLoadCachedCheckedModule(pkg, mod, imported_artifacts, platform_requirement_context, explicit_roots)) {
-            task_payload_alloc.free(imported_envs);
-            task_payload_alloc.free(imported_artifacts);
-            task_payload_alloc.free(explicit_roots);
-            try self.finishCachedModule(pkg, mod);
-            return;
-        }
 
         var platform_requirement_imported_envs: []const *ModuleEnv = &.{};
         var platform_requirement_imported_artifacts: []const check.CheckedArtifact.PublishImportArtifact = &.{};
@@ -6051,6 +5968,36 @@ pub const Coordinator = struct {
             &.{};
         errdefer task_payload_alloc.free(missing_public_types);
 
+        var typing_context: ?*checked_cache_entry.Context = null;
+        errdefer if (typing_context) |context| context.deinit();
+        if (self.cache_manager) |manager| if (manager.config.enabled) {
+            const owner_envs = try compile_package.buildCheckOwnerEnvs(task_payload_alloc, imported_envs, imported_artifacts, available_artifacts, if (platform_surface) |surface| surface.checkerInput() else null);
+            errdefer task_payload_alloc.free(owner_envs);
+            var scope = try check.CheckingInterface.makeScope(task_payload_alloc, mod.moduleEnv().?, self.builtin_modules.builtin_module.env, imported_envs, owner_envs);
+            errdefer scope.deinit();
+            const context = try task_payload_alloc.create(checked_cache_entry.Context);
+            const requirement_owner = if (platform_surface) |surface| scope.ordinal(surface.env.contentIdentityHash().?.*) else null;
+            const key: CheckedArtifact.CheckedModuleArtifactKey = .{ .bytes = CheckedArtifact.typingCacheKeyFromModuleEnv(mod.moduleEnv().?, scope.digest(), requirement_owner, explicit_roots, mod.validation, canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version), missing_public_types) };
+            context.* = .{ .allocator = task_payload_alloc, .key = key, .scope = scope, .owner_envs = owner_envs };
+            typing_context = context;
+            mod.typing_storage_key = key;
+        };
+        if (typing_context) |context| {
+            if (self.tryLoadCachedCheckedModule(pkg, mod, imported_artifacts, platform_requirement_context, explicit_roots, context)) {
+                try self.finishCachedModule(pkg, mod);
+                task_payload_alloc.free(imported_envs);
+                task_payload_alloc.free(imported_artifacts);
+                task_payload_alloc.free(explicit_roots);
+                task_payload_alloc.free(available_artifacts);
+                task_payload_alloc.free(deferred_imports);
+                task_payload_alloc.free(missing_public_types);
+                if (platform_requirement_owner_envs.len > 0) task_payload_alloc.free(platform_requirement_owner_envs);
+                context.deinit();
+                typing_context = null;
+                return;
+            }
+        }
+
         mod.phase = .TypeCheck;
         try self.enqueueTask(.{
             .type_check = .{
@@ -6059,6 +6006,7 @@ pub const Coordinator = struct {
                 .module_name = mod.name,
                 .path = mod.path,
                 .module_env = mod.moduleEnv().?,
+                .typing_context = typing_context,
                 .imported_envs = imported_envs,
                 .deferred_imports = deferred_imports,
                 .missing_public_types = missing_public_types,
@@ -6173,6 +6121,10 @@ pub const Coordinator = struct {
             result.semantic.pending_evaluation = null;
         }
 
+        if (mod.typing_metadata) |metadata| metadata.deinit(mod.moduleEnv().?.gpa);
+        mod.typing_metadata = result.semantic.typing_metadata;
+        result.semantic.typing_metadata = null;
+
         // Append reports - we take ownership, so clear result.reports after copying
         for (result.reports.items) |rep| {
             try mod.reports.append(self.gpa, rep);
@@ -6200,11 +6152,16 @@ pub const Coordinator = struct {
 
         // Update compile stats
         mod.checked_artifacts_published += 1;
-        self.cache_misses += 1;
-        self.modules_compiled += 1;
-        mod.inference_runs += 1;
-        self.checking_interfaces_built += 1;
-        mod.checking_interfaces_built += 1;
+        if (result.semantic.typing_reused) {
+            self.cache_hits += 1;
+            mod.checking_cache_hits += 1;
+        } else {
+            self.cache_misses += 1;
+            self.modules_compiled += 1;
+            mod.inference_runs += 1;
+            self.checking_interfaces_built += 1;
+            mod.checking_interfaces_built += 1;
+        }
 
         try self.completeModuleSuccessfully(pkg, result.module_id);
 
@@ -7476,6 +7433,7 @@ pub const Coordinator = struct {
         var check_timer = startStageTimer(self.roc_ctx.std_io);
 
         const env = task.module_env;
+        defer if (task.typing_context) |context| context.deinit();
         defer task_allocs.result.free(task.imported_envs);
         defer task_allocs.result.free(task.deferred_imports);
         defer task_allocs.result.free(task.missing_public_types);
@@ -7515,6 +7473,7 @@ pub const Coordinator = struct {
             ctfe_options,
             .{ .explicit = task.deferred_imports },
             task.missing_public_types,
+            task.typing_context,
         );
         defer typecheck_output.deinit();
         // On error the coordinator still owns the input environment. Transfer
@@ -7571,6 +7530,9 @@ pub const Coordinator = struct {
             pending_evaluation = state;
         }
         const semantic = try createOwnedSemanticResult(result_alloc, env, publication);
+        semantic.typing_metadata = typecheck_output.typing_metadata;
+        typecheck_output.typing_metadata = null;
+        semantic.typing_reused = typecheck_output.typing_reused;
         semantic.pending_evaluation = pending_evaluation;
         pending_evaluation = null;
         publication_owned = false;
@@ -10878,6 +10840,15 @@ test "checked cache dependency edits preserve fresh-build results" {
     try std.testing.expectEqual(@as(u32, 0), warm.build.modules_compiled);
     try std.testing.expectEqual(cold.build.modules_compiled, warm.build.cache_hits);
 
+    const config = CacheConfig{ .cache_dir = cache_dir };
+    const checked_dir = try config.getCheckedArtifactCacheDir(allocator);
+    defer allocator.free(checked_dir);
+    const before_paths = try testCachePaths(allocator, cache_dir, checked_dir, .checked);
+    defer {
+        for (before_paths) |path| allocator.free(path);
+        allocator.free(before_paths);
+    }
+
     // Only A's test changes. All source-level callable signatures and the
     // code B and C call are identical. The full implementation keys must
     // nevertheless change throughout this chain.
@@ -10905,10 +10876,20 @@ test "checked cache dependency edits preserve fresh-build results" {
     }
     try std.testing.expect(changed_keys >= 4); // A, B, C, and the app.
 
-    // Full dependency identities invalidate A, B, C and the app together.
-    try std.testing.expectEqual(@as(u32, 4), edited.build.modules_compiled);
-    try std.testing.expectEqual(warm.build.cache_hits - 4, edited.build.cache_hits);
+    // Full identities change throughout the chain, but unchanged checking
+    // interfaces let B, C and the app reuse their solved source from the same
+    // combined files. Only A runs inference again.
+    try std.testing.expectEqual(@as(u32, 1), edited.build.modules_compiled);
+    try std.testing.expectEqual(warm.build.cache_hits - 1, edited.build.cache_hits);
     try std.testing.expectEqualSlices([32]u8, uncached.artifact_digests, edited.artifact_digests);
+    const after_paths = try testCachePaths(allocator, cache_dir, checked_dir, .checked);
+    defer {
+        for (after_paths) |path| allocator.free(path);
+        allocator.free(after_paths);
+    }
+    // A gets its new source-keyed entry. B/C/app replace their existing
+    // combined entry instead of adding a second environment or a side file.
+    try std.testing.expectEqual(before_paths.len + 1, after_paths.len);
 
     // Same-signature implementations, a revert, an unused-argument warning,
     // and moved source locations must all agree with an independent build.
@@ -10942,7 +10923,7 @@ test "checked cache dependency edits preserve fresh-build results" {
     defer platform_fresh.deinit(allocator);
     try std.testing.expectEqualStrings(platform_fresh.reports, platform_edit.reports);
     try std.testing.expectEqualSlices([32]u8, platform_fresh.artifact_digests, platform_edit.artifact_digests);
-    try std.testing.expectEqual(@as(u32, 2), platform_edit.build.modules_compiled);
+    try std.testing.expectEqual(@as(u32, 1), platform_edit.build.modules_compiled);
 
     // A changed result type, changed nominal representation, and a dependency
     // error change checking inputs. Inference must run in affected importers.

@@ -91,6 +91,42 @@ pub const Scope = struct {
     }
 };
 
+/// Bind a solved environment whose admission already established the same
+/// checking scope and declaration-reference contract. Store-local owner ids
+/// stay unchanged; each now resolves to the corresponding current content
+/// identity. No solved type or stamped dispatch relation is rewritten.
+pub fn bindOwners(env: *ModuleEnv, current: *const Scope) Allocator.Error!void {
+    const previous = env.checking_dependency.owners.items.items;
+    if (previous.len != current.owners.items.len) {
+        base.invariant("typing cache admission established the same owner-binding domain", .{});
+    }
+    var replacements = std.AutoHashMapUnmanaged(Hash, Hash).empty;
+    defer replacements.deinit(env.gpa);
+    for (previous, current.owners.items) |old, new| {
+        const entry = try replacements.getOrPut(env.gpa, old);
+        if (entry.found_existing and !base.ModuleIdentity.eql(&entry.value_ptr.*, &new)) {
+            base.invariant("typing cache admission preserved nominal-owner equality", .{});
+        }
+        entry.value_ptr.* = new;
+    }
+
+    var identities = try base.SerialStringInterner.initCapacity(env.gpa, env.module_identities.count());
+    errdefer identities.deinit(env.gpa);
+    for (0..env.module_identities.count()) |i| {
+        const old = env.moduleIdentityHash(@fromBackingInt(@as(u32, @intCast(i))));
+        const replacement = replacements.get(old.*) orelse
+            base.invariant("cached source owners were published in its explicit owner-binding scope", .{});
+        const rebound = try identities.insert(env.gpa, &replacement);
+        if (rebound != i) base.invariant("typing cache admission preserved distinct nominal owners", .{});
+    }
+    var owners = try current.copyOwners(env.gpa);
+    errdefer owners.deinit(env.gpa);
+    env.module_identities.deinit(env.gpa);
+    env.module_identities = identities;
+    env.checking_dependency.owners.deinit(env.gpa);
+    env.checking_dependency.owners = owners;
+}
+
 test "checking owner scopes retain nominal equality independently of implementation hashes" {
     const gpa = std.testing.allocator;
     var original = try Scope.init(gpa, @splat(1));
@@ -109,4 +145,28 @@ test "checking owner scopes retain nominal equality independently of implementat
     _ = try split.appendOwner(@splat(4));
     _ = try split.appendOwner(@splat(5));
     try std.testing.expect(!base.ModuleIdentity.eql(&original.digest(), &split.digest()));
+}
+
+test "checking owner binding updates current identities and preserves store-local references" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    try env.initCIRFields("Rebound");
+    try env.setContentIdentity(@splat(1));
+    const foreign = try env.internModuleIdentity(&@as(Hash, @splat(2)), base.Ident.Idx.NONE);
+    var original = try Scope.init(gpa, @splat(1));
+    defer original.deinit();
+    _ = try original.appendOwner(@splat(2));
+    env.checking_dependency.owners = try original.copyOwners(gpa);
+
+    var current = try Scope.init(gpa, @splat(3));
+    defer current.deinit();
+    _ = try current.appendOwner(@splat(4));
+    const self_id = env.selfModuleIdentity();
+    try bindOwners(&env, &current);
+    try std.testing.expectEqual(self_id, env.selfModuleIdentity());
+    try std.testing.expectEqualSlices(u8, &@as(Hash, @splat(3)), env.contentIdentityHash().?);
+    try std.testing.expectEqualSlices(u8, &@as(Hash, @splat(4)), env.moduleIdentityHash(foreign));
+    try std.testing.expectEqual(foreign, env.lookupModuleIdentity(&@as(Hash, @splat(4))).?);
+    try std.testing.expect(env.lookupModuleIdentity(&@as(Hash, @splat(2))) == null);
 }

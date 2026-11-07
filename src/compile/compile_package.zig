@@ -169,13 +169,18 @@ pub const CheckedModuleData = struct {
     checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
 };
 
+const checked_cache_entry = @import("checked_cache_entry.zig");
+
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
+    typing_metadata: ?checked_cache_entry.Metadata = null,
+    typing_reused: bool = false,
     checker: Check,
     publication: CheckedArtifact.CheckedModuleArtifact,
     publication_owned: bool = true,
 
     pub fn deinit(self: *TypeCheckOutput) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.publication.canonical_names.allocator);
         if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
         self.checker.deinit();
     }
@@ -498,6 +503,7 @@ pub fn typeCheckModule(
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
+    typing_context: ?*checked_cache_entry.Context,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -513,14 +519,14 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(
+    const owner_envs = if (typing_context) |context| context.owner_envs else try buildCheckOwnerEnvs(
         check_alloc,
         imported_envs,
         imported_artifacts,
         available_artifacts,
         platform_requirements,
     );
-    defer check_alloc.free(owner_envs);
+    defer if (typing_context == null) check_alloc.free(owner_envs);
 
     // Resolve this module's deferred references into its imports before any
     // checking reads them. The imports have completed and the checked-module
@@ -530,6 +536,8 @@ pub fn typeCheckModule(
         .reachable_envs = owner_envs,
         .missing_public_types = missing_public_types,
     });
+
+    const restored = if (typing_context) |context| try checked_cache_entry.restoreTyping(context, env) else null;
 
     var checker = try Check.initWithOwnerModules(
         check_alloc,
@@ -550,7 +558,16 @@ pub fn typeCheckModule(
     // until after platform requirements are checked, so numeric literals can be
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-    try checker.checkFile();
+    if (restored) |metadata| {
+        try metadata.install(&checker, &typing_context.?.scope);
+        env.types.seal();
+    } else try checker.checkFile();
+
+    const typing_metadata = if (typing_context) |context|
+        try checked_cache_entry.captureMetadata(artifact_alloc, &checker, &context.scope)
+    else
+        null;
+    errdefer if (typing_metadata) |metadata| metadata.deinit(artifact_alloc);
 
     module_envs_map.deinit();
 
@@ -582,6 +599,8 @@ pub fn typeCheckModule(
     return .{
         .checker = checker,
         .publication = checked_artifact,
+        .typing_metadata = typing_metadata,
+        .typing_reused = restored != null,
     };
 }
 

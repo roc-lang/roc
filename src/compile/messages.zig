@@ -164,6 +164,7 @@ pub const CanonicalizeTask = struct {
 
 /// Task to type-check a canonicalized module
 pub const TypeCheckTask = struct {
+    typing_context: ?*@import("checked_cache_entry.zig").Context = null,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier within the package
@@ -334,6 +335,8 @@ pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
 /// now or retained until platform/app relation construction. Selected roots
 /// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
+    typing_metadata: ?@import("checked_cache_entry.zig").Metadata = null,
+    typing_reused: bool = false,
     /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
@@ -341,6 +344,8 @@ pub const OwnedSemanticModuleData = struct {
     pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.module_env.gpa);
+        self.typing_metadata = null;
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
         if (!self.publication_owned) return;
