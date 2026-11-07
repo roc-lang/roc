@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const can = @import("can");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 const checked_module = @import("../checked_module.zig");
 const types = @import("types");

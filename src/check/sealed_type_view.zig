@@ -23,7 +23,6 @@
 const std = @import("std");
 const base = @import("base");
 const can = @import("can");
-const collections = @import("collections");
 const types = @import("types");
 const TypedCIR = @import("typed_cir.zig");
 const canonical = @import("canonical_names.zig");
