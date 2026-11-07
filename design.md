@@ -4531,10 +4531,15 @@ the build more finely than any key could. The checking context identity includes
 hashes, resolved import ids, platform requirement context, and validation
 mode, and is computed with the id by one function
 (`CheckedModuleIdentity.compute`), which both a cache probe and opening the
-module call. It names nothing a command chooses: the root requests a command makes
-of a module by name select among the module's checked compile-time root
-candidates when its root requests are read (`ModuleAnalyses.explicit_roots`),
-so `check`, `build`, `test` and a REPL share one checked entry. A reusable platform module has no app relation in this identity.
+module call. The root requests a command makes of a module by name select
+among the module's checked compile-time root candidates when its root
+requests are read (`ModuleAnalyses.explicit_roots`), so they are not part of
+it, and `check`, `build` and a REPL share one checked entry for every module.
+`roc test` shares every module's entry except its root's: it checks the root
+under the `explicit_roots` validation mode, which does not check an app's
+entrypoint contract with its platform, and the validation mode is part of the
+checking context identity, so the root's checked entry and inference entry
+under `roc test` differ from the ones the other commands write. A reusable platform module has no app relation in this identity.
 Generated code has a separate identity that includes the exact platform/app
 relation; specialization keys use that identity while
 local checked references retain their immutable module owner. The checked
@@ -5383,11 +5388,15 @@ binding resolutions are part of its checking interface (what an importer's
 inference cache entry is keyed by), so the recorded resolution is a function
 of the module and of what its imports fix, and of nothing a command, a
 workspace or a module it does not import decides. Lowering reads the
-resolution through the module's resolved value references, the callable-eval
-templates' `forwarded_lookup` and the checked-error procedure bindings, which
-only restate the recorded resolution in the module's procedure-binding and
-constant ids; a platform pairing extends them with the requirement bindings
-the app supplies.
+resolution through the module's resolved value references
+(`ResolvedValueRefTable`), the callable-eval templates' `forwarded_lookup` and
+the checked-error procedure bindings. The resolved value references are part
+of the module's checked tables slot, computed on demand from the recorded
+`value_references`, `retired_exprs` and `direct_procedure_calls` and naming
+each target by the module's procedure-binding, template and constant ids;
+they are neither cached nor stored with the module. A platform pairing's own
+slot (`valueRefs`) computes the platform's references under the pairing,
+extended with the requirement bindings the app supplies.
 
 ### Synthesized Types
 
@@ -5704,8 +5713,8 @@ cache entry stores one: a cache hit recomputes each fact on its first demand.
   root), its method registry, static dispatch plans and compile-time roots,
   its top-level values with their procedure bindings, callable-eval and
   constant templates, its hoisted constants, and its resolved value
-  references (a translation of the value references checking recorded, by
-  the tables' ids; an associated lookup's target is found by content
+  references (computed from the value references checking recorded, naming
+  each target by the tables' ids; an associated lookup's target is found by content
   identity among the module's direct imports and the modules they and its
   types' name owners reach). The slot computes them from the live module
   on their first demand. The types they name that have no solver variable

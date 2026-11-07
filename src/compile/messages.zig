@@ -200,6 +200,14 @@ pub const TypeCheckTask = struct {
     /// Inference admission keys it, as checked-entry admission does, because
     /// a reused inference result replaces the canonicalized environment.
     source_pin_validation: [32]u8,
+    /// The module's package-qualified name, which a module opened from a
+    /// checked cache entry takes, since identical modules in different
+    /// packages share one entry.
+    qualified_module_name: []const u8,
+    /// Whether the module already has a checked module, which keeps
+    /// `module_env` (and its source) alive. A module opened from a checked
+    /// cache entry otherwise takes over `module_env`'s source.
+    replaces_checked_module: bool,
 };
 
 /// The platform root's requirement surface, borrowed from its completed
@@ -374,6 +382,33 @@ pub const TypeCheckedResult = struct {
     check_diagnostics_ns: u64,
 };
 
+/// A module opened from its checked cache entry instead of being checked.
+pub const CachedModuleOpenedResult = struct {
+    package_name: []const u8,
+    module_id: ModuleId,
+    module_name: []const u8,
+    /// The opened module, whose environment storage owns the loaded entry,
+    /// until the coordinator installs it.
+    checked: ?*Checked.CheckedModule,
+    /// Whether the opened module's environment storage borrows the source of
+    /// the task's `module_env`, which the coordinator releases once it
+    /// installs the module. A result the coordinator does not install leaves
+    /// that source with `module_env`.
+    source_borrowed: bool,
+
+    fn deinit(self: *CachedModuleOpenedResult) void {
+        const checked = self.checked orelse return;
+        if (self.source_borrowed) switch (checked.module_env) {
+            .cached_entry => |*cached| cached.source = &.{},
+            .checked_source, .static_builtin => unreachable,
+        };
+        const allocator = checked.owningAllocator();
+        checked.deinit(allocator);
+        allocator.destroy(checked);
+        self.checked = null;
+    }
+};
+
 /// Diagnostic ownership retained between checking and post-frontend evaluation.
 pub const PendingEvaluationState = struct {
     allocator: Allocator,
@@ -430,6 +465,9 @@ pub const WorkerResult = union(enum) {
     canonicalized_cached: CanonicalizedCachedResult,
     /// Module was successfully type-checked
     type_checked: TypeCheckedResult,
+    /// Module was opened from its checked cache entry; the coordinator takes
+    /// the module and clears `checked` when it installs it.
+    cached_module_opened: CachedModuleOpenedResult,
     /// A worker could not complete the compilation operation.
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
@@ -449,7 +487,7 @@ pub const WorkerResult = union(enum) {
                 var storage: Checked.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .worker_oom => {},
+            .canonicalized, .type_checked, .cached_module_opened, .operation_failed, .worker_oom => {},
         }
         self.deinit(gpa);
     }
@@ -503,6 +541,7 @@ pub const WorkerResult = union(enum) {
                 for (r.reports.items) |*rep| rep.deinit();
                 r.reports.deinit(gpa);
             },
+            .cached_module_opened => |*r| r.deinit(),
             .operation_failed => {},
             .worker_oom => {},
         }

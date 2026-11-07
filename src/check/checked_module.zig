@@ -11717,10 +11717,11 @@ pub const ResolvedValueRefTable = struct {
     /// procedure's reference, ascending by call.
     call_direct_targets: []CallDirectTarget = &.{},
 
-    /// The module's resolved value references in published ids, translated
-    /// from the value-reference resolution checking recorded
-    /// (`ModuleEnv.value_references`, `retired_exprs` and
-    /// `direct_procedure_calls`).
+    /// The module's resolved value references, which its checked tables
+    /// compute on demand from the value-reference resolution checking
+    /// recorded (`ModuleEnv.value_references`, `retired_exprs` and
+    /// `direct_procedure_calls`), naming each target by the module's
+    /// procedure-binding, template and constant ids. Nothing caches them.
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
