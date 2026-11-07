@@ -328,6 +328,15 @@ const ModuleOwners = struct {
         allocator.free(self.positions);
     }
 
+    /// Record that a literal root evaluated in `address_space` asked for an
+    /// allocation larger than a 32-bit `roc_alloc` can be asked for. Any
+    /// checked root this finalization completes can read the literal's
+    /// value, so every module it completes holds an output only that
+    /// address space produces.
+    fn recordLiteralAskedPastU32(self: *const ModuleOwners, address_space: base.target.TargetUsize) void {
+        for (self.modules) |entry| entry.module.evaluation.recordAskedPastU32(address_space);
+    }
+
     fn position(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?u32 {
         const raw = @backingInt(id);
         if (raw >= self.positions.len) {
@@ -4212,6 +4221,7 @@ fn evalInterpreterProgramRoots(
     defer program.deinit();
     const interpreter = &program.interpreter;
     const host = &program.host;
+    defer if (host.asked_past_u32_address_space) module.evaluation.recordAskedPastU32(options.address_space);
     program.timing_io = if (options.timing) |timing| timing.std_io else null;
     var writer = ConstStoreWriter.Writer.init(allocator, module, &lowered.lir_result);
     defer writer.deinit();
@@ -4654,6 +4664,7 @@ fn evalInterpreterLiteralRoot(
 ) FinalizeError!bool {
     const program = try shared_program.acquireFork(lowered);
     defer shared_program.releaseFork(program);
+    defer if (program.host.asked_past_u32_address_space) owners.recordLiteralAskedPastU32(options.address_space);
     program.timing_io = if (options.timing) |timing| timing.std_io else null;
     const interpreter = &program.interpreter;
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
@@ -4727,6 +4738,7 @@ fn evalDevLiteralRoot(
     builtins.in_process_host.leave(entered);
     crash_boundary.deinit();
     _ = try ran;
+    if (host.asked_past_u32_address_space) owners.recordLiteralAskedPastU32(options.address_space);
 
     const producer: lir.LIR.ComptimeProducer = .{ .literal = plan.id };
     const failure: ?LiteralRootFailure = switch (host.termination) {
@@ -6219,6 +6231,7 @@ fn evalDevProgramRoots(
 
     var had_problem = false;
     for (jobs[0..jobs_len]) |*job| {
+        if (job.host.asked_past_u32_address_space) module.evaluation.recordAskedPastU32(options.address_space);
         if (options.retry) |retry| {
             if (job.result == .crashed and retry.holds(native.failedAt(job.host.failure).meaning)) continue;
         }

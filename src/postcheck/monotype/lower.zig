@@ -5815,6 +5815,25 @@ fn constStringBackingLength(view: ModuleView, str: check.ConstStore.ConstStr) u6
     return view.const_store.strBytes(str).len;
 }
 
+/// The capacity a candidate's list with items or string was evaluated with,
+/// when it has room beyond its contents (`Ast.StaticDataCandidate.capacity`).
+/// An empty list or string evaluated with room restores as its capacity
+/// request instead, and is no candidate.
+fn constCandidateCapacity(view: ModuleView, node: checked.ConstNodeId) ?u64 {
+    var current = node;
+    while (true) switch (view.const_store.get(current)) {
+        .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+        .nominal => |nominal| current = nominal.backing,
+        .str => |str| return if (str.len != 0) view.const_store.spareCapacity(current) else null,
+        .list => |list| return switch (list) {
+            .nodes, .packed_bytes => view.const_store.spareCapacity(current),
+            .empty => null,
+        },
+        .pending => Common.invariant("pending const reached static storage metadata production"),
+        .zst, .scalar, .fn_value, .box, .tuple, .record, .tag, .crash, .checked_error => return null,
+    };
+}
+
 fn constStaticDataStorage(view: ModuleView, node: checked.ConstNodeId) Common.StaticDataStorage {
     var current = node;
     while (true) switch (view.const_store.get(current)) {
@@ -6340,6 +6359,13 @@ const Builder = struct {
         if (capacity == 0) return .{ .list = try self.program.addExprSpan(&[0]Ast.ExprId{}) };
         const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = capacity }) });
         return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.program.addExprSpan(&.{requested}) } };
+    }
+
+    /// An empty compile-time string evaluated with room for bytes restores
+    /// as the `with_capacity` it was evaluated with, as an empty list does.
+    fn constEmptyStrData(self: *Builder, capacity: u64) Allocator.Error!ConstExprData {
+        const requested = try self.program.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(Ast.ExprData, .{ .u64 = capacity }) });
+        return .{ .low_level = .{ .op = .str_with_capacity, .args = try self.program.addExprSpan(&.{requested}) } };
     }
 
     fn init(allocator: Allocator, modules: Common.CheckedModules, program: *Ast.Program, options: Options) Builder {
@@ -12645,8 +12671,58 @@ const Builder = struct {
         allow,
     };
 
-    fn constNodeMayUseStaticDataCandidate(self: *Builder, view: ModuleView, node: checked.ConstNodeId, bare_fn: BareFnCandidate) bool {
-        return self.constValueMayUseStaticDataCandidate(view, view.const_store.get(node), bare_fn);
+    /// Whether a list or string on `node`'s spine (its fields, tuple items,
+    /// tag payloads and nominal backings, not a list's items or a box's
+    /// payload) was evaluated with room beyond its contents
+    /// (`Ast.StaticDataCandidate.fresh_form`).
+    fn constSpineRequestsCapacity(self: *Builder, view: ModuleView, root: checked.ConstNodeId) Allocator.Error!bool {
+        var pending: std.ArrayList(checked.ConstNodeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .pending => Common.invariant("pending ConstStore node reached static data selection"),
+            .str, .list => if (view.const_store.spareCapacity(node) != null) return true,
+            .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
+            .tag => |tag| try pending.appendSlice(self.allocator, tag.payloads),
+            .nominal => |nominal| try pending.append(self.allocator, nominal.backing),
+            .zst, .scalar, .box, .crash, .checked_error, .fn_value => {},
+        };
+        return false;
+    }
+
+    fn constNodeMayUseStaticDataCandidate(_: *Builder, view: ModuleView, node_in: checked.ConstNodeId, bare_fn_in: BareFnCandidate) bool {
+        var node = node_in;
+        var bare_fn = bare_fn_in;
+        while (true) switch (view.const_store.get(node)) {
+            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
+            .pending => Common.invariant("pending ConstStore node reached static data selection"),
+            .zst,
+            .scalar,
+            .crash,
+            .checked_error,
+            => return false,
+            // An empty string evaluated with room is static data a read
+            // builds fresh with that room.
+            .str => |str| return constStringBackingLength(view, str) != 0 or view.const_store.spareCapacity(node) != null,
+            .fn_value => return bare_fn == .allow,
+            .list => |list| return switch (list) {
+                .nodes => |items| items.len != 0,
+                .packed_bytes => |packed_list| packed_list.len != 0,
+                // Evaluated with room, it is static data a read builds fresh
+                // with that room; with none, it restores as the empty list.
+                .empty => |capacity| capacity != 0,
+            },
+            .box => return true,
+            .tuple,
+            .record,
+            .tag,
+            => return true,
+            .nominal => |nominal| {
+                node = nominal.backing;
+                bare_fn = .allow;
+            },
+        };
     }
 
     /// Whether a ConstStore node and everything it contains has a stable
@@ -12847,7 +12923,12 @@ const Builder = struct {
                 .pending => Common.invariant("pending ConstStore node reached stored list selection"),
                 .zst => {},
                 .scalar => |scalar| if (!std.meta.eql(scalar, right.scalar)) return false,
-                .str => |str| if (!std.mem.eql(u8, view.const_store.strBytes(str), view.const_store.strBytes(right.str))) return false,
+                .str => |str| {
+                    if (!std.mem.eql(u8, view.const_store.strBytes(str), view.const_store.strBytes(right.str))) return false;
+                    // Admitted strings are empty; an evaluated capacity is
+                    // part of the value.
+                    if (!std.meta.eql(view.const_store.spareCapacity(pair.left), view.const_store.spareCapacity(pair.right))) return false;
+                },
                 .list => |list| {
                     // Admitted lists are empty; an evaluated capacity is part
                     // of the value.
@@ -12876,37 +12957,6 @@ const Builder = struct {
             }
         }
         return true;
-    }
-
-    fn constValueMayUseStaticDataCandidate(_: *Builder, view: ModuleView, value_in: checked.ConstValue, bare_fn_in: BareFnCandidate) bool {
-        var value = value_in;
-        var bare_fn = bare_fn_in;
-        while (true) switch (value) {
-            .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
-            .pending => Common.invariant("pending ConstStore node reached static data selection"),
-            .zst,
-            .scalar,
-            .crash,
-            .checked_error,
-            => return false,
-            .str => |str| return constStringBackingLength(view, str) != 0,
-            .fn_value => return bare_fn == .allow,
-            .list => |list| return switch (list) {
-                .nodes => |items| items.len != 0,
-                .packed_bytes => |packed_list| packed_list.len != 0,
-                // Rebuilt as the `with_capacity` it was evaluated with.
-                .empty => false,
-            },
-            .box => return true,
-            .tuple,
-            .record,
-            .tag,
-            => return true,
-            .nominal => |nominal| {
-                value = view.const_store.get(nominal.backing);
-                bare_fn = .allow;
-            },
-        };
     }
 
     /// Resolve `owner.method` in `scope`. `owner_names` is the name domain
@@ -17091,6 +17141,8 @@ const DraftStaticDataCandidate = struct {
     storage: Common.StaticDataStorage,
     static_data: DraftStaticDataId,
     value: DraftStaticDataCandidateValue,
+    capacity: u64 = 0,
+    fresh_form: bool = false,
 };
 
 /// A draft `Ast.StaticDataCandidateValue`.
@@ -21220,6 +21272,8 @@ const BodyDraftStore = struct {
                 break :blk .{ .static_data_candidate = .{
                     .static_data = static_data_ids[index],
                     .storage = candidate.storage,
+                    .capacity = candidate.capacity,
+                    .fresh_form = candidate.fresh_form,
                     .value = switch (candidate.value) {
                         .runtime => |runtime| .{ .runtime = ids.expr(runtime) },
                         .stored => |stored| .{ .stored = .{
@@ -22899,6 +22953,13 @@ const BodyContext = struct {
         if (capacity == 0) return .{ .list = try self.addExprSpan(&[0]DraftExprId{}) };
         const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = capacity }) });
         return .{ .low_level = .{ .op = .list_with_capacity, .args = try self.addExprSpan(&.{requested}) } };
+    }
+
+    /// An empty compile-time string evaluated with room for bytes restores
+    /// as the `with_capacity` it was evaluated with, as an empty list does.
+    fn constEmptyStrData(self: *BodyContext, capacity: u64) Allocator.Error!ConstExprData {
+        const requested = try self.addExpr(.{ .ty = try self.primitiveType(.u64), .data = restoreScalar(BodyExprData, .{ .u64 = capacity }) });
+        return .{ .low_level = .{ .op = .str_with_capacity, .args = try self.addExprSpan(&.{requested}) } };
     }
 
     fn parserPlanKey(self: *BodyContext, shape_ty: Type.TypeId) names.TypeDigest {
@@ -47569,6 +47630,8 @@ const BodyContext = struct {
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
                 .value = value,
+                .capacity = constCandidateCapacity(store_view, node) orelse 0,
+                .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
             } } });
             try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
             return candidate_expr;
@@ -47624,6 +47687,8 @@ const BodyContext = struct {
                 .static_data = id,
                 .storage = constStaticDataStorage(store_view, node),
                 .value = value,
+                .capacity = constCandidateCapacity(store_view, node) orelse 0,
+                .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
             } });
         }
         return value.runtime;
@@ -47653,9 +47718,10 @@ const BodyContext = struct {
     }
 
     /// Whether `node` is a part of the candidate being restored: a non-empty
-    /// list or a box on its constructor spine. Every other spine node is a
-    /// constructor whose own parts are decided as they are reached, or a leaf
-    /// that restores as a literal.
+    /// list, a box, or a list or string evaluated with room beyond its
+    /// contents on its constructor spine, whose candidate carries that
+    /// capacity. Every other spine node is a constructor whose own parts are
+    /// decided as they are reached, or a leaf that restores as a literal.
     fn isStaticDataPart(self: *const BodyContext, store_view: ModuleView, node: checked.ConstNodeId) bool {
         const root = self.static_data_part_root orelse return false;
         if (node == root.node or !moduleBytesEqual(root.module.bytes, store_view.key.bytes)) return false;
@@ -47663,10 +47729,12 @@ const BodyContext = struct {
             .boxy_fn => Common.invariant("a function value a `.boxy` compilation stored reached Monotype"),
             .list => |list| switch (list) {
                 .nodes => |items| items.len != 0,
-                .empty, .packed_bytes => false,
+                .packed_bytes => store_view.const_store.spareCapacity(node) != null,
+                .empty => false,
             },
+            .str => |str| str.len != 0 and store_view.const_store.spareCapacity(node) != null,
             .box => true,
-            .pending, .zst, .scalar, .str, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
+            .pending, .zst, .scalar, .tuple, .record, .crash, .checked_error, .tag, .nominal, .fn_value => false,
         };
     }
 
@@ -47703,6 +47771,8 @@ const BodyContext = struct {
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
+            .capacity = constCandidateCapacity(store_view, node) orelse 0,
+            .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
         } } });
         try self.draft.static_data_candidate_exprs.put(address, candidate_expr);
         return candidate_expr;
@@ -47730,6 +47800,8 @@ const BodyContext = struct {
             .static_data = id,
             .storage = constStaticDataStorage(store_view, node),
             .value = value,
+            .capacity = constCandidateCapacity(store_view, node) orelse 0,
+            .fresh_form = try self.builder.constSpineRequestsCapacity(store_view, node),
         } });
     }
 
@@ -47988,11 +48060,14 @@ const BodyContext = struct {
                     .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
                     .zst => .unit,
                     .scalar => |scalar| restoreScalar(BodyExprData, scalar),
-                    .str => |str| .{ .str_lit = try self.addStringView(
-                        store_view.const_store.strBytes(str),
-                        0,
-                        str.len,
-                    ) },
+                    .str => |str| if (str.len == 0 and store_view.const_store.spareCapacity(frame.node) != null)
+                        try self.constEmptyStrData(store_view.const_store.spareCapacity(frame.node).?)
+                    else
+                        .{ .str_lit = try self.addStringView(
+                            store_view.const_store.strBytes(str),
+                            0,
+                            str.len,
+                        ) },
                     .crash => |str| .{ .crash = try self.addStringView(
                         store_view.const_store.blobData(str.data),
                         str.offset,
@@ -69658,11 +69733,14 @@ fn constRestoreData(
         .pending => Common.invariant("pending ConstStore node reached Monotype restore"),
         .zst => .unit,
         .scalar => |scalar| restoreScalar(@TypeOf(restorer.*).ConstExprData, scalar),
-        .str => |str| .{ .str_lit = try emit.addStringView(
-            store_view.const_store.strBytes(str),
-            0,
-            str.len,
-        ) },
+        .str => |str| if (str.len == 0 and store_view.const_store.spareCapacity(frame.node) != null)
+            try restorer.constEmptyStrData(store_view.const_store.spareCapacity(frame.node).?)
+        else
+            .{ .str_lit = try emit.addStringView(
+                store_view.const_store.strBytes(str),
+                0,
+                str.len,
+            ) },
         .crash => |str| .{ .crash = try emit.addStringView(
             store_view.const_store.blobData(str.data),
             str.offset,

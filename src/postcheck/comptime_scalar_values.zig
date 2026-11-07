@@ -13,15 +13,17 @@
 //! later transcoding matches slots, so the lowerer emits the literal
 //! directly and creates no slot, failure record, or guard for it.
 //!
-//! One list shape gets the same treatment: an empty list lowers to the
+//! An empty list or string gets the same treatment: it lowers to the
 //! `with_capacity` it was evaluated with, so the request survives the freeze
 //! (a frozen descriptor cannot carry capacity) and the first append goes in
-//! place. A list with elements keeps its slot however uniform its contents:
-//! lowering it to a construction would allocate at every read, while a
-//! consumer that mutates what it read already receives a fresh unique list
-//! from the runtime's copy-on-first-mutation, at the one allocation that
-//! construction would have spent anyway. Other aggregate roots keep their slots and fold in the backend;
-//! failed roots keep the guard that crashes with the original failure.
+//! place. A list with items keeps its slot however uniform its contents:
+//! lowering it to a construction would allocate at every read. A list of
+//! copies, and a value a list or string on whose spine was evaluated with
+//! spare capacity, also name a fresh form (`UniformList`, `FreshPart`),
+//! which a read whose value an in-place operation would otherwise copy
+//! takes instead. Other aggregate roots keep their slots and fold in the
+//! backend; failed roots keep the guard that crashes with the original
+//! failure.
 //!
 //! A build that restores its compile-time values from a checked module's
 //! const store, rather than from a completed host program, reaches the
@@ -34,6 +36,7 @@ const builtins = @import("builtins");
 const check = @import("check");
 const core = @import("lir_core");
 const layout = @import("layout");
+const Common = @import("common.zig");
 const checked = check.CheckedModule;
 const LIR = core.LIR;
 const Program = core.Program;
@@ -51,8 +54,8 @@ const Allocator = std.mem.Allocator;
 pub const Construction = union(enum) {
     literal: ScalarLiteral,
     zst,
-    /// The empty string.
-    empty_str,
+    /// The empty string, rebuilt with the capacity it was evaluated with.
+    empty_str: u64,
     /// An empty list, rebuilt with the capacity it was evaluated with.
     empty_list: u64,
     /// A record, one construction per field in original order.
@@ -103,11 +106,19 @@ pub const UniformList = struct {
     /// program.
     pub fn writeDigest(self: UniformList, allocator: Allocator, hasher: *base.TypeDigestHasher) Allocator.Error!void {
         writeDigestWord(hasher, self.count);
+        try writeConstructionDigest(allocator, hasher, self.element);
+    }
+};
+
+/// Writes a construction's content, part by part: everything `emit` builds
+/// from beside the layout it is read at.
+fn writeConstructionDigest(allocator: Allocator, hasher: *base.TypeDigestHasher, construction: Construction) Allocator.Error!void {
+    {
         // Parts wait on an explicit stack, so nesting never becomes native
         // call depth.
         var pending: std.ArrayList(Construction) = .empty;
         defer pending.deinit(allocator);
-        try pending.append(allocator, self.element);
+        try pending.append(allocator, construction);
         while (pending.pop()) |part| {
             hasher.update(&.{@backingInt(std.meta.activeTag(part))});
             switch (part) {
@@ -131,8 +142,8 @@ pub const UniformList = struct {
                         },
                     }
                 },
-                .zst, .empty_str => {},
-                .empty_list => |capacity| writeDigestWord(hasher, capacity),
+                .zst => {},
+                .empty_str, .empty_list => |capacity| writeDigestWord(hasher, capacity),
                 .record => |fields| {
                     writeDigestWord(hasher, fields.len);
                     try pending.appendSlice(allocator, fields);
@@ -146,12 +157,285 @@ pub const UniformList = struct {
             }
         }
     }
-};
+}
+
+/// Whether a construction rebuilds an empty list or string with room for
+/// items: a capacity it was evaluated with.
+pub fn constructionRequestsCapacity(allocator: Allocator, construction: Construction) Allocator.Error!bool {
+    var pending: std.ArrayList(Construction) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, construction);
+    while (pending.pop()) |part| switch (part) {
+        .literal, .zst => {},
+        .empty_str, .empty_list => |capacity| if (capacity != 0) return true,
+        .record => |fields| try pending.appendSlice(allocator, fields),
+        .tag => |tag| if (tag.payload) |payload| try pending.append(allocator, payload.*),
+    };
+    return false;
+}
 
 fn writeDigestWord(hasher: *base.TypeDigestHasher, value: u64) void {
     var bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &bytes, value, .little);
     hasher.update(&bytes);
+}
+
+/// How the fresh form of a compile-time value builds it again from its static
+/// datum. A value has a fresh form when one of its lists or strings was
+/// evaluated with more capacity than it holds: static data keeps the items
+/// alone, so a read whose value an in-place operation would otherwise copy
+/// builds the value fresh, every list and string of its own spine unique and
+/// with the capacity it was evaluated with, and every other part taken from
+/// the static datum. A part is named by its shape alone, like a
+/// `Construction`, so equal values have equal fresh forms in every program.
+pub const FreshPart = union(enum) {
+    /// Taken from the static datum as it is: a part with no construction
+    /// off the value's own spine, such as a box or a function value.
+    static,
+    /// Built as its construction: a part made of scalars, empty lists and
+    /// strings, each with the capacity it was evaluated with, and records
+    /// and tags of those.
+    construction: Construction,
+    /// A list or string with items, built with room for this many items or
+    /// bytes and then given the static datum's.
+    reserved: u64,
+    /// A record or tuple, one part per field in original order.
+    record: []const FreshPart,
+    /// A tag with a payload.
+    tag: struct {
+        variant_index: u32,
+        discriminant: u32,
+        payload: *const FreshPart,
+    },
+
+    /// Writes the fresh form's content, part by part. Together with the
+    /// value's layout and the static datum it reads, this is everything
+    /// `emitFresh` builds from.
+    pub fn writeDigest(self: FreshPart, allocator: Allocator, hasher: *base.TypeDigestHasher) Allocator.Error!void {
+        var pending: std.ArrayList(FreshPart) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, self);
+        while (pending.pop()) |part| {
+            hasher.update(&.{@backingInt(std.meta.activeTag(part))});
+            switch (part) {
+                .static => {},
+                .construction => |construction| try writeConstructionDigest(allocator, hasher, construction),
+                .reserved => |capacity| writeDigestWord(hasher, capacity),
+                .record => |fields| {
+                    writeDigestWord(hasher, fields.len);
+                    try pending.appendSlice(allocator, fields);
+                },
+                .tag => |tag| {
+                    writeDigestWord(hasher, tag.variant_index);
+                    writeDigestWord(hasher, tag.discriminant);
+                    try pending.append(allocator, tag.payload.*);
+                },
+            }
+        }
+    }
+
+    /// Whether building the value reads its static datum: whether a part
+    /// is taken from it, or a list's or string's items are.
+    pub fn readsDatum(self: FreshPart, allocator: Allocator) Allocator.Error!bool {
+        var pending: std.ArrayList(FreshPart) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, self);
+        while (pending.pop()) |part| switch (part) {
+            .static, .reserved => return true,
+            .construction => {},
+            .record => |fields| try pending.appendSlice(allocator, fields),
+            .tag => |tag| try pending.append(allocator, tag.payload.*),
+        };
+        return false;
+    }
+};
+
+/// Emits `target` = the value `part` builds fresh from `source`, a local
+/// holding the value's static datum (null when the form reads none of it,
+/// `FreshPart.readsDatum`), continuing at `next`, and returns the entry
+/// statement; null when a capacity does not fit a literal. `ctx` supplies
+/// locals as for `emit`. A part's source is read out of its parent's before
+/// the part is built and the parent is built after its parts, so the steps
+/// are collected in execution order first and then emitted in front of one
+/// another from the last.
+pub fn emitFresh(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, origin: LIR.StmtOrigin, target: LIR.LocalId, source: ?LIR.LocalId, part: FreshPart, next: LIR.CFStmtId) Allocator.Error!?LIR.CFStmtId {
+    const allocator = store.allocator;
+    const Source = union(enum) {
+        /// A local already holding the part's static value.
+        local: LIR.LocalId,
+        /// The read of the part's static value out of its parent's.
+        read: LIR.RefOp,
+        /// None: the form builds the part without reading the datum.
+        none,
+    };
+    const Step = union(enum) {
+        read: struct { target: LIR.LocalId, op: LIR.RefOp },
+        with_capacity: struct { target: LIR.LocalId, op: LIR.LowLevel, capacity: i64 },
+        concat: struct { target: LIR.LocalId, op: LIR.LowLevel, fresh: LIR.LocalId, items: LIR.LocalId },
+        build_struct: struct { target: LIR.LocalId, fields: []const LIR.LocalId },
+        build_tag: struct { target: LIR.LocalId, variant_index: u32, discriminant: u32, payload: LIR.LocalId },
+        construct: struct { target: LIR.LocalId, construction: Construction },
+    };
+    const Visit = union(enum) {
+        enter: struct { target: LIR.LocalId, source: Source, part: FreshPart },
+        exit: Step,
+    };
+    var steps: std.ArrayList(Step) = .empty;
+    defer {
+        for (steps.items) |step| if (step == .build_struct) allocator.free(step.build_struct.fields);
+        steps.deinit(allocator);
+    }
+    var visits: std.ArrayList(Visit) = .empty;
+    defer {
+        for (visits.items) |visit| if (visit == .exit and visit.exit == .build_struct) allocator.free(visit.exit.build_struct.fields);
+        visits.deinit(allocator);
+    }
+    try visits.append(allocator, .{ .enter = .{ .target = target, .source = if (source) |local| .{ .local = local } else .none, .part = part } });
+    while (true) {
+        // A step owning its fields moves from `visits` to `steps` without
+        // allocating, so neither list drops it.
+        try steps.ensureUnusedCapacity(allocator, 1);
+        const visit = visits.pop() orelse break;
+        const entered = switch (visit) {
+            .exit => |step| {
+                steps.appendAssumeCapacity(step);
+                continue;
+            },
+            .enter => |entered| entered,
+        };
+        switch (entered.part) {
+            .static => {
+                try steps.append(allocator, .{ .read = .{ .target = entered.target, .op = switch (entered.source) {
+                    .local => |local| LIR.RefOp.local(local),
+                    .read => |op| op,
+                    .none => Common.invariant("a fresh form took a part from a datum it does not read"),
+                } } });
+                continue;
+            },
+            .construction => |construction| {
+                try steps.append(allocator, .{ .construct = .{ .target = entered.target, .construction = construction } });
+                continue;
+            },
+            .reserved, .record, .tag => {},
+        }
+        // A part built around its own parts reads its source only for the
+        // parts that are taken from the datum.
+        const value: ?LIR.LocalId = switch (entered.source) {
+            .local => |local| local,
+            .read => |op| if (try entered.part.readsDatum(allocator)) read: {
+                const local = try ctx.addLocal(store.getLocal(entered.target).layout_idx);
+                try steps.append(allocator, .{ .read = .{ .target = local, .op = op } });
+                break :read local;
+            } else null,
+            .none => null,
+        };
+        const layout_idx = store.getLocal(entered.target).layout_idx;
+        const value_layout = layouts.getLayout(layout_idx);
+        switch (entered.part) {
+            .static, .construction => unreachable, // built from its source above
+            .reserved => |capacity| {
+                if (capacity > std.math.maxInt(i64)) return null;
+                const is_str = layout_idx == .str;
+                if (!is_str and value_layout.tag != .list) Common.invariant("a list's fresh form was read at a layout that is not a list");
+                const with_capacity: LIR.LowLevel = if (is_str) .str_with_capacity else .list_with_capacity;
+                const items = value orelse Common.invariant("a fresh form gave a list the items of a datum it does not read");
+                const fresh = try ctx.addLocal(layout_idx);
+                try steps.append(allocator, .{ .with_capacity = .{ .target = fresh, .op = with_capacity, .capacity = @intCast(capacity) } });
+                try steps.append(allocator, .{ .concat = .{
+                    .target = entered.target,
+                    .op = if (is_str) .str_concat else .list_concat,
+                    .fresh = fresh,
+                    .items = items,
+                } });
+            },
+            .record => |fields| {
+                if (value_layout.tag != .struct_) Common.invariant("a record's fresh form was read at a layout that is not a struct");
+                const struct_idx = value_layout.getStruct().idx;
+                const field_locals = try allocator.alloc(LIR.LocalId, fields.len);
+                for (field_locals, 0..) |*local, original_index| {
+                    local.* = ctx.addLocal(layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(original_index))) catch |err| {
+                        allocator.free(field_locals);
+                        return err;
+                    };
+                }
+                visits.append(allocator, .{ .exit = .{ .build_struct = .{ .target = entered.target, .fields = field_locals } } }) catch |err| {
+                    allocator.free(field_locals);
+                    return err;
+                };
+                // The first field is entered first.
+                var index = fields.len;
+                while (index > 0) {
+                    index -= 1;
+                    try visits.append(allocator, .{ .enter = .{
+                        .target = field_locals[index],
+                        .source = if (value) |record| .{ .read = LIR.RefOp.field(record, @intCast(index)) } else .none,
+                        .part = fields[index],
+                    } });
+                }
+            },
+            .tag => |tag| {
+                if (value_layout.tag != .tag_union) Common.invariant("a tag's fresh form was read at a layout that is not a tag union");
+                const info = layouts.getTagUnionInfo(value_layout);
+                if (tag.variant_index >= info.variants.len) Common.invariant("a tag's fresh form named a variant its layout lacks");
+                const payload = try ctx.addLocal(info.variants.get(tag.variant_index).payload_layout);
+                try visits.append(allocator, .{ .exit = .{ .build_tag = .{
+                    .target = entered.target,
+                    .variant_index = tag.variant_index,
+                    .discriminant = tag.discriminant,
+                    .payload = payload,
+                } } });
+                try visits.append(allocator, .{ .enter = .{
+                    .target = payload,
+                    .source = if (value) |tagged| .{ .read = LIR.RefOp.tagPayloadStruct(tagged, @intCast(tag.variant_index), @intCast(tag.discriminant)) } else .none,
+                    .part = tag.payload.*,
+                } });
+            },
+        }
+    }
+    var current = next;
+    var index = steps.items.len;
+    while (index > 0) {
+        index -= 1;
+        current = switch (steps.items[index]) {
+            .read => |read| try store.addCFStmt(.{ .assign_ref = .{ .target = read.target, .op = read.op, .next = current } }, origin),
+            .with_capacity => |request| request: {
+                const capacity_local = try ctx.addLocal(.u64);
+                const build = try store.addCFStmt(.{ .assign_low_level = .{
+                    .target = request.target,
+                    .op = request.op,
+                    .rc_effect = try store.addRcEffect(request.op.rcEffect()),
+                    .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
+                    .next = current,
+                } }, origin);
+                break :request try store.addCFStmt(.{ .assign_literal = .{
+                    .target = capacity_local,
+                    .value = .{ .i64_literal = .{ .value = request.capacity, .layout_idx = .u64 } },
+                    .next = build,
+                } }, origin);
+            },
+            .concat => |concat| try store.addCFStmt(.{ .assign_low_level = .{
+                .target = concat.target,
+                .op = concat.op,
+                .rc_effect = try store.addRcEffect(concat.op.rcEffect()),
+                .args = try store.addLocalSpan(&[_]LIR.LocalId{ concat.fresh, concat.items }),
+                .next = current,
+            } }, origin),
+            .build_struct => |build| try store.addCFStmt(.{ .assign_struct = .{
+                .target = build.target,
+                .fields = try store.addLocalSpan(build.fields),
+                .next = current,
+            } }, origin),
+            .build_tag => |build| try store.addCFStmt(.{ .assign_tag = .{
+                .target = build.target,
+                .variant_index = build.variant_index,
+                .discriminant = build.discriminant,
+                .payload = build.payload,
+                .next = current,
+            } }, origin),
+            .construct => |construct| try emit(ctx, store, layouts, origin, construct.target, construct.construction, current) orelse return null,
+        };
+    }
+    return current;
 }
 
 /// Constructions of the completed successful roots of one host program that
@@ -161,6 +445,10 @@ pub const CompletedScalarValues = struct {
     /// The completed successful roots that are lists of copies of one
     /// construction, keyed like `entries`.
     uniform_lists: UniformMap,
+    /// The completed successful roots with a fresh form: those a list or
+    /// string on whose spine was evaluated with spare capacity, keyed like
+    /// `entries`.
+    fresh_forms: FreshMap,
     /// The completed successful roots whose value is a string too short to
     /// need target storage (`Common.StaticDataStorage.needsTargetStorage`),
     /// with its bytes: a read lowers as the string's literal, exactly as a
@@ -189,11 +477,12 @@ pub const CompletedScalarValues = struct {
 
     const Map = std.HashMapUnmanaged(Key, Construction, Context, std.hash_map.default_max_load_percentage);
     const UniformMap = std.HashMapUnmanaged(Key, UniformList, Context, std.hash_map.default_max_load_percentage);
+    const FreshMap = std.HashMapUnmanaged(Key, FreshPart, Context, std.hash_map.default_max_load_percentage);
     const StrMap = std.HashMapUnmanaged(Key, []const u8, Context, std.hash_map.default_max_load_percentage);
 
     /// No completed values yet.
     pub fn initEmpty(allocator: Allocator) CompletedScalarValues {
-        return .{ .entries = .empty, .uniform_lists = .empty, .short_strings = .empty, .arena = collections.SingleThreadArena.init(allocator) };
+        return .{ .entries = .empty, .uniform_lists = .empty, .fresh_forms = .empty, .short_strings = .empty, .arena = collections.SingleThreadArena.init(allocator) };
     }
 
     /// Collects every completed successful root of `program` whose frozen
@@ -224,12 +513,24 @@ pub const CompletedScalarValues = struct {
             if (!slotSucceeded(program, frozen, slot)) continue;
             const data_export = exportOf(frozen, slot) orelse continue;
             const key = Key{ .module = root.module, .root = root.root };
-            if (decoder.decodeShortString(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |bytes| {
-                try self.short_strings.put(allocator, key, try self.arena.allocator().dupe(u8, bytes));
+            const bytes = data_export.bytes[data_export.symbol_offset..];
+            // A string evaluated with room beyond its bytes keeps its slot,
+            // so its reads can take the fresh form that gives it that room.
+            if (capacityAt(data_export, data_export.symbol_offset) == null) {
+                if (decoder.decodeShortString(data_export, bytes, data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |short| {
+                    try self.short_strings.put(allocator, key, try self.arena.allocator().dupe(u8, short));
+                    continue;
+                }
+            }
+            // A value a list or string on whose spine was evaluated with
+            // spare capacity keeps its slot even when it has a construction,
+            // so a read that only reads it allocates nothing.
+            if (try decoder.decodeFresh(data_export, bytes, data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |fresh| {
+                try self.fresh_forms.put(allocator, key, fresh);
                 continue;
             }
-            const construction = try decoder.decode(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse {
-                if (try decoder.decodeUniformList(data_export, data_export.bytes[data_export.symbol_offset..], data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |uniform| {
+            const construction = try decoder.decode(data_export, bytes, data_export.symbol_offset, root.role.value.plan, entry.layout_idx) orelse {
+                if (try decoder.decodeUniformList(data_export, bytes, data_export.symbol_offset, root.role.value.plan, entry.layout_idx)) |uniform| {
                     try self.uniform_lists.put(allocator, key, uniform);
                 }
                 continue;
@@ -241,6 +542,7 @@ pub const CompletedScalarValues = struct {
     pub fn deinit(self: *CompletedScalarValues, allocator: Allocator) void {
         self.entries.deinit(allocator);
         self.uniform_lists.deinit(allocator);
+        self.fresh_forms.deinit(allocator);
         self.short_strings.deinit(allocator);
         self.arena.deinit();
     }
@@ -253,6 +555,12 @@ pub const CompletedScalarValues = struct {
     /// The list of copies a root completed to, when it did.
     pub fn uniformListFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer) ?UniformList {
         return self.uniform_lists.get(.{ .module = module, .root = root });
+    }
+
+    /// The fresh form of a root a list or string on whose spine was
+    /// evaluated with spare capacity, when it was.
+    pub fn freshFormFor(self: *const CompletedScalarValues, module: checked.ModuleId, root: LIR.ComptimeProducer) ?FreshPart {
+        return self.fresh_forms.get(.{ .module = module, .root = root });
     }
 
     /// The construction for a root read at `layout_idx`, when the root
@@ -310,11 +618,18 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, o
     while (pending.pop()) |part| switch (part.construction) {
         .literal => |literal| current = try store.addCFStmt(.{ .assign_literal = .{ .target = part.target, .value = try literal.toLiteralValue(store), .next = current } }, origin),
         .zst => current = try store.addCFStmt(.{ .assign_struct = .{ .target = part.target, .fields = LIR.LocalSpan.empty(), .next = current } }, origin),
-        .empty_str => current = try store.addCFStmt(.{ .assign_literal = .{
-            .target = part.target,
-            .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
-            .next = current,
-        } }, origin),
+        .empty_str => |capacity| {
+            if (capacity == 0) {
+                current = try store.addCFStmt(.{ .assign_literal = .{
+                    .target = part.target,
+                    .value = .{ .str_literal = try store.insertStringView("", 0, 0) },
+                    .next = current,
+                } }, origin);
+            } else {
+                if (capacity > std.math.maxInt(i64)) return null;
+                current = try emitStrWithCapacity(ctx, store, origin, part.target, @intCast(capacity), current);
+            }
+        },
         .empty_list => |capacity| {
             if (capacity > std.math.maxInt(i64)) return null;
             current = try emitWithCapacity(ctx, store, origin, part.target, @intCast(capacity), current);
@@ -363,6 +678,24 @@ pub fn emit(ctx: anytype, store: *core.LirStore, layouts: *const layout.Store, o
         },
     };
     return current;
+}
+
+/// `target = str_with_capacity(capacity)`, the runtime form of a completed
+/// empty string evaluated with room for bytes.
+fn emitStrWithCapacity(ctx: anytype, store: *core.LirStore, origin: LIR.StmtOrigin, target: LIR.LocalId, capacity: i64, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+    const capacity_local = try ctx.addLocal(.u64);
+    const build = try store.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = .str_with_capacity,
+        .rc_effect = try store.addRcEffect(LIR.LowLevel.str_with_capacity.rcEffect()),
+        .args = try store.addLocalSpan(&[_]LIR.LocalId{capacity_local}),
+        .next = next,
+    } }, origin);
+    return try store.addCFStmt(.{ .assign_literal = .{
+        .target = capacity_local,
+        .value = .{ .i64_literal = .{ .value = capacity, .layout_idx = .u64 } },
+        .next = build,
+    } }, origin);
 }
 
 /// `target = list_with_capacity(capacity)`, the runtime form of a completed
@@ -560,7 +893,7 @@ pub const Decoder = struct {
             return switch (self.program.const_plans.items[@backingInt(current.plan)]) {
                 .zst => .{ .done = .zst },
                 .scalar => .{ .done = if (decodeScalar(current.layout_idx, current.bytes)) |literal| .{ .literal = literal } else null },
-                .str => .{ .done = if (self.stringIsEmpty(current.bytes)) .empty_str else null },
+                .str => .{ .done = if (self.stringIsEmpty(current.bytes)) .{ .empty_str = if (data_export) |exported| capacityAt(exported, current.offset) orelse 0 else 0 } else null },
                 .list => .{ .done = self.decodeList(data_export, current.bytes, current.offset, value_layout) },
                 .named => |named| {
                     current.plan = named.backing;
@@ -612,6 +945,182 @@ pub const Decoder = struct {
         return backing.bytes[start..][0..len];
     }
 
+    /// The fresh form of a completed root, decoded from its frozen image and
+    /// the capacities its export keeps; null when none of the lists or
+    /// strings on its spine was evaluated with spare capacity.
+    pub fn decodeFresh(self: *Decoder, data_export: *const Program.StaticDataExport, bytes: []const u8, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?FreshPart {
+        // Nested parts wait in frames on an explicit stack, so a value's
+        // nesting never becomes native call depth.
+        var frames: std.ArrayList(FreshFrame) = .empty;
+        var spare = false;
+        var part = DecodePart{ .bytes = bytes, .offset = offset, .plan = plan, .layout_idx = layout_idx };
+        while (true) {
+            var result = switch (try self.freshStep(data_export, part, &spare)) {
+                .done => |done| done,
+                .frame => |frame| {
+                    try frames.append(self.arena, frame);
+                    part = frames.items[frames.items.len - 1].part(self, 0);
+                    continue;
+                },
+            };
+            while (true) {
+                if (frames.items.len == 0) return if (spare) result else null;
+                const top = &frames.items[frames.items.len - 1];
+                top.fields[top.index] = result;
+                top.index += 1;
+                if (top.index < top.fields.len) {
+                    part = top.part(self, top.index);
+                    break;
+                }
+                result = try top.finish(self.arena);
+                _ = frames.pop();
+            }
+        }
+    }
+
+    /// A record-shaped part of a fresh form waiting on its parts.
+    const FreshFrame = struct {
+        bytes: []const u8,
+        offset: usize,
+        plans: []const Program.ConstPlanId,
+        /// The struct laying out the parts; null for a tag's single payload.
+        struct_idx: ?@FieldType(layout.StructLayout, "idx"),
+        /// The single payload's layout when `struct_idx` is null.
+        payload_layout: layout.Idx = undefined,
+        /// The tag wrapping the parts, if any.
+        discriminant: ?u32 = null,
+        fields: []FreshPart,
+        index: usize = 0,
+
+        fn part(frame: *const FreshFrame, decoder: *const Decoder, index: usize) DecodePart {
+            const struct_idx = frame.struct_idx orelse return .{
+                .bytes = frame.bytes,
+                .offset = frame.offset,
+                .plan = frame.plans[0],
+                .layout_idx = frame.payload_layout,
+            };
+            const layouts = decoder.program.layouts;
+            const field_offset = layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index));
+            if (frame.bytes.len < field_offset) Common.invariant("a frozen value's image was shorter than its layout");
+            return .{
+                .bytes = frame.bytes[field_offset..],
+                .offset = frame.offset + field_offset,
+                .plan = frame.plans[index],
+                .layout_idx = layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index)),
+            };
+        }
+
+        fn finish(frame: *const FreshFrame, arena: Allocator) Allocator.Error!FreshPart {
+            const discriminant = frame.discriminant orelse return .{ .record = frame.fields };
+            const payload = try arena.create(FreshPart);
+            payload.* = if (frame.struct_idx == null) frame.fields[0] else .{ .record = frame.fields };
+            return .{ .tag = .{ .variant_index = discriminant, .discriminant = discriminant, .payload = payload } };
+        }
+    };
+
+    const FreshStep = union(enum) {
+        done: FreshPart,
+        frame: FreshFrame,
+    };
+
+    fn freshStep(self: *Decoder, data_export: *const Program.StaticDataExport, start: DecodePart, spare: *bool) Allocator.Error!FreshStep {
+        var current = start;
+        // A part with a construction is built as it, with every capacity
+        // its empty lists and strings were evaluated with.
+        if (try self.decode(data_export, current.bytes, current.offset, current.plan, current.layout_idx)) |construction| {
+            if (try constructionRequestsCapacity(self.arena, construction)) spare.* = true;
+            return .{ .done = .{ .construction = construction } };
+        }
+        while (true) {
+            const value_layout = self.program.layouts.getLayout(current.layout_idx);
+            return switch (self.program.const_plans.items[@backingInt(current.plan)]) {
+                .pending, .layout_only => Common.invariant("an incomplete const plan reached a completed value's fresh form"),
+                .zst, .scalar, .box, .fn_value, .erased_fn, .boxy_fn => .{ .done = .static },
+                .str => .{ .done = freshSequence(data_export, current.offset, self.stringLength(current.bytes), spare) },
+                .list => .{ .done = switch (value_layout.tag) {
+                    .list => freshSequence(data_export, current.offset, self.readWord(current.bytes, 1) orelse Common.invariant("a frozen list's image was shorter than its descriptor"), spare),
+                    .list_of_zst => .static,
+                    .scalar, .box, .box_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => Common.invariant("a list's const plan was frozen at a layout that is not a list"),
+                } },
+                .named => |named| {
+                    current.plan = named.backing;
+                    continue;
+                },
+                .tuple, .record => |child_plans| switch (value_layout.tag) {
+                    .struct_ => if (child_plans.len == 0) .{ .done = .{ .record = &.{} } } else .{ .frame = .{
+                        .bytes = current.bytes,
+                        .offset = current.offset,
+                        .plans = child_plans,
+                        .struct_idx = value_layout.getStruct().idx,
+                        .fields = try self.arena.alloc(FreshPart, child_plans.len),
+                    } },
+                    // A boxed record is off the value's spine.
+                    .box, .box_of_zst => .{ .done = .static },
+                    .scalar, .list, .list_of_zst, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => Common.invariant("a record's const plan was frozen at a layout that is neither a struct nor a box"),
+                },
+                .tag_union => |variants| try self.freshTag(current.bytes, current.offset, variants, current.layout_idx),
+            };
+        }
+    }
+
+    /// A string's or list's part with items, which has no construction:
+    /// built with the capacity it was evaluated with.
+    fn freshSequence(data_export: *const Program.StaticDataExport, offset: usize, len: u64, spare: *bool) FreshPart {
+        const capacity = capacityAt(data_export, offset) orelse len;
+        if (capacity > len) spare.* = true;
+        return .{ .reserved = capacity };
+    }
+
+    fn freshTag(self: *Decoder, bytes: []const u8, offset: usize, variants: []const Program.ConstTagVariant, layout_idx: layout.Idx) Allocator.Error!FreshStep {
+        if (layout_idx == .bool) return .{ .done = .static };
+        const value_layout = self.program.layouts.getLayout(layout_idx);
+        // A boxed tag is off the value's spine.
+        if (value_layout.tag != .tag_union) return .{ .done = .static };
+        const data = self.program.layouts.getTagUnionData(value_layout.getTagUnion().idx);
+        if (bytes.len < data.size.get(self.program.layouts.targetUsize())) Common.invariant("a frozen tag's image was shorter than its layout");
+        const discriminant: u32 = @intCast(data.readDiscriminant(bytes.ptr, self.program.layouts.targetUsize()));
+        const layout_variants = self.program.layouts.getTagUnionVariants(data);
+        if (discriminant >= layout_variants.len) Common.invariant("a frozen tag's discriminant exceeded its layout's variants");
+        const payload_layout = layout_variants.get(discriminant).payload_layout;
+        for (variants) |variant| {
+            if (variant.discriminant != discriminant) continue;
+            if (variant.payloads.len == 0) return .{ .done = .static };
+            if (variant.payloads.len == 1) return .{ .frame = .{
+                .bytes = bytes,
+                .offset = offset,
+                .plans = variant.payloads,
+                .struct_idx = null,
+                .payload_layout = payload_layout,
+                .discriminant = discriminant,
+                .fields = try self.arena.alloc(FreshPart, 1),
+            } };
+            const payload_value_layout = self.program.layouts.getLayout(payload_layout);
+            if (payload_value_layout.tag != .struct_) Common.invariant("a tag's payloads were frozen at a layout that is not a struct");
+            return .{ .frame = .{
+                .bytes = bytes,
+                .offset = offset,
+                .plans = variant.payloads,
+                .struct_idx = payload_value_layout.getStruct().idx,
+                .discriminant = discriminant,
+                .fields = try self.arena.alloc(FreshPart, variant.payloads.len),
+            } };
+        }
+        Common.invariant("a frozen tag matched no variant of its const plan");
+    }
+
+    /// The length of the string whose descriptor `bytes` starts with.
+    fn stringLength(self: *const Decoder, bytes: []const u8) u64 {
+        const size = self.word();
+        if (bytes.len < 3 * size) Common.invariant("a frozen string's image was shorter than its descriptor");
+        const length_word = self.readWord(bytes, 2).?;
+        const small = switch (size) {
+            4 => @as(i32, @bitCast(@as(u32, @intCast(length_word)))) < 0,
+            8 => @as(i64, @bitCast(length_word)) < 0,
+            else => unreachable, // a target word is four or eight bytes
+        };
+        return if (small) bytes[3 * size - 1] & 0x7f else length_word;
+    }
+
     fn word(self: *const Decoder) usize {
         return self.program.layouts.targetUsize().size();
     }
@@ -649,13 +1158,8 @@ pub const Decoder = struct {
     fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, value_layout: layout.Layout) ?Construction {
         if (value_layout.tag != .list) return null;
         if ((self.readWord(bytes, 1) orelse return null) != 0) return null;
-        var capacity: u64 = 0;
-        if (data_export) |exported| {
-            for (exported.empty_list_capacities) |item| {
-                if (item.offset == offset) capacity = item.capacity;
-            }
-        }
-        return .{ .empty_list = capacity };
+        const exported = data_export orelse return .{ .empty_list = 0 };
+        return .{ .empty_list = capacityAt(exported, offset) orelse 0 };
     }
 
     /// A list whose items are all one construction, with that construction
@@ -765,6 +1269,16 @@ fn slotSucceeded(program: *const Program.Result, frozen: *const Program.FrozenSt
     const offset = failure_export.symbol_offset + failure_root.role.failure_message.failed_offset;
     if (offset >= failure_export.bytes.len) return false;
     return failure_export.bytes[offset] == 0;
+}
+
+/// The capacity the list or string whose descriptor is at `offset` was
+/// evaluated with, when the export keeps one: when it had room beyond its
+/// contents.
+fn capacityAt(data_export: *const Program.StaticDataExport, offset: usize) ?u64 {
+    for (data_export.capacities) |item| {
+        if (item.offset == offset) return item.capacity;
+    }
+    return null;
 }
 
 fn relocationAt(data_export: *const Program.StaticDataExport, offset: usize) ?Program.StaticDataRelocation {
@@ -903,7 +1417,7 @@ test "completed successful scalar roots decode to literals; failed and aggregate
     try std.testing.expect(values.literalFor(.{}, .{ .checked = @fromBackingInt(@intCast(6)) }, .str) == null);
 }
 
-test "completed empty list roots decode to their constructions; lists with elements keep their slots" {
+test "a completed empty list root with capacity keeps its slot with its construction as its fresh form; lists with elements keep their slots" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -947,7 +1461,7 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const varied_relocation = [_]Program.StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "varied_backing", .addend = 8 }};
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
-        .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .empty_list_capacities = &.{.{ .offset = 0, .capacity = 16 }} },
+        .{ .symbol_name = "s1", .bytes = &empty_descriptor, .alignment = 8, .capacities = &.{.{ .offset = 0, .capacity = 16 }} },
         .{ .symbol_name = "s2", .bytes = &uniform_descriptor, .alignment = 8, .relocations = &uniform_relocation },
         .{ .symbol_name = "s3", .bytes = &varied_descriptor, .alignment = 8, .relocations = &varied_relocation },
         .{ .symbol_name = "uniform_backing", .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0, 7, 0, 0, 0 }, .alignment = 8 },
@@ -960,8 +1474,11 @@ test "completed empty list roots decode to their constructions; lists with eleme
     var values = try CompletedScalarValues.init(allocator, &program, &frozen);
     defer values.deinit(allocator);
 
-    const empty = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, list_layout) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(u64, 16), empty.empty_list);
+    // A read that only reads the empty list allocates nothing, so the root
+    // keeps its slot; its fresh form is the construction with its capacity.
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, list_layout));
+    const empty = values.freshFormFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u64, 16), empty.construction.empty_list);
     // A uniform list and a varied list alike keep their slots: rebuilding
     // either would allocate at every read.
     try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, list_layout));
@@ -993,11 +1510,11 @@ test "completed empty list roots decode to their constructions; lists with eleme
     const empty_target = try ctx.addLocal(reader_list_layout);
     const origin = LIR.StmtOrigin{ .loc = .none, .region = .zero(), .inline_scope = .none, .kind = .scaffold };
     const empty_ret = try reader.store.addCFStmt(.{ .ret = .{ .value = empty_target } }, origin);
-    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, reader_list_layout).?, empty_ret) orelse return error.TestUnexpectedResult;
+    const reserved = try emit(ctx, &reader.store, &reader.layouts, origin, empty_target, empty.construction, empty_ret) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(@as(i64, 16), reader.store.getCFStmtImmediate(reserved).assign_literal.value.i64_literal.value);
 }
 
-test "an empty string root and a record of an empty list and a scalar decode to constructions" {
+test "an empty string root decodes to its construction; a record of an empty list with capacity and a scalar keeps its slot" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
@@ -1053,7 +1570,7 @@ test "an empty string root and a record of an empty list and a scalar decode to 
     var exports = [_]Program.StaticDataExport{
         .{ .symbol_name = "s0", .bytes = &ok_record, .alignment = 8 },
         .{ .symbol_name = "s1", .bytes = &empty_string, .alignment = 8 },
-        .{ .symbol_name = "s2", .bytes = &record_bytes, .alignment = 8, .empty_list_capacities = &.{.{ .offset = list_field_offset, .capacity = 4 }} },
+        .{ .symbol_name = "s2", .bytes = &record_bytes, .alignment = 8, .capacities = &.{.{ .offset = list_field_offset, .capacity = 4 }} },
         .{ .symbol_name = "s3", .bytes = &short_string, .alignment = 8 },
     };
     for (&exports, 0..) |*item, index| item.value_id = @fromBackingInt(@intCast(index));
@@ -1063,10 +1580,11 @@ test "an empty string root and a record of an empty list and a scalar decode to 
 
     const string = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(1)) }, .str) orelse return error.TestUnexpectedResult;
     try std.testing.expect(string == .empty_str);
-    const record = values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, record_layout) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(@as(usize, 2), record.record.len);
-    try std.testing.expectEqual(@as(u64, 4), record.record[0].empty_list);
-    try std.testing.expectEqual(@as(i128, 9), record.record[1].literal.i128_literal.value);
+    try std.testing.expectEqual(@as(?Construction, null), values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }, record_layout));
+    const record = values.freshFormFor(.{}, .{ .checked = @fromBackingInt(@intCast(2)) }) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 2), record.construction.record.len);
+    try std.testing.expectEqual(@as(u64, 4), record.construction.record[0].empty_list);
+    try std.testing.expectEqual(@as(i128, 9), record.construction.record[1].literal.i128_literal.value);
     try std.testing.expect(values.constructionFor(.{}, .{ .checked = @fromBackingInt(@intCast(3)) }, .str) == null);
 }
 

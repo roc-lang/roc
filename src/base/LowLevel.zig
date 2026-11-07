@@ -753,6 +753,16 @@ pub const LowLevel = enum(u16) {
             return .{};
         }
 
+        /// Argument positions the operation writes in place without checking
+        /// their counts: it returns the consumed argument's allocation as a
+        /// unique result with no runtime uniqueness check, so its caller
+        /// guarantees that argument is uniquely owned with the room the
+        /// operation uses.
+        pub fn uncheckedInPlaceArgs(self: RcEffect) u64 {
+            if (!self.result_unique) return 0;
+            return self.result_aliases_consumed_args & ~self.may_runtime_uniqueness_check_args;
+        }
+
         pub fn allocates() RcEffect {
             return .{
                 .may_allocate = true,
@@ -1451,20 +1461,6 @@ pub const LowLevel = enum(u16) {
     pub fn arcOwnedResultConsumesLender(self: LowLevel) bool {
         if (self == .box_unbox) return false;
         return self.arcBorrowedResultVariant() != null;
-    }
-
-    /// Whether this operation's result differs from what it is given only in
-    /// the capacity the caller asked it to hold. A compile-time constant holds
-    /// its contents and not their capacity, so a hoisted root never stands for
-    /// one of these: evaluating it ahead of time would drop the request and
-    /// remove no runtime work (design.md "Compile-Time Constants and Hoisted
-    /// Roots").
-    pub fn requestsCapacity(self: LowLevel) bool {
-        return self == .str_with_capacity or
-            self == .str_reserve or
-            self == .list_with_capacity or
-            self == .list_reserve or
-            self == .list_reserve_for_append;
     }
 
     /// Whether this primitive can consume borrowed string views directly,

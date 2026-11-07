@@ -66,10 +66,13 @@ pub const InsertOptions = struct {
     /// analysis proves confined. Optimized builds enable this; everything
     /// else emits only atomic count updates and skips the analysis.
     thread_confined_rc: bool = false,
-    /// Prove values unique so a mutation can skip its runtime refcount check,
-    /// and a read of static data can take its fresh form. Optimized builds
-    /// and the tests of the analysis enable this; off, every mutation keeps
-    /// its check, which answers the same question at runtime.
+    /// Prove values unique so a mutation can skip its runtime refcount check.
+    /// Optimized builds and the tests of the analysis enable this; off, every
+    /// mutation keeps its check, which answers the same question at runtime.
+    /// A read of static data that names a fresh form takes it either way when
+    /// the uniqueness analysis finds an in-place operation would otherwise
+    /// copy its value: off, the analysis is settled for those reads alone and
+    /// no claim is drawn from it.
     prove_uniqueness: bool = true,
     /// Select consuming Box.unbox when its lender is dead. Compiled backends
     /// enable this; the value-model interpreter keeps an explicit borrow.
@@ -500,6 +503,14 @@ const GroupLivenessIndex = struct {
     }
 };
 
+/// Whether any read of static data in `store` names a fresh form.
+fn namesFreshForm(store: *const LirStore) bool {
+    for (store.getCFStmts()) |stmt| {
+        if (stmt == .assign_literal and store.literalExtra(stmt.assign_literal.value).fresh_alternative != null) return true;
+    }
+    return false;
+}
+
 /// Public `insert` function.
 pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: InsertOptions) ResourceError!void {
     @import("base").dev_diagnostics.countTestWork(.arc, 1);
@@ -514,7 +525,10 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
     inserter.local_contains_refcounted = local_contains_refcounted;
 
     const uniqueness_options: arc_solve.UniquenessOptions = .{
-        .prove = options.prove_uniqueness,
+        // Only the settlement chooses a fresh-form read's form, so it runs
+        // whenever one exists (`isLocalUniqueHere` claims nothing from it
+        // unless uniqueness is proven).
+        .prove = options.prove_uniqueness or namesFreshForm(store),
         .executor = options.post_check_executor,
         .metrics = if (options.metrics_out) |metrics| &metrics.uniqueness else null,
     };
@@ -589,12 +603,12 @@ pub fn insert(store: *LirStore, layouts: *const layout_mod.Store, options: Inser
         take_stmts.set(@backingInt(stmt.*));
         any_take = true;
     }
-    if (any_take and options.prove_uniqueness) {
+    if (any_take and uniqueness_options.prove) {
         try arc_solve.settleUniquenessWithOptions(store.allocator, store, layouts, local_contains_refcounted, &solution, .{ .set = &take_stmts }, options.consume_dead_boxes, uniqueness_options);
     }
 
     const base_proc_count = store.procSpecCount();
-    try recordProcedureFacts(store, &solution);
+    try recordProcedureFacts(store, &solution, options.prove_uniqueness);
     const sources = try store.allocator.alloc(SourceCache, base_proc_count);
     defer store.allocator.free(sources);
     for (sources, 0..) |*source, index| {
@@ -728,22 +742,25 @@ fn requireHoleParamsBorrowed(store: *const LirStore, layouts: *const layout_mod.
     }
 }
 
-fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution) ResourceError!void {
+/// `claims_uniqueness`: whether the solve proves uniqueness, so a
+/// procedure's signature may claim a unique return. A solve that settles
+/// uniqueness only to choose fresh-form reads claims none.
+fn recordProcedureFacts(store: *LirStore, solution: *const arc_solve.Solution, claims_uniqueness: bool) ResourceError!void {
     const proc_count = store.procSpecCount();
     try recordTailGroups(store, solution);
     for (0..proc_count) |proc_index| {
         const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         if (store.getProcSpecImmediate(proc).arcBody() == null) continue;
         const sig = solution.sigOf(proc);
-        const rows = solution.sigTable().retConditionsOf(sig);
+        const rows: []const arc_sig.RetCondition = if (claims_uniqueness) solution.sigTable().retConditionsOf(sig) else &.{};
         const words = try store.allocator.alloc(u32, rows.len);
         defer store.allocator.free(words);
         for (rows, words) |row, *word| word.* = @bitCast(row);
         const conditions = try store.addU32Span(words);
         const spec = store.getProcSpecPtr(proc);
         spec.rc_read_only_params = sig.read_only_params;
-        spec.rc_ret_unique = sig.ret_unique;
-        spec.rc_ret_unique_fields = sig.ret_unique_fields;
+        spec.rc_ret_unique = claims_uniqueness and sig.ret_unique;
+        spec.rc_ret_unique_fields = if (claims_uniqueness) sig.ret_unique_fields else 0;
         spec.rc_ret_conditions = conditions;
     }
 }
@@ -5279,6 +5296,7 @@ const Inserter = struct {
     /// variant being emitted seeds born-unique, and its body never adds
     /// another holder.
     fn isLocalUniqueHere(self: *const Inserter, local: LIR.LocalId) bool {
+        if (!self.options.prove_uniqueness) return false;
         return self.solution.isUniqueUnder(local, self.current_sig.unique_params);
     }
 

@@ -910,9 +910,9 @@ const Lowerer = struct {
     const_mono_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
-    /// The fresh-form procedure of each static list of copies, by the
+    /// The fresh-form procedure of each static value with one, by the
     /// identity naming what it builds.
-    uniform_constructors: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
+    fresh_form_constructors: std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
@@ -1285,7 +1285,7 @@ const Lowerer = struct {
             .const_mono_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
-            .uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
+            .fresh_form_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1421,7 +1421,7 @@ const Lowerer = struct {
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
-        self.uniform_constructors.deinit();
+        self.fresh_form_constructors.deinit();
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
@@ -1563,7 +1563,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
-        self.uniform_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(self.allocator);
+        self.fresh_form_constructors = std.AutoHashMap(LIR.ProcIdentity, LIR.LirProcSpecId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
@@ -3423,40 +3423,246 @@ const Lowerer = struct {
             const value_layout = self.result.layouts.getLayout(current.layout_idx);
             if (value_layout.tag == .zst) return .{ .done = .zst };
             const expr = self.solved.lifted.getExpr(current.expr);
-            return .{ .done = switch (expr.data) {
-                .unit => .zst,
-                .int_lit => |value| .{ .literal = .{ .i128_literal = .{ .value = value.toI128(), .layout_idx = current.layout_idx } } },
-                .frac_f32_lit => |value| .{ .literal = .{ .f32_literal = value } },
-                .frac_f64_lit => |value| .{ .literal = .{ .f64_literal = value } },
-                .dec_lit => |value| .{ .literal = .{ .dec_literal = value.num } },
-                .str_lit => |literal| if (self.stringLiteral(literal).len == 0) .empty_str else null,
-                .low_level => |call| blk: {
-                    if (call.op != .list_with_capacity or value_layout.tag != .list) break :blk null;
-                    const args = self.solved.lifted.exprSpan(call.args);
-                    if (args.len != 1) break :blk null;
-                    const count = self.solved.lifted.getExpr(GuardedList.at(args, 0));
-                    if (count.data != .int_lit) break :blk null;
-                    const capacity = count.data.int_lit.toI128();
-                    if (capacity < 0 or capacity > std.math.maxInt(u64)) break :blk null;
-                    break :blk .{ .empty_list = @intCast(capacity) };
+            return .{
+                .done = switch (expr.data) {
+                    .unit => .zst,
+                    .int_lit => |value| .{ .literal = .{ .i128_literal = .{ .value = value.toI128(), .layout_idx = current.layout_idx } } },
+                    .frac_f32_lit => |value| .{ .literal = .{ .f32_literal = value } },
+                    .frac_f64_lit => |value| .{ .literal = .{ .f64_literal = value } },
+                    .dec_lit => |value| .{ .literal = .{ .dec_literal = value.num } },
+                    .str_lit => |literal| if (self.stringLiteral(literal).len == 0) .{ .empty_str = 0 } else null,
+                    .low_level => |call| blk: {
+                        const request = self.restoredCapacityRequest(call) orelse break :blk null;
+                        break :blk switch (request.kind) {
+                            .list => if (value_layout.tag == .list) .{ .empty_list = request.capacity } else null,
+                            .str => if (current.layout_idx == .str) .{ .empty_str = request.capacity } else null,
+                        };
+                    },
+                    .list => |items| self.constructionOfListExpr(items, value_layout),
+                    .bytes_lit => |literal| constructionOfPackedList(literal, value_layout),
+                    .record => |fields| return try self.constructionOfRecordExpr(arena, fields, current.ty, value_layout),
+                    .tuple => |items| {
+                        const item_exprs = try GuardedList.dupe(arena, Lifted.ExprId, self.solved.lifted.exprSpan(items));
+                        const item_tys = try GuardedList.dupe(arena, Type.TypeId, self.tupleItemTypes(current.ty));
+                        return try constructionOfStructExprs(arena, item_exprs, item_tys, value_layout);
+                    },
+                    .tag => |tag| return try self.constructionOfTagExpr(arena, tag.name, tag.payloads, current.ty, current.layout_idx),
+                    .nominal => |backing| {
+                        current = .{ .expr = backing, .ty = try self.nominalBackingType(current.ty, backing), .layout_idx = current.layout_idx };
+                        continue;
+                    },
+                    .static_data_candidate => |candidate| {
+                        current = .{ .expr = candidateConstructionExpr(candidate) orelse return .{ .done = null }, .ty = current.ty, .layout_idx = current.layout_idx };
+                        continue;
+                    },
+                    .local,
+                    .@"unreachable",
+                    .comptime_value,
+                    .typed_boundary,
+                    .row_widen,
+                    .record_update,
+                    .let_,
+                    .lambda,
+                    .def_ref,
+                    .fn_def,
+                    .fn_ref,
+                    .call_value,
+                    .call_proc,
+                    .field_access,
+                    .tuple_access,
+                    .structural_eq,
+                    .structural_hash,
+                    .match_,
+                    .if_,
+                    .uninitialized,
+                    .uninitialized_payload,
+                    .if_initialized_payload,
+                    .try_sequence,
+                    .try_record_sequence,
+                    .block,
+                    .loop_,
+                    .break_,
+                    .continue_,
+                    .join_point,
+                    .jump,
+                    .return_,
+                    .crash,
+                    .checked_error,
+                    .comptime_exhaustiveness_failed,
+                    .dbg,
+                    .expect_err,
+                    .literal_rejected,
+                    .expect,
+                    => null,
                 },
-                .list => |items| self.constructionOfListExpr(items, value_layout),
-                .bytes_lit => |literal| constructionOfPackedList(literal, value_layout),
-                .record => |fields| return try self.constructionOfRecordExpr(arena, fields, current.ty, value_layout),
-                .tuple => |items| {
-                    const item_exprs = try GuardedList.dupe(arena, Lifted.ExprId, self.solved.lifted.exprSpan(items));
-                    const item_tys = try GuardedList.dupe(arena, Type.TypeId, self.tupleItemTypes(current.ty));
-                    return try constructionOfStructExprs(arena, item_exprs, item_tys, value_layout);
+            };
+        }
+    }
+
+    /// The capacity a restored empty list or string requests
+    /// (`constEmptyListData`, `constEmptyStrData`): the literal argument of a
+    /// `list_with_capacity` or `str_with_capacity` call; null for any other
+    /// low-level call.
+    fn restoredCapacityRequest(self: *const Lowerer, call: anytype) ?CapacityRequest {
+        const kind: CapacityRequest.Kind = if (call.op == .list_with_capacity) .list else if (call.op == .str_with_capacity) .str else return null;
+        const args = self.solved.lifted.exprSpan(call.args);
+        if (args.len != 1) return null;
+        const count = self.solved.lifted.getExpr(GuardedList.at(args, 0));
+        if (count.data != .int_lit) return null;
+        const capacity = count.data.int_lit.toI128();
+        if (capacity < 0 or capacity > std.math.maxInt(u64)) return null;
+        return .{ .kind = kind, .capacity = @intCast(capacity) };
+    }
+
+    const CapacityRequest = struct {
+        kind: Kind,
+        capacity: u64,
+
+        const Kind = enum { list, str };
+    };
+
+    /// The fresh form of a restored constant read from `candidate`'s static
+    /// datum, read from the restored expressions and the capacities their
+    /// candidates carry exactly as `postcheck_values.Decoder.decodeFresh`
+    /// reads a completed root's from its frozen image; null when no list or
+    /// string on its spine was evaluated with spare capacity. Nested parts
+    /// wait in frames on an explicit stack, so expression nesting never
+    /// becomes native call depth.
+    fn freshFormOfCandidate(self: *Lowerer, arena: std.mem.Allocator, candidate: Mono.StaticDataCandidate, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.FreshPart {
+        var frames: std.ArrayList(FreshFrame) = .empty;
+        var spare = false;
+        var child = FreshChild{ .value = .{ .candidate = candidate }, .ty = ty, .layout_idx = layout_idx };
+        while (true) {
+            var result = switch (try self.freshStep(arena, child, &spare)) {
+                .done => |done| done,
+                .frame => |frame| {
+                    try frames.append(arena, frame);
+                    child = frames.items[frames.items.len - 1].child(self, 0);
+                    continue;
                 },
-                .tag => |tag| return try self.constructionOfTagExpr(arena, tag.name, tag.payloads, current.ty, current.layout_idx),
+            };
+            while (true) {
+                if (frames.items.len == 0) return if (spare) result else null;
+                const top = &frames.items[frames.items.len - 1];
+                top.fields[top.index] = result;
+                top.index += 1;
+                if (top.index < top.fields.len) {
+                    child = top.child(self, top.index);
+                    break;
+                }
+                result = try top.finish(arena);
+                _ = frames.pop();
+            }
+        }
+    }
+
+    const FreshChild = struct {
+        value: union(enum) {
+            expr: Lifted.ExprId,
+            candidate: Mono.StaticDataCandidate,
+        },
+        ty: Type.TypeId,
+        layout_idx: layout.Idx,
+    };
+
+    /// A struct-shaped part of a fresh form waiting on its parts: a record's
+    /// or tuple's fields, or a tag's payloads.
+    const FreshFrame = struct {
+        items: []const Lifted.ExprId,
+        item_tys: []const Type.TypeId,
+        /// The struct laying out the parts; null for a tag's single payload.
+        struct_idx: ?@FieldType(layout.StructLayout, "idx"),
+        /// The single payload's layout when `struct_idx` is null.
+        payload_layout: layout.Idx = undefined,
+        /// The tag wrapping the parts, if any.
+        variant_index: ?u32 = null,
+        fields: []postcheck_values.FreshPart,
+        index: usize = 0,
+
+        fn child(frame: *const FreshFrame, lowerer: *Lowerer, index: usize) FreshChild {
+            return .{
+                .value = .{ .expr = frame.items[index] },
+                .ty = frame.item_tys[index],
+                .layout_idx = if (frame.struct_idx) |struct_idx|
+                    lowerer.result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, @intCast(index))
+                else
+                    frame.payload_layout,
+            };
+        }
+
+        fn finish(frame: *const FreshFrame, arena: std.mem.Allocator) Allocator.Error!postcheck_values.FreshPart {
+            const variant_index = frame.variant_index orelse return .{ .record = frame.fields };
+            const payload = try arena.create(postcheck_values.FreshPart);
+            payload.* = if (frame.struct_idx == null) frame.fields[0] else .{ .record = frame.fields };
+            return .{ .tag = .{ .variant_index = variant_index, .discriminant = variant_index, .payload = payload } };
+        }
+    };
+
+    const FreshStep = union(enum) {
+        done: postcheck_values.FreshPart,
+        frame: FreshFrame,
+    };
+
+    fn freshStep(self: *Lowerer, arena: std.mem.Allocator, start: FreshChild, spare: *bool) Common.LowerError!FreshStep {
+        var current = start;
+        while (true) {
+            const value_layout = self.result.layouts.getLayout(current.layout_idx);
+            const expr_id = switch (current.value) {
+                .expr => |expr| expr,
+                .candidate => |candidate| {
+                    // A list with items or a string evaluated with room
+                    // beyond its contents carries that capacity on its
+                    // candidate.
+                    if (candidate.capacity != 0) {
+                        spare.* = true;
+                        return .{ .done = .{ .reserved = candidate.capacity } };
+                    }
+                    switch (candidate.value) {
+                        .runtime => |runtime| current.value = .{ .expr = runtime },
+                        // A list of zero-sized items allocates nothing, so
+                        // the static datum serves as it is.
+                        .stored => |stored| return .{ .done = if (value_layout.tag == .list) .{ .reserved = stored.item_count } else .static },
+                    }
+                    continue;
+                },
+            };
+            // A part with a construction is built as it, with every capacity
+            // its empty lists and strings were evaluated with.
+            if (try self.constructionOfExpr(arena, expr_id, current.ty, current.layout_idx)) |construction| {
+                if (try postcheck_values.constructionRequestsCapacity(arena, construction)) spare.* = true;
+                return .{ .done = .{ .construction = construction } };
+            }
+            const expr = self.solved.lifted.getExpr(expr_id);
+            return switch (expr.data) {
+                // A list or string with items has no construction.
+                .str_lit => |literal| .{ .done = .{ .reserved = self.stringLiteral(literal).len } },
+                .list => |items| .{ .done = if (value_layout.tag == .list) .{ .reserved = self.solved.lifted.exprSpan(items).len } else .static },
+                .bytes_lit => |literal| .{ .done = if (value_layout.tag == .list) .{ .reserved = literal.len } else .static },
+                .record => |fields| try self.freshRecordStep(arena, fields, current.ty, value_layout),
+                .tuple => |items| try freshStructStep(
+                    arena,
+                    try GuardedList.dupe(arena, Lifted.ExprId, self.solved.lifted.exprSpan(items)),
+                    try GuardedList.dupe(arena, Type.TypeId, self.tupleItemTypes(current.ty)),
+                    value_layout,
+                ),
+                .tag => |tag| try self.freshTagStep(arena, tag.name, tag.payloads, current.ty, current.layout_idx),
                 .nominal => |backing| {
-                    current = .{ .expr = backing, .ty = try self.nominalBackingType(current.ty, backing), .layout_idx = current.layout_idx };
+                    current = .{ .value = .{ .expr = backing }, .ty = try self.nominalBackingType(current.ty, backing), .layout_idx = current.layout_idx };
                     continue;
                 },
                 .static_data_candidate => |candidate| {
-                    current = .{ .expr = candidateConstructionExpr(candidate) orelse return .{ .done = null }, .ty = current.ty, .layout_idx = current.layout_idx };
+                    current.value = .{ .candidate = candidate };
                     continue;
                 },
+                // Every other part of a restored value is a scalar or off
+                // the value's spine: a box, a function value, or a failure
+                // the read raises.
+                .unit,
+                .int_lit,
+                .frac_f32_lit,
+                .frac_f64_lit,
+                .dec_lit,
+                .low_level,
                 .local,
                 .@"unreachable",
                 .comptime_value,
@@ -3495,9 +3701,72 @@ const Lowerer = struct {
                 .expect_err,
                 .literal_rejected,
                 .expect,
-                => null,
-            } };
+                => .{ .done = .static },
+            };
         }
+    }
+
+    fn freshRecordStep(self: *Lowerer, arena: std.mem.Allocator, span: Lifted.Span(Lifted.FieldExpr), ty: Type.TypeId, value_layout: layout.Layout) Common.LowerError!FreshStep {
+        // A boxed record is off the value's spine.
+        if (value_layout.tag != .struct_) return .{ .done = .static };
+        const shape = try self.recordShape(ty);
+        const expr_fields = self.solved.lifted.fieldExprSpan(span);
+        if (expr_fields.len != shape.fields.len) Common.invariant("a restored record's fields differed from its type's");
+        const ordered = try arena.alloc(Lifted.ExprId, shape.fields.len);
+        const field_tys = try arena.alloc(Type.TypeId, shape.fields.len);
+        for (shape.fields, 0..) |field, index| field_tys[index] = field.ty;
+        for (0..expr_fields.len) |index| {
+            const field = GuardedList.at(expr_fields, index);
+            const position = shape.indices.get(field.name) orelse Common.invariant("a restored record named a field its type lacks");
+            ordered[position] = field.value;
+        }
+        return try freshStructStep(arena, ordered, field_tys, value_layout);
+    }
+
+    fn freshStructStep(arena: std.mem.Allocator, items: []const Lifted.ExprId, item_tys: []const Type.TypeId, value_layout: layout.Layout) Allocator.Error!FreshStep {
+        // A boxed tuple is off the value's spine.
+        if (value_layout.tag != .struct_) return .{ .done = .static };
+        if (items.len != item_tys.len) Common.invariant("a restored tuple's items differed from its type's");
+        const fields = try arena.alloc(postcheck_values.FreshPart, items.len);
+        if (items.len == 0) return .{ .done = .{ .record = fields } };
+        return .{ .frame = .{
+            .items = items,
+            .item_tys = item_tys,
+            .struct_idx = value_layout.getStruct().idx,
+            .fields = fields,
+        } };
+    }
+
+    fn freshTagStep(self: *Lowerer, arena: std.mem.Allocator, name: Type.names.TagNameId, payload_span: Lifted.Span(Lifted.ExprId), ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!FreshStep {
+        if (layout_idx == .bool) return .{ .done = .static };
+        const value_layout = self.result.layouts.getLayout(layout_idx);
+        // A boxed tag is off the value's spine.
+        if (value_layout.tag != .tag_union) return .{ .done = .static };
+        const payloads = self.solved.lifted.exprSpan(payload_span);
+        if (payloads.len == 0) return .{ .done = .static };
+        const variant_index = try self.tagIndexForExpr(ty, name, payloads);
+        const payload_tys = self.tagPayloadTypesByIndex(ty, variant_index);
+        if (payloads.len != payload_tys.len) Common.invariant("a restored tag's payloads differed from its type's");
+        const payload_layout = self.tagUnionPayloadLayout(layout_idx, variant_index);
+        const item_exprs = try GuardedList.dupe(arena, Lifted.ExprId, payloads);
+        const item_tys = try GuardedList.dupe(arena, Type.TypeId, payload_tys);
+        if (payloads.len == 1) return .{ .frame = .{
+            .items = item_exprs,
+            .item_tys = item_tys,
+            .struct_idx = null,
+            .payload_layout = payload_layout,
+            .variant_index = variant_index,
+            .fields = try arena.alloc(postcheck_values.FreshPart, 1),
+        } };
+        const payload_value_layout = self.result.layouts.getLayout(payload_layout);
+        if (payload_value_layout.tag != .struct_) Common.invariant("a restored tag's payloads were laid out as no struct");
+        return .{ .frame = .{
+            .items = item_exprs,
+            .item_tys = item_tys,
+            .struct_idx = payload_value_layout.getStruct().idx,
+            .variant_index = variant_index,
+            .fields = try arena.alloc(postcheck_values.FreshPart, payloads.len),
+        } };
     }
 
     /// The expression a candidate's construction is read from: its runtime
@@ -6584,12 +6853,15 @@ const Lowerer = struct {
             };
         }
         const id = try self.comptimeValueSlot(root, ty, layout_idx);
-        // A list of copies keeps its slot and also names its fresh form and
-        // its item count.
+        // A value a list or string on whose spine was evaluated with spare
+        // capacity, and a list of copies, keeps its slot and also names its
+        // fresh form; a list of copies also its item count.
         var fresh_alternative: ?LIR.LirProcSpecId = null;
         var list_len: ?u64 = null;
         if (runtime_values) |values| {
-            if (values.uniformListFor(root.module, root.root)) |uniform| {
+            if (values.freshFormFor(root.module, root.root)) |fresh| {
+                fresh_alternative = try self.freshFormConstructor(where, id, fresh, layout_idx);
+            } else if (values.uniformListFor(root.module, root.root)) |uniform| {
                 fresh_alternative = try self.uniformListConstructor(where, uniform, layout_idx);
                 if (fresh_alternative != null) list_len = uniform.count;
             }
@@ -6612,7 +6884,7 @@ const Lowerer = struct {
     /// does not fit `layout_idx` as a list.
     fn uniformListConstructor(self: *Lowerer, where: LowerSite, uniform: postcheck_values.UniformList, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
         const identity = try self.uniformListConstructorIdentity(uniform, layout_idx);
-        if (self.uniform_constructors.get(identity)) |proc| return proc;
+        if (self.fresh_form_constructors.get(identity)) |proc| return proc;
         if (uniform.count > std.math.maxInt(i64)) return null;
         const store = &self.result.store;
         var new_locals: std.ArrayList(LIR.LocalId) = .empty;
@@ -6640,8 +6912,67 @@ const Lowerer = struct {
             .abi = .roc,
         }, where.loc);
         if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(proc))) store.getProcSpecPtr(proc).stack_probe = .required;
-        try self.uniform_constructors.put(identity, proc);
+        try self.fresh_form_constructors.put(identity, proc);
         return proc;
+    }
+
+    /// The argument-free procedure that builds the value static datum
+    /// `static_id` holds fresh, as `fresh` describes, created on the first
+    /// use of that datum and form. Null when a capacity does not fit a
+    /// literal.
+    fn freshFormConstructor(self: *Lowerer, where: LowerSite, static_id: LIR.StaticDataId, fresh: postcheck_values.FreshPart, layout_idx: layout.Idx) Common.LowerError!?LIR.LirProcSpecId {
+        const identity = try self.freshFormConstructorIdentity(static_id, fresh, layout_idx);
+        if (self.fresh_form_constructors.get(identity)) |proc| return proc;
+        const store = &self.result.store;
+        var new_locals: std.ArrayList(LIR.LocalId) = .empty;
+        defer new_locals.deinit(self.allocator);
+        const context = UniformConstructorEmitContext{ .lowerer = self, .new_locals = &new_locals };
+        // The constructor is its own procedure: it carries the location of
+        // the read that requested it, outside that read's inline scopes.
+        const origin = LIR.StmtOrigin{
+            .loc = where.loc,
+            .region = where.region,
+            .inline_scope = .none,
+            .kind = .scaffold,
+        };
+        const value = try context.addLocal(layout_idx);
+        // A form made of constructions alone reads none of the datum.
+        const source: ?LIR.LocalId = if (try fresh.readsDatum(self.allocator)) try context.addLocal(layout_idx) else null;
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+        const build = try postcheck_values.emitFresh(context, store, &self.result.layouts, origin, value, source, fresh, ret) orelse return null;
+        // The datum is read as itself: this procedure is the fresh form, so
+        // the read names none.
+        const body = if (source) |datum| try store.addCFStmt(.{ .assign_literal = .{
+            .target = datum,
+            .value = .{ .static_data = .{ .id = static_id, .copies = .none } },
+            .next = build,
+        } }, origin) else build;
+        const proc = try store.addProcSpec(.{
+            .name = lirSymbol(self.symbols.fresh()),
+            .identity = identity,
+            .args = LIR.LocalSpan.empty(),
+            .frame_locals = try store.addLocalSpan(new_locals.items),
+            .join_points = LIR.JoinPointSpan.empty(),
+            .body = body,
+            .ret_layout = layout_idx,
+            .abi = .roc,
+        }, where.loc);
+        if (store.procNeedsStackProbe(&self.result.layouts, store.getProcSpec(proc))) store.getProcSpecPtr(proc).stack_probe = .required;
+        try self.fresh_form_constructors.put(identity, proc);
+        return proc;
+    }
+
+    /// A fresh form reads its program's static datum, a program-scoped
+    /// symbol, so its identity names that datum by the program's slot, as a
+    /// static initializer's does, beside the value's layout and the form.
+    fn freshFormConstructorIdentity(self: *Lowerer, static_id: LIR.StaticDataId, fresh: postcheck_values.FreshPart, layout_idx: layout.Idx) std.mem.Allocator.Error!LIR.ProcIdentity {
+        var hasher = base.TypeDigestHasher.init();
+        hasher.update("roc.proc.fresh-form-constructor.v1");
+        hasher.update(&try self.result.layouts.contentDigest(layout_idx));
+        const slot: u32 = @backingInt(static_id);
+        hasher.update(&[_]u8{ @truncate(slot), @truncate(slot >> 8), @truncate(slot >> 16), @truncate(slot >> 24) });
+        try fresh.writeDigest(self.allocator, &hasher);
+        return .{ .bytes = hasher.finalResult() };
     }
 
     const UniformConstructorEmitContext = struct {
@@ -7872,12 +8203,22 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
+        const arena = try self.lane_scratch.acquireArena();
+        defer self.lane_scratch.releaseArena(arena);
+        // A value a list or string on whose spine was evaluated with spare
+        // capacity keeps its static datum even when it has a construction,
+        // and however short a string it is, so a read that only reads it
+        // allocates nothing and the others take the fresh form that gives it
+        // that room.
+        const fresh = if (in_initializer) null else try self.freshFormOfCandidate(arena.allocator(), candidate, ty, layout_idx);
         switch (candidate.value) {
             .runtime => |runtime| {
                 // Closed target initializers serialize the stored value, not
                 // a runtime construction.
                 if (in_initializer) return .{ .tail = exprTask(where, target, runtime, ty, next) };
-                if (try self.lowerConstructionExprInto(where, target, runtime, ty, next)) |built| return .{ .ret = built };
+                if (fresh == null) {
+                    if (try self.lowerConstructionExprInto(where, target, runtime, ty, next)) |built| return .{ .ret = built };
+                }
             },
             // A stored list has items, so it has no construction, and an
             // initializer that holds it reads its frozen value.
@@ -7890,21 +8231,24 @@ const Lowerer = struct {
                 .next = next,
             } }, where.source()) },
         }
-        if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
+        if ((fresh != null or candidate.storage.needsTargetStorage(self.result.layouts.targetUsize())) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
-            // A list of copies keeps its slot and also names its fresh form
-            // and its item count.
-            const arena = try self.lane_scratch.acquireArena();
-            defer self.lane_scratch.releaseArena(arena);
+            // A value a list or string on whose spine was evaluated with
+            // spare capacity, and a list of copies, keeps its slot and also
+            // names its fresh form; a list of copies also its item count.
             var fresh_alternative: ?LIR.LirProcSpecId = null;
             var list_len: ?u64 = null;
-            const uniform = switch (candidate.value) {
-                .runtime => |runtime| try self.uniformListOfExpr(arena.allocator(), runtime, ty, layout_idx),
-                .stored => |stored| try self.uniformStoredList(arena.allocator(), stored, ty, self.result.layouts.getLayout(layout_idx)),
-            };
-            if (uniform) |copies| {
-                fresh_alternative = try self.uniformListConstructor(where, copies, layout_idx);
-                if (fresh_alternative != null) list_len = copies.count;
+            if (fresh) |form| {
+                fresh_alternative = try self.freshFormConstructor(where, id, form, layout_idx);
+            } else {
+                const uniform = switch (candidate.value) {
+                    .runtime => |runtime| try self.uniformListOfExpr(arena.allocator(), runtime, ty, layout_idx),
+                    .stored => |stored| try self.uniformStoredList(arena.allocator(), stored, ty, self.result.layouts.getLayout(layout_idx)),
+                };
+                if (uniform) |copies| {
+                    fresh_alternative = try self.uniformListConstructor(where, copies, layout_idx);
+                    if (fresh_alternative != null) list_len = copies.count;
+                }
             }
             return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
                 .target = target,
@@ -16697,7 +17041,8 @@ fn constructionEql(allocator: std.mem.Allocator, a: postcheck_values.Constructio
         if (std.meta.activeTag(pair.a) != std.meta.activeTag(pair.b)) return false;
         switch (pair.a) {
             .literal => |literal| if (!std.meta.eql(literal, pair.b.literal)) return false,
-            .zst, .empty_str => {},
+            .zst => {},
+            .empty_str => |capacity| if (capacity != pair.b.empty_str) return false,
             .empty_list => |capacity| if (capacity != pair.b.empty_list) return false,
             .record => |fields| {
                 if (fields.len != pair.b.record.len) return false;

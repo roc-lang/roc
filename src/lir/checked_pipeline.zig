@@ -2373,7 +2373,7 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
+        .capacities = try allocator.alloc(LirProgram.EvaluatedCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 

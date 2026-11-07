@@ -222,7 +222,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "list_prefetched", .list_prefetched },
         .{ "list_append_unsafe", .list_append_unsafe },
         .{ "u8_list_append_unsafe", .list_append_unsafe },
-        .{ "Builtin.List.reserve", .list_reserve },
         .{ "list_reserve", .list_reserve },
         .{ "Builtin.Bool.not", .bool_not },
         .{ "bool_likely", .bool_likely },

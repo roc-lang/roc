@@ -44,15 +44,17 @@ pub const StaticDataExport = struct {
     is_mutable: bool = false,
     /// Pointer relocations from this symbol's bytes to other symbols.
     relocations: []const StaticDataRelocation = &.{},
-    /// The capacities the empty lists inside this value were evaluated
-    /// with, by byte offset of each list's descriptor in `bytes`. A frozen
-    /// list's capacity word is its length, so the requests would otherwise
-    /// be lost; a runtime consumer rebuilding the value uses them.
-    empty_list_capacities: []const EmptyListCapacity = &.{},
+    /// The capacities the lists and strings inside this value were
+    /// evaluated with, where they have room beyond their contents, by byte
+    /// offset of each descriptor in `bytes`. A frozen descriptor's capacity
+    /// is its length, so the room would otherwise be lost; a runtime
+    /// consumer building the value again uses them.
+    capacities: []const EvaluatedCapacity = &.{},
 };
 
-/// The evaluated capacity of one empty list inside a frozen value.
-pub const EmptyListCapacity = struct {
+/// The evaluated capacity of one list or string inside a frozen value, more
+/// than it holds.
+pub const EvaluatedCapacity = struct {
     offset: u64,
     capacity: u64,
 };
@@ -106,7 +108,7 @@ pub const FrozenStaticData = struct {
                 if (relocation.owns_target_symbol_name) self.allocator.free(relocation.target_symbol_name);
             }
             self.allocator.free(item.relocations);
-            self.allocator.free(item.empty_list_capacities);
+            self.allocator.free(item.capacities);
         }
         self.allocator.free(self.exports);
         self.* = undefined;
