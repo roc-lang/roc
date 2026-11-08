@@ -132,6 +132,29 @@ pub const Built = struct {
     expect_sites: []const object_cache.ExpectSiteRecord = &.{},
     test_roots: []const object_cache.TestRootRecord = &.{},
 
+    /// Take the decoded entry's owned metadata after code restoration succeeds.
+    /// On allocation failure, the caller still owns every input.
+    fn fromRestoredEntry(gpa: Allocator, entry: *object_cache.Entry, pieces: ?*backend.dev.UnitPieces.Pieces, image: ?Image) Allocator.Error!Built {
+        // Metadata borrows the mapped bytes and requires independent ownership.
+        // Complete every fallible operation before transferring the owned data.
+        const function_metadata = try gpa.dupe(u8, entry.function_metadata);
+        const built: Built = .{
+            .restored = true,
+            .function_metadata = function_metadata,
+            .pieces = pieces,
+            .image = image,
+            .exports = entry.exports,
+            .hosted_symbols = entry.hosted_symbols,
+            .expect_sites = entry.expect_sites,
+            .test_roots = entry.test_roots,
+        };
+        entry.exports = &.{};
+        entry.hosted_symbols = &.{};
+        entry.expect_sites = &.{};
+        entry.test_roots = &.{};
+        return built;
+    }
+
     pub fn deinit(self: Built, gpa: Allocator) void {
         if (self.pieces) |pieces| {
             pieces.deinit();
@@ -392,8 +415,8 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
     if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces, unit.config.boxy_function_unit != null)) |restored| {
-        // The view's export records, allocated from `gpa`, move into the
-        // returned `Built`; the view releases everything else it allocated.
+        // The view's owned export records, symbols, and test tables move into
+        // the returned `Built`; the view releases its remaining allocations.
         var entry = restored.entry;
         defer object_cache.deinitEntryView(gpa, entry);
         // The mapping stays alive as the image's owner; otherwise it is
@@ -434,25 +457,12 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
             decoded.deinit();
             gpa.destroy(decoded);
         };
-        const hosted_symbols = try dupeSymbols(gpa, entry.hosted_symbols);
-        errdefer freeSymbols(gpa, hosted_symbols);
-        const expect_sites = try gpa.dupe(object_cache.ExpectSiteRecord, entry.expect_sites);
-        errdefer gpa.free(expect_sites);
-        const test_roots = try gpa.dupe(object_cache.TestRootRecord, entry.test_roots);
-        errdefer gpa.free(test_roots);
-        const function_metadata = try gpa.dupe(u8, entry.function_metadata);
-        const exports = entry.exports;
-        entry.exports = &.{};
-        return .{
-            .restored = true,
-            .function_metadata = function_metadata,
-            .pieces = pieces,
-            .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
-            .hosted_symbols = hosted_symbols,
-            .exports = exports,
-            .expect_sites = expect_sites,
-            .test_roots = test_roots,
-        };
+        return try Built.fromRestoredEntry(
+            gpa,
+            &entry,
+            pieces,
+            if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
+        );
     }
     restore_scope.end();
     if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache miss for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
@@ -773,4 +783,55 @@ fn dupeRecords(gpa: Allocator, records: []const object_cache.ExportRecord) Alloc
         duped += 1;
     }
     return copies;
+}
+
+test "Boxy object restoration transfers owned metadata and survives allocation failures" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testRestoredMetadata, .{});
+}
+
+fn testRestoredMetadata(gpa: Allocator) !void {
+    const built = restored: {
+        const bytes = try object_cache.encode(gpa, .{
+            .exports = &.{.{
+                .identity = @splat(3),
+                .rc_borrowed_params = 1,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_unique = false,
+                .may_leave_pending = false,
+                .rc_ret_conditions = &.{ 7, 9 },
+                .table_needs = "table inputs",
+            }},
+            .hosted_symbols = &.{"roc_fx_test"},
+            .link_root_symbols = &.{"link-only"},
+            .expect_sites = &.{.{ .module = @splat(4), .region_start = 5, .region_end = 8 }},
+            .test_roots = &.{.{ .module = @splat(4), .root_index = 2, .symbol = 6 }},
+            .pieces = &.{},
+            .function_metadata = "function metadata",
+        });
+        defer gpa.free(bytes);
+        var entry = try object_cache.decodeView(gpa, bytes);
+        defer object_cache.deinitEntryView(gpa, entry);
+        const exports = entry.exports;
+        const symbols = entry.hosted_symbols;
+        const sites = entry.expect_sites;
+        const roots = entry.test_roots;
+        const result = try Built.fromRestoredEntry(gpa, &entry, null, null);
+        errdefer result.deinit(gpa);
+        try std.testing.expectEqual(exports.ptr, result.exports.ptr);
+        try std.testing.expectEqual(symbols.ptr, result.hosted_symbols.ptr);
+        try std.testing.expectEqual(sites.ptr, result.expect_sites.ptr);
+        try std.testing.expectEqual(roots.ptr, result.test_roots.ptr);
+        break :restored result;
+    };
+    defer built.deinit(gpa);
+    // Both the decoded view and its byte buffer are gone; Built owns its data.
+    try std.testing.expectEqualStrings("table inputs", built.exports[0].table_needs);
+    try std.testing.expectEqualSlices(u32, &.{ 7, 9 }, built.exports[0].rc_ret_conditions);
+    try std.testing.expectEqualStrings("roc_fx_test", built.hosted_symbols[0]);
+    try std.testing.expectEqual(@as(u32, 5), built.expect_sites[0].region_start);
+    try std.testing.expectEqual(@as(u32, 6), built.test_roots[0].symbol);
+    try std.testing.expectEqualStrings("function metadata", built.function_metadata);
 }
