@@ -1133,7 +1133,6 @@ pub const RootRequestTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
-        bodies: CheckedBodies,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_values: *const TopLevelValueTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -1204,9 +1203,7 @@ pub const RootRequestTable = struct {
 
         for (compile_time_roots.roots) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) {
-                continue;
-            }
+            if (forwardedLookupForRoot(root, top_level_values, top_level_procedure_bindings, callable_eval_templates.view()) != null) continue;
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -2175,9 +2172,29 @@ fn compileTimeRootHasRootRequest(
     return false;
 }
 
-/// An exact checked procedure lookup already carries the callable identity
-/// that compile-time evaluation would rediscover. Keep its callable binding
-/// pending for runtime demand instead of scheduling an evaluator wrapper.
+/// The explicit forwarding recipe for a top-level callable root, when
+/// publication proved that construction needs no evaluator.
+fn forwardedLookupForRoot(
+    root: CompileTimeRoot,
+    values: *const TopLevelValueTable,
+    bindings: *const TopLevelProcedureBindingTable,
+    callables: CallableEvalTemplateTableView,
+) ?CIR.Expr.Idx {
+    if (root.kind != .callable_binding) return null;
+    const value = values.lookupByPattern(root.pattern orelse return null) orelse return null;
+    const binding = switch (value.value) {
+        .procedure_binding => |id| bindings.get(id),
+        .const_ref => return null,
+    };
+    return switch (binding.body) {
+        .callable_eval_template => |id| callables.templates[@backingInt(id)].forwarded_lookup,
+        .direct_template, .checked_error => null,
+    };
+}
+
+/// A checked lookup that may become an exact procedure alias once its target
+/// binding is known. Root scheduling consumes the proved forwarding recipe,
+/// not this candidate classification.
 fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -22642,7 +22659,7 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 4);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 5);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -22655,6 +22672,7 @@ pub const PlatformPairing = struct {
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
@@ -22697,7 +22715,6 @@ pub const PlatformPairing = struct {
                 "static_dispatch_plans",
                 "nested_proc_sites",
                 "top_level_procedure_bindings",
-                "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
@@ -22743,6 +22760,7 @@ pub const PlatformPairing = struct {
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
@@ -22803,6 +22821,7 @@ pub const PlatformPairing = struct {
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
@@ -22885,6 +22904,22 @@ pub fn pairCheckedPlatform(
         result.pairing_types = .{ .images = try images.toOwnedSlice(session) };
     }
 
+    // Pairing can turn a requirement lookup (and aliases forwarding to it)
+    // into a direct procedure. Publish the recipe before classifying calls
+    // and roots, and retain it in the pairing's owned/cacheable columns.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
+
     // A requirement lookup whose binding the app rejected produces no value,
     // and a call of a requirement the binding classifies may become direct.
     {
@@ -22903,8 +22938,7 @@ pub fn pairCheckedPlatform(
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
             const data = env.store.getExpr(call_expr);
             if (data != .e_call) continue;
-            const ref_id = platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) orelse continue;
-            if (platform.resolved_value_refs.records[@backingInt(ref_id)].ref != .platform_required_declaration) continue;
+            if (platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) == null) continue;
             // The binding supplies the procedure kind that an unpaired
             // requirement cannot classify. Publish the same direct-call
             // decision as a resolved module.
@@ -22977,13 +23011,16 @@ pub fn pairCheckedPlatform(
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null and
-            compileTimeCallableRootIsProcedureReference(result.bodies(), &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
+            forwardedLookupForRoot(result.compile_time_roots.root(request.compile_time_root.?), &result.top_level_values, &result.top_level_procedure_bindings, result.callable_eval_templates.view()) != null) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) blk: {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            break :blk !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -23008,8 +23045,7 @@ pub fn pairCheckedPlatform(
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        if (!request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -24870,6 +24906,19 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
 }
 
+/// Hidden callable interfaces can exchange rows absent from the nominal's
+/// visible type arguments, so argument occurrences prevent result sealing.
+fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
+    return switch (nominal.representation) {
+        .local_box_payload_capability, .imported_box_payload_capability => true,
+        // A parser spec's callback uses the invocation's error row, although
+        // the nominal exposes only its value shape. Sealing that row changes
+        // the callback's argument and result ABI.
+        .builtin => |kind| builtinRuntimeEncoding(kind) == .parse_tag_union_spec,
+        .local_declaration, .imported_declaration, .opaque_without_backing => false,
+    };
+}
+
 /// Compute every sealed scheme-variable slot of one template together. A type
 /// can occur on both a coercible result path and an externally involved path;
 /// the visited key therefore includes the traversal mode.
@@ -24944,10 +24993,7 @@ const SealedSchemeSlots = struct {
             switch (step.mode) {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
-                        .nominal => |nominal| switch (nominal.representation) {
-                            .local_box_payload_capability, .imported_box_payload_capability => return,
-                            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
-                        },
+                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return,
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                     };
                     try self.pushChildren(payload, step.mode);
@@ -25093,10 +25139,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
             if ((try self.seen.getOrPut(allocator, ty)).found_existing) continue;
             const payload = self.types.payload(ty);
             switch (payload) {
-                .nominal => |nominal| switch (nominal.representation) {
-                    .local_box_payload_capability, .imported_box_payload_capability => return true,
-                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
-                },
+                .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return true,
                 .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
             try self.pushChildren(payload);
@@ -34539,7 +34582,6 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &resolved_value_refs,
         &top_level_values,
         &top_level_procedure_bindings,
@@ -37496,6 +37538,7 @@ test "sealed slot batching restricts hidden callable veto to arguments" {
     const representations = [_]CheckedNominalRepresentationRef{
         .{ .local_box_payload_capability = .{ .capability = undefined } },
         .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = undefined } },
+        .{ .builtin = .parse_tag_union_spec },
     };
     for (representations) |representation| {
         const hidden = try f.nominal(representation, &.{});

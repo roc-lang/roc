@@ -136,7 +136,15 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         .{ .compile_time = true, .exports_unrelated = false },
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
-    }) |case| {
+    }, 0..) |case, case_index| {
+        // Producer objects consume completed roots, unlike the evaluator's
+        // program above. Run the actual producer before testing either
+        // runtime mode instead of asking them to lower pending values.
+        if (case_index == 1) {
+            coord.specialization_strategy = .boxy;
+            try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
+        }
         var output = try boxy.run(allocator, .{
             .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
             .roots = .{ .requests = if (case.compile_time) roots else &.{} },

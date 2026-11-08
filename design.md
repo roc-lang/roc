@@ -13978,7 +13978,11 @@ callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(the argument traversal of `SealedSchemeSlots`). A bounded flex that unification
+(the argument traversal of `SealedSchemeSlots`). This includes
+`Encoding.ParseTagUnionSpec`: its nominal exposes the parsed shape, but its
+callback exchanges the format invocation's error row in both arguments and
+results. Sealing the format's row would change that callback's ABI.
+A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.

@@ -7757,6 +7757,8 @@ const CompiledBuildFacts = struct {
 
 const ModuleCheckingFacts = struct {
     name: []const u8,
+    artifact_key: ?[32]u8,
+    storage_key: ?[32]u8,
     inference_runs: u32,
     interfaces_built: u32,
     work: compile_package.CheckingWork,
@@ -7898,6 +7900,8 @@ fn compileAppFactsWithWorkers(
             errdefer allocator.free(name);
             try checking.append(allocator, .{
                 .name = name,
+                .artifact_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null,
+                .storage_key = if (mod.typing_storage_key) |key| key.bytes else null,
                 .inference_runs = mod.inference_runs,
                 .interfaces_built = mod.checking_interfaces_built,
                 .work = mod.checking_work,
@@ -10344,11 +10348,18 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.artifact_keys) |key| {
-        const in_both = for (unlifted.artifact_keys) |other| {
-            if (std.mem.eql(u8, &key, &other)) break true;
-        } else false;
-        if (!in_both) continue;
+    for (lifted.checking) |facts| {
+        const artifact_key = facts.artifact_key orelse continue;
+        const peer = for (unlifted.checking) |other| {
+            if (other.artifact_key) |other_key| {
+                if (std.mem.eql(u8, &artifact_key, &other_key)) break other;
+            }
+        } else continue;
+        // Storage is indexed by the typing input, not the published artifact's
+        // identity. Shared artifacts must still have identical input keys and
+        // bytes regardless of the importing app.
+        try std.testing.expectEqual(facts.storage_key, peer.storage_key);
+        const key = facts.storage_key orelse continue;
         const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
         defer allocator.free(from_lifted);
         const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
