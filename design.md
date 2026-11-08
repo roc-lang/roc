@@ -24551,8 +24551,8 @@ the list of instruction sets lives only in `isa.zig`. Code that runs generated
 code in-process asks `isa.host`, never `RocTarget.detectNative`, which maps an
 architecture without a code generator to one that has one.
 
-The shared driver also serves every word size, and defines a name for each
-register width by the kind of value, in `backend/dev/widths.zig`: `word_width`
+The shared driver also serves every word size, and names each register
+width by the kind of value, from `backend/dev/widths.zig`: `word_width`
 for a target word (pointers, lengths, sizes, addresses), `wide64_width` for a
 value that is 64 bits on every target (U64, I64, F64 bits, an i128 or Dec
 half), and `scalar_width` for an integer of up to 8 bytes held in one register
@@ -24565,10 +24565,13 @@ use the word width because they work on addresses (`emitLeaStack`). A `u64` or
 `i64` argument to a C function is passed with a `…Wide64` builder method. In
 debug builds, each call checks its arguments against the function's
 parameters: there must be one argument per parameter, and the `…Wide64`
-arguments must sit exactly at the `u64` and `i64` parameters. A 32-bit
-instruction set's `RegisterWidth` has no `w64` member, so `wide64_width`,
-`scalar_width` and a stray `.w64` are compile errors on it until the driver
-routes those values through register pairs.
+arguments must sit exactly at the `u64` and `i64` parameters. Word sizes and
+register bit counts use `target_ptr_size`, `word_bits` or `scalar_bits`, never
+a literal 8 or 64. A 64-bit value's own size stays 8. Stack argument slots
+stay 8 bytes until the 32-bit calling convention. A 32-bit instruction set's
+`RegisterWidth` has no `w64` member, so `wide64_width`, `scalar_width` and a
+stray `.w64` are compile errors on it until the driver routes those values
+through register pairs.
 
 ## Dev Backend Register Lifetimes
 
