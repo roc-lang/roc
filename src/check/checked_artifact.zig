@@ -3854,9 +3854,28 @@ pub const CheckedTypeStoreView = struct {
     /// finds for its key, so every root of one identity-free type shares one
     /// id.
     pub fn canonicalId(self: CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
-        if (try self.rootHasIdentityVariables(id)) return id;
-        return (try self.rootForKey(try self.rootKey(id))) orelse
-            checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        if (self.knownCanonical(id)) |known| return known;
+        const result = if (try self.rootHasIdentityVariables(id))
+            id
+        else
+            (try self.rootForKey(try self.rootKey(id))) orelse
+                checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        // An unfinished synthesized graph has no settled identity fact.
+        if (self.knownIdentity(id) != null) {
+            if (type_ids.isSynthesized(id)) {
+                self.synthesizedKeys().canonical.items[self.synthesizedIndex(id)].put(result);
+            } else self.sealedKeys().recordCanonical(type_ids.asVar(id), result);
+        }
+        return result;
+    }
+
+    fn knownCanonical(self: CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
+        if (type_ids.isSynthesized(id)) {
+            const keys = self.synthesized_keys orelse return null;
+            return keys.canonical.items[self.synthesizedIndex(id)].get();
+        }
+        const keys = self.sealed_keys orelse return null;
+        return keys.knownCanonical(type_ids.asVar(id));
     }
 
     /// Whether `left` and `right` are one checked type of this view: the same
@@ -7659,6 +7678,8 @@ pub const SynthesizedTypeKeys = struct {
     /// Per root: 0 while unknown, else 1 + whether a walk found the root
     /// reaches an identity variable.
     identity: std.ArrayList(std.atomic.Value(u8)) = .empty,
+    /// Canonical ids of settled synthesized types, recorded on first request.
+    canonical: std.ArrayList(sealed_type_keys.CanonicalIdSlot) = .empty,
     index: collections.OnceSlot(*KeyIndex, .synthesized_type_key_index) = .empty,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?CheckedTypeKeyDigester = null,
@@ -7682,6 +7703,7 @@ pub const SynthesizedTypeKeys = struct {
         if (self.writer) |*writer| writer.deinit();
         self.slots.deinit(allocator);
         self.identity.deinit(allocator);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -7692,9 +7714,11 @@ pub const SynthesizedTypeKeys = struct {
         if (self.slots.items.len >= count) return;
         try self.slots.ensureTotalCapacity(self.allocator, count);
         try self.identity.ensureTotalCapacity(self.allocator, count);
+        try self.canonical.ensureTotalCapacity(self.allocator, count);
         while (self.slots.items.len < count) {
             self.slots.appendAssumeCapacity(.empty);
             self.identity.appendAssumeCapacity(.init(0));
+            self.canonical.appendAssumeCapacity(.{});
         }
         self.dropIndex();
     }
@@ -36697,6 +36721,27 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     try std.testing.expect(store.synthetic_variable_roots.contains(respecialized_tail));
     try std.testing.expect(store.synthetic_variable_roots.contains(plan_tail));
     try std.testing.expectEqual(plan_tail, store.identityOrigin(plan_tail));
+}
+
+test "canonical ids remember settled types but not pending synthesized roots" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &store, &names);
+    const first = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
+    const pending = try store.reserveSyntheticTypeRoot(allocator);
+    try std.testing.expectEqual(pending, try store.view().canonicalId(pending));
+    try std.testing.expect(store.view().knownCanonical(pending) == null);
+    try store.fillSyntheticTypeRoot(allocator, pending, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
+    try std.testing.expectEqual(first, store.view().knownCanonical(pending).?);
+    // Appended roots cannot precede the selected lowest existing root.
+    const later = try store.reserveSyntheticTypeRoot(allocator);
+    try store.fillSyntheticTypeRoot(allocator, later, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(later));
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
 }
 
 test "pairing type columns borrow frozen storage until written" {
