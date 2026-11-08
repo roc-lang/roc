@@ -82,8 +82,8 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
                 fn body(guarded: *@This()) void {
                     const jumped = guarded.boundary.set();
                     guarded.jumped = jumped;
-                    // setjmp's recovery frame must remain live until the
-                    // callback returns or longjmps into it.
+                    // This frame owns the recovery point. Tail-calling the body
+                    // would discard it before code that can longjmp runs.
                     if (jumped == 0) @call(.never_tail, call, .{guarded.context});
                 }
             };

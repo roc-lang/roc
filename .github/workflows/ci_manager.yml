@@ -157,7 +157,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -262,7 +262,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -307,7 +307,7 @@ jobs:
       # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
           use-tool-cache: 'true'
 
@@ -496,7 +496,7 @@ jobs:
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
           use-tool-cache: 'true'
 
@@ -515,7 +515,7 @@ jobs:
 
       # Every file here is new to this machine: the sources come from a fresh
       # checkout and the cache from the archive above, so nothing has the inode
-      # or mtime the cache recorded. Zig 0.17.0 counts that as a miss for C
+      # or mtime the cache recorded. Zig 0.17 counts that as a miss for C
       # sources and linked artifacts even when the contents are identical, and
       # would recompile every binary this shard runs. The tool records the new
       # stat for each entry whose contents still match; it ships in the build
@@ -729,7 +729,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -800,7 +800,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages

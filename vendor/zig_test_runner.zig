@@ -1,4 +1,4 @@
-//! Vendored Zig 0.17.0 test runner (MIT), with an explicit Roc summary output
+//! Vendored Zig 0.17.1 test runner (MIT), with an explicit Roc summary output
 //! and Roc's death-test child mode (`--roc-death-test=<test name>`, see
 //! `src/base/death_test.zig`).
 //! Default test runner for unit tests.

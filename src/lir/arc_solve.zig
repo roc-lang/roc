@@ -101,9 +101,7 @@ pub const UniquenessMetrics = struct {
 
 /// A null executor uses the identical component solver on the calling thread.
 pub const UniquenessOptions = struct {
-    /// Settle the uniqueness analysis. Off, no local is proven unique and no
-    /// candidate read takes its fresh form, so every mutation keeps its
-    /// runtime check and every read stays the static datum.
+    /// Settle the uniqueness analysis. Off, every mutation retains its runtime check.
     prove: bool = true,
     executor: ?*const task_executor.Executor = null,
     metrics: ?*UniquenessMetrics = null,
@@ -252,16 +250,6 @@ pub const Solution = struct {
     /// must be seeded born-unique for the birth to hold; zero for a birth
     /// that holds in every emission of the proc.
     unique_conds: []arc_sig.ParamMask,
-    /// Bit set => every read with a fresh form the local's born value derives
-    /// from takes that form, so the birth stands; clear when the value comes
-    /// from a read that stays the static datum, whose count is the static
-    /// sentinel.
-    unique_origins_ok: std.bit_set.DynamicBitSetUnmanaged,
-    /// Bit set (by statement) => this read of a static list of copies takes
-    /// its fresh form: some runtime uniqueness check, or a callee position a
-    /// variant would seed, rests on the value being born there. Every other
-    /// such read keeps the static datum.
-    fresh_reads: std.bit_set.DynamicBitSetUnmanaged,
     /// Flat conditional-return rows referenced by `RcSig.ret_conditions`.
     ret_conditions: []arc_sig.RetCondition,
     /// Bit set => the proc's signature is pinned by ABI (roots, hosted,
@@ -314,8 +302,6 @@ pub const Solution = struct {
         self.unique_destroyed.deinit(self.allocator);
         self.unique_born.deinit(self.allocator);
         self.allocator.free(self.unique_conds);
-        self.unique_origins_ok.deinit(self.allocator);
-        self.fresh_reads.deinit(self.allocator);
         self.pinned.deinit(self.allocator);
         self.stability_pinned.deinit(self.allocator);
         if (self.uniqueness_structure) |structure| structure.destroy();
@@ -379,7 +365,6 @@ pub const Solution = struct {
         const index = @backingInt(local);
         if (index >= self.leader.len) return false;
         if (!self.unique_born.isSet(index) or self.unique_destroyed.isSet(index)) return false;
-        if (!self.unique_origins_ok.isSet(index)) return false;
         return (self.unique_conds[index] & ~seeds) == 0;
     }
 
@@ -506,10 +491,9 @@ pub const Solution = struct {
     }
 
     /// Owns parameter positions of a solved signature after the solve:
-    /// the positions whose owned variant takes every stored unit of the
-    /// parameter on every returning path, so the borrowed base would retain
-    /// each of those units where the variant takes them and save no caller
-    /// any work. The parameter's binding stays solved borrowed; emission
+    /// positions taken totally, or beneficial positions committed owned by
+    /// the producer of an exported worker. Callers retain any argument they
+    /// keep under the resulting ABI. The binding stays solved borrowed; emission
     /// overrides it to owned exactly as a demanded variant does.
     pub fn ownParams(self: *Solution, proc: LIR.LirProcSpecId, mask: arc_sig.ParamMask) void {
         const index = @backingInt(proc);
@@ -774,8 +758,6 @@ const BindingFact = union(enum) {
     consuming_result: OwnershipFlow,
 };
 
-const FreshFormRead = struct { target: LIR.LocalId, fresh_form: LIR.LirProcSpecId };
-
 const VisibilityFact = union(enum) {
     link: struct { a: LIR.LocalId, b: LIR.LocalId },
     seed: LIR.LocalId,
@@ -800,16 +782,6 @@ const UniqueJoinIncoming = struct {
     target: u32,
     source: u32,
 };
-
-/// A read of a static list of copies that names a fresh form, and its target.
-const CandidateDef = struct {
-    stmt: LIR.CFStmtId,
-    target: u32,
-};
-
-fn originWords(candidate_count: usize) usize {
-    return (candidate_count + 63) / 64;
-}
 
 /// One pure same-value alias definition, resolved after the statement scan.
 const AliasDef = struct {
@@ -936,8 +908,6 @@ const Solver = struct {
     /// Later analyses consume these typed facts without decoding LIR again.
     binding_facts: std.ArrayList(BindingFact),
     visibility_facts: std.ArrayList(VisibilityFact),
-    /// Reads that name a fresh form. Each may become a call of that procedure.
-    fresh_form_reads: std.ArrayList(FreshFormRead),
     unique_facts: std.ArrayList(UniqueFact),
     address_taken: std.bit_set.DynamicBitSetUnmanaged,
     /// Reachable returned locals and joins, partitioned by source proc.
@@ -1016,7 +986,6 @@ pub fn solveWithOptions(
         .param_uses = .empty,
         .binding_facts = .empty,
         .visibility_facts = .empty,
-        .fresh_form_reads = .empty,
         .unique_facts = .empty,
         .address_taken = .{},
         .proc_stmts = .{},
@@ -1048,7 +1017,6 @@ pub fn solveWithOptions(
         solver.param_uses.deinit(allocator);
         solver.binding_facts.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
-        solver.fresh_form_reads.deinit(allocator);
         solver.unique_facts.deinit(allocator);
         solver.address_taken.deinit(allocator);
         solver.proc_stmts.deinit(allocator);
@@ -1234,10 +1202,6 @@ pub fn solveWithOptions(
         const unique_seed_masks = try allocator.alloc(arc_sig.ParamMask, proc_count);
         errdefer allocator.free(unique_seed_masks);
         @memset(unique_seed_masks, 0);
-        var unique_origins_ok = try std.bit_set.DynamicBitSetUnmanaged.initFull(allocator, local_count);
-        errdefer unique_origins_ok.deinit(allocator);
-        var fresh_reads = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
-        errdefer fresh_reads.deinit(allocator);
 
         // Expand the dense ARC solution exactly once for LocalId-indexed stage
         // consumers. Non-ARC locals are identity leaders with no ownership bits.
@@ -1337,8 +1301,6 @@ pub fn solveWithOptions(
             .unique_destroyed = unique_destroyed,
             .unique_born = unique_born,
             .unique_conds = unique_conds,
-            .unique_origins_ok = unique_origins_ok,
-            .fresh_reads = fresh_reads,
             .ret_conditions = initial_ret_conditions,
             .pinned = solver.pinned,
             .stability_pinned = solver.stability_pinned,
@@ -2937,9 +2899,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             } else if (assign.value == .str_literal or assign.value == .static_data or assign.value == .bytes_literal) {
                 try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
             }
-            if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
-                try solver.fresh_form_reads.append(allocator, .{ .target = assign.target, .fresh_form = fresh_form });
-            }
             switch (assign.value) {
                 .str_literal, .static_data, .bytes_literal => {},
                 .i64_literal,
@@ -3500,21 +3459,6 @@ fn computeVisibilityFromFacts(
         }
     }
 
-    // A read that names a fresh form may be emitted as a call of it, and which
-    // reads are is settled after this analysis. Visibility is a may-property,
-    // so every such read flows from the procedure's returns.
-    for (solver.fresh_form_reads.items) |read| {
-        const target = domain.indexOf(read.target) orelse continue;
-        if (solver.store.getProcSpecImmediate(read.fresh_form).body == null) {
-            seeds.set(target);
-            continue;
-        }
-        for (solver.proc_returns.of(@backingInt(read.fresh_form))) |return_local| {
-            const returned = domain.indexOfRaw(return_local) orelse continue;
-            sets.unite(target, returned);
-        }
-    }
-
     // Pinned parameters and returns are the remaining producer-authored
     // visibility seeds.
     for (0..solver.store.procSpecCount()) |proc_index| {
@@ -3696,18 +3640,7 @@ fn computeVisibilityFromLift(
                     .discriminant => {},
                 }
             },
-            .assign_literal => |assign| {
-                // A read that names a fresh form may be emitted as a call of it.
-                if (store.literalExtra(assign.value).fresh_alternative) |fresh_form| {
-                    if (store.getProcSpecImmediate(fresh_form).body == null) {
-                        seedLocal(&visible, rc_local, @backingInt(assign.target));
-                    } else {
-                        for (ret_values.of(@backingInt(fresh_form))) |value| {
-                            addEdge(&sets, rc_local, @backingInt(assign.target), value);
-                        }
-                    }
-                }
-            },
+            .assign_literal => {},
             .assign_struct => |assign| {
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
@@ -3929,25 +3862,6 @@ pub const Uniqueness = struct {
     /// Bit set => some statement consumes the local's value (moves its
     /// unit, or would retain to do so).
     consumed: std.bit_set.DynamicBitSetUnmanaged,
-    /// The reads of a static list of copies that name a fresh form, in the
-    /// analyzed statements; candidate `c` is the read at `candidates[c]`.
-    /// Each is a birth whose value is the fresh list if the read takes that
-    /// form and a static datum otherwise.
-    candidates: []LIR.CFStmtId,
-    /// Per local, `origin_words` words: bit `c` set => the local's born
-    /// value derives from candidate `c`, through the same pure aliases, join
-    /// edges, field stores and takes, and call edges the birth flows
-    /// through; a stored field's origins live in `field_conds`. Origins
-    /// never leave the procedure: a returned value or field that derives
-    /// from a candidate is not a unique return, since the caller cannot see
-    /// which form the read takes.
-    origins: []u64,
-    origin_words: usize,
-    /// Bit `c` set => some runtime uniqueness check in the analyzed
-    /// statements, or a callee position a variant would seed, rests on a
-    /// value derived from candidate `c`, so that read takes its fresh form.
-    needed: []u64,
-
     pub fn deinit(self: *Uniqueness, allocator: Allocator) void {
         self.born_unique.deinit(allocator);
         self.unique.deinit(allocator);
@@ -3956,9 +3870,6 @@ pub const Uniqueness = struct {
         allocator.free(self.conds);
         self.field_conds.deinit(allocator);
         self.consumed.deinit(allocator);
-        allocator.free(self.candidates);
-        allocator.free(self.origins);
-        allocator.free(self.needed);
     }
 
     /// A copy owning no storage of this verdict.
@@ -3972,52 +3883,18 @@ pub const Uniqueness = struct {
             .field_conds = .{
                 .base = try allocator.dupe(u32, self.field_conds.base),
                 .conds = try allocator.dupe(arc_sig.ParamMask, self.field_conds.conds),
-                .origins = try allocator.dupe(u64, self.field_conds.origins),
-                .origin_words = self.field_conds.origin_words,
             },
             .consumed = try self.consumed.clone(allocator),
-            .candidates = try allocator.dupe(LIR.CFStmtId, self.candidates),
-            .origins = try allocator.dupe(u64, self.origins),
-            .origin_words = self.origin_words,
-            .needed = try allocator.dupe(u64, self.needed),
         };
-    }
-
-    fn originsOf(self: *const Uniqueness, dense: usize) []const u64 {
-        return self.origins[dense * self.origin_words ..][0..self.origin_words];
-    }
-
-    /// Whether the local's born value derives from any candidate read.
-    pub fn hasOrigins(self: *const Uniqueness, dense: usize) bool {
-        for (self.originsOf(dense)) |word| if (word != 0) return true;
-        return false;
-    }
-
-    /// Whether every candidate the local's value derives from takes its
-    /// fresh form, so the local's birth stands in the emitted program.
-    pub fn originsNeeded(self: *const Uniqueness, dense: usize) bool {
-        for (self.originsOf(dense), self.needed) |word, needed| if ((word & ~needed) != 0) return false;
-        return true;
-    }
-
-    /// Marks the candidates a checked value derives from as needed, when the
-    /// value is born there with no other holder.
-    fn noteNeededIfBorn(self: *Uniqueness, dense: ?u32) void {
-        const index = dense orelse return;
-        if (!self.born_unique.isSet(index) or self.destroyed.isSet(index)) return;
-        for (self.needed, self.originsOf(index)) |*needed, word| needed.* |= word;
     }
 };
 
 /// Conditions on per-field unique origins: a container with any field input
 /// owns sixty-four parameter masks, one per field, at `base[container]`,
-/// and, when the analyzed statements hold candidate reads, sixty-four
-/// candidate bitsets of `origin_words` words each at the same base.
+/// with no alternative representation for static data.
 pub const FieldConds = struct {
     base: []u32,
     conds: []arc_sig.ParamMask,
-    origins: []u64 = &.{},
-    origin_words: usize = 0,
 
     pub fn get(self: FieldConds, container: u32, field: u32) arc_sig.ParamMask {
         const base = self.base[container];
@@ -4025,34 +3902,9 @@ pub const FieldConds = struct {
         return self.conds[base + field];
     }
 
-    /// The candidates the container's stored field derives from; empty
-    /// when the container tracks no fields or no candidate exists.
-    pub fn originsOf(self: FieldConds, container: u32, field: u32) []const u64 {
-        const base = self.base[container];
-        if (base == no_local or self.origin_words == 0) return &.{};
-        return self.origins[(base + field) * self.origin_words ..][0..self.origin_words];
-    }
-
-    /// The fields of the container whose stored values derive from a
-    /// candidate read.
-    pub fn fieldsWithOrigins(self: FieldConds, container: u32) u64 {
-        if (self.base[container] == no_local or self.origin_words == 0) return 0;
-        var mask: u64 = 0;
-        for (0..64) |field| {
-            for (self.originsOf(container, @intCast(field))) |word| {
-                if (word != 0) {
-                    mask |= @as(u64, 1) << @as(u6, @intCast(field));
-                    break;
-                }
-            }
-        }
-        return mask;
-    }
-
     pub fn deinit(self: *FieldConds, allocator: Allocator) void {
         allocator.free(self.base);
         allocator.free(self.conds);
-        allocator.free(self.origins);
     }
 };
 
@@ -4257,30 +4109,11 @@ const ConsumptionProof = struct {
 /// returns its parameter—keeps the birth its entry edge brings, which is the
 /// inductive fact the runtime obeys. Deadness ascends along the same edges:
 /// a second holder of a source is a second holder of everything the source
-/// flows into. Candidate origins ascend as well: a local starts from the
-/// candidate reads among its own definitions and gathers its inputs'
-/// origins, and a stored field gathers its inputs' origins.
-fn orOriginWords(into: []u64, origins: []const u64, origin_words: usize, local: u32) bool {
-    return orWords(into, origins[local * origin_words ..][0..origin_words]);
-}
-
-/// ORs `from` into `into`, returning whether any bit was new; an empty
-/// `from` (no fields tracked, or no candidate) leaves `into` alone.
-fn orWords(into: []u64, from: []const u64) bool {
-    var grew: u64 = 0;
-    for (from, 0..) |word, index| {
-        grew |= word & ~into[index];
-        into[index] |= word;
-    }
-    return grew != 0;
-}
-
+/// flows into.
 fn settleUniqueOrigins(
     allocator: Allocator,
     born: *std.bit_set.DynamicBitSetUnmanaged,
     conds: []arc_sig.ParamMask,
-    origins: []u64,
-    origin_words: usize,
     foreign: *const std.bit_set.DynamicBitSetUnmanaged,
     multi_def: *const std.bit_set.DynamicBitSetUnmanaged,
     multi_ok: *const std.bit_set.DynamicBitSetUnmanaged,
@@ -4423,9 +4256,6 @@ fn settleUniqueOrigins(
     }
     field_conds.conds = try allocator.alloc(arc_sig.ParamMask, @as(usize, container_count) * 64);
     @memset(field_conds.conds, 0);
-    field_conds.origin_words = origin_words;
-    field_conds.origins = try allocator.alloc(u64, @as(usize, container_count) * 64 * origin_words);
-    @memset(field_conds.origins, 0);
 
     const Meet = struct {
         /// The condition under which every input so far is born, or null
@@ -4466,19 +4296,15 @@ fn settleUniqueOrigins(
             var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
             var changed = false;
-            // A stored field's origins gather its inputs' origins.
-            const container_origins = field_conds.origins[field_conds.base[container] * origin_words ..][0 .. 64 * origin_words];
             for (store_inputs.row(container)) |edge_index| {
                 const edge = field_edges.stores[edge_index];
                 meets[edge.field].fromLocal(born, conds, edge.source);
-                if (orOriginWords(container_origins[edge.field * origin_words ..][0..origin_words], origins, origin_words, edge.source)) changed = true;
                 if (destroyed.isSet(edge.source)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
             }
             for (mask_alias_inputs.row(container)) |edge_index| {
                 const source = field_edges.aliases[edge_index].source;
                 for (0..64) |field| {
                     meets[field].fromSlot(masks, field_conds, source, @intCast(field));
-                    if (orWords(container_origins[field * origin_words ..][0..origin_words], field_conds.originsOf(source, @intCast(field)))) changed = true;
                 }
                 dead |= dead_masks[source];
             }
@@ -4499,7 +4325,6 @@ fn settleUniqueOrigins(
                 const meet = &meets[edge.field];
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
                     meet.fromLocal(born, conds, arg);
-                    if (orOriginWords(container_origins[edge.field * origin_words ..][0..origin_words], origins, origin_words, arg)) changed = true;
                     if (destroyed.isSet(arg)) dead |= @as(u64, 1) << @as(u6, @intCast(edge.field));
                 }
             }
@@ -4540,19 +4365,14 @@ fn settleUniqueOrigins(
         var meet = Meet{};
         var dead = destroyed.isSet(local);
         var changed = false;
-        // A derived local's origins gather its inputs' origins on top of the
-        // candidate reads among its own definitions.
-        const local_origins = origins[local * origin_words ..][0..origin_words];
         if (alias_source[local] != no_local) {
             const source = alias_source[local];
             meet.fromLocal(born, conds, source);
-            if (orOriginWords(local_origins, origins, origin_words, source)) changed = true;
             dead = dead or destroyed.isSet(source);
         } else if (join_inputs.row(local).len != 0 or read_inputs.row(local).len != 0) {
             for (join_inputs.row(local)) |edge_index| {
                 const source = join_incoming[edge_index].source;
                 meet.fromLocal(born, conds, source);
-                if (orOriginWords(local_origins, origins, origin_words, source)) changed = true;
                 dead = dead or destroyed.isSet(source);
             }
             // A join result cell's field takes are incoming edges alongside
@@ -4560,7 +4380,6 @@ fn settleUniqueOrigins(
             for (read_inputs.row(local)) |edge_index| {
                 const read = field_edges.reads[edge_index];
                 meet.fromSlot(masks, field_conds, read.container, read.field);
-                if (orWords(local_origins, field_conds.originsOf(read.container, read.field))) changed = true;
                 dead = dead or (dead_masks[read.container] & (@as(u64, 1) << @as(u6, @intCast(read.field)))) != 0;
             }
         } else {
@@ -4569,7 +4388,6 @@ fn settleUniqueOrigins(
                 if (edge.field != arc_sig.RetCondition.whole_value) continue;
                 for (field_edges.call_args[edge.args_start..][0..edge.args_len]) |arg| {
                     meet.fromLocal(born, conds, arg);
-                    if (orOriginWords(local_origins, origins, origin_words, arg)) changed = true;
                     dead = dead or destroyed.isSet(arg);
                 }
             }
@@ -4660,22 +4478,7 @@ pub fn computeProcUniqueness(
     layouts: *const layout_mod.Store,
     order_scratch: *UseOrderScratch,
 ) SolveError!Uniqueness {
-    return computeUniquenessDetailed(
-        allocator,
-        store,
-        rc_local,
-        sigs,
-        proc,
-        stmts,
-        .{ .local_to_dense = local_to_dense, .count = dense_locals.len, .locals = @ptrCast(dense_locals) },
-        true,
-        layouts,
-        .stamped,
-        null,
-        null,
-        order_scratch,
-        null,
-    );
+    return computeUniquenessDetailed(allocator, store, rc_local, sigs, proc, stmts, .{ .local_to_dense = local_to_dense, .count = dense_locals.len, .locals = @ptrCast(dense_locals) }, true, layouts, .stamped, null, null, order_scratch);
 }
 
 /// Store-indexed tables that `computeProcUniqueness` reuses across procedures.
@@ -4729,7 +4532,6 @@ const UniquenessWorkspace = struct {
         layouts: *const layout_mod.Store,
         takes: TakeSource,
         borrowed: *const std.bit_set.DynamicBitSetUnmanaged,
-        seed_masks: ?[]const arc_sig.ParamMask,
     ) SolveError!Uniqueness {
         // No result from the previous round survives into this call.
         _ = self.scratch.reset(.retain_capacity);
@@ -4738,7 +4540,7 @@ const UniquenessWorkspace = struct {
             uniqueness_analysis_rounds += 1;
         }
         self.order.use_answers = &self.use_answers;
-        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self, null, seed_masks);
+        return computeUniquenessDetailed(self.scratch.allocator(), store, rc_local, sigs, null, self.stmts, null, consume_dead_boxes, layouts, takes, borrowed, self, null);
     }
 };
 
@@ -5097,22 +4899,7 @@ const UniquenessComponentTask = struct {
         _ = result.workspace.scratch.reset(.retain_capacity);
         const arena = result.workspace.scratch.allocator();
         self.analysis_started = true;
-        const computed = try computeUniquenessDetailed(
-            scratch,
-            self.store,
-            self.rc_local,
-            self.solution.sigTable(),
-            null,
-            self.component.stmts,
-            self.domain,
-            self.consume_dead_boxes,
-            self.layouts,
-            self.takes,
-            &self.solution.borrowed,
-            &result.workspace,
-            null,
-            self.solution.unique_seed_masks,
-        );
+        const computed = try computeUniquenessDetailed(scratch, self.store, self.rc_local, self.solution.sigTable(), null, self.component.stmts, self.domain, self.consume_dead_boxes, self.layouts, self.takes, &self.solution.borrowed, &result.workspace, null);
         result.uniqueness = try computed.clone(arena);
         result.updates = try arena.alloc(UniquenessProcUpdate, self.component.procs.len);
         for (self.component.procs, result.updates) |proc, *update| {
@@ -5155,14 +4942,14 @@ const UniquenessComponentTask = struct {
                 };
                 // A value derived from a candidate read is not a unique
                 // return: its birth is decided within this procedure.
-                if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense) or uniqueness.hasOrigins(dense)) {
+                if (!uniqueness.born_unique.isSet(dense) or uniqueness.destroyed.isSet(dense)) {
                     all_born = false;
                 } else {
                     whole_params |= uniqueness.conds[dense];
                 }
                 // A field derived from a candidate read is not a unique
                 // return either: its birth is decided within this procedure.
-                fields &= uniqueness.field_masks[dense] & ~uniqueness.field_conds.fieldsWithOrigins(dense);
+                fields &= uniqueness.field_masks[dense];
                 var born_fields = std.bit_set.IntegerBitSet(64){ .mask = uniqueness.field_masks[dense] };
                 var iter = born_fields.iterator(.{});
                 while (iter.next()) |field| field_params[field] |= uniqueness.field_conds.get(dense, @intCast(field));
@@ -5393,8 +5180,7 @@ pub fn settleUniquenessWithOptions(
             if (options.executor != null) metrics.task_committed += 1;
             for (context.component.procs, result.updates) |proc, update| {
                 const old = solution.sigs[proc];
-                // A caller's fresh-form decisions read the callee's seed
-                // mask, so a seed change re-analyzes callers too.
+                // Caller uniqueness variants depend on callee seed masks.
                 const row_changed = !sameRetConditions(solution.sigTable().retConditionsOf(old), update.rows);
                 rows_changed = rows_changed or row_changed;
                 const changed = old.read_only_params != update.sig.read_only_params or
@@ -5425,8 +5211,6 @@ pub fn settleUniquenessWithOptions(
     solution.unique_destroyed.setRangeValue(.{ .start = 0, .end = solution.unique_destroyed.bit_length }, false);
     solution.unique_born.setRangeValue(.{ .start = 0, .end = solution.unique_born.bit_length }, false);
     @memset(solution.unique_conds, 0);
-    solution.unique_origins_ok.setRangeValue(.{ .start = 0, .end = solution.unique_origins_ok.bit_length }, true);
-    solution.fresh_reads.setRangeValue(.{ .start = 0, .end = solution.fresh_reads.bit_length }, false);
     for (components) |component| {
         const verdict = component.result.?.uniqueness;
         for (component.locals, 0..) |raw, dense| {
@@ -5434,16 +5218,7 @@ pub fn settleUniquenessWithOptions(
             solution.unique_destroyed.setValue(raw, verdict.destroyed.isSet(dense));
             solution.unique_born.setValue(raw, verdict.born_unique.isSet(dense));
             solution.unique_conds[raw] = verdict.conds[dense];
-            solution.unique_origins_ok.setValue(raw, verdict.originsNeeded(dense));
         }
-        publishFreshReads(solution, verdict);
-    }
-}
-
-/// Records which candidate reads of a verdict take their fresh form.
-fn publishFreshReads(solution: *Solution, verdict: Uniqueness) void {
-    for (verdict.candidates, 0..) |stmt, index| {
-        if ((verdict.needed[index / 64] & (@as(u64, 1) << @as(u6, @intCast(index % 64)))) != 0) solution.fresh_reads.set(@backingInt(stmt));
     }
 }
 
@@ -5495,7 +5270,7 @@ fn settleUniquenessOracle(
     const seed_scratch = try allocator.alloc(arc_sig.ParamMask, proc_count);
     defer allocator.free(seed_scratch);
     while (true) {
-        const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, &solution.borrowed, solution.unique_seed_masks);
+        const uniqueness = try workspace.analyze(store, rc_local, solution.sigTable(), consume_dead_boxes, layouts, takes, &solution.borrowed);
         var changed = false;
         rows.clearRetainingCapacity();
         for (0..proc_count) |proc_index| {
@@ -5534,12 +5309,12 @@ fn settleUniquenessOracle(
                         fields = 0;
                         break;
                     }
-                    if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw) or uniqueness.hasOrigins(raw)) {
+                    if (!uniqueness.born_unique.isSet(raw) or uniqueness.destroyed.isSet(raw)) {
                         all_born = false;
                     } else {
                         whole_params |= uniqueness.conds[raw];
                     }
-                    fields &= uniqueness.field_masks[raw] & ~uniqueness.field_conds.fieldsWithOrigins(@intCast(raw));
+                    fields &= uniqueness.field_masks[raw];
                     var born_fields = std.bit_set.IntegerBitSet(64){ .mask = uniqueness.field_masks[raw] };
                     var born_field_iter = born_fields.iterator(.{});
                     while (born_field_iter.next()) |field| field_params[field] |= uniqueness.field_conds.get(@intCast(raw), @intCast(field));
@@ -5586,9 +5361,7 @@ fn settleUniquenessOracle(
         // Parameter positions whose seed would let a runtime check the
         // body performs on a value carried from them go check-free, and a
         // value carried into a callee position the callee's mask names
-        // composes that seed. The masks feed the analysis (a caller's
-        // fresh-form decisions read them), so a changed mask is another
-        // round.
+        // composes that seed. Propagate changed masks through callers.
         @memset(seed_scratch, 0);
         for (0..proc_count) |proc_index| {
             for (proc_stmts.of(proc_index)) |stmt| {
@@ -5645,10 +5418,6 @@ fn settleUniquenessOracle(
         solution.unique_destroyed = destroyed;
         solution.unique_born = born;
         solution.unique_conds = conds;
-        solution.unique_origins_ok.setRangeValue(.{ .start = 0, .end = solution.unique_origins_ok.bit_length }, true);
-        solution.fresh_reads.setRangeValue(.{ .start = 0, .end = solution.fresh_reads.bit_length }, false);
-        for (0..rc_local.len) |raw| solution.unique_origins_ok.setValue(raw, uniqueness.originsNeeded(raw));
-        publishFreshReads(solution, uniqueness);
         return;
     }
 }
@@ -5679,22 +5448,7 @@ fn settleUniquenessOracle(
 /// the solver consumes its shared per-proc lift, while final-LIR
 /// certification analyzes one emitted proc at a time because base and
 /// specialized bodies deliberately share every source LocalId.
-fn computeUniquenessDetailed(
-    allocator: Allocator,
-    store: *const LirStore,
-    rc_local: []const bool,
-    sigs: arc_sig.SigTable,
-    only_proc: ?LIR.LirProcSpecId,
-    exact_stmts: ?[]const LIR.CFStmtId,
-    proc_domain: ?ProcUniquenessDomain,
-    consume_dead_boxes: bool,
-    layouts: *const layout_mod.Store,
-    takes: TakeSource,
-    borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged,
-    workspace: ?*UniquenessWorkspace,
-    order_scratch: ?*UseOrder.Scratch,
-    callee_seed_masks: ?[]const arc_sig.ParamMask,
-) SolveError!Uniqueness {
+fn computeUniquenessDetailed(allocator: Allocator, store: *const LirStore, rc_local: []const bool, sigs: arc_sig.SigTable, only_proc: ?LIR.LirProcSpecId, exact_stmts: ?[]const LIR.CFStmtId, proc_domain: ?ProcUniquenessDomain, consume_dead_boxes: bool, layouts: *const layout_mod.Store, takes: TakeSource, borrowed: ?*const std.bit_set.DynamicBitSetUnmanaged, workspace: ?*UniquenessWorkspace, order_scratch: ?*UseOrder.Scratch) SolveError!Uniqueness {
     const local_count = if (proc_domain) |domain| domain.count else store.localCount();
 
     var reachable: std.bit_set.DynamicBitSetUnmanaged = .{};
@@ -5715,8 +5469,6 @@ fn computeUniquenessDetailed(
     // can still execute after it.
     var consumes = std.ArrayList(ConsumeAt).empty;
     defer consumes.deinit(allocator);
-    var candidate_defs = std.ArrayList(CandidateDef).empty;
-    defer candidate_defs.deinit(allocator);
     var has_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
     defer has_def.deinit(allocator);
     var multi_def = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
@@ -5978,15 +5730,7 @@ fn computeUniquenessDetailed(
             .assign_literal => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 switch (assign.value) {
-                    // A read of a static list of copies that names a fresh
-                    // form is a birth if the read takes that form; which
-                    // reads do is settled from where their values reach.
-                    .static_data => if (store.literalExtra(assign.value).fresh_alternative != null) {
-                        marks.noteBirth(&born, assign.target);
-                        if (marks.indexOf(assign.target)) |target| try candidate_defs.append(allocator, .{ .stmt = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))), .target = target });
-                    } else {
-                        marks.destroy(&foreign_def, assign.target);
-                    },
+                    .static_data => marks.destroy(&foreign_def, assign.target),
                     // Static-backed literals view backing whose count is the
                     // static sentinel, never 1, so they are not unique births
                     // and must never take in-place paths.
@@ -6677,22 +6421,10 @@ fn computeUniquenessDetailed(
     var field_conds = FieldConds{ .base = try allocator.alloc(u32, local_count), .conds = &.{} };
     errdefer field_conds.deinit(allocator);
     @memset(field_conds.base, no_local);
-    const candidates = try allocator.alloc(LIR.CFStmtId, candidate_defs.items.len);
-    errdefer allocator.free(candidates);
-    const origin_words = originWords(candidates.len);
-    const origins = try allocator.alloc(u64, local_count * origin_words);
-    errdefer allocator.free(origins);
-    @memset(origins, 0);
-    for (candidate_defs.items, 0..) |def, index| {
-        candidates[index] = def.stmt;
-        origins[def.target * origin_words + index / 64] |= @as(u64, 1) << @as(u6, @intCast(index % 64));
-    }
     try settleUniqueOrigins(
         allocator,
         &born,
         conds,
-        origins,
-        origin_words,
         &foreign_def,
         &multi_def,
         &multi_ok,
@@ -6728,7 +6460,7 @@ fn computeUniquenessDetailed(
         if (conds[index] != 0) unique.unset(index);
     }
 
-    var result = Uniqueness{
+    const result = Uniqueness{
         .born_unique = born,
         .unique = unique,
         .destroyed = destroyed,
@@ -6736,81 +6468,7 @@ fn computeUniquenessDetailed(
         .conds = conds,
         .field_conds = field_conds,
         .consumed = consumed,
-        .candidates = candidates,
-        .origins = origins,
-        .origin_words = origin_words,
-        .needed = try allocator.alloc(u64, origin_words),
     };
-    @memset(result.needed, 0);
-    if (candidates.len != 0) {
-        // A candidate is needed where a value derived from it meets a
-        // runtime uniqueness check that its birth would answer, or is
-        // passed dying to a callee position a variant would seed.
-        var needed_iter = reachable.iterator(.{});
-        var needed_exact_index: usize = 0;
-        needed_loop: while (true) {
-            const stmt_index = if (exact_stmts) |stmts| blk: {
-                if (needed_exact_index == stmts.len) break :needed_loop;
-                defer needed_exact_index += 1;
-                break :blk @backingInt(stmts[needed_exact_index]);
-            } else needed_iter.next() orelse break :needed_loop;
-            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-            switch (stmt.*) {
-                .assign_low_level => |assign| {
-                    const rc_effect = if (!consume_dead_boxes and assign.op == .box_unbox)
-                        assign.op.arcBorrowedResultVariant().?.rcEffect()
-                    else
-                        assign.op.arcInferenceRcEffect(store.stmtRow(assign.rc_effect));
-                    const args = store.getLocalSpan(assign.args);
-                    for (0..@min(GuardedList.borrowLen(args), 64)) |position| {
-                        if ((rc_effect.may_runtime_uniqueness_check_args & (@as(u64, 1) << @as(u6, @intCast(position)))) == 0) continue;
-                        result.noteNeededIfBorn(marks.indexOf(GuardedList.at(args, position)));
-                    }
-                },
-                .assign_call => |assign| {
-                    const masks = callee_seed_masks orelse continue;
-                    const callee_seeds = masks[@backingInt(assign.proc)];
-                    if (callee_seeds == 0) continue;
-                    const args = store.getLocalSpan(assign.args);
-                    for (0..@min(GuardedList.borrowLen(args), arc_sig.tracked_param_count)) |position| {
-                        const param_bit = arc_sig.paramBit(position) orelse unreachable; // the loop bound keeps position below tracked_param_count
-                        if ((callee_seeds & param_bit) == 0) continue;
-                        result.noteNeededIfBorn(marks.indexOf(GuardedList.at(args, position)));
-                    }
-                },
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                .dyn,
-                => {},
-            }
-        }
-    }
     return result;
 }
 
@@ -7089,8 +6747,8 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
             sigs[0].ret_unique = true;
         }
         const table = arc_sig.SigTable{ .sigs = &sigs, .ret_conditions = &conditions };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = &takes }, &borrowed, null);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .{ .set = &takes }, &borrowed);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .{ .set = &takes }, &borrowed, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(topology, workspace.order.topology.preds.stmts.ptr);
@@ -7109,7 +6767,7 @@ test "uniqueness workspace reuses topology and exact use queries across signatur
     try testing.expectEqual(@as(usize, 3), workspace.iterations);
     try testing.expectEqual(@as(usize, 1), workspace.consumption.rebuilds);
     // A separate post-take proof cannot reuse the pre-take lattice verdict.
-    const without_take = try workspace.analyze(&f.store, &rc, .{ .sigs = &sigs }, true, &f.layouts, .none, &borrowed, null);
+    const without_take = try workspace.analyze(&f.store, &rc, .{ .sigs = &sigs }, true, &f.layouts, .none, &borrowed);
     try testing.expect(!without_take.born_unique.isSet(@backingInt(taken)));
 }
 
@@ -7141,8 +6799,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     for ([_]arc_sig.ParamMask{ 0, 1, 0 }) |read_only| {
         sigs[0].read_only_params = read_only;
         const table = arc_sig.SigTable{ .sigs = &sigs };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+        var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
         defer expected.deinit(allocator);
         try UniquenessTest.expectSame(expected, actual);
         try testing.expectEqual(read_only != 0, actual.unique.isSet(@backingInt(source)));
@@ -7153,8 +6811,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     for ([_]bool{ true, false, true }, 1..) |is_view, rebuilds| {
         borrowed.setValue(@backingInt(view), is_view);
         const table = arc_sig.SigTable{ .sigs = &sigs };
-        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+        const actual = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+        var reference = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
         defer reference.deinit(allocator);
         try UniquenessTest.expectSame(reference, actual);
         // An owned alias adds a holder before the source's return. Restoring
@@ -7166,8 +6824,8 @@ test "uniqueness workspace reanalyzes read-only signatures through borrowed view
     }
     sigs[0].borrowed_params = 0;
     const table = arc_sig.SigTable{ .sigs = &sigs };
-    const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed, null);
-    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+    const owned = try workspace.analyze(&f.store, &rc, table, true, &f.layouts, .none, &borrowed);
+    var expected = try computeUniquenessDetailed(allocator, &f.store, &rc, table, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
     defer expected.deinit(allocator);
     try UniquenessTest.expectSame(expected, owned);
     try testing.expectEqual(@as(usize, 4), workspace.consumption.rebuilds);
@@ -7207,7 +6865,7 @@ fn aliasBornUniqueAfterRepeatedDefinitions(sequential: bool) SolveError!bool {
     var sigs = [_]arc_sig.RcSig{.all_owned};
     var borrowed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, rc.len);
     defer borrowed.deinit(allocator);
-    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, true, &f.layouts, .none, &borrowed, null, null, null);
+    var uniqueness = try computeUniquenessDetailed(allocator, &f.store, &rc, .{ .sigs = &sigs }, null, null, null, true, &f.layouts, .none, &borrowed, null, null);
     defer uniqueness.deinit(allocator);
     return uniqueness.born_unique.isSet(@backingInt(alias));
 }
@@ -7294,9 +6952,6 @@ const UniquenessOracleState = struct {
         errdefer result.unique_destroyed.deinit(allocator);
         result.unique_conds = try allocator.dupe(arc_sig.ParamMask, source.unique_conds);
         errdefer allocator.free(result.unique_conds);
-        result.unique_origins_ok = try source.unique_origins_ok.clone(allocator);
-        errdefer result.unique_origins_ok.deinit(allocator);
-        result.fresh_reads = try source.fresh_reads.clone(allocator);
         return .{ .solution = result };
     }
 
@@ -7305,8 +6960,6 @@ const UniquenessOracleState = struct {
         allocator.free(self.solution.sigs);
         allocator.free(self.solution.ret_conditions);
         allocator.free(self.solution.unique_seed_masks);
-        self.solution.unique_origins_ok.deinit(allocator);
-        self.solution.fresh_reads.deinit(allocator);
         self.solution.unique.deinit(allocator);
         self.solution.unique_born.deinit(allocator);
         self.solution.unique_destroyed.deinit(allocator);
@@ -7661,146 +7314,6 @@ test "uniqueness seed masks compose through direct calls" {
     try std.testing.expectEqual(@as(arc_sig.ParamMask, 0b01), solution.unique_seed_masks[@backingInt(top)]);
 }
 
-test "uniqueness carries a candidate read's origin through a returned record field to its take" {
-    const allocator = std.testing.allocator;
-    var f = try UniquenessTest.init();
-    defer f.deinit();
-    // callee(p) = {p, []}: its first field is born exactly when the
-    // argument is, so the caller's call edge carries the argument's origin
-    // into the result's field, and the take of that field inherits it.
-    const param = try f.local(f.list);
-    const other = try f.local(f.list);
-    const pair = try f.local(f.pair);
-    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = pair, .fields = try f.store.addLocalSpan(&.{ param, other }), .next = try f.ret(pair) } }, .test_fixture);
-    const callee_body = try f.store.addCFStmt(.{ .assign_list = .{ .target = other, .elems = try f.store.addLocalSpan(&.{}), .next = make_pair } }, .test_fixture);
-    const callee = try f.proc(&.{param}, callee_body, f.list);
-    const fresh_form = try f.proc(&.{}, null, f.list);
-    const static_list = try f.staticData(fresh_form, f.list);
-
-    // Caller: read the candidate, pass it through the callee, take the
-    // field back, and check it.
-    const candidate = try f.local(f.list);
-    const got = try f.local(f.pair);
-    const first = try f.local(f.list);
-    const reversed = try f.local(f.list);
-    const check = try f.store.addCFStmt(.{ .assign_low_level = .{
-        .target = reversed,
-        .op = .list_reverse,
-        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.RcEffect.runtimeUniqueness(1)),
-        .args = try f.store.addLocalSpan(&.{first}),
-        .next = try f.ret(reversed),
-    } }, .test_fixture);
-    const take = try f.store.addCFStmt(.{ .assign_ref = .{
-        .target = first,
-        .op = .field(got, 0),
-        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
-            .take_kind = .take,
-        }),
-        .next = check,
-    } }, .test_fixture);
-    const call = try f.call(got, callee, &.{candidate}, take);
-    const read = try f.store.addCFStmt(.{ .assign_literal = .{
-        .target = candidate,
-        .value = .{ .static_data = .{
-            .id = static_list,
-            .copies = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                .fresh_alternative = fresh_form,
-            }),
-        } },
-        .next = call,
-    } }, .test_fixture);
-    _ = try f.proc(&.{}, read, f.list);
-
-    // A second read whose value only rides along in a field and is read
-    // back without a check stays static, and its take is not unique.
-    const idle = try f.local(f.list);
-    const idle_got = try f.local(f.pair);
-    const idle_first = try f.local(f.list);
-    const idle_take = try f.store.addCFStmt(.{ .assign_ref = .{
-        .target = idle_first,
-        .op = .field(idle_got, 0),
-        .extra = try f.store.addOptionalStmtRow(LIR.RefExtra, .{
-            .take_kind = .take,
-        }),
-        .next = try f.ret(idle_first),
-    } }, .test_fixture);
-    const idle_call = try f.call(idle_got, callee, &.{idle}, idle_take);
-    const idle_read = try f.store.addCFStmt(.{ .assign_literal = .{
-        .target = idle,
-        .value = .{ .static_data = .{
-            .id = static_list,
-            .copies = try f.store.addOptionalStmtRow(LIR.LiteralExtra, .{
-                .fresh_alternative = fresh_form,
-            }),
-        } },
-        .next = idle_call,
-    } }, .test_fixture);
-    _ = try f.proc(&.{}, idle_read, f.list);
-
-    const rc = try allocator.alloc(bool, f.store.localCount());
-    defer allocator.free(rc);
-    @memset(rc, true);
-    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, true);
-    defer solution.deinit();
-    try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
-    try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
-    try std.testing.expect(solution.isUnique(first));
-    try std.testing.expect(solution.isUniqueUnder(first, 0));
-    try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
-    try std.testing.expect(!solution.isUniqueUnder(idle_first, 0));
-    // The callee's field row stays a conditional row on its parameter; a
-    // candidate never reaches a signature.
-    try std.testing.expectEqual(@as(u64, 0), solution.sigOf(callee).ret_unique_fields & 1);
-    UniquenessOracleState.resetCapabilities(&solution);
-    var metrics: UniquenessMetrics = .{};
-    try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
-    try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
-    try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
-}
-
-test "a read's possible fresh form joins every read of that form in host visibility" {
-    const allocator = std.testing.allocator;
-    var f = try UniquenessTest.init();
-    defer f.deinit();
-    // fresh() = []: the procedure both reads name.
-    const built = try f.local(f.list);
-    const fresh_body = try f.store.addCFStmt(.{ .assign_list = .{
-        .target = built,
-        .elems = LIR.LocalSpan.empty(),
-        .next = try f.ret(built),
-    } }, .test_fixture);
-    const fresh_form = try f.proc(&.{}, fresh_body, f.list);
-    const static_list = try f.staticData(fresh_form, f.list);
-    const readOf = struct {
-        fn stmt(fixture: anytype, target: LIR.LocalId, id: LIR.StaticDataId, form: LIR.LirProcSpecId) SolveError!LIR.CFStmtId {
-            return fixture.store.addCFStmt(.{ .assign_literal = .{
-                .target = target,
-                .value = .{ .static_data = .{
-                    .id = id,
-                    .copies = try fixture.store.addOptionalStmtRow(LIR.LiteralExtra, .{ .fresh_alternative = form }),
-                } },
-                .next = try fixture.ret(target),
-            } }, .test_fixture);
-        }
-    }.stmt;
-    // The root's read reaches the host; the other's stays in the program.
-    const host_read = try f.local(f.list);
-    const root = try f.proc(&.{}, try readOf(&f, host_read, static_list, fresh_form), f.list);
-    const program_read = try f.local(f.list);
-    _ = try f.proc(&.{}, try readOf(&f, program_read, static_list, fresh_form), f.list);
-
-    const rc = try allocator.alloc(bool, f.store.localCount());
-    defer allocator.free(rc);
-    @memset(rc, true);
-    var solution = try solveWithOptions(allocator, &f.store, &f.layouts, rc, &.{root}, true, true, .{});
-    defer solution.deinit();
-    // Either read may become a call, and the procedure's returns connect the
-    // calls, so the visibility of one is the visibility of all.
-    try std.testing.expect(solution.isVisible(host_read));
-    try std.testing.expect(solution.isVisible(built));
-    try std.testing.expect(solution.isVisible(program_read));
-}
-
 test "uniqueness vetoes a join cell's field that a call definition does not vouch for" {
     // Repro for https://github.com/roc-lang/roc/issues/12127: a cell is either
     // a fresh pair or a callee's fresh pair whose first field is an element
@@ -7986,4 +7499,38 @@ test "ARC shared predicates have one definition across the ARC stage" {
 /// callee's solved base signature.
 pub fn sharesEmissionUnit(store: *const LirStore, caller: LIR.LirProcSpecId, callee: LIR.LirProcSpecId) bool {
     return LIR.EmissionUnit.shares(store.getProcSpec(caller).emission_unit, store.getProcSpec(callee).emission_unit);
+}
+
+test "uniqueness never treats a completed static list as a fresh allocation" {
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const initialized = try f.local(f.list);
+    const initializer = try f.proc(&.{}, try f.store.addCFStmt(.{ .assign_list = .{
+        .target = initialized,
+        .elems = .empty(),
+        .next = try f.ret(initialized),
+    } }, .test_fixture), f.list);
+    const slot = try f.staticData(initializer, f.list);
+    const read = try f.local(f.list);
+    const alias = try f.local(f.list);
+    const copy = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = alias,
+        .op = .local(read),
+        .next = try f.ret(alias),
+    } }, .test_fixture);
+    const literal = try f.store.addCFStmt(.{ .assign_literal = .{
+        .target = read,
+        .value = .{ .static_data = .{ .id = slot } },
+        .next = copy,
+    } }, .test_fixture);
+    const root = try f.proc(&.{}, literal, f.list);
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{root}, true);
+    defer solution.deinit();
+    try std.testing.expect(!solution.isUniqueUnder(read, std.math.maxInt(arc_sig.ParamMask)));
+    try std.testing.expect(!solution.isUniqueUnder(alias, std.math.maxInt(arc_sig.ParamMask)));
+    try std.testing.expect(!solution.sigOf(root).ret_unique);
 }

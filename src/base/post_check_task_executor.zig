@@ -108,6 +108,8 @@ pub const Executor = struct {
     lane_count: usize,
     /// Open a session, returning its handle.
     beginFn: *const fn (*anyopaque) std.mem.Allocator.Error!*anyopaque,
+    /// Success accepts exactly one task. Failure accepts none: no queued or
+    /// running callback and no future completion may belong to that submission.
     submitFn: *const fn (*anyopaque, *anyopaque, Task) std.mem.Allocator.Error!void,
     /// Must synchronize with the completed callback so its writes are visible
     /// before the returned value is consumed.

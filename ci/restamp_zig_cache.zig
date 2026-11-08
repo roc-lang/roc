@@ -7,7 +7,7 @@
 //! from a fresh checkout and the cache from an archive, so no recorded inode or
 //! mtime matches.
 //!
-//! Zig is meant to fall back to the content digest in that case. Zig 0.17.0
+//! Zig is meant to fall back to the content digest in that case. Zig 0.17
 //! does so for the files a compilation discovers, but not for the inputs a
 //! step declares up front: `std.Build.Cache.Manifest.checkInputPath` hashes
 //! the file and then compares the result with a digest the caller never
