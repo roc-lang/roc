@@ -542,15 +542,29 @@ fn runInChild(allocator: Allocator, work: ChildWorkFn, source: []const u8) ForkO
     return .success;
 }
 
-fn checkPassed(resources: *test_helpers.ProblemResources) bool {
-    if (resources.main.checker.problems.problems.items.len != 0) return false;
+fn checkPassed(allocator: Allocator, resources: *test_helpers.ProblemResources) Allocator.Error!bool {
     if (resources.main.module_env.types.containsErrContent()) return false;
-    // Canonicalization diagnostics.
-    const diag_indices = resources.main.module_env.store.sliceDiagnostics(
-        resources.main.module_env.diagnostics,
-    );
-    if (diag_indices.len != 0) return false;
-    return true;
+    const counts = try test_helpers.explicitRootDiagnosticCounts(allocator, resources.main.module_env, resources.main.checker);
+    return counts.canonicalization + counts.checking == 0;
+}
+
+test "explicit root diagnostic counts omit only the entrypoint contract" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { source: []const u8, has_error: bool }{
+        .{ .source = "value = 42", .has_error = false },
+        .{ .source = "value : Str\nvalue = 42", .has_error = true },
+        .{ .source = "value = not_here", .has_error = true },
+    };
+    for (cases) |case| {
+        var resources = try test_helpers.parseAndCheckProgramForProblems(allocator, .module, case.source, &.{}, prePublishedBuiltin());
+        defer resources.deinit(allocator);
+        const before = resources.main.module_env.diagnosticCount();
+        try std.testing.expect(before > 0);
+        const counts = try test_helpers.explicitRootDiagnosticCounts(allocator, resources.main.module_env, resources.main.checker);
+        try std.testing.expectEqual(case.has_error, counts.errors != 0);
+        if (!case.has_error) try std.testing.expectEqual(@as(usize, 0), counts.canonicalization + counts.checking);
+        try std.testing.expectEqual(before, resources.main.module_env.diagnosticCount());
+    }
 }
 
 /// Run the check stage for `source` and return null on success, or an owned
@@ -564,7 +578,7 @@ fn runCheck(
         return try dupeErr(allocator, "parseAndCheckProgramForProblems: {s}", .{@errorName(err)});
     defer resources.deinit(allocator);
 
-    if (!checkPassed(&resources)) {
+    if (!try checkPassed(allocator, &resources)) {
         return try dupeErr(allocator, "check produced diagnostics or problems", .{});
     }
     return null;

@@ -2106,16 +2106,41 @@ fn moduleDiagnosticsHaveErrors(
     module_env: *ModuleEnv,
     checker: *Check,
 ) Allocator.Error!bool {
+    return (try explicitRootDiagnosticCounts(allocator, module_env, checker)).errors != 0;
+}
+
+/// Counts of reports visible when a module's roots are requested explicitly.
+pub const DiagnosticCounts = struct {
+    canonicalization: usize = 0,
+    canonicalization_errors: usize = 0,
+    checking: usize = 0,
+    errors: usize = 0,
+};
+
+/// Count the same reports explicit-root evaluation renders, without changing
+/// the module's checked diagnostics. Harnesses must not treat an omitted
+/// entrypoint contract as either a failure or an expected error.
+pub fn explicitRootDiagnosticCounts(
+    allocator: Allocator,
+    module_env: *ModuleEnv,
+    checker: *Check,
+) Allocator.Error!DiagnosticCounts {
     var reports: std.ArrayList(reporting.Report) = .empty;
     defer check.module_reports.deinit(allocator, &reports);
     try check.module_reports.appendCanonicalize(allocator, &reports, module_env, 0, "repl");
-    try check.module_reports.appendTypes(allocator, &reports, module_env, checker, "repl", &.{}, null);
-    // Every module here has its roots requested explicitly.
     check.module_reports.omitEntryContract(&reports);
+    var counts: DiagnosticCounts = .{ .canonicalization = reports.items.len };
     for (reports.items) |report| {
-        if (report.severity.isError()) return true;
+        if (report.severity.isError()) counts.canonicalization_errors += 1;
     }
-    return false;
+    try check.module_reports.appendTypes(allocator, &reports, module_env, checker, "repl", &.{}, null);
+    check.module_reports.omitEntryContract(&reports);
+    counts.checking = reports.items.len - counts.canonicalization;
+    counts.errors = counts.canonicalization_errors;
+    for (reports.items[counts.canonicalization..]) |report| {
+        if (report.severity.isError()) counts.errors += 1;
+    }
+    return counts;
 }
 
 /// Render the diagnostics already produced in parsed resources. This preserves

@@ -1282,13 +1282,11 @@ fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
     );
     defer resources.deinit(allocator);
 
-    const diagnostics = try resources.main.module_env.getDiagnostics();
-    defer allocator.free(diagnostics);
-
+    const counts = try helpers.explicitRootDiagnosticCounts(allocator, resources.main.module_env, resources.main.checker);
     const problems = resources.main.parse_ast.tokenize_diagnostics.items.len +
         resources.main.parse_ast.parse_diagnostics.items.len +
-        diagnostics.len +
-        resources.main.checker.problems.problems.items.len;
+        counts.canonicalization +
+        counts.checking;
     if (problems == 0) return;
 
     const rendered = try helpers.renderProblems(allocator, case.source_kind, case.source);

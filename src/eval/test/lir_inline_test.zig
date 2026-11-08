@@ -3048,12 +3048,11 @@ test "issue 11144 nested lambdas in one large body specialize in linear work" {
             try sharedPrePublishedBuiltin(),
         );
         defer resources.deinit(allocator);
-        const diagnostics = try resources.main.module_env.getDiagnostics();
-        defer allocator.free(diagnostics);
+        const counts = try helpers.explicitRootDiagnosticCounts(allocator, resources.main.module_env, resources.main.checker);
         try std.testing.expectEqual(@as(usize, 0), resources.main.parse_ast.tokenize_diagnostics.items.len);
         try std.testing.expectEqual(@as(usize, 0), resources.main.parse_ast.parse_diagnostics.items.len);
-        try std.testing.expectEqual(@as(usize, 0), diagnostics.len);
-        try std.testing.expectEqual(@as(usize, 0), resources.main.checker.problems.problems.items.len);
+        try std.testing.expectEqual(@as(usize, 0), counts.canonicalization);
+        try std.testing.expectEqual(@as(usize, 0), counts.checking);
     }
     const Counts = struct { snapshots: u64, backing_slots: u64, lookup_probes: u64, commit_steps: u64 };
     var counts: [3]Counts = undefined;

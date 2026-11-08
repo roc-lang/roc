@@ -1535,10 +1535,8 @@ fn runTestProblem(
     };
     defer resources.deinit(allocator);
 
-    const can_diags = try resources.main.module_env.getDiagnostics();
-    defer allocator.free(can_diags);
-    const type_problems = resources.main.checker.problems.problems.items.len;
-    const has_problems = can_diags.len + type_problems > 0;
+    const counts = try helpers.explicitRootDiagnosticCounts(allocator, resources.main.module_env, resources.main.checker);
+    const has_problems = counts.canonicalization + counts.checking > 0;
 
     const timings = EvalTimings{
         .parse_ns = resources.main.parse_ns,
@@ -1590,12 +1588,8 @@ fn runCrashTest(
 
     const can_diags = try compiled.resources.module_env.getDiagnostics();
     defer allocator.free(can_diags);
-    const type_problems = compiled.resources.checker.problems.problems.items.len;
-    var can_errors: usize = 0;
-    for (can_diags) |diag| {
-        if (canDiagnosticIsError(diag)) can_errors += 1;
-    }
-    const has_problems = can_errors + type_problems > 0;
+    const counts = try helpers.explicitRootDiagnosticCounts(allocator, compiled.resources.module_env, compiled.resources.checker);
+    const has_problems = counts.canonicalization_errors + counts.checking > 0;
     if (require_problems and !has_problems) {
         return .{
             .status = .fail,
@@ -1737,108 +1731,6 @@ fn runCrashTest(
         .timings = final_timings,
         .has_backend_details = true,
         .backends = backends,
-    };
-}
-
-fn canDiagnosticIsError(diag: anytype) bool {
-    return switch (diag) {
-        .shadowing_warning,
-        .binding_name_does_not_match_mutability,
-        .unused_variable,
-        .used_underscore_variable,
-        .type_shadowed_warning,
-        .type_var_starting_with_dollar,
-        .underscore_in_type_declaration,
-        .module_header_deprecated,
-        .roc_version_mismatch,
-        .deprecated_number_suffix,
-        .trailing_try_suffix,
-        .redundant_return,
-        .unreachable_code,
-        => false,
-        .not_implemented,
-        .exposed_but_not_implemented,
-        .provided_value_is_required,
-        .redundant_exposed,
-        .invalid_num_literal,
-        .empty_tuple,
-        .ident_already_in_scope,
-        .duplicate_pattern_binder,
-        .ident_not_in_scope,
-        .read_uninitialized_var,
-        .self_referential_definition,
-        .circular_value_definition,
-        .local_reference_before_definition,
-        .mutually_recursive_local_definitions,
-        .erroneous_value_use,
-        .erroneous_value_expr,
-        .qualified_ident_does_not_exist,
-        .invalid_top_level_statement,
-        .invalid_associated_statement,
-        .expr_not_canonicalized,
-        .range_op_chained,
-        .expr_syntax_error,
-        .unreachable_string_pattern_capture,
-        .pattern_arg_invalid,
-        .pattern_not_canonicalized,
-        .if_expr_without_else,
-        .malformed_type_annotation,
-        .malformed_where_clause,
-        .where_clause_not_allowed_in_type_decl,
-        .where_alias_constraint_not_on_receiver,
-        .open_ext_not_allowed_in_type_decl,
-        .unnamed_field_not_allowed_in_structural_record,
-        .optional_field_cannot_have_default,
-        .unnamed_field_cannot_have_default,
-        .default_not_allowed_in_structural_record,
-        .default_not_allowed_on_local_type_decl,
-        .record_default_reference_cycle,
-        .var_across_function_boundary,
-        .var_in_binder_pattern,
-        .type_redeclared,
-        .file_import_not_found,
-        .file_import_io_error,
-        .file_import_absolute_path,
-        .file_import_not_utf8,
-        .module_not_found,
-        .value_not_exposed,
-        .type_not_exposed,
-        .public_type_not_defined,
-        .private_type_in_exposed_type,
-        .private_type_in_exposed_field,
-        .type_from_missing_module,
-        .module_not_imported,
-        .nested_type_not_found,
-        .internal_builtin_type,
-        .nested_value_not_found,
-        .record_builder_map2_not_found,
-        .too_many_exports,
-        .undeclared_type,
-        .undeclared_type_var,
-        .type_alias_but_needed_nominal,
-        .crash_expects_string,
-        .type_module_missing_matching_type,
-        .type_module_has_alias_not_nominal,
-        .default_app_missing_main,
-        .default_app_wrong_arity,
-        .cannot_import_default_app,
-        .type_name_case_mismatch,
-        .redundant_expose_main_type,
-        .invalid_main_type_rename_in_exposing,
-        .type_alias_redeclared,
-        .nominal_type_redeclared,
-        .builtin_type_shadowed_warning,
-        .type_parameter_conflict,
-        .duplicate_record_field,
-        .duplicate_tag,
-        .f64_pattern_literal,
-        .break_outside_loop,
-        .infinite_loop_never_exits,
-        .return_outside_fn,
-        .control_flow_in_expect,
-        .var_reassigned_in_expect,
-        .mutually_recursive_type_aliases,
-        => true,
     };
 }
 
