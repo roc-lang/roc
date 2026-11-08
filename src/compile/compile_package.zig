@@ -212,9 +212,6 @@ pub const ArtifactPublicationInputs = struct {
     io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
     evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
-    /// How this module's compile-time roots were established. Part of the
-    /// checked-artifact cache identity. See `Can.Validation`.
-    validation: Can.Validation = .checking,
 };
 
 fn importedArtifactsCoverImportedEnvs(
@@ -463,7 +460,6 @@ pub fn canonicalizeModuleWithSiblings(
     parse_ast: *AST,
     builtin_module_env: *const ModuleEnv,
     builtin_indices: can.CIR.BuiltinIndices,
-    validation: Can.Validation,
     is_entry_module: bool,
     source_pin_version: ?[]const u8,
 ) Allocator.Error!void {
@@ -473,11 +469,10 @@ pub fn canonicalizeModuleWithSiblings(
             .builtin_indices = builtin_indices,
         },
         .compiler_version = source_pin_version,
-        .validation = validation,
         .is_entry_module = is_entry_module,
     });
     try czer.canonicalizeFile();
-    try czer.runValidation();
+    try czer.validateForChecking();
     czer.deinit();
 }
 
@@ -497,7 +492,6 @@ pub fn typeCheckModule(
     platform_requirements: ?Check.PlatformRequirementInput,
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    validation: Can.Validation,
     source_pin_validation: [32]u8,
     io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options,
@@ -546,7 +540,7 @@ pub fn typeCheckModule(
         checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
     else
         null;
-    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
+    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, source_pin_validation, missing_public_types);
     const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
     defer if (loaded) |capsule| capsule.deinit();
 
@@ -561,7 +555,6 @@ pub fn typeCheckModule(
         module_builtin_ctx,
     );
     checker.platform_requirements = platform_requirements;
-    checker.validation = validation;
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
@@ -597,7 +590,6 @@ pub fn typeCheckModule(
             .io = io,
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
-            .validation = validation,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
@@ -676,7 +668,6 @@ pub fn publishFromPrebuiltModules(
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,
-            .validation = publication.validation,
         },
     );
 }

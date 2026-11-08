@@ -456,7 +456,7 @@ fn hashCheckingContextIdentity(identity: CheckingContextIdentity) [32]u8 {
 
 /// The digest of the checking inputs of a module that its imports' and its
 /// app pairing's implementations do not reach: its imports' names, explicit
-/// root requests, validation mode and platform requirement context.
+/// root requests and platform requirement context.
 pub fn checkingContextPolicyHash(identity: CheckingContextIdentity) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hashCheckingContextPolicy(&hasher, identity, false);
@@ -493,7 +493,6 @@ fn hashCheckingContextPolicy(hasher: *base.Sha256, identity: CheckingContextIden
     for (identity.explicit_roots) |root| {
         hashExplicitRootRequestInput(hasher, root);
     }
-    hashByteSlice(hasher, @tagName(identity.validation));
 }
 
 fn hashExplicitRootRequestInput(
@@ -564,19 +563,12 @@ pub const CheckingContextIdentity = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    /// How the module's compile-time roots were established. An app root
-    /// checked without its entrypoint contract reports no problem for a
-    /// platform requirement it does not supply, so two compilations of the
-    /// same source that disagree here produce different checked output and
-    /// must not share a cache entry.
-    validation: can.Can.Validation = .checking,
 
     pub const Serialized = extern struct {
         imports: SerializedSlice(ImportIdentity) = .{},
         explicit_roots: SerializedSlice(ExplicitRootRequestInput) = .{},
         platform_requirement_context: artifact_serialize.SerializedOptional(PlatformRequirementContextKey) = .{},
         platform_app_relation: artifact_serialize.SerializedOptional(PlatformAppRelationKey) = .{},
-        validation: artifact_serialize.SerializedScalar(can.Can.Validation, .checking) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckingContextIdentity, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -589,7 +581,6 @@ pub const CheckingContextIdentity = struct {
         platform_requirement_context: ?PlatformRequirementContextKey,
         platform_app_relation: ?PlatformAppRelationKey,
         explicit_roots: []const ExplicitRootRequestInput,
-        validation: can.Can.Validation,
     ) Allocator.Error!CheckingContextIdentity {
         const imported_names = module_env.imports.imports.items.items;
         const imports = try allocator.alloc(ImportIdentity, imported_names.len);
@@ -614,7 +605,6 @@ pub const CheckingContextIdentity = struct {
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = platform_app_relation,
             .explicit_roots = roots,
-            .validation = validation,
         };
     }
 
@@ -732,7 +722,6 @@ pub const PublishInputs = struct {
     /// Prepared metadata may serve frontend imports; evaluation and cache publication wait.
     evaluation_phase: enum { immediate, post_frontend } = .immediate,
     problem_store: ?*problem.Store = null,
-    validation: can.Can.Validation = .checking,
 };
 
 /// Which of a module's checker-selected compile-time roots its artifact
@@ -1141,7 +1130,6 @@ pub const RootRequestTable = struct {
         const_templates: *const ConstTemplateTable,
         template_root_evidence: []const ?artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
-        validation: can.Can.Validation,
     ) Allocator.Error!RootRequestTable {
         var requests = std.ArrayList(RootRequest).empty;
         errdefer requests.deinit(allocator);
@@ -1180,7 +1168,6 @@ pub const RootRequestTable = struct {
             top_level_procedure_bindings,
             platform_app_relation,
             platform_required_declarations,
-            validation,
         );
 
         for (platform_required_bindings.bindings, 0..) |binding, i| {
@@ -2289,7 +2276,6 @@ fn appendPublishedEntrypointRoots(
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_app_relation: ?PlatformAppRelationKey,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
-    validation: can.Can.Validation,
 ) Allocator.Error!void {
     const module_env = module.moduleEnvConst();
 
@@ -2321,16 +2307,14 @@ fn appendPublishedEntrypointRoots(
     }
 
     switch (module_env.module_kind) {
-        .default_app, .app => if (validation == .checking) {
-            try appendExposedAppProcedureRoots(
-                requests,
-                allocator,
-                module,
-                checked_types,
-                top_level_values,
-                top_level_procedure_bindings,
-            );
-        },
+        .default_app, .app => try appendExposedAppProcedureRoots(
+            requests,
+            allocator,
+            module,
+            checked_types,
+            top_level_values,
+            top_level_procedure_bindings,
+        ),
         .type_module,
         .package,
         .platform,
@@ -8914,7 +8898,7 @@ fn expectSingleNominalBackingPayload(allocator: Allocator, module_name: []const 
     };
     _ = try names.internModuleIdentity(&module_identity.stable_hash);
 
-    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{}, .checking);
+    var checking_context_identity = try CheckingContextIdentity.fromModule(allocator, module_env, &.{}, null, null, &.{});
     defer checking_context_identity.deinit(allocator);
     const artifact_key = CheckedModuleArtifactKey.computeFromSourceHash(
         hashModuleSourceInputs(module_env),
@@ -33336,7 +33320,6 @@ pub const CheckedModuleKeyInputs = struct {
     platform_requirement_context: ?PlatformRequirementContextKey = null,
     platform_app_relation: ?PlatformAppRelationKey = null,
     explicit_roots: []const ExplicitRootRequestInput = &.{},
-    validation: can.Can.Validation = .checking,
 };
 
 /// Compute the checked module cache identity for a module environment whose
@@ -33355,7 +33338,6 @@ pub fn checkedModuleKeyFromModuleEnv(
         inputs.platform_requirement_context,
         inputs.platform_app_relation,
         inputs.explicit_roots,
-        inputs.validation,
     );
     defer checking_context_identity.deinit(allocator);
 
@@ -33378,7 +33360,6 @@ pub fn inferenceKeyFromModuleEnv(
     scope_hash: [32]u8,
     platform_requirement_owner: ?u32,
     explicit_roots: []const ExplicitRootRequestInput,
-    validation: can.Can.Validation,
     source_pin_validation: [32]u8,
     missing_public_types: []const []const u8,
 ) [32]u8 {
@@ -33393,7 +33374,6 @@ pub fn inferenceKeyFromModuleEnv(
         hasher.update(&.{1});
         hashU32(&hasher, owner);
     } else hasher.update(&.{0});
-    hashByteSlice(&hasher, @tagName(validation));
     hasher.update(&source_pin_validation);
     hashU32(&hasher, @intCast(explicit_roots.len));
     for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
@@ -33740,7 +33720,6 @@ pub fn publishFromTypedModule(
         inputs.platform_requirement_context,
         if (inputs.platform_app_relation) |relation| relation.key else null,
         inputs.explicit_roots,
-        inputs.validation,
     );
     errdefer checking_context_identity.deinit(allocator);
 
@@ -34208,7 +34187,6 @@ pub fn publishFromTypedModule(
         &const_templates,
         static_dispatch_plans.template_root_evidence,
         inputs.explicit_roots,
-        inputs.validation,
     );
     errdefer root_requests.deinit(allocator);
 

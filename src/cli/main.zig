@@ -16588,7 +16588,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     // file needs no entrypoint: a headerless file that is neither a type module
     // nor a default app is tested as a plain module, and an app is tested
     // whether or not it supplies the definitions its platform requires.
-    build_env.setEntryValidation(.explicit_roots);
+    build_env.setEntryContract(.omitted);
 
     var extra_buf: [2][]const u8 = undefined;
     const extra_paths = appendExtraWatchPaths(.{ .test_cmd = args }, &extra_buf);

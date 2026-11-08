@@ -73,7 +73,7 @@ test "issue 12052: a Builtin.roc copy below an ancestor default-app main.roc is 
     try std.testing.expect(copy_errors > 0);
 }
 
-test "issue 12052: the owning main.roc of an explicit-roots entry build keeps ordinary validation" {
+test "issue 12052: the owning main.roc of an explicit-roots entry build shows its entrypoint-contract reports" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
 
@@ -81,8 +81,8 @@ test "issue 12052: the owning main.roc of an explicit-roots entry build keeps or
     defer tmp.cleanup();
 
     // A headerless main.roc with no `main!` is a default app missing its
-    // entrypoint under ordinary validation; only explicit-roots validation
-    // would accept it as a plain module.
+    // entrypoint; only a module whose entrypoint-contract reports are
+    // omitted would show nothing for it.
     try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data = "x = 1\n" });
     try tmp.dir.writeFile(io, .{ .sub_path = "Child.roc", .data = "module [y]\n\ny = 2\n\nexpect y == 2\n" });
 
@@ -96,9 +96,9 @@ test "issue 12052: the owning main.roc of an explicit-roots entry build keeps or
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
 
-    // `roc test --main=main.roc Child.roc` relaxes validation for the tested
-    // file only.
-    build_env.setEntryValidation(.explicit_roots);
+    // `roc test --main=main.roc Child.roc` omits the entrypoint-contract
+    // reports of the tested file only.
+    build_env.setEntryContract(.omitted);
 
     build_env.buildWithMain(child_path, main_path) catch {};
 

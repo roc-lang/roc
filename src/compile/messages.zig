@@ -118,9 +118,6 @@ pub const ParseTask = struct {
     module_role: ModuleEnv.ModuleRole,
     /// Dependency depth from root
     depth: u32,
-    /// Post-canonicalization validation this module receives. A
-    /// canonicalization input, so the parse task's cache probe keys on it.
-    validation: can.Can.Validation,
     /// True only for the module the compiler was pointed at. A
     /// canonicalization input, so the parse task's cache probe keys on it.
     /// See `Can.ModuleInitContext.is_entry_module`.
@@ -149,8 +146,6 @@ pub const CanonicalizeTask = struct {
     module_env: *ModuleEnv,
     /// Cached AST from parsing (ownership transferred)
     cached_ast: *AST,
-    /// Post-canonicalization validation this module receives.
-    validation: can.Can.Validation,
     /// True only for the module the compiler was pointed at. Gates the
     /// `default_app` classification, and with it the synthetic `echo!` hosted
     /// lambda, so a module inside a package cannot reach the host by defining
@@ -192,10 +187,6 @@ pub const TypeCheckTask = struct {
     platform_requirements: ?PlatformRequirementSurface = null,
     /// Additional checked roots requested by package-level metadata.
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
-    /// How this module's compile-time roots are established. Decides whether
-    /// an app root's entrypoint contract with its platform is enforced, and
-    /// participates in the checked-artifact cache identity.
-    validation: can.Can.Validation = .checking,
     /// The source-pin validation input canonicalization reported against.
     /// Inference admission keys it, as checked-entry admission does, because
     /// a reused inference result replaces the canonicalized environment.

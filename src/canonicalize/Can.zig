@@ -70,8 +70,6 @@ pub const ModuleInitContext = struct {
     /// which canonicalize for inspection—the snapshot tool above all—
     /// produce output that does not change with whichever compiler built them.
     compiler_version: ?[]const u8 = null,
-    /// How this module's compile-time roots are established. See `Validation`.
-    validation: Validation = .checking,
     /// Whether this file is the build's entry module: the file the compiler was
     /// pointed at, rather than a module discovered inside some package.
     ///
@@ -315,8 +313,6 @@ header_exposed_modules: std.AutoHashMapUnmanaged(Ident.Idx, Region) = .{},
 /// Version of the compiler that is running, or null to skip checking the
 /// header's `roc` version pin. See `ModuleInitContext.compiler_version`.
 compiler_version: ?[]const u8 = null,
-/// How this module's compile-time roots are established. See `Validation`.
-validation: Validation = .checking,
 /// Whether this file is the build's entry module. Defaults to false so an
 /// omission withholds the capability rather than granting it. See
 /// `ModuleInitContext.is_entry_module`.
@@ -526,7 +522,6 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .exposed_qualified_type_idents = .keyed,
     .header_exposed_modules = .keyed,
     .compiler_version = .input,
-    .validation = .input,
     .is_entry_module = .input,
     .pending_provides_entries = .settled,
     .used_patterns = .keyed,
@@ -1061,7 +1056,6 @@ fn initInternal(
         .active_decl_scopes = .init(gpa),
         .globally_resolvable_patterns = .init(gpa),
         .compiler_version = if (maybe_context) |context| context.compiler_version else null,
-        .validation = if (maybe_context) |context| context.validation else .checking,
         // `initBuiltin` passes no context. A builtin module is never a default
         // app, and the fail-closed answer is the correct one for it anyway.
         .is_entry_module = if (maybe_context) |context| context.is_entry_module else false,
@@ -5176,65 +5170,6 @@ fn defPatternIdent(store: *const CIR.NodeStore, pattern_idx: CIR.Pattern.Idx) ?I
     return null;
 }
 
-/// How a module's compile-time roots are established, and with them whether
-/// the module's entrypoint contract with a platform is part of the
-/// compilation. Canonicalization applies the validation this selects, and
-/// checking enforces (or does not enforce) the entrypoint contract to match,
-/// so the two can never disagree about what the module is being compiled for.
-pub const Validation = enum(u8) {
-    /// Roc's user-facing app/type-module validation: a headerless file must be
-    /// a type module whose nominal type matches the file name, or, when it is
-    /// the entry module, a default app with a valid `main!`; and an app must
-    /// supply every definition its platform requires.
-    checking,
-    /// Validation for a module whose compile-time roots are requested
-    /// explicitly rather than derived from an app entrypoint or a type module.
-    /// A headerless file that is neither of those becomes a plain module, and
-    /// an app's entrypoints are not required to exist: the platform's
-    /// requirement types still constrain the definitions the app does supply,
-    /// but a requirement with no matching definition is simply unbound.
-    explicit_roots,
-};
-
-/// Run the post-canonicalization validation this module's `validation` mode
-/// selects.
-pub fn runValidation(self: *Self) std.mem.Allocator.Error!void {
-    switch (self.validation) {
-        .checking => try self.validateForChecking(),
-        .explicit_roots => try self.validateForExplicitRoots(),
-    }
-}
-
-/// Finalize a module that will be published through explicit checked-artifact
-/// root requests instead of Roc's user-facing `roc check` app/type-module
-/// validation.
-pub fn validateForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    if (self.parse_ir.hasErrors()) {
-        try self.env.publishScratchDiagnostics();
-        return;
-    }
-
-    if (self.env.module_kind == .type_module) {
-        const main_type_ident = &self.env.module_kind.type_module;
-        if (self.findMatchingTypeIdent()) |result| {
-            if (result.kind == .nominal or result.kind == .@"opaque") {
-                main_type_ident.* = result.ident;
-            } else {
-                self.env.module_kind = .module;
-                try self.exposeTopLevelTypesForExplicitRoots();
-            }
-        } else {
-            self.env.module_kind = .module;
-            try self.exposeTopLevelTypesForExplicitRoots();
-        }
-    }
-
-    try self.env.publishScratchDiagnostics();
-}
-
 /// Run post-canonicalization validation that the type checker depends on—
 /// module-kind sanity for type modules / default apps, header presence on
 /// non-default-app files, and any other deferred diagnostics.
@@ -5281,8 +5216,10 @@ pub fn validateForChecking(self: *Self) std.mem.Allocator.Error!void {
                 main_type_ident.* = ident;
             } else {
                 // Neither a type module nor a default app, so there is no main
-                // type; the file is compiled on as a plain module.
+                // type; the file is compiled on as a plain module that exposes
+                // its top-level types.
                 self.env.module_kind = .module;
+                try self.exposeTopLevelTypes();
             }
         },
         .default_app, .app, .package, .platform, .hosted, .module, .malformed => {
@@ -6780,17 +6717,6 @@ fn populateExports(self: *Self) std.mem.Allocator.Error!void {
 }
 
 fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
-    // An app header's exposed list is the app's entrypoint contract with its
-    // platform, not an ordinary public API, so a compilation whose roots are
-    // requested explicitly does not require those entrypoints to exist.
-    switch (self.validation) {
-        .checking => {},
-        .explicit_roots => switch (self.env.module_kind) {
-            .app, .default_app => return,
-            .type_module, .package, .platform, .hosted, .module, .malformed => {},
-        },
-    }
-
     const unimplemented_count = self.exposed_ident_texts.count() + self.exposed_type_idents.count();
     if (unimplemented_count == 0) return;
 
@@ -21430,7 +21356,7 @@ fn hasAnyTypeDeclarations(self: *Self) bool {
     return false;
 }
 
-fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void {
+fn exposeTopLevelTypes(self: *Self) std.mem.Allocator.Error!void {
     const decl_index = &self.parse_ir.decl_index;
     const module_scope_idx = self.parse_ir.store.getFile().scope;
     std.debug.assert(@backingInt(module_scope_idx) < decl_index.scopeCount());
@@ -21441,7 +21367,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
         const type_ident = decl.name_ident orelse continue;
         const stmt_id: AST.Statement.Idx = @fromBackingInt(@intCast(decl.statement));
         const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse
-            base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@backingInt(stmt_id)});
+            base.invariant("plain-module exposure invariant violated: missing canonical statement for AST type decl {d}", .{@backingInt(stmt_id)});
 
         try self.env.setExposedTypeNodeIndexById(type_ident, @backingInt(stmt_idx));
     }

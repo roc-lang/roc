@@ -1051,7 +1051,7 @@ fn hasBlockingReports(reports: std.ArrayList(reporting.Report)) bool {
 }
 
 fn compileCheckedReplModuleSource(source: []const u8) PlaygroundCompileError!CompilerStageData {
-    var data = try compileSourceWithValidation(source, "main", .explicit_roots);
+    var data = try compileSourceWithRoots(source, "main", .explicit);
     errdefer data.deinit();
 
     if (hasBlockingReports(data.tokenize_reports) or
@@ -1075,7 +1075,7 @@ fn replaceCompilerData(new_data: CompilerStageData) void {
 }
 
 fn replaceCompilerDataFromReplSource(source: []const u8) PlaygroundCompileError!void {
-    replaceCompilerData(try compileSourceWithValidation(source, "main", .explicit_roots));
+    replaceCompilerData(try compileSourceWithRoots(source, "main", .explicit));
 }
 
 fn writeReplStaticError(response_buffer: []u8, message: []const u8, stage: ReplErrorStage) ResponseWriteError!void {
@@ -1203,13 +1203,18 @@ fn runReplStep(session: *ReplSession, input: []const u8, response_buffer: []u8) 
     }
 }
 
+/// How a compiled source's roots are established: from its entrypoint
+/// contract (a type module or a default app), or requested explicitly (the
+/// REPL), which does not show the entrypoint-contract reports.
+const SourceRoots = enum { entrypoint, explicit };
+
 /// Compile source through all compiler stages.
 /// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
 fn compileSource(source: []const u8, module_name: []const u8) PlaygroundCompileError!CompilerStageData {
-    return compileSourceWithValidation(source, module_name, .checking);
+    return compileSourceWithRoots(source, module_name, .entrypoint);
 }
 
-fn compileSourceWithValidation(source: []const u8, module_name: []const u8, validation_mode: Can.Validation) PlaygroundCompileError!CompilerStageData {
+fn compileSourceWithRoots(source: []const u8, module_name: []const u8, roots: SourceRoots) PlaygroundCompileError!CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -1376,7 +1381,6 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
             .builtin_indices = builtin_indices,
         },
         .is_entry_module = true,
-        .validation = validation_mode,
     });
     defer czer.deinit();
 
@@ -1387,7 +1391,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         return err;
     };
 
-    czer.runValidation() catch |err| {
+    czer.validateForChecking() catch |err| {
         logDebug("compileSource: validation failed: {}\n", .{err});
         return err;
     };
@@ -1397,6 +1401,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     result.parse_ast = parse_ast;
 
     try check.module_reports.appendCanonicalize(allocator, &result.can_reports, env, 0, "main.roc");
+    if (roots == .explicit) check.module_reports.omitEntryContract(&result.can_reports);
 
     // Stage 3: Type checking (always run if we have CIR, even with canonicalization errors)
     // The type checker works with malformed canonical nodes to provide partial type information
@@ -1440,6 +1445,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
         logDebug("compileSource: Type checking complete\n", .{});
 
         try check.module_reports.appendUnfinalizedTypes(allocator, &result.type_reports, type_can_ir, solver, "main.roc", imported_envs);
+        if (roots == .explicit) check.module_reports.omitEntryContract(&result.type_reports);
     }
 
     logDebug("compileSource: Compilation complete\n", .{});

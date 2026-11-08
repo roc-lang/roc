@@ -241,6 +241,14 @@ pub const Report = struct {
     /// a definition the file lacks). Renderers name it in place of a position.
     /// Owned by `owned_strings`.
     file: ?[]const u8,
+    /// Whether the report is about a module's entrypoint contract: a
+    /// headerless file that is neither a type module nor a default app, an
+    /// app that lacks a definition its header exposes or its platform
+    /// requires. Every compilation records these problems; a compilation
+    /// that requests a module's roots explicitly (`roc test`, a separate
+    /// entry module, an embedder's explicit roots) does not show them for
+    /// that module.
+    entry_contract: bool = false,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, title: []const u8, headline: []const u8, severity: Severity) Allocator.Error!Report {

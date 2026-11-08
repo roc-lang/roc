@@ -15039,17 +15039,13 @@ fn customPipelineParitySharedCache(io: std.Io, allocator: Allocator, env: *const
         name: []const u8,
         args: []const []const u8,
         /// Entries this step is expected to add the first time it runs. Every
-        /// program-producing pipeline reuses exactly what `check` already
-        /// wrote, so they add nothing. `roc test` links no program: it checks
-        /// the root under explicitly requested roots rather than its app
-        /// entrypoint contract, and publishes no executable artifacts, so its
-        /// app root has a distinct checking context. Its parametric platform
-        /// root is shared by every pipeline, so only the app entry is added.
+        /// command checks every module the same way, so each reuses exactly
+        /// what `check` already wrote and adds nothing.
         added_entries: usize,
     }{
         .{ .name = "run (second)", .args = &.{}, .added_entries = 0 },
         .{ .name = "build", .args = &.{ "build", build_out_arg }, .added_entries = 0 },
-        .{ .name = "test", .args = &.{"test"}, .added_entries = 1 },
+        .{ .name = "test", .args = &.{"test"}, .added_entries = 0 },
         .{ .name = "test (second)", .args = &.{"test"}, .added_entries = 0 },
         .{ .name = "check (second)", .args = &.{"check"}, .added_entries = 0 },
         .{ .name = "run (third)", .args = &.{}, .added_entries = 0 },

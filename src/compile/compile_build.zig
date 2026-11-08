@@ -71,6 +71,8 @@ const module_discovery = @import("module_discovery.zig");
 const boxy_interface = @import("boxy_interface.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
+/// Whether a module's entrypoint-contract reports are shown.
+pub const EntryContract = coordinator_mod.EntryContract;
 const DiscoveredParse = @import("messages.zig").DiscoveredParse;
 const roc_target = @import("roc_target");
 const targets_config_mod = @import("targets_config.zig");
@@ -286,15 +288,15 @@ pub const BuildEnv = struct {
     /// module whose source was rejected) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
-    /// Post-canonicalization validation of the module this build was pointed
-    /// at when that module is the package root. `roc test` sets
-    /// `.explicit_roots` because it runs the file's top-level `expect`s, which
-    /// are compile-time roots in their own right: a headerless file that is
-    /// neither a type module nor a default app is a plain module there rather
-    /// than a file missing its `main!`. A separate entry module below an
-    /// owning `main.roc` always takes `.explicit_roots`, and that `main.roc`
-    /// takes ordinary `.checking` validation.
-    entry_validation: Can.Validation = .checking,
+    /// Whether the entrypoint-contract reports (`Report.entry_contract`) of
+    /// the module this build was pointed at are shown when that module is the
+    /// package root. `roc test` omits them: it runs the file's top-level
+    /// `expect`s, so a headerless file that is neither a type module nor a
+    /// default app, or an app missing what its header exposes or its platform
+    /// requires, is tested as it is. A separate entry module below an owning
+    /// `main.roc` always omits them, and that `main.roc` shows them. Checking
+    /// is the same either way.
+    entry_contract: EntryContract = .shown,
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
@@ -584,8 +586,8 @@ pub const BuildEnv = struct {
         self.post_check_publication_mode = mode;
     }
 
-    pub fn setEntryValidation(self: *BuildEnv, validation: Can.Validation) void {
-        self.entry_validation = validation;
+    pub fn setEntryContract(self: *BuildEnv, entry_contract: EntryContract) void {
+        self.entry_contract = entry_contract;
     }
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
@@ -1235,12 +1237,12 @@ pub const BuildEnv = struct {
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
         // When an owning `main.roc` supplied the packages, the file the build
         // was pointed at is a separate entry module and owns the entry
-        // validation; the `main.roc` root is validated as an ordinary module.
+        // contract; the `main.roc` root shows its reports as an ordinary module.
         const has_separate_entry = if (self.entry_module_abs) |entry_file|
             !std.mem.eql(u8, entry_file, pkg_root_file)
         else
             false;
-        coord_pkg.modules.items[root_id].validation = if (has_separate_entry) .checking else self.entry_validation;
+        coord_pkg.modules.items[root_id].entry_contract = if (has_separate_entry) .shown else self.entry_contract;
         if (self.root_source_dir_override) |source_dir| {
             coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }
@@ -1269,7 +1271,7 @@ pub const BuildEnv = struct {
                 const entry_module_name = self.entry_module_logical_path orelse return error.Internal;
                 const entry_id = try coord_pkg.ensureModule(self.gpa, entry_module_name, entry_file);
                 const entry_module = &coord_pkg.modules.items[entry_id];
-                entry_module.validation = .explicit_roots;
+                entry_module.entry_contract = .omitted;
                 // The build's root is the `main.roc` that supplied the
                 // packages, so the coordinator would otherwise take this
                 // file—the one the compiler was actually pointed at—for a
@@ -2062,8 +2064,12 @@ pub const BuildEnv = struct {
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
-                for (mod.reports.items) |report| {
-                    try self.sink.emitReport(pkg.name, mod.name, report);
+                for (mod.reports.items) |*report| {
+                    if (mod.entry_contract.shows(report)) {
+                        try self.sink.emitReport(pkg.name, mod.name, report.*);
+                    } else {
+                        report.deinit();
+                    }
                 }
                 mod.reports.clearRetainingCapacity();
             }

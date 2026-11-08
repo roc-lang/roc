@@ -35,8 +35,6 @@ pub const CanonicalizedCacheKeyInput = struct {
     /// canonicalization reads directly (builtin low-level declarations,
     /// module-alias publication, builtin type wiring).
     module_role: can.ModuleEnv.ModuleRole,
-    /// The post-canonicalization validation this module receives.
-    validation: can.Can.Validation,
     /// The compiler that produced the entry.
     compiler_version: []const u8,
     /// The cache entry format's version hash: the serialized `ModuleEnv`
@@ -54,7 +52,6 @@ pub fn canonicalizedModuleCacheKey(input: CanonicalizedCacheKeyInput) Canonicali
     hashLengthPrefixed(&hasher, input.module_basename);
     hashLengthPrefixed(&hasher, input.source);
     hasher.update(&[_]u8{@intFromBool(input.is_entry_module)});
-    hasher.update(&[_]u8{@backingInt(input.validation)});
     hasher.update(&[_]u8{@backingInt(input.module_role)});
 
     var key = CanonicalizedModuleCacheKey{};
@@ -99,7 +96,6 @@ fn canonicalizedTestInput() CanonicalizedCacheKeyInput {
         .module_basename = "Main.roc",
         .is_entry_module = true,
         .module_role = .user,
-        .validation = .checking,
         .compiler_version = "roc-test-version",
         .entry_version_hash = hashWithByte(7),
     };
@@ -126,10 +122,6 @@ test "canonicalized module cache key is a function of exactly its declared input
     var changed_role = canonicalizedTestInput();
     changed_role.module_role = .builtin;
     try std.testing.expect(!canonicalizedKeyEql(baseline, canonicalizedModuleCacheKey(changed_role)));
-
-    var changed_validation = canonicalizedTestInput();
-    changed_validation.validation = .explicit_roots;
-    try std.testing.expect(!canonicalizedKeyEql(baseline, canonicalizedModuleCacheKey(changed_validation)));
 
     var changed_compiler = canonicalizedTestInput();
     changed_compiler.compiler_version = "roc-other-version";
@@ -165,5 +157,5 @@ test "canonicalized module cache key input names nothing outside the module" {
         try std.testing.expect(!std.mem.eql(u8, field_name, "root_module"));
     }
 
-    try std.testing.expectEqual(@as(usize, 7), field_names.len);
+    try std.testing.expectEqual(@as(usize, 6), field_names.len);
 }

@@ -2053,6 +2053,28 @@ fn addOwnedSourceRegionTo(
 
 /// Convert a canonicalization diagnostic to a Report for rendering.
 pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!Report {
+    var report = try self.diagnosticToReportContent(diagnostic, allocator, filename);
+    report.entry_contract = self.diagnosticIsEntryContract(diagnostic);
+    return report;
+}
+
+/// Whether `diagnostic` is about the module's entrypoint contract: the
+/// headerless-file shape check, a default app's `main!`, or an app header
+/// exposing a definition the app lacks (see `Report.entry_contract`).
+fn diagnosticIsEntryContract(self: *const Self, diagnostic: CIR.Diagnostic) bool {
+    const tag = std.meta.activeTag(diagnostic);
+    if (tag == .type_module_has_alias_not_nominal or
+        tag == .type_module_missing_matching_type or
+        tag == .default_app_missing_main or
+        tag == .default_app_wrong_arity) return true;
+    if (tag != .exposed_but_not_implemented) return false;
+    return switch (self.module_kind) {
+        .app, .default_app => true,
+        .type_module, .package, .platform, .hosted, .module, .malformed => false,
+    };
+}
+
+fn diagnosticToReportContent(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!Report {
     return switch (diagnostic) {
         .invalid_num_literal => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
