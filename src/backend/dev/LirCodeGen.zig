@@ -43,6 +43,7 @@ const CallingConventionMod = @import("CallingConvention.zig");
 const roc_target_mod = @import("roc_target");
 const RocTarget = roc_target_mod.RocTarget;
 const isaOf = @import("isa.zig").isaOf;
+const Widths = @import("widths.zig").Widths;
 const host_isa = @import("isa.zig").host;
 const CpuLevel = roc_target_mod.CpuLevel;
 
@@ -336,6 +337,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
     // The instruction set; `isaOf` rejects every other architecture at
     // compile time.
     const isa = isaOf(target);
+    // The register widths, named by kind of value (`widths.zig`).
+    const widths = Widths(target);
     // Every dev-backend target is little-endian (`isaOf` admits no big-endian
     // architecture), so `num_from_le_bytes_unchecked` reads its bytes with a
     // plain load.
@@ -361,8 +364,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
     const str_flag_byte_shift: u8 = @intCast((str_flag_byte_offset - str_len_offset) * 8);
     // The small-string flag as a bit of the length word. It is the word's sign
     // bit, so a signed test of the length word also detects small strings.
-    const str_small_bit: i64 = @bitCast(RocStr.targetSmallStrBit(target_ptr_size));
-    comptime std.debug.assert(str_small_bit == std.math.minInt(i64));
+    const str_small_bit: @Int(.signed, widths.word_bits) =
+        @bitCast(@as(@Int(.unsigned, widths.word_bits), @intCast(RocStr.targetSmallStrBit(target_ptr_size))));
+    comptime std.debug.assert(str_small_bit == std.math.minInt(@TypeOf(str_small_bit)));
 
     const roc_list_size: u32 = RocList.word_count * target_ptr_size;
     const list_bytes_offset: i32 = @intCast(RocList.targetFieldOffset(.bytes, target_ptr_size));
@@ -1589,7 +1593,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     x86_64.GeneralReg.RDI,
             };
 
-            try self.emitMovRegReg(result_ptr_save_reg, arg0_reg);
+            try self.emitMovRegReg(widths.word_width, result_ptr_save_reg, arg0_reg);
 
             // NOTE: Do NOT free arg0_reg/arg1_reg here. Although their values have
             // been saved to callee-saved registers, freeing them makes RDI/RSI (or X0/X1)
@@ -1839,7 +1843,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return switch (loc) {
                 .general_reg => |reg| {
                     const slot = self.codegen.allocStackSlot(8);
-                    try self.codegen.emitStoreStack(.w64, slot, reg);
+                    try self.codegen.emitStoreStack(widths.word_width, slot, reg);
                     self.codegen.freeGeneral(reg);
                     return .{ .stack = .{ .offset = slot } };
                 },
@@ -1943,7 +1947,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Load the RocList length field
                     const result_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, result_reg, frame_ptr, base_offset + list_len_offset);
+                    try self.emitLoad(widths.word_width, result_reg, frame_ptr, base_offset + list_len_offset);
                     return .{ .general_reg = result_reg };
                 },
                 .list_capacity => {
@@ -1969,13 +1973,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer self.codegen.freeGeneral(tag_reg);
                     const result_reg = try self.allocTempGeneral();
 
-                    try self.emitLoad(.w64, len_reg, frame_ptr, base_offset + list_len_offset);
-                    try self.emitLoad(.w64, cap_reg, frame_ptr, base_offset + list_capacity_offset);
-                    try self.emitShiftImm(.shr, .w64, result_reg, cap_reg, RocList.capacity_shift);
+                    try self.emitLoad(widths.word_width, len_reg, frame_ptr, base_offset + list_len_offset);
+                    try self.emitLoad(widths.word_width, cap_reg, frame_ptr, base_offset + list_capacity_offset);
+                    try self.emitShiftImm(.shr, widths.word_width, result_reg, cap_reg, RocList.capacity_shift);
 
-                    try self.codegen.emitLoadImm(tag_reg, seamless_slice_tag);
-                    try self.codegen.emitAnd(.w64, tag_reg, tag_reg, cap_reg);
-                    try self.emitCmpImm(tag_reg, 0);
+                    try self.emitLoadImm(widths.word_width, tag_reg, seamless_slice_tag);
+                    try self.codegen.emitAnd(widths.word_width, tag_reg, tag_reg, cap_reg);
+                    try self.emitCmpImm(widths.word_width, tag_reg, 0);
                     switch (isa) {
                         .aarch64 => {
                             try self.codegen.emit.csel(.w64, result_reg, len_reg, result_reg, .ne);
@@ -2102,10 +2106,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (val != 0) base.invariant("LIR/codegen invariant violated: list_append_unsafe received nonzero list immediate {d}", .{val});
                             const slot = self.codegen.allocStackSlot(roc_list_size);
                             const temp = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(temp, 0);
-                            try self.emitStore(.w64, frame_ptr, slot + list_bytes_offset, temp);
-                            try self.emitStore(.w64, frame_ptr, slot + list_len_offset, temp);
-                            try self.emitStore(.w64, frame_ptr, slot + list_capacity_offset, temp);
+                            try self.emitLoadImm(widths.word_width, temp, 0);
+                            try self.emitStore(widths.word_width, frame_ptr, slot + list_bytes_offset, temp);
+                            try self.emitStore(widths.word_width, frame_ptr, slot + list_len_offset, temp);
+                            try self.emitStore(widths.word_width, frame_ptr, slot + list_capacity_offset, temp);
                             self.codegen.freeGeneral(temp);
                             break :blk slot;
                         },
@@ -2158,9 +2162,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const addr_reg = try self.allocTempGeneral();
                     switch (index_loc) {
-                        .immediate_i64 => |val| try self.codegen.emitLoadImm(addr_reg, val),
+                        .immediate_i64 => |val| try self.emitLoadImm(.w64, addr_reg, val),
                         .general_reg => |reg| {
-                            try self.emitMovRegReg(addr_reg, reg);
+                            try self.emitMovRegReg(.w64, addr_reg, reg);
                             self.codegen.freeGeneral(reg);
                         },
                         .stack => |s| try self.codegen.emitLoadStack(.w64, addr_reg, s.offset),
@@ -2178,8 +2182,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Byte index, so the list pointer is added without scaling.
                     const ptr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
-                    try self.codegen.emitAdd(.w64, addr_reg, addr_reg, ptr_reg);
+                    try self.codegen.emitLoadStack(widths.word_width, ptr_reg, list_base);
+                    try self.codegen.emitAdd(widths.word_width, addr_reg, addr_reg, ptr_reg);
                     self.codegen.freeGeneral(ptr_reg);
 
                     const result_slot = self.codegen.allocStackSlot(@intCast(width));
@@ -2271,10 +2275,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const index_reg = try self.allocTempGeneral();
                     switch (index_loc) {
                         .immediate_i64 => |val| {
-                            try self.codegen.emitLoadImm(index_reg, val);
+                            try self.emitLoadImm(.w64, index_reg, val);
                         },
                         .general_reg => |reg| {
-                            try self.emitMovRegReg(index_reg, reg);
+                            try self.emitMovRegReg(.w64, index_reg, reg);
                             self.codegen.freeGeneral(reg);
                         },
                         .stack => |s| {
@@ -2295,22 +2299,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     // Load list pointer (offset 0 in list struct)
                     const ptr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+                    try self.codegen.emitLoadStack(widths.word_width, ptr_reg, list_base);
 
                     // Calculate element address: ptr + index * elem_size
                     const addr_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+                    try self.codegen.emit.movRegReg(widths.word_width, addr_reg, index_reg);
                     self.codegen.freeGeneral(index_reg);
 
                     if (elem_size != 1) {
                         const size_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(size_reg, elem_size);
-                        try self.codegen.emitMul(.w64, addr_reg, addr_reg, size_reg);
+                        try self.emitLoadImm(widths.word_width, size_reg, elem_size);
+                        try self.codegen.emitMul(widths.word_width, addr_reg, addr_reg, size_reg);
                         self.codegen.freeGeneral(size_reg);
                     }
 
                     // Add base pointer
-                    try self.codegen.emitAdd(.w64, addr_reg, addr_reg, ptr_reg);
+                    try self.codegen.emitAdd(widths.word_width, addr_reg, addr_reg, ptr_reg);
                     self.codegen.freeGeneral(ptr_reg);
 
                     return self.loadListElemToStack(addr_reg, 0, elem_size, elem_layout_idx, elem_layout_val);
@@ -2354,7 +2358,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const bound_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const bound_reg = try self.ensureInGeneralReg(bound_loc);
                     const size_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(size_reg, elem_size);
+                    try self.emitLoadImm(.w64, size_reg, elem_size);
                     const result_reg = try self.allocTempGeneral();
                     try self.codegen.emitCmp(.w64, result_reg, size_reg, bound_reg, condCode(.below_or_equal));
                     self.freeGenerals(.{ size_reg, bound_reg });
@@ -2369,8 +2373,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const tmp = try self.allocTempGeneral();
                     var off: i32 = 0;
                     while (off < roc_list_size) : (off += target_ptr_size) {
-                        try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
-                        try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                        try self.emitLoad(widths.word_width, tmp, frame_ptr, list_off + off);
+                        try self.emitStore(widths.word_width, frame_ptr, result_offset + off, tmp);
                     }
                     self.codegen.freeGeneral(tmp);
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -2397,18 +2401,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const index_reg = try self.ensureInGeneralReg(index_loc);
                     const ptr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_base);
+                    try self.codegen.emitLoadStack(widths.word_width, ptr_reg, list_base);
 
                     const addr_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+                    try self.codegen.emit.movRegReg(widths.word_width, addr_reg, index_reg);
                     self.codegen.freeGeneral(index_reg);
                     if (elem_size != 1) {
                         const size_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(size_reg, elem_size);
-                        try self.codegen.emitMul(.w64, addr_reg, addr_reg, size_reg);
+                        try self.emitLoadImm(widths.word_width, size_reg, elem_size);
+                        try self.codegen.emitMul(widths.word_width, addr_reg, addr_reg, size_reg);
                         self.codegen.freeGeneral(size_reg);
                     }
-                    try self.codegen.emitAdd(.w64, addr_reg, addr_reg, ptr_reg);
+                    try self.codegen.emitAdd(widths.word_width, addr_reg, addr_reg, ptr_reg);
                     self.codegen.freeGeneral(ptr_reg);
 
                     return self.loadListElemToStack(addr_reg, 0, elem_size, ll.ret_layout, ret_layout_val);
@@ -2428,8 +2432,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const zst_tmp = try self.allocTempGeneral();
                         var zst_off: i32 = 0;
                         while (zst_off < roc_list_size) : (zst_off += target_ptr_size) {
-                            try self.emitLoad(.w64, zst_tmp, frame_ptr, list_off + zst_off);
-                            try self.emitStore(.w64, frame_ptr, zst_result_offset + zst_off, zst_tmp);
+                            try self.emitLoad(widths.word_width, zst_tmp, frame_ptr, list_off + zst_off);
+                            try self.emitStore(widths.word_width, frame_ptr, zst_result_offset + zst_off, zst_tmp);
                         }
                         self.codegen.freeGeneral(zst_tmp);
                         return .{ .list_stack = .{ .struct_offset = zst_result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -2438,17 +2442,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const index_reg = try self.ensureInGeneralReg(index_loc);
                     const addr_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, addr_reg, index_reg);
+                    try self.codegen.emit.movRegReg(widths.word_width, addr_reg, index_reg);
                     self.codegen.freeGeneral(index_reg);
                     if (elem_size != 1) {
                         const size_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(size_reg, elem_size);
-                        try self.codegen.emitMul(.w64, addr_reg, addr_reg, size_reg);
+                        try self.emitLoadImm(widths.word_width, size_reg, elem_size);
+                        try self.codegen.emitMul(widths.word_width, addr_reg, addr_reg, size_reg);
                         self.codegen.freeGeneral(size_reg);
                     }
                     const ptr_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, ptr_reg, list_off);
-                    try self.codegen.emitAdd(.w64, addr_reg, addr_reg, ptr_reg);
+                    try self.codegen.emitLoadStack(widths.word_width, ptr_reg, list_off);
+                    try self.codegen.emitAdd(widths.word_width, addr_reg, addr_reg, ptr_reg);
                     self.codegen.freeGeneral(ptr_reg);
 
                     const temp_reg = try self.allocTempGeneral();
@@ -2465,8 +2469,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const tmp = try self.allocTempGeneral();
                     var off: i32 = 0;
                     while (off < roc_list_size) : (off += target_ptr_size) {
-                        try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
-                        try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                        try self.emitLoad(widths.word_width, tmp, frame_ptr, list_off + off);
+                        try self.emitStore(widths.word_width, frame_ptr, result_offset + off, tmp);
                     }
                     self.codegen.freeGeneral(tmp);
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
@@ -3112,7 +3116,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitShiftImm(.sar, .w64, src_reg, src_reg, 63);
                         try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_reg);
                     } else {
-                        try self.codegen.emitLoadImm(src_reg, 0);
+                        try self.emitLoadImm(.w64, src_reg, 0);
                         try self.codegen.emitStoreStack(.w64, stack_offset + 8, src_reg);
                     }
                     self.codegen.freeGeneral(src_reg);
@@ -3442,11 +3446,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const layout_slot = self.codegen.allocStackSlot(@sizeOf(if (split_op == .str_split_first) dev_wrappers.StrSplitFirstLayout else dev_wrappers.StrSplitLastLayout));
                     const layout_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+                    try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
                     try self.emitStore(.w32, frame_ptr, layout_slot, layout_reg);
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+                    try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
                     try self.emitStore(.w32, frame_ptr, layout_slot + 4, layout_reg);
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
+                    try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
                     try self.emitStore(.w32, frame_ptr, layout_slot + 8, layout_reg);
                     self.codegen.freeGeneral(layout_reg);
 
@@ -3488,9 +3492,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const layout_slot = self.codegen.allocStackSlot(@sizeOf(dev_wrappers.StrDropPrefixCaselessAsciiLayout));
                     const layout_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+                    try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
                     try self.emitStore(.w32, frame_ptr, layout_slot, layout_reg);
-                    try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+                    try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
                     try self.emitStore(.w32, frame_ptr, layout_slot + 4, layout_reg);
                     self.codegen.freeGeneral(layout_reg);
 
@@ -3561,9 +3565,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const tmp = try self.allocTempGeneral();
                     for (offsets.items, 0..) |offset, i| {
                         inline for (0..3) |word| {
-                            const word_offset: i32 = @intCast(word * 8);
-                            try self.emitLoad(.w64, tmp, frame_ptr, offset + word_offset);
-                            try self.emitStore(.w64, frame_ptr, region + @as(i32, @intCast(i * roc_str_size)) + word_offset, tmp);
+                            const word_offset: i32 = @intCast(word * target_ptr_size);
+                            try self.emitLoad(widths.word_width, tmp, frame_ptr, offset + word_offset);
+                            try self.emitStore(widths.word_width, frame_ptr, region + @as(i32, @intCast(i * roc_str_size)) + word_offset, tmp);
                         }
                     }
                     self.codegen.freeGeneral(tmp);
@@ -3707,7 +3711,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .{ "err_index_offset", ls.getStructFieldOffsetByOriginalIndex(rec_idx, 0) },
                         .{ "err_problem_offset", ls.getStructFieldOffsetByOriginalIndex(rec_idx, 1) },
                     }) |field| {
-                        try self.codegen.emitLoadImm(layout_reg, @bitCast(@as(i64, @intCast(field[1]))));
+                        try self.emitLoadImm(widths.word_width, layout_reg, @bitCast(@as(i64, @intCast(field[1]))));
                         try self.emitStore(.w32, frame_ptr, layout_slot + @offsetOf(ResultLayout, field[0]), layout_reg);
                     }
                     self.codegen.freeGeneral(layout_reg);
@@ -3769,8 +3773,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         defer self.codegen.freeGeneral(tmp);
                         var off: i32 = 0;
                         while (off < roc_list_size) : (off += target_ptr_size) {
-                            try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
-                            try self.emitStore(.w64, frame_ptr, result_offset + list_field_offset + off, tmp);
+                            try self.emitLoad(widths.word_width, tmp, frame_ptr, list_off + off);
+                            try self.emitStore(widths.word_width, frame_ptr, result_offset + list_field_offset + off, tmp);
                         }
                         return .{ .stack = .{ .offset = result_offset } };
                     }
@@ -3801,8 +3805,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         defer self.codegen.freeGeneral(tmp);
                         var off: i32 = 0;
                         while (off < roc_list_size) : (off += target_ptr_size) {
-                            try self.emitLoad(.w64, tmp, frame_ptr, list_off + off);
-                            try self.emitStore(.w64, frame_ptr, result_offset + off, tmp);
+                            try self.emitLoad(widths.word_width, tmp, frame_ptr, list_off + off);
+                            try self.emitStore(widths.word_width, frame_ptr, result_offset + off, tmp);
                         }
                         return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                     }
@@ -4272,8 +4276,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
-                    try self.emitCmpImm(src_reg, 0);
-                    try self.emitSetCond(result_reg, condCode(.equal));
+                    try self.emitCmpImm(widths.word_width, src_reg, 0);
+                    try self.emitSetCond(widths.word_width, result_reg, condCode(.equal));
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
@@ -4281,8 +4285,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const inner_loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(inner_loc);
                     const result_reg = try self.allocTempGeneral();
-                    try self.emitCmpImm(src_reg, 0);
-                    try self.emitSetCond(result_reg, condCode(.not_equal));
+                    try self.emitCmpImm(widths.word_width, src_reg, 0);
+                    try self.emitSetCond(widths.word_width, result_reg, condCode(.not_equal));
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = result_reg };
                 },
@@ -4550,7 +4554,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // return a null-like pointer since there's no data to store.
                         _ = try self.emitValueLocal(GuardedList.at(args, 0));
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4562,7 +4566,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (elem_size == 0) {
                         _ = try self.emitValueLocal(GuardedList.at(args, 0));
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4577,14 +4581,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
                     // Save heap pointer to stack (generating the value expression may clobber registers)
-                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                    try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                     // Generate the value expression
                     const value_loc = try self.emitValueLocal(GuardedList.at(args, 0));
 
                     // Copy value to heap
                     const heap_ptr = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                    try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
 
                     const value_offset = try self.ensureOnStack(value_loc, elem_size);
                     const temp_reg = try self.allocTempGeneral();
@@ -4655,7 +4659,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (ret_layout_data.tag == .box_of_zst) {
                         _ = try self.emitValueLocal(GuardedList.at(args, 0));
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4664,7 +4668,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (elem_size == 0) {
                         _ = try self.emitValueLocal(GuardedList.at(args, 0));
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4810,7 +4814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     if (ret_layout_data.tag == .box_of_zst) {
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4818,7 +4822,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const elem_size: u32 = box_abi.elem_size;
                     if (elem_size == 0) {
                         const reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.emitLoadImm(widths.word_width, reg, 0);
                         return .{ .general_reg = reg };
                     }
 
@@ -4831,10 +4835,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                         try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
-                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                    try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                     const heap_ptr = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                    try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
                     try self.zeroMemAt(heap_ptr, elem_size);
                     return .{ .general_reg = heap_ptr };
                 },
@@ -4895,7 +4899,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const loc = try self.emitValueLocal(GuardedList.at(args, 0));
                     const src_reg = try self.ensureInGeneralReg(loc);
                     const dst_reg = try self.allocTempGeneral();
-                    try self.emitMovRegReg(dst_reg, src_reg);
+                    try self.emitMovRegReg(widths.word_width, dst_reg, src_reg);
                     self.codegen.freeGeneral(src_reg);
                     return .{ .general_reg = dst_reg };
                 },
@@ -4934,7 +4938,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn scalarRetReg(self: *Self) Allocator.Error!ValueLocation {
             const result_reg = try self.allocTempGeneral();
-            try self.codegen.emit.movRegReg(.w64, result_reg, ret_reg_0);
+            try self.codegen.emit.movRegReg(widths.word_width, result_reg, ret_reg_0);
             return .{ .general_reg = result_reg };
         }
 
@@ -5076,8 +5080,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(high_reg);
             const low: u64 = @truncate(bits);
             const high: u64 = @truncate(bits >> 64);
-            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+            try self.emitLoadImm(.w64, low_reg, @bitCast(low));
+            try self.emitLoadImm(.w64, high_reg, @bitCast(high));
             switch (isa) {
                 .x86_64 => {
                     if (self.cpu_level == .v1) {
@@ -5287,7 +5291,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const index = try self.ensureInGeneralReg(index_loc);
             defer self.codegen.freeGeneral(index);
             const lane_bytes: u8 = @intCast(kind.laneBits() / 8);
-            if (lane_bytes > 1) try self.emitShiftImm(.shl, .w64, index, index, @ctz(lane_bytes));
+            if (lane_bytes > 1) try self.emitShiftImm(.shl, widths.word_width, index, index, @ctz(lane_bytes));
 
             switch (isa) {
                 .x86_64 => {
@@ -5588,7 +5592,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var case_patches: [16]usize = undefined;
             for (0..16) |shift| {
-                try self.emitCmpImm(count, @intCast(shift));
+                try self.emitCmpImm(widths.word_width, count, @intCast(shift));
                 case_patches[shift] = try self.emitJumpIfEqual();
             }
             try self.codegen.emitMoveV128(result, rhs.reg);
@@ -6318,11 +6322,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(raw_count);
             const count = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(count);
-            try self.emitMovRegReg(count, raw_count);
+            try self.emitMovRegReg(widths.word_width, count, raw_count);
             const count_mask = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(count_mask);
-            try self.codegen.emitLoadImm(count_mask, kind.laneBits() - 1);
-            try self.codegen.emitAnd(.w64, count, count, count_mask);
+            try self.emitLoadImm(widths.word_width, count_mask, kind.laneBits() - 1);
+            try self.codegen.emitAnd(widths.word_width, count, count, count_mask);
 
             const result = try self.allocTempVector(protected);
             protected |= floatRegMask(result);
@@ -6460,9 +6464,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result = try self.allocTempVector(protected);
             protected |= floatRegMask(result);
 
-            try self.emitCmpImm(count, 0);
+            try self.emitCmpImm(widths.word_width, count, 0);
             const zero_count_patch = try self.emitJumpIfEqual();
-            try self.emitCmpImm(count, kind.laneBits());
+            try self.emitCmpImm(widths.word_width, count, kind.laneBits());
             const out_of_range_patch = try self.codegen.emitCondJump(condCode(.above_or_equal));
 
             const wide_kind: builtins.simd.Kind = if (kind == .i16x8) .i32x4 else .i64x2;
@@ -6472,13 +6476,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitSimdWiden(high, vector.reg, kind, true, protected);
             const bias_scalar = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(bias_scalar);
-            try self.codegen.emitLoadImm(bias_scalar, 1);
+            try self.emitLoadImm(.w64, bias_scalar, 1);
             const bias_shift = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(bias_shift);
-            try self.emitMovRegReg(bias_shift, count);
+            try self.emitMovRegReg(widths.word_width, bias_shift, count);
             const one = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(one);
-            try self.codegen.emitLoadImm(one, 1);
+            try self.emitLoadImm(widths.word_width, one, 1);
             try self.codegen.emitSub(.w64, bias_shift, bias_shift, one);
             try self.emitShiftReg(.shl, .w64, bias_scalar, bias_scalar, bias_shift);
             const bias = try self.allocTempVector(protected);
@@ -6714,9 +6718,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.freeGenerals(.{ a, b, product_low, product_high, scratch, count });
             try self.codegen.emitLoadStack(.w64, a, operands + lane_offset);
             try self.codegen.emitLoadStack(.w64, b, operands + 16 + lane_offset);
-            try self.codegen.emitLoadImm(product_low, 0);
-            try self.codegen.emitLoadImm(product_high, 0);
-            try self.codegen.emitLoadImm(count, 64);
+            try self.emitLoadImm(.w64, product_low, 0);
+            try self.emitLoadImm(.w64, product_high, 0);
+            try self.emitLoadImm(widths.word_width, count, 64);
 
             const loop = self.codegen.currentOffset();
             try self.emitShiftImm(.shr, .w64, scratch, product_low, 63);
@@ -6727,8 +6731,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.emitAnd(.w64, scratch, scratch, a);
             try self.codegen.emitXor(.w64, product_low, product_low, scratch);
             try self.emitShiftImm(.shl, .w64, b, b, 1);
-            try self.emitSubImm(.w64, count, count, 1);
-            try self.emitCmpImm(count, 0);
+            try self.emitSubImm(widths.word_width, count, count, 1);
+            try self.emitCmpImm(widths.word_width, count, 0);
             const repeat = try self.emitJumpIfNotEqual();
             try self.codegen.patchJump(repeat, loop);
 
@@ -6786,7 +6790,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             const low = try self.ensureInGeneralReg(loc);
             const high = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(high, 0);
+            try self.emitLoadImm(.w64, high, 0);
             return .{ .low = low, .high = high };
         }
 
@@ -7356,11 +7360,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(index_reg);
             const abi = self.layout_store.builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
             std.debug.assert(abi.elem_size == 1 or abi.elem_size == 2 or abi.elem_size == 4);
-            if (abi.elem_size > 1) try self.emitShiftImm(.shl, .w64, index_reg, index_reg, @intCast(@ctz(abi.elem_size)));
+            if (abi.elem_size > 1) try self.emitShiftImm(.shl, widths.word_width, index_reg, index_reg, @intCast(@ctz(abi.elem_size)));
             const bytes_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(bytes_reg);
-            try self.emitLoad(.w64, bytes_reg, frame_ptr, list_offset);
-            try self.codegen.emitAdd(.w64, bytes_reg, bytes_reg, index_reg);
+            try self.emitLoad(widths.word_width, bytes_reg, frame_ptr, list_offset);
+            try self.codegen.emitAdd(widths.word_width, bytes_reg, bytes_reg, index_reg);
 
             const kind = self.requireSimdKind(ll.ret_layout);
             const result_reg = try self.allocTempVector(0);
@@ -7380,8 +7384,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer self.codegen.freeGeneral(index_reg);
                 const bytes_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(bytes_reg);
-                try self.emitLoad(.w64, bytes_reg, frame_ptr, list_offset);
-                try self.codegen.emitAdd(.w64, bytes_reg, bytes_reg, index_reg);
+                try self.emitLoad(widths.word_width, bytes_reg, frame_ptr, list_offset);
+                try self.codegen.emitAdd(widths.word_width, bytes_reg, bytes_reg, index_reg);
                 try self.codegen.emitStoreV128(bytes_reg, 0, vector.reg);
                 return try self.emitValueLocal(GuardedList.at(args, 1));
             }
@@ -7914,7 +7918,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Load list length from the struct
             const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
 
             // Compute start and len based on mode
             const start_slot = self.codegen.allocStackSlot(8);
@@ -7925,7 +7929,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // start = 0, len = min(n, list_len)
                     // listSublist handles this correctly even if n > list_len
                     const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.emitLoadImm(.w64, zero_reg, 0);
                     try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
                     try self.emitStore(.w64, frame_ptr, len_slot, n_reg);
                     self.codegen.freeGeneral(zero_reg);
@@ -7933,7 +7937,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .take_last => {
                     // start = max(list_len - n, 0), len = n
                     const diff_reg = try self.allocTempGeneral();
-                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
+                    try self.emitSaturatingSub(.w64, diff_reg, len_reg, n_reg);
                     try self.emitStore(.w64, frame_ptr, start_slot, diff_reg);
                     try self.emitStore(.w64, frame_ptr, len_slot, n_reg);
                     self.codegen.freeGeneral(diff_reg);
@@ -8111,12 +8115,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (list_abi.elem_size_align.size == 0) {
                 // ZST: the reversed list is the input list (length unchanged, no data).
                 const tr = try self.allocTempGeneral();
-                try self.emitLoad(.w64, tr, frame_ptr, list_off + list_bytes_offset);
-                try self.emitStore(.w64, frame_ptr, result_offset + list_bytes_offset, tr);
-                try self.emitLoad(.w64, tr, frame_ptr, list_off + list_len_offset);
-                try self.emitStore(.w64, frame_ptr, result_offset + list_len_offset, tr);
-                try self.emitLoad(.w64, tr, frame_ptr, list_off + list_capacity_offset);
-                try self.emitStore(.w64, frame_ptr, result_offset + list_capacity_offset, tr);
+                try self.emitLoad(widths.word_width, tr, frame_ptr, list_off + list_bytes_offset);
+                try self.emitStore(widths.word_width, frame_ptr, result_offset + list_bytes_offset, tr);
+                try self.emitLoad(widths.word_width, tr, frame_ptr, list_off + list_len_offset);
+                try self.emitStore(widths.word_width, frame_ptr, result_offset + list_len_offset, tr);
+                try self.emitLoad(widths.word_width, tr, frame_ptr, list_off + list_capacity_offset);
+                try self.emitStore(widths.word_width, frame_ptr, result_offset + list_capacity_offset, tr);
                 self.codegen.freeGeneral(tr);
                 return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
             }
@@ -8190,7 +8194,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (self.generation_mode) {
                 .native_execution => {
                     const address = self.nativeStaticDataAddress(id);
-                    try self.codegen.emitLoadImm(src_reg, @bitCast(@as(u64, address)));
+                    try self.emitLoadImm(widths.word_width, src_reg, @bitCast(@as(u64, address)));
                 },
                 .shim_execution, .object_file => try self.emitStaticDataAddress(src_reg, id),
             }
@@ -8301,15 +8305,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .f64 => builtins.float_bits.normalized_f64_nan_bits,
             };
 
-            try self.codegen.emitLoadImm(masked_reg, @bitCast(signless_mask));
+            try self.emitLoadImm(.w64, masked_reg, @bitCast(signless_mask));
             switch (width) {
                 .f32 => try self.codegen.emitAnd(.w32, masked_reg, masked_reg, bits_reg),
                 .f64 => try self.codegen.emitAnd(.w64, masked_reg, masked_reg, bits_reg),
             }
-            try self.codegen.emitLoadImm(infinity_reg, @bitCast(infinity_bits));
-            try self.emitCmpReg(masked_reg, infinity_reg);
+            try self.emitLoadImm(.w64, infinity_reg, @bitCast(infinity_bits));
+            try self.emitCmpReg(.w64, masked_reg, infinity_reg);
             const not_nan_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
-            try self.codegen.emitLoadImm(bits_reg, @bitCast(normalized_nan_bits));
+            try self.emitLoadImm(.w64, bits_reg, @bitCast(normalized_nan_bits));
             try self.codegen.patchJump(not_nan_patch, self.codegen.currentOffset());
         }
 
@@ -8347,13 +8351,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(masked_reg);
             defer self.codegen.freeGeneral(ptr_reg);
 
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset);
-            try self.emitCmpImm(ptr_reg, 0);
+            try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, slot_offset);
+            try self.emitCmpImm(widths.word_width, ptr_reg, 0);
             const null_patch = try self.emitJumpIfEqual();
 
-            try self.codegen.emitLoadImm(masked_reg, 7);
-            try self.codegen.emitAnd(.w64, masked_reg, masked_reg, ptr_reg);
-            try self.emitCmpImm(masked_reg, 0);
+            try self.emitLoadImm(widths.word_width, masked_reg, 7);
+            try self.codegen.emitAnd(widths.word_width, masked_reg, masked_reg, ptr_reg);
+            try self.emitCmpImm(widths.word_width, masked_reg, 0);
             const aligned_patch = try self.emitJumpIfEqual();
 
             try self.emitDebugCrashInvalidLocal(.box, .non_aligned_pointer, local);
@@ -8398,18 +8402,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(len_reg);
             defer self.codegen.freeGeneral(ptr_reg);
 
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, slot_offset + str_bytes_offset);
-            try self.emitLoad(.w64, cap_reg, frame_ptr, slot_offset + str_capacity_offset);
-            try self.emitLoad(.w64, len_reg, frame_ptr, slot_offset + str_len_offset);
+            try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, slot_offset + str_bytes_offset);
+            try self.emitLoad(widths.word_width, cap_reg, frame_ptr, slot_offset + str_capacity_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, slot_offset + str_len_offset);
 
             // Small RocStrs are stored inline and identified by the small-string flag in length.
-            try self.codegen.emitLoadImm(tmp_reg, str_small_bit);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, len_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoadImm(widths.word_width, tmp_reg, str_small_bit);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, len_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const small_patch = try self.emitJumpIfNotEqual();
 
             // Non-small RocStrs must have a non-null bytes pointer.
-            try self.emitCmpImm(ptr_reg, 0);
+            try self.emitCmpImm(widths.word_width, ptr_reg, 0);
             const ptr_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidLocal(.str, .null_bytes_pointer, local);
             const after_null = self.codegen.currentOffset();
@@ -8419,22 +8423,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // allocation pointer in capacity_or_alloc_ptr. Their bytes pointer
             // may be arbitrarily offset, so validate the stored allocation
             // pointer instead of requiring bytes alignment.
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_tag);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, cap_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoadImm(widths.word_width, tmp_reg, seamless_slice_tag);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, cap_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const non_seamless_patch = try self.emitJumpIfEqual();
 
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_alloc_ptr_mask);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, cap_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoadImm(widths.word_width, tmp_reg, seamless_slice_alloc_ptr_mask);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, cap_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const alloc_non_null_patch = try self.emitJumpIfNotEqual();
             try self.emitDebugCrashInvalidLocal(.str, .null_allocation_pointer, local);
             const after_alloc_null = self.codegen.currentOffset();
             try self.codegen.patchJump(alloc_non_null_patch, after_alloc_null);
 
-            try self.codegen.emitLoadImm(ptr_reg, @alignOf(usize) - 1);
-            try self.codegen.emitAnd(.w64, ptr_reg, ptr_reg, tmp_reg);
-            try self.emitCmpImm(ptr_reg, 0);
+            try self.emitLoadImm(widths.word_width, ptr_reg, @alignOf(usize) - 1);
+            try self.codegen.emitAnd(widths.word_width, ptr_reg, ptr_reg, tmp_reg);
+            try self.emitCmpImm(widths.word_width, ptr_reg, 0);
             const alloc_aligned_patch = try self.emitJumpIfEqual();
             try self.emitDebugCrashInvalidLocal(.str, .misaligned_allocation_pointer, local);
             const after_alloc_align = self.codegen.currentOffset();
@@ -8445,16 +8449,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.codegen.patchJump(non_seamless_patch, after_seamless);
 
             // Non-slice RocStrs must satisfy len <= decoded capacity.
-            try self.codegen.emitLoadImm(tmp_reg, @alignOf(usize) - 1);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, ptr_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoadImm(widths.word_width, tmp_reg, @alignOf(usize) - 1);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, ptr_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const ptr_aligned_patch = try self.emitJumpIfEqual();
             try self.emitDebugCrashInvalidLocal(.str, .misaligned_bytes_pointer, local);
             const after_ptr_align = self.codegen.currentOffset();
             try self.codegen.patchJump(ptr_aligned_patch, after_ptr_align);
 
-            try self.emitShiftImm(.shr, .w64, tmp_reg, cap_reg, RocStr.capacity_shift);
-            try self.emitCmpReg(len_reg, tmp_reg);
+            try self.emitShiftImm(.shr, widths.word_width, tmp_reg, cap_reg, RocStr.capacity_shift);
+            try self.emitCmpReg(widths.word_width, len_reg, tmp_reg);
             const len_ok_patch = try self.codegen.emitCondJump(condCode(.below_or_equal));
             try self.emitDebugCrashInvalidLocal(.str, .length_exceeds_capacity, local);
             const done = self.codegen.currentOffset();
@@ -8593,9 +8597,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     const reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, reg, @bitCast(low));
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, reg, @bitCast(high));
                     try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                 },
                 .immediate_i64 => |val| {
@@ -8606,9 +8610,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     };
                     const reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, reg, @bitCast(low));
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, reg, @bitCast(high));
                     try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                 },
                 .general_reg => |reg| {
@@ -8622,12 +8626,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                     try self.codegen.emit.asrRegRegImm(.w64, high_reg, reg, 63);
                                 },
                                 .x86_64 => {
-                                    try self.emitMovRegReg(high_reg, reg);
+                                    try self.emitMovRegReg(.w64, high_reg, reg);
                                     try self.codegen.emit.sarRegImm8(.w64, high_reg, 63);
                                 },
                             }
                         },
-                        .unsigned => try self.codegen.emitLoadImm(high_reg, 0),
+                        .unsigned => try self.emitLoadImm(.w64, high_reg, 0),
                     }
                     try self.codegen.emitStoreStack(.w64, dest_offset + 8, high_reg);
                 },
@@ -9035,7 +9039,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.freeGenerals(.{ lhs_reg, rhs_reg });
                                 return .{ .general_reg = overflow_reg };
                             }
-                            try self.emitCmpImm(overflow_reg, 0);
+                            try self.emitCmpImm(widths.word_width, overflow_reg, 0);
                             try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
@@ -9059,7 +9063,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.freeGenerals(.{ lhs_reg, rhs_reg });
                                 return .{ .general_reg = overflow_reg };
                             }
-                            try self.emitCmpImm(overflow_reg, 0);
+                            try self.emitCmpImm(widths.word_width, overflow_reg, 0);
                             try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
@@ -9123,10 +9127,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // the divisor back only when the remainder is non-zero and
                         // its sign differs from the divisor's sign.
                         const divisor_reg = try self.allocTempGeneral();
-                        try self.emitMovRegReg(divisor_reg, rhs_reg);
+                        try self.emitMovRegReg(.w64, divisor_reg, rhs_reg);
                         try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                         const sign_check_reg = try self.allocTempGeneral();
-                        try self.emitCmpImm(result_reg, 0);
+                        try self.emitCmpImm(.w64, result_reg, 0);
                         const zero_patch = try self.emitJumpIfEqual();
 
                         switch (isa) {
@@ -9134,12 +9138,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 try self.codegen.emit.eorRegRegReg(.w64, sign_check_reg, result_reg, divisor_reg);
                             },
                             .x86_64 => {
-                                try self.emitMovRegReg(sign_check_reg, result_reg);
+                                try self.emitMovRegReg(.w64, sign_check_reg, result_reg);
                                 try self.codegen.emit.xorRegReg(.w64, sign_check_reg, divisor_reg);
                             },
                         }
 
-                        try self.emitCmpImm(sign_check_reg, 0);
+                        try self.emitCmpImm(.w64, sign_check_reg, 0);
                         const same_sign_patch = try self.codegen.emitCondJump(condCode(.greater_or_equal));
                         try self.codegen.emitAdd(.w64, result_reg, result_reg, divisor_reg);
                         const done_patch = try self.codegen.emitJump();
@@ -9189,8 +9193,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             switch (operand_layout) {
                 .u8, .u16, .u32, .i8, .i16, .i32 => try self.emitNarrowIntRangeFlag(flag_reg, result_reg, operand_layout),
-                .u64 => try self.emitSetCond(flag_reg, if (operation == .add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow)),
-                .i64 => try self.emitSetCond(flag_reg, condCode(.overflow)),
+                .u64 => try self.emitSetCond(widths.word_width, flag_reg, if (operation == .add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow)),
+                .i64 => try self.emitSetCond(widths.word_width, flag_reg, condCode(.overflow)),
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
                     if (builtin.mode == .debug) std.debug.assert(!is_unsigned or operand_layout == .u128);
                     base.invariant("LIR/codegen invariant violated: add/sub overflow flag requested for layout {d}", .{@backingInt(operand_layout)});
@@ -9219,16 +9223,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const min_value = range.min orelse {
                 const max_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(max_reg);
-                try self.codegen.emitLoadImm(max_reg, range.max);
+                try self.emitLoadImm(.w64, max_reg, range.max);
                 try self.codegen.emitCmp(.w64, flag_reg, result_reg, max_reg, condCode(.above));
                 return;
             };
             const limit_reg, const high_flag = try self.allocTempGenerals(2);
             defer self.codegen.freeGeneral(limit_reg);
             defer self.codegen.freeGeneral(high_flag);
-            try self.codegen.emitLoadImm(limit_reg, min_value);
+            try self.emitLoadImm(.w64, limit_reg, min_value);
             try self.codegen.emitCmp(.w64, flag_reg, result_reg, limit_reg, condCode(.less));
-            try self.codegen.emitLoadImm(limit_reg, range.max);
+            try self.emitLoadImm(.w64, limit_reg, range.max);
             try self.codegen.emitCmp(.w64, high_flag, result_reg, limit_reg, condCode(.greater));
             try self.codegen.emitOr(.w64, flag_reg, flag_reg, high_flag);
         }
@@ -9257,7 +9261,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     },
                     .x86_64 => {
                         try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
-                        try self.emitSetCond(flag_reg, condCode(.overflow));
+                        try self.emitSetCond(.w64, flag_reg, condCode(.overflow));
                     },
                 },
                 .u64 => switch (isa) {
@@ -9279,10 +9283,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         } else rhs_reg;
                         if (lhs_reg != .RAX) try self.codegen.emit.movRegReg(.w64, .RAX, lhs_reg);
                         try self.codegen.emit.mulReg(.w64, rhs_src);
-                        try self.emitMovRegReg(result_reg, .RAX);
+                        try self.emitMovRegReg(.w64, result_reg, .RAX);
                         // MUL sets OF exactly when the high half is nonzero. Read
                         // it after preserving RAX so result_reg may safely be RDX.
-                        try self.emitSetCond(flag_reg, condCode(.overflow));
+                        try self.emitSetCond(.w64, flag_reg, condCode(.overflow));
                         if (rhs_temp) |temp| self.codegen.freeGeneral(temp);
                     },
                 },
@@ -9318,12 +9322,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitNarrowIntRangeCheck(self: *Self, result_reg: GeneralReg, operand_layout: layout.Idx, message: []const u8) Allocator.Error!void {
             const range = narrowIntRange(operand_layout);
             if (range.min) |min_value| {
-                try self.emitCmpRegImm64(result_reg, min_value);
+                try self.emitCmpRegImm64(.w64, result_reg, min_value);
                 try self.emitCrashOnCond(condCode(.less), message);
-                try self.emitCmpRegImm64(result_reg, range.max);
+                try self.emitCmpRegImm64(.w64, result_reg, range.max);
                 try self.emitCrashOnCond(condCode(.greater), message);
             } else {
-                try self.emitCmpRegImm64(result_reg, range.max);
+                try self.emitCmpRegImm64(.w64, result_reg, range.max);
                 try self.emitCrashOnCond(condCode(.above), message);
             }
         }
@@ -9342,11 +9346,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
-        fn emitCmpRegImm64(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
+        fn emitCmpRegImm64(self: *Self, comptime width: widths.RegisterWidth, reg: GeneralReg, value: i64) Allocator.Error!void {
             const temp = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(temp);
-            try self.codegen.emitLoadImm(temp, value);
-            try self.emitCmpReg(reg, temp);
+            try self.emitLoadImm(width, temp, value);
+            try self.emitCmpReg(width, reg, temp);
         }
 
         fn emitCrashOnCond(self: *Self, cond: Condition, message: []const u8) Allocator.Error!void {
@@ -9360,15 +9364,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitCheckedZeroDenominator(self: *Self, op: lir.LowLevel, rhs_reg: GeneralReg, operand_layout: layout.Idx) Allocator.Error!void {
             const message = checkedZeroDenominatorMessage(op, operand_layout);
-            try self.emitCmpImm(rhs_reg, 0);
+            try self.emitCmpImm(.w64, rhs_reg, 0);
             try self.emitCrashOnCond(condCode(.equal), message);
         }
 
         fn emitCheckedSignedMinDivOverflow(self: *Self, op: lir.LowLevel, lhs_reg: GeneralReg, rhs_reg: GeneralReg, operand_layout: layout.Idx) Allocator.Error!void {
             const lowest = signedLowestI64(operand_layout) orelse return;
-            try self.emitCmpRegImm64(lhs_reg, lowest);
+            try self.emitCmpRegImm64(.w64, lhs_reg, lowest);
             const lhs_not_lowest = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_reg, -1);
+            try self.emitCmpRegImm64(.w64, rhs_reg, -1);
             try self.emitCrashOnCond(condCode(.equal), checkedOverflowMessage(op));
             try self.codegen.patchJump(lhs_not_lowest, self.codegen.currentOffset());
         }
@@ -9381,11 +9385,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             operand_layout: layout.Idx,
         ) Allocator.Error!?usize {
             const lowest = signedLowestI64(operand_layout) orelse return null;
-            try self.emitCmpRegImm64(lhs_reg, lowest);
+            try self.emitCmpRegImm64(.w64, lhs_reg, lowest);
             const lhs_not_lowest = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_reg, -1);
+            try self.emitCmpRegImm64(.w64, rhs_reg, -1);
             const rhs_not_neg_one = try self.emitJumpIfNotEqual();
-            try self.codegen.emitLoadImm(result_reg, 0);
+            try self.emitLoadImm(.w64, result_reg, 0);
             const done_patch = try self.codegen.emitJump();
             const normal_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(lhs_not_lowest, normal_offset);
@@ -9428,7 +9432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.mulRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
                     try self.codegen.emit.smulhRegRegReg(high_reg, lhs_reg, rhs_reg);
                     try self.emitShiftImm(.sar, .w64, sign_reg, result_reg, 63);
-                    try self.emitCmpReg(high_reg, sign_reg);
+                    try self.emitCmpReg(.w64, high_reg, sign_reg);
                     try self.emitCrashOnCond(condCode(.not_equal), message);
                     self.freeGenerals(.{ sign_reg, high_reg });
                 },
@@ -9445,7 +9449,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const high_reg = try self.allocTempGeneral();
                     try self.codegen.emit.mulRegRegReg(.w64, result_reg, lhs_reg, rhs_reg);
                     try self.codegen.emit.umulhRegRegReg(high_reg, lhs_reg, rhs_reg);
-                    try self.emitCmpImm(high_reg, 0);
+                    try self.emitCmpImm(.w64, high_reg, 0);
                     try self.emitCrashOnCond(condCode(.not_equal), message);
                     self.codegen.freeGeneral(high_reg);
                 },
@@ -9461,7 +9465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.codegen.emit.movRegReg(.w64, .RAX, lhs_reg);
                     }
                     try self.codegen.emit.mulReg(.w64, rhs_src);
-                    try self.emitCmpImm(.RDX, 0);
+                    try self.emitCmpImm(.w64, .RDX, 0);
                     try self.emitCrashOnCond(condCode(.not_equal), message);
                     if (result_reg != .RAX) {
                         try self.codegen.emit.movRegReg(.w64, result_reg, .RAX);
@@ -9617,13 +9621,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (family_entry) |entry| {
                         if (entry.mode == .crash_on_overflow or entry.mode == .overflows) {
                             const overflow_reg = try self.allocTempGeneral();
-                            try self.emitSetCond(overflow_reg, if (!is_unsigned) condCode(.overflow) else if (is_add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow));
+                            try self.emitSetCond(widths.word_width, overflow_reg, if (!is_unsigned) condCode(.overflow) else if (is_add) condCode(.unsigned_add_overflow) else condCode(.unsigned_sub_overflow));
                             if (entry.mode == .overflows) {
                                 try self.bindPendingI128OverflowResult(result_low, result_high);
                                 self.freeGenerals(.{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high });
                                 return .{ .general_reg = overflow_reg };
                             }
-                            try self.emitCmpImm(overflow_reg, 0);
+                            try self.emitCmpImm(widths.word_width, overflow_reg, 0);
                             try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                             self.codegen.freeGeneral(overflow_reg);
                         }
@@ -9641,7 +9645,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             self.freeGenerals(.{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high });
                             return .{ .general_reg = overflow_reg };
                         }
-                        try self.emitCmpImm(overflow_reg, 0);
+                        try self.emitCmpImm(widths.word_width, overflow_reg, 0);
                         try self.emitCrashOnCond(condCode(.not_equal), checkedOverflowMessage(entry.op));
                         self.codegen.freeGeneral(overflow_reg);
                     } else if (checked_op) |_| {
@@ -10198,11 +10202,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const Layout = dev_wrappers.NumPrefixParseLayout;
             const layout_slot = self.codegen.allocStackSlot(@sizeOf(Layout));
             const layout_reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
+            try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0)));
             try self.emitStore(.w32, frame_ptr, layout_slot + @offsetOf(Layout, "err_offset"), layout_reg);
-            try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
+            try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1)));
             try self.emitStore(.w32, frame_ptr, layout_slot + @offsetOf(Layout, "rest_offset"), layout_reg);
-            try self.codegen.emitLoadImm(layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
+            try self.emitLoadImm(widths.word_width, layout_reg, @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 2)));
             try self.emitStore(.w32, frame_ptr, layout_slot + @offsetOf(Layout, "value_offset"), layout_reg);
             self.codegen.freeGeneral(layout_reg);
 
@@ -10477,7 +10481,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.callBuiltin(&builder, builtin_fn);
 
             const overflow_reg = try self.allocTempGeneral();
-            try self.emitMovRegReg(overflow_reg, ret_reg_0);
+            try self.emitMovRegReg(widths.word_width, overflow_reg, ret_reg_0);
 
             try self.codegen.emitLoadStack(.w64, result_low, result_slot);
             try self.codegen.emitLoadStack(.w64, result_high, result_slot + 8);
@@ -10490,9 +10494,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             rhs_parts: I128Parts,
             operand_layout: layout.Idx,
         ) Allocator.Error!void {
-            try self.emitCmpImm(rhs_parts.low, 0);
+            try self.emitCmpImm(.w64, rhs_parts.low, 0);
             const low_not_zero = try self.emitJumpIfNotEqual();
-            try self.emitCmpImm(rhs_parts.high, 0);
+            try self.emitCmpImm(.w64, rhs_parts.high, 0);
             try self.emitCrashOnCond(condCode(.equal), checkedZeroDenominatorMessage(op, operand_layout));
             try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
         }
@@ -10506,13 +10510,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (operand_layout != .i128) return;
 
-            try self.emitCmpImm(lhs_parts.low, 0);
+            try self.emitCmpImm(.w64, lhs_parts.low, 0);
             const lhs_low_not_zero = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(lhs_parts.high, std.math.minInt(i64));
+            try self.emitCmpRegImm64(.w64, lhs_parts.high, std.math.minInt(i64));
             const lhs_high_not_min = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_parts.low, -1);
+            try self.emitCmpRegImm64(.w64, rhs_parts.low, -1);
             const rhs_low_not_neg_one = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_parts.high, -1);
+            try self.emitCmpRegImm64(.w64, rhs_parts.high, -1);
             try self.emitCrashOnCond(condCode(.equal), checkedOverflowMessage(op));
 
             const normal_offset = self.codegen.currentOffset();
@@ -10531,17 +10535,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!?usize {
             if (operand_layout != .i128) return null;
 
-            try self.emitCmpImm(lhs_parts.low, 0);
+            try self.emitCmpImm(.w64, lhs_parts.low, 0);
             const lhs_low_not_zero = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(lhs_parts.high, std.math.minInt(i64));
+            try self.emitCmpRegImm64(.w64, lhs_parts.high, std.math.minInt(i64));
             const lhs_high_not_min = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_parts.low, -1);
+            try self.emitCmpRegImm64(.w64, rhs_parts.low, -1);
             const rhs_low_not_neg_one = try self.emitJumpIfNotEqual();
-            try self.emitCmpRegImm64(rhs_parts.high, -1);
+            try self.emitCmpRegImm64(.w64, rhs_parts.high, -1);
             const rhs_high_not_neg_one = try self.emitJumpIfNotEqual();
 
-            try self.codegen.emitLoadImm(result_low, 0);
-            try self.codegen.emitLoadImm(result_high, 0);
+            try self.emitLoadImm(.w64, result_low, 0);
+            try self.emitLoadImm(.w64, result_high, 0);
             const done_patch = try self.codegen.emitJump();
 
             const normal_offset = self.codegen.currentOffset();
@@ -10665,14 +10669,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // classic SWAR sequence on general registers.
                 const t, const m = try self.allocTempGenerals(2);
                 // x = src
-                try self.emitMovRegReg(dst, src);
+                try self.emitMovRegReg(.w64, dst, src);
                 // x = x - ((x >> 1) & 0x5555555555555555)
                 try self.emitShiftImm(.shr, .w64, t, dst, 1);
-                try self.codegen.emitLoadImm(m, @bitCast(@as(u64, 0x5555555555555555)));
+                try self.emitLoadImm(.w64, m, @bitCast(@as(u64, 0x5555555555555555)));
                 try self.codegen.emitAnd(.w64, t, t, m);
                 try self.codegen.emitSub(.w64, dst, dst, t);
                 // x = (x & 0x3333...) + ((x >> 2) & 0x3333...)
-                try self.codegen.emitLoadImm(m, @bitCast(@as(u64, 0x3333333333333333)));
+                try self.emitLoadImm(.w64, m, @bitCast(@as(u64, 0x3333333333333333)));
                 try self.codegen.emitAnd(.w64, t, dst, m);
                 try self.emitShiftImm(.shr, .w64, dst, dst, 2);
                 try self.codegen.emitAnd(.w64, dst, dst, m);
@@ -10680,10 +10684,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // x = (x + (x >> 4)) & 0x0f0f...
                 try self.emitShiftImm(.shr, .w64, t, dst, 4);
                 try self.codegen.emitAdd(.w64, dst, dst, t);
-                try self.codegen.emitLoadImm(m, @bitCast(@as(u64, 0x0f0f0f0f0f0f0f0f)));
+                try self.emitLoadImm(.w64, m, @bitCast(@as(u64, 0x0f0f0f0f0f0f0f0f)));
                 try self.codegen.emitAnd(.w64, dst, dst, m);
                 // count = (x * 0x0101...) >> 56
-                try self.codegen.emitLoadImm(m, @bitCast(@as(u64, 0x0101010101010101)));
+                try self.emitLoadImm(.w64, m, @bitCast(@as(u64, 0x0101010101010101)));
                 try self.codegen.emitMul(.w64, dst, dst, m);
                 try self.emitShiftImm(.shr, .w64, dst, dst, 56);
                 self.freeGenerals(.{ t, m });
@@ -10714,7 +10718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Subtract into the temp: `dst` is the right-hand operand here,
                 // so making it the destination would overwrite it first.
                 try self.codegen.emitSub(.w64, t, t, dst);
-                try self.emitMovRegReg(dst, t);
+                try self.emitMovRegReg(.w64, dst, t);
                 self.codegen.freeGeneral(t);
                 return;
             }
@@ -10762,12 +10766,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
             const src_reg = try self.ensureInGeneralReg(inner_loc);
             const work = try self.allocTempGeneral();
-            try self.emitMovRegReg(work, src_reg);
+            try self.emitMovRegReg(.w64, work, src_reg);
             self.codegen.freeGeneral(src_reg);
             if (width < 64) {
                 const mask_reg = try self.allocTempGeneral();
                 const mask: i64 = @bitCast((@as(u64, 1) << @intCast(width)) - 1);
-                try self.codegen.emitLoadImm(mask_reg, mask);
+                try self.emitLoadImm(.w64, mask_reg, mask);
                 try self.codegen.emitAnd(.w64, work, work, mask_reg);
                 self.codegen.freeGeneral(mask_reg);
             }
@@ -10780,7 +10784,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitClz64(result, work);
                     if (width < 64) {
                         const adj = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(adj, @intCast(64 - @as(u32, width)));
+                        try self.emitLoadImm(widths.word_width, adj, @intCast(64 - @as(u32, width)));
                         try self.codegen.emitSub(.w64, result, result, adj);
                         self.codegen.freeGeneral(adj);
                     }
@@ -10788,7 +10792,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_count_trailing_zero_bits => {
                     if (width < 64) {
                         const sent = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(sent, @bitCast(@as(u64, 1) << @intCast(width)));
+                        try self.emitLoadImm(.w64, sent, @bitCast(@as(u64, 1) << @intCast(width)));
                         try self.codegen.emitOr(.w64, work, work, sent);
                         self.codegen.freeGeneral(sent);
                     }
@@ -10824,7 +10828,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitClz64(result, parts.high);
                     try self.emitClz64(lz_low, parts.low);
                     const is_zero, const zero_reg = try self.allocTempGenerals(2);
-                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.emitLoadImm(.w64, zero_reg, 0);
                     try self.codegen.emitCmp(.w64, is_zero, parts.high, zero_reg, condCode(.equal));
                     try self.codegen.emitMul(.w64, lz_low, lz_low, is_zero);
                     try self.codegen.emitAdd(.w64, result, result, lz_low);
@@ -10836,7 +10840,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitCtz64(result, parts.low);
                     try self.emitCtz64(tz_high, parts.high);
                     const is_zero, const zero_reg = try self.allocTempGenerals(2);
-                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.emitLoadImm(.w64, zero_reg, 0);
                     try self.codegen.emitCmp(.w64, is_zero, parts.low, zero_reg, condCode(.equal));
                     try self.codegen.emitMul(.w64, tz_high, tz_high, is_zero);
                     try self.codegen.emitAdd(.w64, result, result, tz_high);
@@ -10857,8 +10861,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// fits in the low half, so the high half is zero.
         fn decScaleParts(self: *Self) Allocator.Error!I128Parts {
             const low_reg, const high_reg = try self.allocTempGenerals(2);
-            try self.codegen.emitLoadImm(low_reg, @intCast(builtins.dec.RocDec.one_point_zero_i128));
-            try self.codegen.emitLoadImm(high_reg, 0);
+            try self.emitLoadImm(.w64, low_reg, @intCast(builtins.dec.RocDec.one_point_zero_i128));
+            try self.emitLoadImm(.w64, high_reg, 0);
             return .{ .low = low_reg, .high = high_reg };
         }
 
@@ -10870,8 +10874,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    try self.codegen.emitLoadImm(low_reg, @bitCast(low));
-                    try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, low_reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, high_reg, @bitCast(high));
                 },
                 .stack_i128 => |offset| {
                     try self.codegen.emitLoadStack(.w64, low_reg, offset);
@@ -10879,15 +10883,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .immediate_i64 => |val| {
                     // Sign-extend to 128 bits
-                    try self.codegen.emitLoadImm(low_reg, val);
+                    try self.emitLoadImm(.w64, low_reg, val);
                     if (val < 0) {
-                        try self.codegen.emitLoadImm(high_reg, -1); // All 1s for sign extension
+                        try self.emitLoadImm(.w64, high_reg, -1); // All 1s for sign extension
                     } else {
-                        try self.codegen.emitLoadImm(high_reg, 0);
+                        try self.emitLoadImm(.w64, high_reg, 0);
                     }
                 },
                 .general_reg => |reg| {
-                    try self.emitMovRegReg(low_reg, reg);
+                    try self.emitMovRegReg(.w64, low_reg, reg);
                     try self.emitSignExtendHighReg(high_reg, low_reg, signedness);
                 },
                 .stack_str => |offset| {
@@ -10912,11 +10916,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitSignExtendHighReg(self: *Self, high_reg: GeneralReg, low_reg: GeneralReg, signedness: std.builtin.Signedness) Allocator.Error!void {
             switch (signedness) {
                 .signed => {
-                    try self.emitMovRegReg(high_reg, low_reg);
+                    try self.emitMovRegReg(.w64, high_reg, low_reg);
                     try self.emitShiftImm(.sar, .w64, high_reg, high_reg, 63);
                 },
                 .unsigned => {
-                    try self.codegen.emitLoadImm(high_reg, 0);
+                    try self.emitLoadImm(.w64, high_reg, 0);
                 },
             }
         }
@@ -11308,10 +11312,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (operand_layout == .i128 or operand_layout == .dec) {
                 const parts = try self.getI128Parts(loc, .signed);
                 const high_lowest = try self.allocTempGeneral();
-                try self.emitCmpImm(parts.low, 0);
+                try self.emitCmpImm(.w64, parts.low, 0);
                 const low_not_zero = try self.emitJumpIfNotEqual();
-                try self.codegen.emitLoadImm(high_lowest, std.math.minInt(i64));
-                try self.emitCmpReg(parts.high, high_lowest);
+                try self.emitLoadImm(.w64, high_lowest, std.math.minInt(i64));
+                try self.emitCmpReg(.w64, parts.high, high_lowest);
                 try self.emitCrashOnCond(condCode(.equal), message);
                 try self.codegen.patchJump(low_not_zero, self.codegen.currentOffset());
                 self.freeGenerals(.{ high_lowest, parts.low, parts.high });
@@ -11320,7 +11324,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const lowest = signedLowestI64(operand_layout) orelse return;
             const src_reg = try self.ensureInGeneralReg(loc);
-            try self.emitCmpRegImm64(src_reg, lowest);
+            try self.emitCmpRegImm64(.w64, src_reg, lowest);
             try self.emitCrashOnCond(condCode(.equal), message);
             self.codegen.freeGeneral(src_reg);
         }
@@ -11494,10 +11498,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .x86_64 => {
                     // diff = a - b
-                    try self.emitMovRegReg(diff_reg, a_reg);
+                    try self.emitMovRegReg(.w64, diff_reg, a_reg);
                     try self.codegen.emit.subRegReg(.w64, diff_reg, b_reg);
                     // neg = b - a
-                    try self.emitMovRegReg(neg_reg, b_reg);
+                    try self.emitMovRegReg(.w64, neg_reg, b_reg);
                     try self.codegen.emit.subRegReg(.w64, neg_reg, a_reg);
                     // CMP a, b
                     try self.codegen.emit.cmpRegReg(.w64, a_reg, b_reg);
@@ -11540,9 +11544,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .x86_64 => {
                     // Compute a - b (128-bit)—SBB sets flags for 128-bit comparison
-                    try self.emitMovRegReg(diff_lo, a_parts.low);
+                    try self.emitMovRegReg(.w64, diff_lo, a_parts.low);
                     try self.codegen.emit.subRegReg(.w64, diff_lo, b_parts.low);
-                    try self.emitMovRegReg(diff_hi, a_parts.high);
+                    try self.emitMovRegReg(.w64, diff_hi, a_parts.high);
                     try self.codegen.emit.sbbRegReg(.w64, diff_hi, b_parts.high);
 
                     // Save comparison result before clobbering flags
@@ -11551,9 +11555,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.codegen.emit.setcc(if (is_signed) .greater_or_equal else .above_or_equal, flag_reg);
 
                     // Compute b - a
-                    try self.emitMovRegReg(bma_lo, b_parts.low);
+                    try self.emitMovRegReg(.w64, bma_lo, b_parts.low);
                     try self.codegen.emit.subRegReg(.w64, bma_lo, a_parts.low);
-                    try self.emitMovRegReg(bma_hi, b_parts.high);
+                    try self.emitMovRegReg(.w64, bma_hi, b_parts.high);
                     try self.codegen.emit.sbbRegReg(.w64, bma_hi, a_parts.high);
 
                     // Select based on saved flag: if a < b (flag == 0), use bma
@@ -11575,8 +11579,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Move register to register (architecture-specific)
-        fn emitMovRegReg(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
-            try self.codegen.emit.movRegReg(.w64, dst, src);
+        fn emitMovRegReg(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            try self.codegen.emit.movRegReg(width, dst, src);
         }
 
         /// Load the discriminant from a tag union value and mask to actual size.
@@ -11590,7 +11594,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!GeneralReg {
             const disc_reg = try self.allocTempGeneral();
             if (tu_disc_size == 0) {
-                try self.codegen.emitLoadImm(disc_reg, 0);
+                try self.emitLoadImm(.w64, disc_reg, 0);
                 return disc_reg;
             }
             switch (value_loc) {
@@ -11632,10 +11636,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                 },
                 .general_reg => |reg| {
-                    try self.emitMovRegReg(disc_reg, reg);
+                    try self.emitMovRegReg(.w64, disc_reg, reg);
                 },
                 .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(disc_reg, val);
+                    try self.emitLoadImm(.w64, disc_reg, val);
                 },
                 .float_reg,
                 .vector_reg,
@@ -11672,8 +11676,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Computes the payload location for each arg and delegates to bindPattern,
         /// which handles all pattern types (bind, wildcard, tag, struct, list, as_pattern, etc.).
         /// Emit a compare of two registers
-        fn emitCmpReg(self: *Self, reg1: GeneralReg, reg2: GeneralReg) Allocator.Error!void {
-            try self.codegen.emit.cmpRegReg(.w64, reg1, reg2);
+        fn emitCmpReg(self: *Self, comptime width: widths.RegisterWidth, reg1: GeneralReg, reg2: GeneralReg) Allocator.Error!void {
+            try self.codegen.emit.cmpRegReg(width, reg1, reg2);
         }
 
         /// Store a discriminant value at the given offset
@@ -11681,7 +11685,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (disc_size == 0) return;
 
             const reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(reg, value);
+            try self.emitLoadImm(.w64, reg, value);
 
             // Store appropriate size - architecture specific
             switch (isa) {
@@ -11714,7 +11718,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(reg);
-            try self.codegen.emitLoadImm(reg, value);
+            try self.emitLoadImm(.w64, reg, value);
 
             switch (disc_size) {
                 1 => {
@@ -11947,11 +11951,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                 try self.callBuiltin(&builder, .allocate_with_refcount);
             }
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+            try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
             const payload_offset = try self.ensureOnStack(payload_loc, elem_size);
             const heap_ptr = try self.allocTempGeneral();
-            try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+            try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
             const temp_reg = try self.allocTempGeneral();
             try self.copyChunked(temp_reg, frame_ptr, payload_offset, heap_ptr, 0, elem_size);
             self.codegen.freeGeneral(temp_reg);
@@ -12560,12 +12564,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count_slot: ?i32,
         ) Allocator.Error!void {
             const arg0 = self.getArgumentRegister(0);
-            try self.emitLoad(.w64, arg0, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, arg0, frame_ptr, ptr_slot);
 
             switch (helper.key.op) {
                 .incref => {
                     const arg1 = self.getArgumentRegister(1);
-                    try self.emitLoad(.w64, arg1, frame_ptr, count_slot.?);
+                    try self.emitLoad(widths.word_width, arg1, frame_ptr, count_slot.?);
                 },
                 .decref, .free => {},
                 .host_drop => hostDropInRcStatement(),
@@ -12584,19 +12588,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ptr_slot = self.codegen.allocStackSlot(8);
             const ptr_reg = try self.allocTempGeneral();
 
-            try self.emitMovRegReg(ptr_reg, frame_ptr);
+            try self.emitMovRegReg(widths.word_width, ptr_reg, frame_ptr);
             if (base_offset != 0) {
                 try self.emitAddPtrImmAny(ptr_reg, ptr_reg, base_offset);
             }
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
+            try self.emitStore(widths.word_width, frame_ptr, ptr_slot, ptr_reg);
             self.codegen.freeGeneral(ptr_reg);
 
             switch (helper.key.op) {
                 .incref => {
                     const count_slot = self.codegen.allocStackSlot(8);
                     const count_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(count_reg, count);
-                    try self.emitStore(.w64, frame_ptr, count_slot, count_reg);
+                    try self.emitLoadImm(widths.word_width, count_reg, count);
+                    try self.emitStore(widths.word_width, frame_ptr, count_slot, count_reg);
                     self.codegen.freeGeneral(count_reg);
                     try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
                 },
@@ -12648,7 +12652,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             count_slot: ?i32,
         ) Allocator.Error!void {
             const ptr_slot = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, ptr_slot, ptr_reg);
+            try self.emitStore(widths.word_width, frame_ptr, ptr_slot, ptr_reg);
             try self.emitCallRcHelperFromStackSlots(helper, ptr_slot, count_slot);
         }
 
@@ -12763,21 +12767,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             value_ptr_reg: GeneralReg,
             out_reg: GeneralReg,
         ) Allocator.Error!void {
-            try self.emitLoad(.w64, out_reg, value_ptr_reg, str_bytes_offset);
+            try self.emitLoad(widths.word_width, out_reg, value_ptr_reg, str_bytes_offset);
 
             const cap_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cap_reg);
-            try self.emitLoad(.w64, cap_reg, value_ptr_reg, str_capacity_offset);
+            try self.emitLoad(widths.word_width, cap_reg, value_ptr_reg, str_capacity_offset);
 
             const tag_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(tag_reg);
-            try self.codegen.emitLoadImm(tag_reg, seamless_slice_tag);
-            try self.codegen.emitAnd(.w64, tag_reg, tag_reg, cap_reg);
-            try self.emitCmpImm(tag_reg, 0);
+            try self.emitLoadImm(widths.word_width, tag_reg, seamless_slice_tag);
+            try self.codegen.emitAnd(widths.word_width, tag_reg, tag_reg, cap_reg);
+            try self.emitCmpImm(widths.word_width, tag_reg, 0);
             const done_patch = try self.emitJumpIfEqual();
 
-            try self.codegen.emitLoadImm(out_reg, seamless_slice_alloc_ptr_mask);
-            try self.codegen.emitAnd(.w64, out_reg, out_reg, cap_reg);
+            try self.emitLoadImm(widths.word_width, out_reg, seamless_slice_alloc_ptr_mask);
+            try self.codegen.emitAnd(widths.word_width, out_reg, out_reg, cap_reg);
             try self.codegen.patchJump(done_patch, self.codegen.currentOffset());
         }
 
@@ -12793,11 +12797,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const value_ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(value_ptr_reg);
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
 
             const len_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(len_reg);
-            try self.emitLoad(.w64, len_reg, value_ptr_reg, str_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, value_ptr_reg, str_len_offset);
 
             const skip_patch = blk: {
                 switch (isa) {
@@ -12839,7 +12843,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const value_ptr_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(value_ptr_reg);
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -12865,10 +12869,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(bytes_reg);
             defer self.codegen.freeGeneral(value_ptr_reg);
 
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
-            try self.emitLoad(.w64, bytes_reg, value_ptr_reg, list_bytes_offset);
-            try self.emitLoad(.w64, len_reg, value_ptr_reg, list_len_offset);
-            try self.emitLoad(.w64, cap_reg, value_ptr_reg, list_capacity_offset);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, bytes_reg, value_ptr_reg, list_bytes_offset);
+            try self.emitLoad(widths.word_width, len_reg, value_ptr_reg, list_len_offset);
+            try self.emitLoad(widths.word_width, cap_reg, value_ptr_reg, list_capacity_offset);
 
             if (list_plan.child) |child_key| {
                 // The element callback's C ABI carries no atomicity parameter,
@@ -12880,7 +12884,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitPendingRcAddr(child, callback_reg);
                 try self.scheduleRcHelper(child);
             } else {
-                try self.codegen.emitLoadImm(callback_reg, 0);
+                try self.emitLoadImm(widths.word_width, callback_reg, 0);
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -12905,8 +12909,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(payload_reg);
             defer self.codegen.freeGeneral(value_ptr_reg);
 
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
-            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, payload_reg, value_ptr_reg, 0);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -12927,8 +12931,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(payload_reg);
             defer self.codegen.freeGeneral(value_ptr_reg);
 
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
-            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, payload_reg, value_ptr_reg, 0);
 
             if (box_plan.child) |child_key| {
                 // The payload callback's C ABI carries no atomicity parameter,
@@ -12938,7 +12942,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitPendingRcAddr(child, callback_reg);
                 try self.scheduleRcHelper(child);
             } else {
-                try self.codegen.emitLoadImm(callback_reg, 0);
+                try self.emitLoadImm(widths.word_width, callback_reg, 0);
             }
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -12958,8 +12962,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(payload_reg);
             defer self.codegen.freeGeneral(value_ptr_reg);
 
-            try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
-            try self.emitLoad(.w64, payload_reg, value_ptr_reg, 0);
+            try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
+            try self.emitLoad(widths.word_width, payload_reg, value_ptr_reg, 0);
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -13047,7 +13051,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const field_ptr_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(field_ptr_reg);
 
-                        try self.emitLoad(.w64, field_ptr_reg, frame_ptr, ptr_slot);
+                        try self.emitLoad(widths.word_width, field_ptr_reg, frame_ptr, ptr_slot);
                         try self.emitAddPtrImmAny(field_ptr_reg, field_ptr_reg, @intCast(field_plan.offset));
                         try self.emitRawRcHelperCallFromPtrReg(
                             .{ .key = field_plan.child, .atomicity = helper.atomicity },
@@ -13064,7 +13068,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, 0)) |child_key| {
                             const payload_reg = try self.allocTempGeneral();
                             defer self.codegen.freeGeneral(payload_reg);
-                            try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
+                            try self.emitLoad(widths.word_width, payload_reg, frame_ptr, ptr_slot);
                             try self.emitRawRcHelperCallFromPtrReg(
                                 .{ .key = child_key, .atomicity = helper.atomicity },
                                 payload_reg,
@@ -13087,7 +13091,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const child_key = self.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_i) orelse continue;
 
                         const value_ptr_reg, const disc_reg = try self.allocTempGenerals(2);
-                        try self.emitLoad(.w64, value_ptr_reg, frame_ptr, ptr_slot);
+                        try self.emitLoad(widths.word_width, value_ptr_reg, frame_ptr, ptr_slot);
                         if (disc_use_w32) {
                             try self.emitLoad(.w32, disc_reg, value_ptr_reg, disc_offset);
                         } else {
@@ -13098,18 +13102,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (disc_size < 8) {
                             const disc_mask: u64 = (@as(u64, 1) << @intCast(disc_size * 8)) - 1;
                             const mask_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(mask_reg, @bitCast(disc_mask));
+                            try self.emitLoadImm(.w64, mask_reg, @bitCast(disc_mask));
                             try self.codegen.emitAnd(.w64, disc_reg, disc_reg, mask_reg);
                             self.codegen.freeGeneral(mask_reg);
                         }
 
-                        try self.emitCmpImm(disc_reg, @intCast(variant_i));
+                        try self.emitCmpImm(.w64, disc_reg, @intCast(variant_i));
                         self.codegen.freeGeneral(disc_reg);
 
                         const skip_patch = try self.emitJumpIfNotEqual();
                         const payload_reg = try self.allocTempGeneral();
                         defer self.codegen.freeGeneral(payload_reg);
-                        try self.emitLoad(.w64, payload_reg, frame_ptr, ptr_slot);
+                        try self.emitLoad(widths.word_width, payload_reg, frame_ptr, ptr_slot);
                         try self.emitRawRcHelperCallFromPtrReg(
                             .{ .key = child_key, .atomicity = helper.atomicity },
                             payload_reg,
@@ -13127,7 +13131,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .closure => |child_key| {
                     const captures_reg = try self.allocTempGeneral();
                     defer self.codegen.freeGeneral(captures_reg);
-                    try self.emitLoad(.w64, captures_reg, frame_ptr, ptr_slot);
+                    try self.emitLoad(widths.word_width, captures_reg, frame_ptr, ptr_slot);
                     try self.emitRawRcHelperCallFromPtrReg(
                         .{ .key = child_key, .atomicity = helper.atomicity },
                         captures_reg,
@@ -13205,13 +13209,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const ptr_slot = self.codegen.allocStackSlot(8);
             const ptr_arg_reg = self.getArgumentRegister(0);
-            try self.codegen.emitStoreStack(.w64, ptr_slot, ptr_arg_reg);
+            try self.codegen.emitStoreStack(widths.word_width, ptr_slot, ptr_arg_reg);
 
             const count_slot: ?i32 = switch (payload.key.op) {
                 .incref => blk: {
                     const count_arg_reg = self.getArgumentRegister(1);
                     const slot = self.codegen.allocStackSlot(8);
-                    try self.codegen.emitStoreStack(.w64, slot, count_arg_reg);
+                    try self.codegen.emitStoreStack(widths.word_width, slot, count_arg_reg);
                     break :blk slot;
                 },
                 // A `host_drop` adapter's second argument is the published
@@ -13220,8 +13224,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             const ptr_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, ptr_slot);
-            try self.emitCmpImm(ptr_reg, 0);
+            try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, ptr_slot);
+            try self.emitCmpImm(widths.word_width, ptr_reg, 0);
             self.codegen.freeGeneral(ptr_reg);
             const early_return_patch = try self.emitJumpIfEqual();
 
@@ -13374,7 +13378,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         break :blk ValueLocation{ .general_reg = reg };
                     } else {
                         const result_reg = try self.allocTempGeneral();
-                        try self.emitShiftImm(.shr, .w64, result_reg, reg, @intCast(field_offset * 8));
+                        try self.emitShiftImm(.shr, widths.word_width, result_reg, reg, @intCast(field_offset * 8));
                         self.codegen.freeGeneral(reg);
                         break :blk ValueLocation{ .general_reg = result_reg };
                     }
@@ -13650,11 +13654,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (elems.len == 0) {
                 const list_struct_offset: i32 = self.codegen.allocStackSlot(roc_list_size);
                 const zero_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(zero_reg, 0);
+                try self.emitLoadImm(widths.word_width, zero_reg, 0);
 
-                try self.emitStore(.w64, frame_ptr, list_struct_offset + list_bytes_offset, zero_reg);
-                try self.emitStore(.w64, frame_ptr, list_struct_offset + list_len_offset, zero_reg);
-                try self.emitStore(.w64, frame_ptr, list_struct_offset + list_capacity_offset, zero_reg);
+                try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_bytes_offset, zero_reg);
+                try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_len_offset, zero_reg);
+                try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_capacity_offset, zero_reg);
                 self.codegen.freeGeneral(zero_reg);
 
                 return .{ .list_stack = .{
@@ -13676,8 +13680,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Zero-sized elements occupy no storage, so the list owns no
                 // allocation and its data pointer stays null.
                 const null_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(null_reg, 0);
-                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, null_reg);
+                try self.emitLoadImm(widths.word_width, null_reg, 0);
+                try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, null_reg);
                 self.codegen.freeGeneral(null_reg);
             } else {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -13687,7 +13691,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
                 try self.callBuiltin(&builder, .allocate_with_refcount);
 
-                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
             }
 
             for (0..elems.len) |i| {
@@ -13704,7 +13708,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const elem_stack_offset = try self.ensureOnStack(elem_loc, elem_size);
                 const heap_ptr = try self.allocTempGeneral();
-                try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
 
                 const temp_reg = try self.allocTempGeneral();
                 try self.copyChunked(temp_reg, frame_ptr, elem_stack_offset, heap_ptr, elem_heap_offset, elem_size);
@@ -13716,13 +13720,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const encoded_capacity: u64 = @as(u64, num_elems) << RocList.capacity_shift;
 
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, heap_ptr_slot);
-            try self.codegen.emitLoadImm(len_reg, @intCast(num_elems));
-            try self.codegen.emitLoadImm(cap_reg, @intCast(encoded_capacity));
+            try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, heap_ptr_slot);
+            try self.emitLoadImm(widths.word_width, len_reg, @intCast(num_elems));
+            try self.emitLoadImm(widths.word_width, cap_reg, @intCast(encoded_capacity));
 
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + list_bytes_offset, ptr_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + list_len_offset, len_reg);
-            try self.emitStore(.w64, frame_ptr, list_struct_offset + list_capacity_offset, cap_reg);
+            try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_bytes_offset, ptr_reg);
+            try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_len_offset, len_reg);
+            try self.emitStore(widths.word_width, frame_ptr, list_struct_offset + list_capacity_offset, cap_reg);
 
             self.freeGenerals(.{ ptr_reg, len_reg, cap_reg });
 
@@ -13760,7 +13764,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                         try self.callBuiltin(&builder, .allocate_with_refcount);
                     }
-                    try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                    try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                     const field_exprs = self.store.getLocalSpan(s.fields);
                     for (0..field_exprs.len) |i| {
@@ -13778,7 +13782,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         const field_stack_offset = try self.ensureOnStack(field_loc, field_size);
                         const heap_ptr = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                        try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
 
                         const temp_reg = try self.allocTempGeneral();
                         try self.copyChunked(temp_reg, frame_ptr, field_stack_offset, heap_ptr, @intCast(field_offset), field_size);
@@ -13786,7 +13790,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     const result_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+                    try self.emitLoad(widths.word_width, result_reg, frame_ptr, heap_ptr_slot);
                     return .{ .general_reg = result_reg };
                 },
                 .struct_ => {
@@ -13881,7 +13885,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addImmArg(if (box_abi.contains_refcounted) 1 else 0);
                     try self.callBuiltin(&builder, .allocate_with_refcount);
                 }
-                try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
                 const inner_tu_data = ls.getTagUnionData(inner_layout.getTagUnion().idx);
                 const variants = ls.getTagUnionVariants(inner_tu_data);
@@ -13905,7 +13909,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (payload_size > 0) {
                         const arg_stack_offset = try self.ensureOnStack(arg_loc, payload_size);
                         const heap_ptr = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                        try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
                         const temp_reg = try self.allocTempGeneral();
                         try self.copyChunked(temp_reg, frame_ptr, arg_stack_offset, heap_ptr, 0, payload_size);
                         self.freeGenerals(.{ temp_reg, heap_ptr });
@@ -13914,13 +13918,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 {
                     const heap_ptr = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+                    try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
                     try self.storeDiscriminantToPtr(heap_ptr, inner_tu_data.discriminant_offset.get(self.layout_store.targetUsize()), tag.discriminant, inner_tu_data.discriminant_size);
                     self.codegen.freeGeneral(heap_ptr);
                 }
 
                 const result_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+                try self.emitLoad(widths.word_width, result_reg, frame_ptr, heap_ptr_slot);
                 return .{ .general_reg = result_reg };
             }
             if (union_layout.tag != .tag_union) {
@@ -14088,7 +14092,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const slot = self.codegen.allocStackSlot(8);
                         const reg = try self.allocTempGeneral();
                         try self.emitBytesAddress(arg_ref, reg);
-                        try self.emitStore(.w64, frame_ptr, slot, reg);
+                        try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                         self.codegen.freeGeneral(reg);
                         arg_locs[i] = self.stackLocationForLayout(expected_layout, slot);
                     }
@@ -14109,7 +14113,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const slot = self.codegen.allocStackSlot(8);
                 const reg = try self.allocTempGeneral();
                 try self.emitTargetAddress(dst, reg);
-                try self.emitStore(.w64, frame_ptr, slot, reg);
+                try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                 self.codegen.freeGeneral(reg);
                 arg_layouts[arg_refs.len] = self.localLayout(callee_result);
                 arg_locs[arg_refs.len] = self.stackLocationForLayout(arg_layouts[arg_refs.len], slot);
@@ -14144,7 +14148,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (size != 0) {
                 const offset = try self.ensureOnStack(value_loc, size);
                 const to, const temp = try self.allocTempGenerals(2);
-                try self.emitLoad(.w64, to, frame_ptr, self.localSlot(target_local));
+                try self.emitLoad(widths.word_width, to, frame_ptr, self.localSlot(target_local));
                 try self.copyChunked(temp, frame_ptr, offset, to, 0, size);
                 self.freeGenerals(.{ temp, to });
             }
@@ -14264,7 +14268,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             reg_idx += 1;
                         } else {
                             try self.emitTailBlockAddress(scratch_reg, delta + pointee_offset);
-                            try self.emitStore(.w64, frame_ptr, staging + word_offset, scratch_reg);
+                            try self.emitStore(widths.word_width, frame_ptr, staging + word_offset, scratch_reg);
                             word_offset += 8;
                         }
                         pointee_offset += @intCast(self.pointeeBlockBytes(info.layout_idx.?));
@@ -14294,7 +14298,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 var reg_idx: u8 = 0;
                 var pointee_offset: i32 = @intCast(block.words);
                 if (needs_ret_ptr) {
-                    try self.emitLoad(.w64, self.getArgumentRegister(0), frame_ptr, self.ret_ptr_slot.?);
+                    try self.emitLoad(widths.word_width, self.getArgumentRegister(0), frame_ptr, self.ret_ptr_slot.?);
                     reg_idx = 1;
                 }
                 for (arg_infos, 0..) |info, i| {
@@ -14323,7 +14327,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else {
                         var ri: u8 = 0;
                         while (ri < info.num_regs) : (ri += 1) {
-                            try self.emitLoad(.w64, self.getArgumentRegister(reg_idx + ri), frame_ptr, frozen.stack_offset + @as(i32, ri) * 8);
+                            try self.emitLoad(widths.word_width, self.getArgumentRegister(reg_idx + ri), frame_ptr, frozen.stack_offset + @as(i32, ri) * target_ptr_size);
                         }
                     }
                     reg_idx += info.num_regs;
@@ -14396,25 +14400,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// (`moved[i]` for argument `i`). Returns the slot holding the carry.
         fn emitTailCarry(self: *Self, arg_refs: anytype, param_refs: anytype, moved: []i32) Allocator.Error!i32 {
             const cursor, const desc_reg, const size = try self.allocTempGenerals(3);
-            try self.codegen.emitLoadImm(cursor, 0);
+            try self.emitLoadImm(widths.word_width, cursor, 0);
             for (0..arg_refs.len) |i| {
                 if (self.localDyn(GuardedList.at(param_refs, i)) == null) continue;
                 const arg_ref = GuardedList.at(arg_refs, i);
                 if (self.localDyn(arg_ref)) |dyn| {
-                    try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
+                    try self.emitLoad(widths.word_width, desc_reg, frame_ptr, self.localSlot(dyn.desc));
                     try self.emitLoad(.w32, size, desc_reg, desc_size_offset);
                 } else {
-                    try self.codegen.emitLoadImm(size, self.getLayoutSize(self.localLayout(arg_ref)));
+                    try self.emitLoadImm(widths.word_width, size, self.getLayoutSize(self.localLayout(arg_ref)));
                 }
                 moved[i] = self.codegen.allocStackSlot(8);
-                try self.emitStore(.w64, frame_ptr, moved[i], cursor);
-                try self.emitAddImm(size, size, 15);
-                try self.codegen.emitLoadImm(desc_reg, -16);
-                try self.codegen.emitAnd(.w64, size, size, desc_reg);
-                try self.codegen.emitAdd(.w64, cursor, cursor, size);
+                try self.emitStore(widths.word_width, frame_ptr, moved[i], cursor);
+                try self.emitAddImm(widths.word_width, size, size, 15);
+                try self.emitLoadImm(widths.word_width, desc_reg, -16);
+                try self.codegen.emitAnd(widths.word_width, size, size, desc_reg);
+                try self.codegen.emitAdd(widths.word_width, cursor, cursor, size);
             }
             const total = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, total, cursor);
+            try self.emitStore(widths.word_width, frame_ptr, total, cursor);
             self.freeGenerals(.{ size, desc_reg, cursor });
 
             const carry = self.codegen.allocStackSlot(8);
@@ -14423,17 +14427,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addMemArg(frame_ptr, total);
                 try self.callBoxyRuntime(&builder, "roc_desc_carry_alloc");
-                try self.emitStore(.w64, frame_ptr, carry, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, carry, ret_reg_0);
             }
 
             for (0..arg_refs.len) |i| {
                 if (self.localDyn(GuardedList.at(param_refs, i)) == null) continue;
                 const arg_ref = GuardedList.at(arg_refs, i);
                 const address, const offset = try self.allocTempGenerals(2);
-                try self.emitLoad(.w64, address, frame_ptr, carry);
-                try self.emitLoad(.w64, offset, frame_ptr, moved[i]);
-                try self.codegen.emitAdd(.w64, address, address, offset);
-                try self.emitStore(.w64, frame_ptr, moved[i], address);
+                try self.emitLoad(widths.word_width, address, frame_ptr, carry);
+                try self.emitLoad(widths.word_width, offset, frame_ptr, moved[i]);
+                try self.codegen.emitAdd(widths.word_width, address, address, offset);
+                try self.emitStore(widths.word_width, frame_ptr, moved[i], address);
                 if (self.localDyn(arg_ref)) |dyn| {
                     self.freeGenerals(.{ offset, address });
                     try self.emitDescCopy(dyn.desc, .{ .dynamic = moved[i] }, arg_ref);
@@ -14486,7 +14490,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const closure_ptr_slot = self.codegen.allocStackSlot(8);
             {
                 const closure_ptr_reg = try self.ensureInGeneralReg(closure_loc);
-                try self.emitStore(.w64, frame_ptr, closure_ptr_slot, closure_ptr_reg);
+                try self.emitStore(widths.word_width, frame_ptr, closure_ptr_slot, closure_ptr_reg);
                 self.codegen.freeGeneral(closure_ptr_reg);
             }
 
@@ -14525,10 +14529,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const capture_ptr_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, capture_ptr_reg, frame_ptr, closure_ptr_slot);
+            try self.emitLoad(widths.word_width, capture_ptr_reg, frame_ptr, closure_ptr_slot);
             try self.emitAddPtrImmAny(capture_ptr_reg, capture_ptr_reg, builtins.erased_callable.capture_offset);
             const capture_stack_offset = self.codegen.allocStackSlot(8);
-            try self.emitStore(.w64, frame_ptr, capture_stack_offset, capture_ptr_reg);
+            try self.emitStore(widths.word_width, frame_ptr, capture_stack_offset, capture_ptr_reg);
             self.codegen.freeGeneral(capture_ptr_reg);
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const ret_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_ret_layout)).size;
@@ -14537,9 +14541,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             const fn_slot = self.codegen.allocStackSlot(8);
             const reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, reg, frame_ptr, closure_ptr_slot);
-            try self.emitLoad(.w64, reg, reg, 0);
-            try self.emitStore(.w64, frame_ptr, fn_slot, reg);
+            try self.emitLoad(widths.word_width, reg, frame_ptr, closure_ptr_slot);
+            try self.emitLoad(widths.word_width, reg, reg, 0);
+            try self.emitStore(widths.word_width, frame_ptr, fn_slot, reg);
             self.codegen.freeGeneral(reg);
             if (deferred) try builder.addMemArg(frame_ptr, self.pendingCellSlot());
             try builder.addMemArg(frame_ptr, fn_slot);
@@ -14574,12 +14578,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const cell = self.codegen.allocStackSlot(builtins.native_callable.pendingByteSize(word));
             const slot = self.codegen.allocStackSlot(word);
             const reg = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(reg, 0);
+            try self.emitLoadImm(widths.word_width, reg, 0);
             for (0..builtins.native_callable.zeroed_words) |i| {
-                try self.emitStore(.w64, frame_ptr, cell + @as(i32, @intCast(i * word)), reg);
+                try self.emitStore(widths.word_width, frame_ptr, cell + @as(i32, @intCast(i * word)), reg);
             }
             try self.emitLeaStack(reg, cell);
-            try self.emitStore(.w64, frame_ptr, slot, reg);
+            try self.emitStore(widths.word_width, frame_ptr, slot, reg);
             self.codegen.freeGeneral(reg);
             self.pending_cell_slot = slot;
             const out_slot = invocation orelse return;
@@ -14588,11 +14592,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, out_slot);
             try self.callBuiltin(&builder, .native_callable_caller_cell);
             const flag_slot = self.codegen.allocStackSlot(word);
-            try self.emitStore(.w64, frame_ptr, flag_slot, ret_reg_0);
+            try self.emitStore(widths.word_width, frame_ptr, flag_slot, ret_reg_0);
             self.caller_drives_slot = flag_slot;
-            try self.emitCmpImm(ret_reg_0, 0);
+            try self.emitCmpImm(widths.word_width, ret_reg_0, 0);
             const own = try self.emitJumpIfEqual();
-            try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+            try self.emitStore(widths.word_width, frame_ptr, slot, ret_reg_0);
             try self.codegen.patchJump(own, self.codegen.currentOffset());
         }
 
@@ -14630,8 +14634,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const flag_slot = self.caller_drives_slot orelse
                     base.invariant("Dev/codegen invariant violated: procedure reads a caller-drives flag it never recorded", .{});
                 const flag_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, flag_reg, frame_ptr, flag_slot);
-                try self.emitCmpImm(flag_reg, 0);
+                try self.emitLoad(widths.word_width, flag_reg, frame_ptr, flag_slot);
+                try self.emitCmpImm(widths.word_width, flag_reg, 0);
                 self.codegen.freeGeneral(flag_reg);
                 skip_patch = try self.emitJumpIfNotEqual();
             }
@@ -14698,7 +14702,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer builder.deinit();
                     try self.callBuiltin(&builder, .hot_reload_retain_current);
                     try self.emitStore(
-                        .w64,
+                        widths.word_width,
                         frame_ptr,
                         capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "code_ref"))),
                         ret_reg_0,
@@ -14706,14 +14710,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const original_on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
                     try self.emitStore(
-                        .w64,
+                        widths.word_width,
                         frame_ptr,
                         capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_drop"))),
                         original_on_drop_reg,
                     );
                     self.codegen.freeGeneral(original_on_drop_reg);
                     const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
-                    try self.emitStore(.w64, frame_ptr, capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy"))), original_on_copy_reg);
+                    try self.emitStore(widths.word_width, frame_ptr, capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy"))), original_on_copy_reg);
                     self.codegen.freeGeneral(original_on_copy_reg);
                 }
 
@@ -14748,7 +14752,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitPendingProcAddress(proc_id, proc_addr)
                     else
                         try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, proc_addr);
-                    try self.emitStore(.w64, frame_ptr, proc_addr_slot, proc_addr);
+                    try self.emitStore(widths.word_width, frame_ptr, proc_addr_slot, proc_addr);
                     self.codegen.freeGeneral(proc_addr);
                 }
 
@@ -14762,7 +14766,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
                         break :blk reg;
                     } else try self.materializeErasedCallableOnDrop(on_drop);
-                    try self.emitStore(.w64, frame_ptr, on_drop_slot, on_drop_reg);
+                    try self.emitStore(widths.word_width, frame_ptr, on_drop_slot, on_drop_reg);
                     self.codegen.freeGeneral(on_drop_reg);
                 }
 
@@ -14770,7 +14774,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 {
                     const reuse_loc = try self.emitValueLocal(reuse_local);
                     const reuse_reg = try self.ensureInGeneralReg(reuse_loc);
-                    try self.emitStore(.w64, frame_ptr, reuse_ptr_slot, reuse_reg);
+                    try self.emitStore(widths.word_width, frame_ptr, reuse_ptr_slot, reuse_reg);
                     self.codegen.freeGeneral(reuse_reg);
                 }
 
@@ -14806,7 +14810,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(if (builtins.erased_callable.allocation_has_refcounted_children) 1 else 0);
                 try self.callBuiltin(&builder, .allocate_with_refcount);
             }
-            try self.emitStore(.w64, frame_ptr, heap_ptr_slot, ret_reg_0);
+            try self.emitStore(widths.word_width, frame_ptr, heap_ptr_slot, ret_reg_0);
 
             const hot_reload_code_ref_slot: ?i32 = if (self.hotReloadEnabled()) blk: {
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -14814,12 +14818,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.callBuiltin(&builder, .hot_reload_retain_current);
 
                 const slot = self.codegen.allocStackSlot(8);
-                try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, slot, ret_reg_0);
                 break :blk slot;
             } else null;
 
             const heap_ptr = try self.allocTempGeneral();
-            try self.emitLoad(.w64, heap_ptr, frame_ptr, heap_ptr_slot);
+            try self.emitLoad(widths.word_width, heap_ptr, frame_ptr, heap_ptr_slot);
 
             const proc_addr = try self.allocTempGeneral();
             const proc = try self.compiledProcForId(proc_id);
@@ -14827,20 +14831,20 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitPendingProcAddress(proc_id, proc_addr)
             else
                 try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, proc_addr);
-            try self.emitStore(.w64, heap_ptr, 0, proc_addr);
+            try self.emitStore(widths.word_width, heap_ptr, 0, proc_addr);
             self.codegen.freeGeneral(proc_addr);
 
             if (self.hotReloadEnabled()) {
                 const hot_drop_reg = try self.allocTempGeneral();
                 try self.emitBuiltinAddress(hot_drop_reg, .hot_reload_erased_callable_drop);
-                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
+                try self.emitStore(widths.word_width, heap_ptr, @intCast(@sizeOf(usize)), hot_drop_reg);
                 self.codegen.freeGeneral(hot_drop_reg);
 
                 if (hot_reload_code_ref_slot) |slot| {
                     const code_ref_reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, code_ref_reg, frame_ptr, slot);
+                    try self.emitLoad(widths.word_width, code_ref_reg, frame_ptr, slot);
                     try self.emitStore(
-                        .w64,
+                        widths.word_width,
                         heap_ptr,
                         @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "code_ref")),
                         code_ref_reg,
@@ -14850,18 +14854,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 const original_on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
                 try self.emitStore(
-                    .w64,
+                    widths.word_width,
                     heap_ptr,
                     @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_drop")),
                     original_on_drop_reg,
                 );
                 self.codegen.freeGeneral(original_on_drop_reg);
                 const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
-                try self.emitStore(.w64, heap_ptr, @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy")), original_on_copy_reg);
+                try self.emitStore(widths.word_width, heap_ptr, @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy")), original_on_copy_reg);
                 self.codegen.freeGeneral(original_on_copy_reg);
             } else {
                 const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
-                try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
+                try self.emitStore(widths.word_width, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
                 self.codegen.freeGeneral(on_drop_reg);
             }
 
@@ -14892,7 +14896,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.codegen.freeGeneral(heap_ptr);
 
             const result_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
+            try self.emitLoad(widths.word_width, result_reg, frame_ptr, heap_ptr_slot);
             return .{ .general_reg = result_reg };
         }
 
@@ -14902,9 +14906,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitBuiltinAddress(result, .hot_reload_erased_callable_copy);
                 break :blk result;
             } else try self.materializeErasedCallableOnDrop(on_copy);
-            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "on_copy")), reg);
+            try self.emitStore(widths.word_width, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "on_copy")), reg);
             try self.codegen.emitLoadImm(reg, size);
-            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "capture_size")), reg);
+            try self.emitStore(widths.word_width, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "capture_size")), reg);
             self.codegen.freeGeneral(reg);
         }
 
@@ -14914,10 +14918,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!GeneralReg {
             const on_drop_reg = try self.allocTempGeneral();
             switch (on_drop) {
-                .none => try self.codegen.emitLoadImm(on_drop_reg, 0),
+                .none => try self.emitLoadImm(widths.word_width, on_drop_reg, 0),
                 .rc_helper => |helper_key| {
                     if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
-                        try self.codegen.emitLoadImm(on_drop_reg, 0);
+                        try self.emitLoadImm(widths.word_width, on_drop_reg, 0);
                     } else {
                         // `on_drop` is selected here at closure creation, which
                         // is not an RC statement and makes no thread-confinement
@@ -14963,9 +14967,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 total_args_size += size_align.size;
             }
 
-            // Pad by 8 bytes so register pieces loaded as full 64-bit words from the tail
+            // Pad by a word so register pieces loaded as full words from the tail
             // argument never read past the slot.
-            const args_slot = self.codegen.allocStackSlot(total_args_size + 8);
+            const args_slot = self.codegen.allocStackSlot(total_args_size + target_ptr_size);
 
             for (args, arg_layouts, arg_offsets) |arg_loc_raw, arg_layout, arg_offset| {
                 const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
@@ -15092,7 +15096,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (piece.size <= 4) {
                                     try self.emitStore(.w32, frame_ptr, dst_off, reg);
                                 } else {
-                                    try self.emitStore(.w64, frame_ptr, dst_off, reg);
+                                    try self.emitStore(widths.word_width, frame_ptr, dst_off, reg);
                                 }
                                 gp_i += 1;
                             },
@@ -15155,26 +15159,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
         }
 
+        /// Load the immediate `value` into `dst` at `width`.
+        fn emitLoadImm(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, value: i64) Allocator.Error!void {
+            switch (isa) {
+                // Both instruction sets' `emitLoadImm` write the whole 64-bit
+                // register.
+                .x86_64, .aarch64 => {
+                    comptime std.debug.assert(width == .w64);
+                    try self.codegen.emitLoadImm(dst, value);
+                },
+            }
+        }
+
         /// Compare a general register against an immediate bit pattern.
-        fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) Allocator.Error!void {
+        fn emitCmpImm(self: *Self, comptime width: widths.RegisterWidth, reg: GeneralReg, value: i64) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     if (value >= 0 and value <= std.math.maxInt(u12)) {
-                        try self.codegen.emit.cmpRegImm12(.w64, reg, @intCast(value));
+                        try self.codegen.emit.cmpRegImm12(width, reg, @intCast(value));
                     } else {
                         const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp, value);
-                        try self.codegen.emit.cmpRegReg(.w64, reg, temp);
+                        try self.emitLoadImm(width, temp, value);
+                        try self.codegen.emit.cmpRegReg(width, reg, temp);
                         self.codegen.freeGeneral(temp);
                     }
                 },
                 .x86_64 => {
                     if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
-                        try self.codegen.emit.cmpRegImm32(.w64, reg, @intCast(value));
+                        try self.codegen.emit.cmpRegImm32(width, reg, @intCast(value));
                     } else {
                         const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp, value);
-                        try self.codegen.emit.cmpRegReg(.w64, reg, temp);
+                        try self.emitLoadImm(width, temp, value);
+                        try self.codegen.emit.cmpRegReg(width, reg, temp);
                         self.codegen.freeGeneral(temp);
                     }
                 },
@@ -15398,17 +15414,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (loc) {
                 .general_reg => |src_reg| {
                     if (src_reg != target_reg) {
-                        try self.emitMovRegReg(target_reg, src_reg);
+                        try self.emitMovRegReg(.w64, target_reg, src_reg);
                     }
                 },
                 .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(target_reg, val);
+                    try self.emitLoadImm(.w64, target_reg, val);
                 },
                 .immediate_i128 => |imm| {
                     const val = imm.get();
                     // Only load low 64 bits into single register
                     const low: i64 = @truncate(val);
-                    try self.codegen.emitLoadImm(target_reg, low);
+                    try self.emitLoadImm(.w64, target_reg, low);
                 },
                 .stack => |s| {
                     const offset = s.offset;
@@ -15420,11 +15436,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .stack_str => |offset| {
                     // Load ptr/data (first 8 bytes of string struct)
-                    try self.codegen.emitLoadStack(.w64, target_reg, offset);
+                    try self.codegen.emitLoadStack(widths.word_width, target_reg, offset);
                 },
                 .list_stack => |list_info| {
                     // Load ptr (first 8 bytes of list struct)
-                    try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
+                    try self.codegen.emitLoadStack(widths.word_width, target_reg, list_info.struct_offset);
                 },
                 .float_reg => |float| {
                     // Calls use general argument registers; pass float values as raw bits.
@@ -15441,11 +15457,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .vector_reg, .noreturn => unexpectedLocation("moveToReg", loc),
                 .immediate_f32 => |val| {
                     const bits: u32 = @bitCast(val);
-                    try self.codegen.emitLoadImm(target_reg, bits);
+                    try self.emitLoadImm(widths.word_width, target_reg, bits);
                 },
                 .immediate_f64 => |val| {
                     const bits: u64 = @bitCast(val);
-                    try self.codegen.emitLoadImm(target_reg, @bitCast(bits));
+                    try self.emitLoadImm(.w64, target_reg, @bitCast(bits));
                 },
             }
         }
@@ -15523,8 +15539,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn aggregateArgRegisterPressure(size: u32) u8 {
-            if (size <= 8) return 1;
-            const regs = (size + 7) / 8;
+            if (size <= target_ptr_size) return 1;
+            const regs = (size + target_ptr_size - 1) / target_ptr_size;
             if (regs > max_arg_regs) return pass_by_ptr_arg_regs;
             return @intCast(regs);
         }
@@ -15569,9 +15585,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Copy from local stack to argument stack area
                     var ri: u8 = 0;
                     while (ri < num_regs) : (ri += 1) {
-                        const off: i32 = @as(i32, ri) * 8;
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
-                        try self.emitStore(.w64, stack_ptr, stack_offset + off, temp_reg);
+                        const off: i32 = @as(i32, ri) * target_ptr_size;
+                        try self.emitLoad(widths.word_width, temp_reg, frame_ptr, src_offset + off);
+                        try self.emitStore(widths.word_width, stack_ptr, stack_offset + off, temp_reg);
                     }
                 },
                 .stack => |s| {
@@ -15579,13 +15595,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Copy from local stack to argument stack area
                     if (num_regs == 1 and s.size != .qword) {
                         try self.emitSizedLoadStack(temp_reg, src_offset, s.size);
-                        try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
+                        try self.emitStore(widths.word_width, stack_ptr, stack_offset, temp_reg);
                     } else {
                         var ri: u8 = 0;
                         while (ri < num_regs) : (ri += 1) {
-                            const off: i32 = @as(i32, ri) * 8;
-                            try self.emitLoad(.w64, temp_reg, frame_ptr, src_offset + off);
-                            try self.emitStore(.w64, stack_ptr, stack_offset + off, temp_reg);
+                            const off: i32 = @as(i32, ri) * target_ptr_size;
+                            try self.emitLoad(widths.word_width, temp_reg, frame_ptr, src_offset + off);
+                            try self.emitStore(widths.word_width, stack_ptr, stack_offset + off, temp_reg);
                         }
                     }
                 },
@@ -15593,32 +15609,32 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // One register per RocList word
                     var ri: u8 = 0;
                     while (ri < num_regs) : (ri += 1) {
-                        const off: i32 = @as(i32, ri) * 8;
-                        try self.emitLoad(.w64, temp_reg, frame_ptr, info.struct_offset + off);
-                        try self.emitStore(.w64, stack_ptr, stack_offset + off, temp_reg);
+                        const off: i32 = @as(i32, ri) * target_ptr_size;
+                        try self.emitLoad(widths.word_width, temp_reg, frame_ptr, info.struct_offset + off);
+                        try self.emitStore(widths.word_width, stack_ptr, stack_offset + off, temp_reg);
                     }
                 },
                 .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(temp_reg, val);
+                    try self.emitLoadImm(.w64, temp_reg, val);
                     try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
                 },
                 .immediate_i128 => |imm| {
                     const val = imm.get();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, temp_reg, @bitCast(low));
                     try self.emitStore(.w64, stack_ptr, stack_offset, temp_reg);
-                    try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, temp_reg, @bitCast(high));
                     try self.emitStore(.w64, stack_ptr, stack_offset + 8, temp_reg);
                 },
                 .general_reg => |reg| {
-                    try self.emitStore(.w64, stack_ptr, stack_offset, reg);
+                    try self.emitStore(widths.word_width, stack_ptr, stack_offset, reg);
                 },
                 .float_reg, .vector_reg, .immediate_f32, .immediate_f64, .noreturn => {
                     if (arg_layout == .f32) {
                         const bits_reg = try self.materializeF32BitsInGeneralReg(arg_loc);
                         if (bits_reg != temp_reg) {
-                            try self.codegen.emit.movRegReg(.w64, temp_reg, bits_reg);
+                            try self.codegen.emit.movRegReg(widths.word_width, temp_reg, bits_reg);
                             self.codegen.freeGeneral(bits_reg);
                         }
                     } else {
@@ -15765,23 +15781,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitZstListWithCapacity(self: *Self, len_reg: ?GeneralReg, capacity: ZstCapacity) Allocator.Error!ValueLocation {
             const slot = self.codegen.allocStackSlot(roc_list_size);
             const zero_reg, const cap_reg = try self.allocTempGenerals(2);
-            try self.codegen.emitLoadImm(zero_reg, 0);
-            try self.emitStore(.w64, frame_ptr, slot + list_bytes_offset, zero_reg);
-            try self.emitStore(.w64, frame_ptr, slot + list_len_offset, len_reg orelse zero_reg);
+            try self.emitLoadImm(widths.word_width, zero_reg, 0);
+            try self.emitStore(widths.word_width, frame_ptr, slot + list_bytes_offset, zero_reg);
+            try self.emitStore(widths.word_width, frame_ptr, slot + list_len_offset, len_reg orelse zero_reg);
             switch (capacity) {
-                .exact => try self.emitShiftImm(.shl, .w64, cap_reg, len_reg orelse zero_reg, RocList.capacity_shift),
+                .exact => try self.emitShiftImm(.shl, widths.word_width, cap_reg, len_reg orelse zero_reg, RocList.capacity_shift),
                 .at_least => |count_reg| {
                     if (len_reg) |len| {
                         // max(count, len) is len + (count -| len).
-                        try self.emitSaturatingSub(cap_reg, count_reg, len);
+                        try self.emitSaturatingSub(.w64, cap_reg, count_reg, len);
                         try self.codegen.emitAdd(.w64, cap_reg, cap_reg, len);
-                        try self.emitShiftImm(.shl, .w64, cap_reg, cap_reg, RocList.capacity_shift);
+                        try self.emitShiftImm(.shl, widths.word_width, cap_reg, cap_reg, RocList.capacity_shift);
                     } else {
-                        try self.emitShiftImm(.shl, .w64, cap_reg, count_reg, RocList.capacity_shift);
+                        try self.emitShiftImm(.shl, widths.word_width, cap_reg, count_reg, RocList.capacity_shift);
                     }
                 },
             }
-            try self.emitStore(.w64, frame_ptr, slot + list_capacity_offset, cap_reg);
+            try self.emitStore(widths.word_width, frame_ptr, slot + list_capacity_offset, cap_reg);
             self.freeGenerals(.{ cap_reg, zero_reg });
             return .{ .list_stack = .{ .struct_offset = slot, .data_offset = 0, .num_elements = 0 } };
         }
@@ -15798,8 +15814,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitZstListKeeping(self: *Self, list_off: i32, len_reg: ?GeneralReg) Allocator.Error!ValueLocation {
             const count_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(count_reg);
-            try self.emitLoad(.w64, count_reg, frame_ptr, list_off + list_capacity_offset);
-            try self.emitShiftImm(.shr, .w64, count_reg, count_reg, RocList.capacity_shift);
+            try self.emitLoad(widths.word_width, count_reg, frame_ptr, list_off + list_capacity_offset);
+            try self.emitShiftImm(.shr, widths.word_width, count_reg, count_reg, RocList.capacity_shift);
             return self.emitZstListWithCapacity(len_reg, .{ .at_least = count_reg });
         }
 
@@ -15807,10 +15823,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `RocList.max_zero_sized_capacity`, the most a capacity word encodes.
         fn emitBoundZstCapacity(self: *Self, count_reg: GeneralReg) Allocator.Error!void {
             const max_reg, const over_reg = try self.allocTempGenerals(2);
-            try self.codegen.emitLoadImm(max_reg, @intCast(RocList.max_zero_sized_capacity));
+            try self.emitLoadImm(.w64, max_reg, @intCast(RocList.max_zero_sized_capacity));
             // min(count, max) is max -| (max -| count).
-            try self.emitSaturatingSub(over_reg, max_reg, count_reg);
-            try self.emitSaturatingSub(count_reg, max_reg, over_reg);
+            try self.emitSaturatingSub(.w64, over_reg, max_reg, count_reg);
+            try self.emitSaturatingSub(.w64, count_reg, max_reg, over_reg);
             self.freeGenerals(.{ over_reg, max_reg });
         }
 
@@ -15818,15 +15834,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `spare` more items counted at `spare_at`.
         fn emitZstListReserving(self: *Self, list_off: i32, spare_at: i32) Allocator.Error!ValueLocation {
             const len_reg, const wanted_reg = try self.allocTempGenerals(2);
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
             try self.emitLoad(.w64, wanted_reg, frame_ptr, spare_at);
             {
                 // len +| spare: spare is first cut down to the room left above len.
                 const room_reg, const over_reg = try self.allocTempGenerals(2);
-                try self.codegen.emitLoadImm(over_reg, -1);
-                try self.emitSaturatingSub(room_reg, over_reg, len_reg);
-                try self.emitSaturatingSub(over_reg, room_reg, wanted_reg);
-                try self.emitSaturatingSub(wanted_reg, room_reg, over_reg);
+                try self.emitLoadImm(.w64, over_reg, -1);
+                try self.emitSaturatingSub(.w64, room_reg, over_reg, len_reg);
+                try self.emitSaturatingSub(.w64, over_reg, room_reg, wanted_reg);
+                try self.emitSaturatingSub(.w64, wanted_reg, room_reg, over_reg);
                 try self.codegen.emitAdd(.w64, wanted_reg, wanted_reg, len_reg);
                 self.freeGenerals(.{ over_reg, room_reg });
             }
@@ -15834,9 +15850,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 // The capacity the list already has, when that is larger.
                 const held_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, held_reg, frame_ptr, list_off + list_capacity_offset);
-                try self.emitShiftImm(.shr, .w64, held_reg, held_reg, RocList.capacity_shift);
-                try self.emitSaturatingSub(held_reg, held_reg, wanted_reg);
+                try self.emitLoad(widths.word_width, held_reg, frame_ptr, list_off + list_capacity_offset);
+                try self.emitShiftImm(.shr, widths.word_width, held_reg, held_reg, RocList.capacity_shift);
+                try self.emitSaturatingSub(.w64, held_reg, held_reg, wanted_reg);
                 try self.codegen.emitAdd(.w64, wanted_reg, wanted_reg, held_reg);
                 self.codegen.freeGeneral(held_reg);
             }
@@ -15849,7 +15865,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the count at `count_at`.
         fn emitZstListGrownBy(self: *Self, list_off: i32, count_at: i32) Allocator.Error!ValueLocation {
             const len_reg, const count_reg = try self.allocTempGenerals(2);
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
             try self.emitLoad(.w64, count_reg, frame_ptr, count_at);
             try self.codegen.emitAdd(.w64, len_reg, len_reg, count_reg);
             self.codegen.freeGeneral(count_reg);
@@ -15862,8 +15878,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// at `list_off`, grown in place.
         fn emitZstListOneLonger(self: *Self, list_off: i32) Allocator.Error!ValueLocation {
             const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
-            try self.emitAddImm(len_reg, len_reg, 1);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitAddImm(widths.word_width, len_reg, len_reg, 1);
             const result = try self.emitZstListKeeping(list_off, len_reg);
             self.codegen.freeGeneral(len_reg);
             return result;
@@ -15874,12 +15890,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// subtraction alone because `min(x, y)` is `y -| (y -| x)`.
         fn emitZstSublist(self: *Self, list_off: i32, start_at: i32, len_at: i32) Allocator.Error!ValueLocation {
             const avail_reg, const start_reg, const want_reg, const tmp_reg = try self.allocTempGenerals(4);
-            try self.emitLoad(.w64, avail_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, avail_reg, frame_ptr, list_off + list_len_offset);
             try self.emitLoad(.w64, start_reg, frame_ptr, start_at);
             try self.emitLoad(.w64, want_reg, frame_ptr, len_at);
-            try self.emitSaturatingSub(avail_reg, avail_reg, start_reg);
-            try self.emitSaturatingSub(tmp_reg, avail_reg, want_reg);
-            try self.emitSaturatingSub(avail_reg, avail_reg, tmp_reg);
+            try self.emitSaturatingSub(.w64, avail_reg, avail_reg, start_reg);
+            try self.emitSaturatingSub(.w64, tmp_reg, avail_reg, want_reg);
+            try self.emitSaturatingSub(.w64, avail_reg, avail_reg, tmp_reg);
             self.freeGenerals(.{ tmp_reg, want_reg, start_reg });
             const result = try self.emitZstList(avail_reg);
             self.codegen.freeGeneral(avail_reg);
@@ -15890,16 +15906,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// one shorter when the index is in bounds, unchanged when it is not.
         fn emitZstDropAt(self: *Self, list_off: i32, index_at: i32) Allocator.Error!ValueLocation {
             const size_reg, const index_reg, const one_reg, const flag_reg = try self.allocTempGenerals(4);
-            try self.emitLoad(.w64, size_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, size_reg, frame_ptr, list_off + list_len_offset);
             try self.emitLoad(.w64, index_reg, frame_ptr, index_at);
-            try self.codegen.emitLoadImm(one_reg, 1);
+            try self.emitLoadImm(.w64, one_reg, 1);
             // flag = min(size -| index, 1): one when the index is in bounds.
             // Each destination stays distinct from the subtrahend, because
             // emitSaturatingSub computes into its destination in place.
-            try self.emitSaturatingSub(flag_reg, size_reg, index_reg);
-            try self.emitSaturatingSub(index_reg, one_reg, flag_reg);
-            try self.emitSaturatingSub(flag_reg, one_reg, index_reg);
-            try self.emitSaturatingSub(size_reg, size_reg, flag_reg);
+            try self.emitSaturatingSub(.w64, flag_reg, size_reg, index_reg);
+            try self.emitSaturatingSub(.w64, index_reg, one_reg, flag_reg);
+            try self.emitSaturatingSub(.w64, flag_reg, one_reg, index_reg);
+            try self.emitSaturatingSub(.w64, size_reg, size_reg, flag_reg);
             self.freeGenerals(.{ flag_reg, one_reg, index_reg });
             const result = try self.emitZstListKeeping(list_off, size_reg);
             self.codegen.freeGeneral(size_reg);
@@ -15911,7 +15927,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitZstListWithSameLen(self: *Self, list_off: i32) Allocator.Error!ValueLocation {
             const len_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(len_reg);
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
             return self.emitZstList(len_reg);
         }
 
@@ -15921,7 +15937,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitZstListUnchanged(self: *Self, list_off: i32) Allocator.Error!ValueLocation {
             const len_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(len_reg);
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + list_len_offset);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, list_off + list_len_offset);
             return self.emitZstListKeeping(list_off, len_reg);
         }
 
@@ -16101,7 +16117,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitBuiltinAddress(self: *Self, dst_reg: GeneralReg, builtin_fn: BuiltinFn) Allocator.Error!void {
             switch (self.generation_mode) {
                 .native_execution => {
-                    try self.codegen.emitLoadImm(dst_reg, @bitCast(@as(u64, builtin_fn.wrapperAddress())));
+                    try self.emitLoadImm(widths.word_width, dst_reg, @bitCast(@as(u64, builtin_fn.wrapperAddress())));
                 },
                 .shim_execution, .object_file => {
                     try self.codegen.emitLoadDataAddress(dst_reg, try self.builtinSymbol(builtin_fn));
@@ -16147,7 +16163,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try self.callBuiltin(&builder, .hot_reload_enter);
             }
-            try self.emitStore(.w64, frame_ptr, code_ref_slot, ret_reg_0);
+            try self.emitStore(widths.word_width, frame_ptr, code_ref_slot, ret_reg_0);
             return code_ref_slot;
         }
 
@@ -16166,7 +16182,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_stack => |info| info.struct_offset,
                 .general_reg => |reg| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(size));
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
                     break :blk slot;
                 },
@@ -16191,7 +16207,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     const slot = self.codegen.allocStackSlot(@max(8, @as(u32, @intCast(size))));
                     const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, val);
+                    try self.emitLoadImm(.w64, temp, val);
                     try self.emitStore(.w64, frame_ptr, slot, temp);
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
@@ -16203,9 +16219,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const temp = try self.allocTempGeneral();
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                    try self.codegen.emitLoadImm(temp, @bitCast(low));
+                    try self.emitLoadImm(.w64, temp, @bitCast(low));
                     try self.emitStore(.w64, frame_ptr, slot, temp);
-                    try self.codegen.emitLoadImm(temp, @bitCast(high));
+                    try self.emitLoadImm(.w64, temp, @bitCast(high));
                     try self.emitStore(.w64, frame_ptr, slot + 8, temp);
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
@@ -16222,7 +16238,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |reg| return reg,
                 .immediate_i64 => |val| {
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, val);
+                    try self.emitLoadImm(.w64, reg, val);
                     return reg;
                 },
                 .immediate_i128 => |imm| {
@@ -16230,7 +16246,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Only load low 64 bits
                     const reg = try self.allocTempGeneral();
                     const low: i64 = @truncate(val);
-                    try self.codegen.emitLoadImm(reg, low);
+                    try self.emitLoadImm(.w64, reg, low);
                     return reg;
                 },
                 .stack => |s| {
@@ -16247,13 +16263,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .stack_str => |offset| {
                     // Load ptr/data (first 8 bytes of string struct)
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, reg, offset);
+                    try self.codegen.emitLoadStack(widths.word_width, reg, offset);
                     return reg;
                 },
                 .list_stack => |list_info| {
                     // Load ptr (first 8 bytes of list struct)
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
+                    try self.codegen.emitLoadStack(widths.word_width, reg, list_info.struct_offset);
                     return reg;
                 },
                 .float_reg => |float| {
@@ -16274,13 +16290,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_f32 => |val| {
                     const reg = try self.allocTempGeneral();
                     const bits: u32 = @bitCast(val);
-                    try self.codegen.emitLoadImm(reg, bits);
+                    try self.emitLoadImm(widths.word_width, reg, bits);
                     return reg;
                 },
                 .immediate_f64 => |val| {
                     const reg = try self.allocTempGeneral();
                     const bits: u64 = @bitCast(val);
-                    try self.codegen.emitLoadImm(reg, @bitCast(bits));
+                    try self.emitLoadImm(.w64, reg, @bitCast(bits));
                     return reg;
                 },
             }
@@ -16293,13 +16309,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const f32_val: f32 = @floatFromInt(val);
                     const bits: u32 = @bitCast(f32_val);
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                    try self.emitLoadImm(widths.word_width, reg, @as(i64, bits));
                     return reg;
                 },
                 .immediate_f32 => |val| {
                     const bits: u32 = @bitCast(val);
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                    try self.emitLoadImm(widths.word_width, reg, @as(i64, bits));
                     return reg;
                 },
                 .immediate_f64 => base.invariant("LIR/codegen invariant violated: materializing F32 bits from F64 immediate", .{}),
@@ -16587,7 +16603,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .immediate_f64 => |val| {
                             const bits: i64 = @bitCast(val);
                             const reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(reg, bits);
+                            try self.emitLoadImm(.w64, reg, bits);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
                             self.codegen.freeGeneral(reg);
                         },
@@ -16623,7 +16639,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .immediate_f32 => |val| {
                             const bits: u32 = @bitCast(val);
                             const reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                            try self.emitLoadImm(widths.word_width, reg, @as(i64, bits));
                             try self.emitStoreToPtr(.w32, reg, saved_ptr_reg, 0);
                             self.codegen.freeGeneral(reg);
                         },
@@ -16661,8 +16677,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             var off: i32 = 0;
                             while (off < roc_str_size) : (off += target_ptr_size) {
-                                try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + off);
-                                try self.emitStore(.w64, saved_ptr_reg, off, temp_reg);
+                                try self.emitLoad(widths.word_width, temp_reg, frame_ptr, stack_offset + off);
+                                try self.emitStore(widths.word_width, saved_ptr_reg, off, temp_reg);
                             }
 
                             self.codegen.freeGeneral(temp_reg);
@@ -16674,8 +16690,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             var off: i32 = 0;
                             while (off < roc_str_size) : (off += target_ptr_size) {
-                                try self.emitLoad(.w64, temp_reg, frame_ptr, stack_offset + off);
-                                try self.emitStore(.w64, saved_ptr_reg, off, temp_reg);
+                                try self.emitLoad(widths.word_width, temp_reg, frame_ptr, stack_offset + off);
+                                try self.emitStore(widths.word_width, saved_ptr_reg, off, temp_reg);
                             }
 
                             self.codegen.freeGeneral(temp_reg);
@@ -16797,11 +16813,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const reg = try self.allocTempGeneral();
 
                     // Store low 64 bits at [ptr]
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, reg, @bitCast(low));
                     try self.emitStoreToPtr(.w64, reg, ptr_reg, 0);
 
                     // Store high 64 bits at [ptr + 8]
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, reg, @bitCast(high));
                     try self.emitStoreToPtr(.w64, reg, ptr_reg, 8);
 
                     self.codegen.freeGeneral(reg);
@@ -16843,10 +16859,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     const reg = try self.allocTempGeneral();
 
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.emitLoadImm(.w64, reg, @bitCast(low));
                     try self.emitStoreToPtr(.w64, reg, ptr_reg, 0);
 
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.emitLoadImm(.w64, reg, @bitCast(high));
                     try self.emitStoreToPtr(.w64, reg, ptr_reg, 8);
 
                     self.codegen.freeGeneral(reg);
@@ -16863,7 +16879,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                         .x86_64 => {
                             try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
-                            try self.emitMovRegReg(sign_reg, reg);
+                            try self.emitMovRegReg(.w64, sign_reg, reg);
                             try self.codegen.emit.sarRegImm8(.w64, sign_reg, 63);
                             try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, sign_reg);
                         },
@@ -16883,7 +16899,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (loc) {
                 .immediate_i64 => |val| {
                     const reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(reg, val);
+                    try self.emitLoadImm(.w64, reg, val);
                     switch (size) {
                         1 => try self.emitStoreStackW8(dest_offset, reg),
                         2 => try self.emitStoreStackW16(dest_offset, reg),
@@ -16892,14 +16908,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         16 => {
                             try self.codegen.emitStoreStack(.w64, dest_offset, reg);
                             const high: i64 = if (val < 0) -1 else 0;
-                            try self.codegen.emitLoadImm(reg, high);
+                            try self.emitLoadImm(.w64, reg, high);
                             try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                         },
                         roc_list_size => {
                             std.debug.assert(val == 0);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + list_bytes_offset, reg);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + list_len_offset, reg);
-                            try self.codegen.emitStoreStack(.w64, dest_offset + list_capacity_offset, reg);
+                            try self.codegen.emitStoreStack(widths.word_width, dest_offset + list_bytes_offset, reg);
+                            try self.codegen.emitStoreStack(widths.word_width, dest_offset + list_len_offset, reg);
+                            try self.codegen.emitStoreStack(widths.word_width, dest_offset + list_capacity_offset, reg);
                         },
                         else => base.invariant("LIR/codegen invariant violated: immediate stored into a {d}-byte slot", .{size}),
                     }
@@ -16915,13 +16931,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     switch (size) {
                         16 => {
-                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.emitLoadImm(.w64, reg, @bitCast(low));
                             try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                            try self.codegen.emitLoadImm(reg, @bitCast(high));
+                            try self.emitLoadImm(.w64, reg, @bitCast(high));
                             try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
                         },
                         8 => {
-                            try self.codegen.emitLoadImm(reg, @bitCast(low));
+                            try self.emitLoadImm(.w64, reg, @bitCast(low));
                             try self.codegen.emitStoreStack(.w64, dest_offset, reg);
                         },
                         else => {
@@ -16935,7 +16951,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const remaining = size - written;
                                 const chunk_bytes: u32 = if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
                                 const chunk: u64 = (low >> @intCast(written * 8)) & (@as(u64, std.math.maxInt(u64)) >> @as(u6, @intCast((8 - chunk_bytes) * 8)));
-                                try self.codegen.emitLoadImm(reg, @bitCast(chunk));
+                                try self.emitLoadImm(widths.word_width, reg, @bitCast(chunk));
                                 const chunk_offset = dest_offset + @as(i32, @intCast(written));
                                 switch (chunk_bytes) {
                                     4 => try self.codegen.emitStoreStack(.w32, chunk_offset, reg),
@@ -17027,7 +17043,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitLoad(self: *Self, comptime width: anytype, dst: GeneralReg, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+        fn emitLoad(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     try self.codegen.emit.ldrRegMemSoff(width, dst, base_reg, offset);
@@ -17038,7 +17054,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitStore(self: *Self, comptime width: anytype, base_reg: GeneralReg, offset: i32, src: GeneralReg) Allocator.Error!void {
+        fn emitStore(self: *Self, comptime width: widths.RegisterWidth, base_reg: GeneralReg, offset: i32, src: GeneralReg) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     try self.codegen.emit.strRegMemSoff(width, src, base_reg, offset);
@@ -17117,7 +17133,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Shift `src` by the immediate `amount` into `dst`: left, logical
         /// right, or arithmetic right.
-        fn emitShiftImm(self: *Self, comptime op: ShiftOp, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: u8) Allocator.Error!void {
+        fn emitShiftImm(self: *Self, comptime op: ShiftOp, comptime width: widths.RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: u8) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     const emit_fn = switch (op) {
@@ -17140,7 +17156,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         /// Shift `src` by the register `amount` into `dst`.
-        fn emitShiftReg(self: *Self, comptime op: ShiftOp, comptime width: anytype, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
+        fn emitShiftReg(self: *Self, comptime op: ShiftOp, comptime width: widths.RegisterWidth, dst: GeneralReg, src: GeneralReg, amount: GeneralReg) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     const emit_fn = switch (op) {
@@ -17186,38 +17202,38 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitSaturatingSub(self: *Self, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
+        fn emitSaturatingSub(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
-                    try self.codegen.emit.cmpRegReg(.w64, a, b);
-                    try self.codegen.emit.subRegRegReg(.w64, dst, a, b);
-                    try self.codegen.emit.csel(.w64, dst, dst, .ZRSP, .cs);
+                    try self.codegen.emit.cmpRegReg(width, a, b);
+                    try self.codegen.emit.subRegRegReg(width, dst, a, b);
+                    try self.codegen.emit.csel(width, dst, dst, .ZRSP, .cs);
                 },
                 .x86_64 => {
-                    if (dst != a) try self.codegen.emit.movRegReg(.w64, dst, a);
-                    try self.codegen.emit.subRegReg(.w64, dst, b);
+                    if (dst != a) try self.codegen.emit.movRegReg(width, dst, a);
+                    try self.codegen.emit.subRegReg(width, dst, b);
                     const patch_loc = try self.codegen.emitCondJump(.above_or_equal);
-                    try self.codegen.emit.xorRegReg(.w64, dst, dst);
+                    try self.codegen.emit.xorRegReg(width, dst, dst);
                     try self.codegen.patchJump(patch_loc, self.codegen.currentOffset());
                 },
             }
         }
 
-        fn emitAddImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
+        fn emitAddImm(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
-                    try self.codegen.emit.addRegRegImm12(.w64, dst, src, @intCast(imm));
+                    try self.codegen.emit.addRegRegImm12(width, dst, src, @intCast(imm));
                 },
                 .x86_64 => {
-                    if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
-                    try self.codegen.emit.addImm(dst, imm);
+                    if (dst != src) try self.codegen.emit.movRegReg(width, dst, src);
+                    try self.codegen.emit.addRegImm32(width, dst, imm);
                 },
             }
         }
 
         fn emitAddPtrImmAny(self: *Self, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             if (imm == 0) {
-                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                if (dst != src) try self.codegen.emit.movRegReg(widths.word_width, dst, src);
                 return;
             }
 
@@ -17237,10 +17253,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64 => {},
             }
 
-            try self.emitAddImm(dst, src, imm);
+            try self.emitAddImm(.w64, dst, src, imm);
         }
 
-        fn emitSubImm(self: *Self, comptime width: anytype, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
+        fn emitSubImm(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i32) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
                     try self.codegen.emit.subRegRegImm12(width, dst, src, @intCast(imm));
@@ -17252,12 +17268,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
         }
 
-        fn emitSetCond(self: *Self, dst: GeneralReg, cond: Condition) Allocator.Error!void {
+        fn emitSetCond(self: *Self, comptime width: widths.RegisterWidth, dst: GeneralReg, cond: Condition) Allocator.Error!void {
             switch (isa) {
                 .aarch64 => {
-                    try self.codegen.emit.cset(.w64, dst, cond);
+                    try self.codegen.emit.cset(width, dst, cond);
                 },
                 .x86_64 => {
+                    // `andRegImm32` always writes the whole 64-bit register.
+                    comptime std.debug.assert(width == .w64);
                     try self.codegen.emit.setcc(cond, dst);
                     try self.codegen.emit.andRegImm32(dst, 0xFF);
                 },
@@ -17312,12 +17330,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return self.copyLoop(temp_reg, src_base, src_offset, dst_base, dst_offset, size, src, dst, count);
             }
             if (size == 0) return;
-            if (size == 8) {
-                try self.emitLoad(.w64, temp_reg, src_base, src_offset);
-                try self.emitStore(.w64, dst_base, dst_offset, temp_reg);
+            if (size == target_ptr_size) {
+                try self.emitLoad(widths.word_width, temp_reg, src_base, src_offset);
+                try self.emitStore(widths.word_width, dst_base, dst_offset, temp_reg);
                 return;
             }
-            if (size < 8) {
+            if (size < target_ptr_size) {
                 // A leading chunk plus an overlapping tail chunk of the same
                 // width cover any sub-word size in at most two copies.
                 if (size >= 4) {
@@ -17346,48 +17364,48 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             var copied: u32 = 0;
-            while (copied + 8 <= size) : (copied += 8) {
+            while (copied + target_ptr_size <= size) : (copied += target_ptr_size) {
                 const s = src_offset + @as(i32, @intCast(copied));
                 const d = dst_offset + @as(i32, @intCast(copied));
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
+                try self.emitLoad(widths.word_width, temp_reg, src_base, s);
+                try self.emitStore(widths.word_width, dst_base, d, temp_reg);
             }
 
             if (copied < size) {
-                const tail = @as(i32, @intCast(size - 8));
+                const tail = @as(i32, @intCast(size - target_ptr_size));
                 const s = src_offset + tail;
                 const d = dst_offset + tail;
-                try self.emitLoad(.w64, temp_reg, src_base, s);
-                try self.emitStore(.w64, dst_base, d, temp_reg);
+                try self.emitLoad(widths.word_width, temp_reg, src_base, s);
+                try self.emitStore(widths.word_width, dst_base, d, temp_reg);
             }
         }
 
         /// The caller supplies three distinct scratch registers, disjoint from
         /// both bases and temp_reg. No call or frame allocation is emitted.
         fn copyLoop(self: *Self, temp_reg: GeneralReg, src_base: GeneralReg, src_offset: i32, dst_base: GeneralReg, dst_offset: i32, size: u32, src: GeneralReg, dst: GeneralReg, count: GeneralReg) Allocator.Error!void {
-            std.debug.assert(size >= 8);
+            std.debug.assert(size >= target_ptr_size);
             std.debug.assert(src != dst and src != count and dst != count);
             inline for (.{ src, dst, count }) |reg| {
                 std.debug.assert(reg != temp_reg and reg != src_base and reg != dst_base);
             }
             // Materialize each address once, including large frame offsets.
-            try self.codegen.emitLoadImm(src, src_offset);
-            try self.codegen.emitAdd(.w64, src, src, src_base);
-            try self.codegen.emitLoadImm(dst, dst_offset);
-            try self.codegen.emitAdd(.w64, dst, dst, dst_base);
-            try self.codegen.emitLoadImm(count, size / 8);
+            try self.emitLoadImm(widths.word_width, src, src_offset);
+            try self.codegen.emitAdd(widths.word_width, src, src, src_base);
+            try self.emitLoadImm(widths.word_width, dst, dst_offset);
+            try self.codegen.emitAdd(widths.word_width, dst, dst, dst_base);
+            try self.emitLoadImm(widths.word_width, count, size / target_ptr_size);
             const loop = self.codegen.currentOffset();
-            try self.emitLoad(.w64, temp_reg, src, 0);
-            try self.emitStore(.w64, dst, 0, temp_reg);
-            try self.emitAddImm(src, src, 8);
-            try self.emitAddImm(dst, dst, 8);
-            try self.emitSubImm(.w64, count, count, 1);
-            try self.emitCmpImm(count, 0);
+            try self.emitLoad(widths.word_width, temp_reg, src, 0);
+            try self.emitStore(widths.word_width, dst, 0, temp_reg);
+            try self.emitAddImm(widths.word_width, src, src, target_ptr_size);
+            try self.emitAddImm(widths.word_width, dst, dst, target_ptr_size);
+            try self.emitSubImm(widths.word_width, count, count, 1);
+            try self.emitCmpImm(widths.word_width, count, 0);
             const repeat = try self.emitJumpIfNotEqual();
             try self.codegen.patchJump(repeat, loop);
             // Pointers now address the exact tail; never touch padding outside
             // caller-owned or heap storage.
-            try self.copyChunked(temp_reg, src, 0, dst, 0, size % 8);
+            try self.copyChunked(temp_reg, src, 0, dst, 0, size % target_ptr_size);
         }
 
         fn zeroStackArea(self: *Self, offset: i32, size: u32) Allocator.Error!void {
@@ -17407,23 +17425,23 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (size == 0) return;
             const value = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(value);
-            try self.codegen.emitLoadImm(value, @bitCast(bits));
+            try self.emitLoadImm(widths.word_width, value, @bitCast(bits));
             if (size > 32) {
                 const dst = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(dst);
                 const count = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(count);
-                try self.codegen.emitLoadImm(dst, offset);
-                try self.codegen.emitAdd(.w64, dst, dst, base_reg);
-                try self.codegen.emitLoadImm(count, size / 8);
+                try self.emitLoadImm(widths.word_width, dst, offset);
+                try self.codegen.emitAdd(widths.word_width, dst, dst, base_reg);
+                try self.emitLoadImm(widths.word_width, count, size / target_ptr_size);
                 const loop = self.codegen.currentOffset();
-                try self.emitStore(.w64, dst, 0, value);
-                try self.emitAddImm(dst, dst, 8);
-                try self.emitSubImm(.w64, count, count, 1);
-                try self.emitCmpImm(count, 0);
+                try self.emitStore(widths.word_width, dst, 0, value);
+                try self.emitAddImm(widths.word_width, dst, dst, target_ptr_size);
+                try self.emitSubImm(widths.word_width, count, count, 1);
+                try self.emitCmpImm(widths.word_width, count, 0);
                 const repeat = try self.emitJumpIfNotEqual();
                 try self.codegen.patchJump(repeat, loop);
-                try self.fillSmall(value, dst, 0, size % 8);
+                try self.fillSmall(value, dst, 0, size % target_ptr_size);
             } else {
                 try self.fillSmall(value, base_reg, offset, size);
             }
@@ -17433,10 +17451,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(size <= 32);
             var remaining = size;
             var off = offset;
-            while (remaining >= 8) {
-                try self.emitStore(.w64, base_reg, off, value);
-                off += 8;
-                remaining -= 8;
+            while (remaining >= target_ptr_size) {
+                try self.emitStore(widths.word_width, base_reg, off, value);
+                off += target_ptr_size;
+                remaining -= target_ptr_size;
             }
             if (remaining >= 4) {
                 try self.emitStore(.w32, base_reg, off, value);
@@ -17451,22 +17469,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (remaining >= 1) try self.emitStoreW8(base_reg, off, value);
         }
 
-        const StoreWidth = enum { w32, w64 };
-
-        fn emitStoreToPtr(self: *Self, comptime width: StoreWidth, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) Allocator.Error!void {
+        fn emitStoreToPtr(self: *Self, comptime width: widths.RegisterWidth, src: GeneralReg, ptr_reg: GeneralReg, byte_offset: i32) Allocator.Error!void {
             switch (isa) {
-                .aarch64 => {
-                    switch (width) {
-                        .w64 => try self.codegen.emit.strRegMemSoff(.w64, src, ptr_reg, byte_offset),
-                        .w32 => try self.codegen.emit.strRegMemSoff(.w32, src, ptr_reg, byte_offset),
-                    }
-                },
-                .x86_64 => {
-                    switch (width) {
-                        .w64 => try self.codegen.emit.movMemReg(.w64, ptr_reg, byte_offset, src),
-                        .w32 => try self.codegen.emit.movMemReg(.w32, ptr_reg, byte_offset, src),
-                    }
-                },
+                .aarch64 => try self.codegen.emit.strRegMemSoff(width, src, ptr_reg, byte_offset),
+                .x86_64 => try self.codegen.emit.movMemReg(width, ptr_reg, byte_offset, src),
             }
         }
 
@@ -17494,7 +17500,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Store general register to memory at [ptr_reg] (architecture-specific)
         fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) Allocator.Error!void {
-            try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0);
+            try self.emitStoreToPtr(widths.word_width, src_reg, ptr_reg, 0);
         }
 
         fn emitStoreScalarToPtr(self: *Self, ptr_reg: GeneralReg, src_reg: GeneralReg, size: u32) Allocator.Error!void {
@@ -17624,7 +17630,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Load the address of a local's bytes into `dst`.
         fn emitBytesAddress(self: *Self, local: LocalId, dst: GeneralReg) Allocator.Error!void {
-            if (self.localDyn(local) != null) return self.emitLoad(.w64, dst, frame_ptr, self.localSlot(local));
+            if (self.localDyn(local) != null) return self.emitLoad(widths.word_width, dst, frame_ptr, self.localSlot(local));
             if (self.closedIsZeroSized(local)) return self.emitLeaStack(dst, 0);
             try self.emitLeaStack(dst, self.localSlot(local));
         }
@@ -17640,16 +17646,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// the array's offset.
         fn emitLocalArray(self: *Self, span: LocalSpan, kind: LocalArrayKind) Allocator.Error!i32 {
             const locals = self.store.getLocalSpan(span);
-            const array = self.codegen.allocStackSlot(@intCast(@max(locals.len, 1) * 8));
+            const array = self.codegen.allocStackSlot(@intCast(@max(locals.len, 1) * target_ptr_size));
             const reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(reg);
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 switch (kind) {
-                    .words => try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(local)),
+                    .words => try self.emitLoad(widths.word_width, reg, frame_ptr, self.localSlot(local)),
                     .bytes => try self.emitBytesAddress(local, reg),
                 }
-                try self.emitStore(.w64, frame_ptr, array + @as(i32, @intCast(i * 8)), reg);
+                try self.emitStore(widths.word_width, frame_ptr, array + @as(i32, @intCast(i * target_ptr_size)), reg);
             }
             return array;
         }
@@ -17683,7 +17689,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitTargetAddress(self: *Self, t: DynTarget, dst: GeneralReg) Allocator.Error!void {
             switch (t) {
-                .dynamic => |slot| try self.emitLoad(.w64, dst, frame_ptr, slot),
+                .dynamic => |slot| try self.emitLoad(widths.word_width, dst, frame_ptr, slot),
                 .closed => |offset| try self.emitLeaStack(dst, offset),
                 .zero_sized => try self.emitLeaStack(dst, 0),
             }
@@ -17732,7 +17738,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn bindComponentAddress(self: *Self, dst_local: LocalId) Allocator.Error!void {
             const address = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(address);
-            try self.emitMovRegReg(address, ret_reg_0);
+            try self.emitMovRegReg(widths.word_width, address, ret_reg_0);
             try self.bindComponentAddressIn(dst_local, address);
         }
 
@@ -17741,13 +17747,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn bindComponentAddressIn(self: *Self, dst_local: LocalId, address: GeneralReg) Allocator.Error!void {
             if (self.localDyn(dst_local)) |dyn| {
                 if (dyn.storage == .view) {
-                    try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), address);
+                    try self.emitStore(widths.word_width, frame_ptr, self.localSlot(dst_local), address);
                     return;
                 }
                 // Save the component address before setting up the
                 // descriptor copy's arguments, which can clobber registers.
                 const address_slot = self.codegen.allocStackSlot(8);
-                try self.emitStore(.w64, frame_ptr, address_slot, address);
+                try self.emitStore(widths.word_width, frame_ptr, address_slot, address);
                 const dst = try self.dynTarget(dst_local);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
@@ -17777,9 +17783,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitDescBacking(self: *Self, desc: GeneralReg, kind: GeneralReg) Allocator.Error!void {
             const loop = self.codegen.currentOffset();
             try self.emitLoadW8(kind, desc, desc_kind_offset);
-            try self.emitCmpImm(kind, @backingInt(boxy_runtime.Kind.nominal));
+            try self.emitCmpImm(widths.word_width, kind, @backingInt(boxy_runtime.Kind.nominal));
             const exit = try self.codegen.emitCondJump(condCode(.not_equal));
-            try self.emitLoad(.w64, desc, desc, desc_child_offset);
+            try self.emitLoad(widths.word_width, desc, desc, desc_child_offset);
             try self.codegen.patchJump(try self.codegen.emitJump(), loop);
             try self.codegen.patchJump(exit, self.codegen.currentOffset());
         }
@@ -17793,16 +17799,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// 24-byte copy; `scratch` is a further register.
         fn emitSizedCopy(self: *Self, size: GeneralReg, src: GeneralReg, dst: GeneralReg, scratch: GeneralReg, other: *std.ArrayList(usize), done: *std.ArrayList(usize)) Allocator.Error!void {
             const value = size;
-            try self.emitCmpImm(size, 8);
+            try self.emitCmpImm(widths.word_width, size, 8);
             const to_8 = try self.codegen.emitCondJump(condCode(.equal));
             const to_16 = try self.codegen.emitCondJump(condCode(.above));
-            try self.emitCmpImm(size, 4);
+            try self.emitCmpImm(widths.word_width, size, 4);
             const to_4 = try self.codegen.emitCondJump(condCode(.equal));
             try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
-            try self.emitCmpImm(size, 2);
+            try self.emitCmpImm(widths.word_width, size, 2);
             const to_2 = try self.codegen.emitCondJump(condCode(.equal));
             try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
-            try self.emitCmpImm(size, 0);
+            try self.emitCmpImm(widths.word_width, size, 0);
             try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
             try self.emitLoadW8(value, src, 0);
             try self.emitStoreW8(dst, 0, value);
@@ -17820,7 +17826,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, dst, 0, value);
             try done.append(self.allocator, try self.codegen.emitJump());
             try self.codegen.patchJump(to_16, self.codegen.currentOffset());
-            try self.emitCmpImm(size, 16);
+            try self.emitCmpImm(widths.word_width, size, 16);
             const to_24 = try self.codegen.emitCondJump(condCode(.not_equal));
             try self.emitLoad(.w64, value, src, 0);
             try self.emitLoad(.w64, scratch, src, 8);
@@ -17828,7 +17834,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitStore(.w64, dst, 8, scratch);
             try done.append(self.allocator, try self.codegen.emitJump());
             try self.codegen.patchJump(to_24, self.codegen.currentOffset());
-            try self.emitCmpImm(size, 24);
+            try self.emitCmpImm(widths.word_width, size, 24);
             try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
             try self.emitLoad(.w64, value, src, 0);
             try self.emitLoad(.w64, scratch, src, 8);
@@ -17851,7 +17857,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const size, const from, const to, const scratch = try self.allocTempGenerals(4);
                 defer self.freeGenerals(.{ scratch, to, from, size });
-                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(desc));
+                try self.emitLoad(widths.word_width, size, frame_ptr, self.localSlot(desc));
                 try self.emitLoad(.w32, size, size, desc_size_offset);
                 try self.emitBytesAddress(src, from);
                 try self.emitTargetAddress(dst, to);
@@ -17878,15 +17884,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const size, const index = try self.allocTempGenerals(2);
                 defer self.freeGenerals(.{ index, size });
-                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(item.elem_desc));
+                try self.emitLoad(widths.word_width, size, frame_ptr, self.localSlot(item.elem_desc));
                 try self.emitLoad(.w32, size, size, desc_size_offset);
-                try self.emitCmpImm(size, 0);
+                try self.emitCmpImm(widths.word_width, size, 0);
                 zero_sized = try self.codegen.emitCondJump(condCode(.equal));
                 try self.emitBytesAddress(item.list, address);
-                try self.emitLoad(.w64, address, address, list_bytes_offset);
+                try self.emitLoad(widths.word_width, address, address, list_bytes_offset);
                 try self.emitLoad(.w64, index, frame_ptr, self.localSlot(item.index));
-                try self.codegen.emitMul(.w64, index, index, size);
-                try self.codegen.emitAdd(.w64, address, address, index);
+                try self.codegen.emitMul(widths.word_width, index, index, size);
+                try self.codegen.emitAdd(widths.word_width, address, address, index);
             }
             const done = try self.codegen.emitJump();
             try self.codegen.patchJump(zero_sized, self.codegen.currentOffset());
@@ -17897,7 +17903,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.addBytesArg(&builder, item.list);
                 try self.addWordArg(&builder, item.index);
                 try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
-                try self.emitMovRegReg(address, ret_reg_0);
+                try self.emitMovRegReg(widths.word_width, address, ret_reg_0);
             }
             try self.codegen.patchJump(done, self.codegen.currentOffset());
             try self.bindComponentAddressIn(dst_local, address);
@@ -17919,19 +17925,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const size, const from, const to, const scratch = try self.allocTempGenerals(4);
                 defer self.freeGenerals(.{ scratch, to, from, size });
-                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(elem_desc));
+                try self.emitLoad(widths.word_width, size, frame_ptr, self.localSlot(elem_desc));
                 try self.emitLoad(.w32, size, size, desc_size_offset);
-                try self.emitCmpImm(size, 0);
+                try self.emitCmpImm(widths.word_width, size, 0);
                 try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
                 try self.emitBytesAddress(list, from);
-                try self.emitLoad(.w64, from, from, list_bytes_offset);
-                try self.emitCmpImm(from, 0);
+                try self.emitLoad(widths.word_width, from, from, list_bytes_offset);
+                try self.emitCmpImm(widths.word_width, from, 0);
                 try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
                 try self.emitBytesAddress(index, to);
                 try self.emitLoad(.w64, to, to, 0);
-                try self.codegen.emitMul(.w64, to, to, size);
-                try self.codegen.emitAdd(.w64, from, from, to);
-                try self.emitStore(.w64, frame_ptr, item_slot, from);
+                try self.codegen.emitMul(widths.word_width, to, to, size);
+                try self.codegen.emitAdd(widths.word_width, from, from, to);
+                try self.emitStore(widths.word_width, frame_ptr, item_slot, from);
                 try self.emitTargetAddress(dst, to);
                 try self.emitSizedCopy(size, from, to, scratch, &other, &done);
             }
@@ -17969,21 +17975,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const size, const from, const to, const scratch = try self.allocTempGenerals(4);
                 defer self.freeGenerals(.{ scratch, to, from, size });
-                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(elem_desc));
+                try self.emitLoad(widths.word_width, size, frame_ptr, self.localSlot(elem_desc));
                 try self.emitLoad(.w32, size, size, desc_size_offset);
-                try self.emitCmpImm(size, 0);
+                try self.emitCmpImm(widths.word_width, size, 0);
                 zero_sized = try self.codegen.emitCondJump(condCode(.equal));
                 try self.emitBytesAddress(list, to);
                 if (index) |index_local| {
                     try self.emitBytesAddress(index_local, from);
                     try self.emitLoad(.w64, from, from, 0);
                 } else {
-                    try self.emitLoad(.w64, from, to, list_len_offset);
+                    try self.emitLoad(widths.word_width, from, to, list_len_offset);
                 }
-                try self.emitLoad(.w64, to, to, list_bytes_offset);
-                try self.codegen.emitMul(.w64, from, from, size);
-                try self.codegen.emitAdd(.w64, to, to, from);
-                try self.emitStore(.w64, frame_ptr, item_slot, to);
+                try self.emitLoad(widths.word_width, to, to, list_bytes_offset);
+                try self.codegen.emitMul(widths.word_width, from, from, size);
+                try self.codegen.emitAdd(widths.word_width, to, to, from);
+                try self.emitStore(widths.word_width, frame_ptr, item_slot, to);
                 try self.emitBytesAddress(element, from);
                 try self.emitSizedCopy(size, from, to, scratch, &other, &copied);
             }
@@ -18000,31 +18006,31 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const from, const to, const bytes, const len = try self.allocTempGenerals(4);
             defer self.freeGenerals(.{ len, bytes, to, from });
             try self.emitBytesAddress(list, from);
-            try self.emitLoad(.w64, bytes, from, list_bytes_offset);
-            try self.emitLoad(.w64, len, from, list_len_offset);
-            try self.emitLoad(.w64, from, from, list_capacity_offset);
+            try self.emitLoad(widths.word_width, bytes, from, list_bytes_offset);
+            try self.emitLoad(widths.word_width, len, from, list_len_offset);
+            try self.emitLoad(widths.word_width, from, from, list_capacity_offset);
             const written = try self.codegen.emitJump();
             try self.codegen.patchJump(zero_sized, self.codegen.currentOffset());
             try self.emitBytesAddress(list, from);
-            try self.emitLoad(.w64, bytes, from, list_bytes_offset);
-            try self.emitLoad(.w64, len, from, list_len_offset);
-            try self.emitLoad(.w64, from, from, list_capacity_offset);
+            try self.emitLoad(widths.word_width, bytes, from, list_bytes_offset);
+            try self.emitLoad(widths.word_width, len, from, list_len_offset);
+            try self.emitLoad(widths.word_width, from, from, list_capacity_offset);
             if (index == null) {
                 // `RocList.zeroSizedKeeping`: no bytes, and the capacity the
                 // list has, or its new length when that is larger.
-                try self.codegen.emitLoadImm(bytes, 0);
-                try self.emitShiftImm(.shr, .w64, from, from, RocList.capacity_shift);
-                try self.emitAddImm(to, len, 1);
-                try self.emitSaturatingSub(from, from, to);
-                try self.codegen.emitAdd(.w64, from, from, to);
-                try self.emitShiftImm(.shl, .w64, from, from, RocList.capacity_shift);
+                try self.emitLoadImm(widths.word_width, bytes, 0);
+                try self.emitShiftImm(.shr, widths.word_width, from, from, RocList.capacity_shift);
+                try self.emitAddImm(widths.word_width, to, len, 1);
+                try self.emitSaturatingSub(widths.word_width, from, from, to);
+                try self.codegen.emitAdd(widths.word_width, from, from, to);
+                try self.emitShiftImm(.shl, widths.word_width, from, from, RocList.capacity_shift);
             }
             try self.codegen.patchJump(written, self.codegen.currentOffset());
-            if (index == null) try self.emitAddImm(len, len, 1);
+            if (index == null) try self.emitAddImm(widths.word_width, len, len, 1);
             try self.emitTargetAddress(dst, to);
-            try self.emitStore(.w64, to, list_bytes_offset, bytes);
-            try self.emitStore(.w64, to, list_len_offset, len);
-            try self.emitStore(.w64, to, list_capacity_offset, from);
+            try self.emitStore(widths.word_width, to, list_bytes_offset, bytes);
+            try self.emitStore(widths.word_width, to, list_len_offset, len);
+            try self.emitStore(widths.word_width, to, list_capacity_offset, from);
             try self.finishTarget(dst_local, dst);
         }
 
@@ -18039,25 +18045,25 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const entry, const temp, const scale = try self.allocTempGenerals(3);
                 defer self.freeGenerals(.{ scale, temp, entry });
-                try self.emitLoad(.w64, entry, frame_ptr, self.localSlot(desc));
+                try self.emitLoad(widths.word_width, entry, frame_ptr, self.localSlot(desc));
                 try self.emitDescBacking(entry, temp);
-                try self.emitLoad(.w64, entry, entry, desc_entries_offset);
+                try self.emitLoad(widths.word_width, entry, entry, desc_entries_offset);
                 // The semantic index's entry names the field's memory slot.
                 const index_entry: i32 = @intCast(@as(u64, field_index) * field_entry_size);
                 try self.emitLoad(.w32, temp, entry, index_entry + field_slot_offset);
                 // A field entry is 24 bytes: the slot times three, then times eight.
-                try self.emitMovRegReg(scale, temp);
-                try self.emitShiftImm(.shl, .w64, temp, temp, 1);
-                try self.codegen.emitAdd(.w64, temp, temp, scale);
-                try self.emitShiftImm(.shl, .w64, temp, temp, 3);
-                try self.codegen.emitAdd(.w64, entry, entry, temp);
-                try self.emitLoad(.w64, temp, entry, field_desc_offset);
+                try self.emitMovRegReg(widths.word_width, scale, temp);
+                try self.emitShiftImm(.shl, widths.word_width, temp, temp, 1);
+                try self.codegen.emitAdd(widths.word_width, temp, temp, scale);
+                try self.emitShiftImm(.shl, widths.word_width, temp, temp, 3);
+                try self.codegen.emitAdd(widths.word_width, entry, entry, temp);
+                try self.emitLoad(widths.word_width, temp, entry, field_desc_offset);
                 try self.emitLoadW8(temp, temp, desc_kind_offset);
-                try self.emitCmpImm(temp, @backingInt(boxy_runtime.Kind.recursive_box));
+                try self.emitCmpImm(widths.word_width, temp, @backingInt(boxy_runtime.Kind.recursive_box));
                 boxed = try self.codegen.emitCondJump(condCode(.equal));
                 try self.emitLoad(.w32, temp, entry, field_offset_offset);
                 try self.emitBytesAddress(base_local, address);
-                try self.codegen.emitAdd(.w64, address, address, temp);
+                try self.codegen.emitAdd(widths.word_width, address, address, temp);
             }
             const done = try self.codegen.emitJump();
             try self.codegen.patchJump(boxed, self.codegen.currentOffset());
@@ -18068,7 +18074,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.addBytesArg(&builder, base_local);
                 try builder.addImmArg(field_index);
                 try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
-                try self.emitMovRegReg(address, ret_reg_0);
+                try self.emitMovRegReg(widths.word_width, address, ret_reg_0);
             }
             try self.codegen.patchJump(done, self.codegen.currentOffset());
             try self.bindComponentAddressIn(dst_local, address);
@@ -18086,16 +18092,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 const desc, const at = try self.allocTempGenerals(2);
                 defer self.freeGenerals(.{ at, desc });
-                try self.emitLoad(.w64, desc, frame_ptr, self.localSlot(tag.desc));
+                try self.emitLoad(widths.word_width, desc, frame_ptr, self.localSlot(tag.desc));
                 try self.emitDescBacking(desc, at);
                 try self.emitBytesAddress(tag.base, at);
                 try self.emitLoad(.w32, value, desc, desc_discriminant_offset_offset);
-                try self.codegen.emitAdd(.w64, at, at, value);
+                try self.codegen.emitAdd(widths.word_width, at, at, value);
                 try self.emitLoad(.w32, desc, desc, desc_discriminant_size_offset);
-                try self.emitCmpImm(desc, 2);
+                try self.emitCmpImm(widths.word_width, desc, 2);
                 const wide = try self.codegen.emitCondJump(condCode(.above));
                 const two = try self.codegen.emitCondJump(condCode(.equal));
-                try self.emitCmpImm(desc, 1);
+                try self.emitCmpImm(widths.word_width, desc, 1);
                 const one = try self.codegen.emitCondJump(condCode(.equal));
                 try self.codegen.emitLoadImm(value, 0);
                 try done.append(self.allocator, try self.codegen.emitJump());
@@ -18130,11 +18136,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             const flags, const mask = try self.allocTempGenerals(2);
             defer self.freeGenerals(.{ mask, flags });
-            try self.emitLoad(.w64, flags, frame_ptr, self.localSlot(desc));
+            try self.emitLoad(widths.word_width, flags, frame_ptr, self.localSlot(desc));
             try self.emitLoadW8(flags, flags, desc_flags_offset);
-            try self.codegen.emitLoadImm(mask, desc_contains_refcounted_mask);
-            try self.codegen.emitAnd(.w64, flags, flags, mask);
-            try self.emitCmpImm(flags, 0);
+            try self.emitLoadImm(widths.word_width, mask, desc_contains_refcounted_mask);
+            try self.codegen.emitAnd(widths.word_width, flags, flags, mask);
+            try self.emitCmpImm(widths.word_width, flags, 0);
             return self.codegen.emitCondJump(condCode(.equal));
         }
 
@@ -18195,35 +18201,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateDynFrameAlloc(self: *Self) Allocator.Error!void {
             const locals = self.store.getLocalSpan(self.current_proc_frame_locals);
             const total, const desc_reg, const field = try self.allocTempGenerals(3);
-            try self.codegen.emitLoadImm(total, 0);
+            try self.emitLoadImm(widths.word_width, total, 0);
             for (0..locals.len) |i| {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
                 if (dyn.storage != .frame) continue;
-                try self.emitLoad(.w64, desc_reg, frame_ptr, self.localSlot(dyn.desc));
+                try self.emitLoad(widths.word_width, desc_reg, frame_ptr, self.localSlot(dyn.desc));
                 // total = alignForward(total, alignment); the local's offset.
                 try self.emitLoad(.w32, field, desc_reg, desc_alignment_offset);
-                try self.codegen.emitAdd(.w64, total, total, field);
-                try self.emitSubImm(.w64, total, total, 1);
-                try self.codegen.emitNeg(.w64, field, field);
-                try self.codegen.emitAnd(.w64, total, total, field);
-                try self.emitStore(.w64, frame_ptr, self.localSlot(local), total);
+                try self.codegen.emitAdd(widths.word_width, total, total, field);
+                try self.emitSubImm(widths.word_width, total, total, 1);
+                try self.codegen.emitNeg(widths.word_width, field, field);
+                try self.codegen.emitAnd(widths.word_width, total, total, field);
+                try self.emitStore(widths.word_width, frame_ptr, self.localSlot(local), total);
                 try self.emitLoad(.w32, field, desc_reg, desc_size_offset);
-                try self.codegen.emitAdd(.w64, total, total, field);
+                try self.codegen.emitAdd(widths.word_width, total, total, field);
             }
-            try self.emitAddImm(total, total, @intCast(call_stack_alignment - 1));
-            try self.codegen.emitLoadImm(field, -@as(i64, call_stack_alignment));
-            try self.codegen.emitAnd(.w64, total, total, field);
+            try self.emitAddImm(widths.word_width, total, total, @intCast(call_stack_alignment - 1));
+            try self.emitLoadImm(widths.word_width, field, -@as(i64, call_stack_alignment));
+            try self.codegen.emitAnd(widths.word_width, total, total, field);
 
             // Lower the stack pointer by `total`, touching each page it crosses.
             const page: i32 = @intCast(lir.LIR.stack_probe_page_size);
             const loop = self.codegen.currentOffset();
-            try self.emitCmpImm(total, page);
+            try self.emitCmpImm(widths.word_width, total, page);
             const tail = try self.codegen.emitCondJump(condCode(.below));
             try self.emitSubStackPtr(@intCast(page));
-            try self.emitLoad(.w64, field, stack_ptr, 0);
-            try self.codegen.emitLoadImm(field, page);
-            try self.codegen.emitSub(.w64, total, total, field);
+            try self.emitLoad(widths.word_width, field, stack_ptr, 0);
+            try self.emitLoadImm(widths.word_width, field, page);
+            try self.codegen.emitSub(widths.word_width, total, total, field);
             const back = try self.codegen.emitJump();
             try self.codegen.patchJump(back, loop);
             try self.codegen.patchJump(tail, self.codegen.currentOffset());
@@ -18242,9 +18248,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const local = GuardedList.at(locals, i);
                 const dyn = self.localDyn(local) orelse continue;
                 if (dyn.storage != .frame) continue;
-                try self.emitLoad(.w64, field, frame_ptr, self.localSlot(local));
-                try self.codegen.emitAdd(.w64, field, field, total);
-                try self.emitStore(.w64, frame_ptr, self.localSlot(local), field);
+                try self.emitLoad(widths.word_width, field, frame_ptr, self.localSlot(local));
+                try self.codegen.emitAdd(widths.word_width, field, field, total);
+                try self.emitStore(widths.word_width, frame_ptr, self.localSlot(local), field);
             }
             self.freeGenerals(.{ field, desc_reg, total });
             self.proc_has_dyn_region = true;
@@ -18263,7 +18269,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else
                     try self.emitInternalCodeAddress(.{ .proc = proc.id }, proc.code_start, reg);
             }
-            try self.emitStore(.w64, frame_ptr, slot, reg);
+            try self.emitStore(widths.word_width, frame_ptr, slot, reg);
             self.codegen.freeGeneral(reg);
         }
 
@@ -18277,10 +18283,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .frame_alloc => unreachable, // handled above
                 .table_entry => |entry| {
                     const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(entry.table));
-                    try self.emitLoad(.w64, reg, reg, @intCast(LIR.tableEntryOffset(entry.index, 8)));
+                    try self.emitLoad(widths.word_width, reg, frame_ptr, self.localSlot(entry.table));
+                    try self.emitLoad(widths.word_width, reg, reg, @intCast(LIR.tableEntryOffset(entry.index, target_ptr_size)));
                     const slot = self.codegen.allocStackSlot(8);
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
                     try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
                 },
@@ -18423,8 +18429,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // The address word becomes the view's address, or a
                     // closed target loads the bytes there.
                     const reg = try self.allocTempGeneral();
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(v.address));
-                    try self.emitMovRegReg(ret_reg_0, reg);
+                    try self.emitLoad(widths.word_width, reg, frame_ptr, self.localSlot(v.address));
+                    try self.emitMovRegReg(widths.word_width, ret_reg_0, reg);
                     self.codegen.freeGeneral(reg);
                     try self.bindComponentAddress(dst_local);
                 },
@@ -18437,7 +18443,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         defer retain.deinit();
                         try self.callBuiltin(&retain, .hot_reload_retain_current);
                         code_ref_slot = self.codegen.allocStackSlot(8);
-                        try self.emitStore(.w64, frame_ptr, code_ref_slot.?, ret_reg_0);
+                        try self.emitStore(widths.word_width, frame_ptr, code_ref_slot.?, ret_reg_0);
                     }
                     try builder.addMemArg(frame_ptr, fn_slot);
                     try self.addBytesArg(&builder, c.capture);
@@ -18449,14 +18455,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const drop_slot = self.codegen.allocStackSlot(8);
                         const reg = try self.allocTempGeneral();
                         try self.emitBuiltinAddress(reg, .hot_reload_erased_callable_drop);
-                        try self.emitStore(.w64, frame_ptr, drop_slot, reg);
+                        try self.emitStore(widths.word_width, frame_ptr, drop_slot, reg);
                         self.codegen.freeGeneral(reg);
                         try builder.addMemArg(frame_ptr, slot);
                         try builder.addMemArg(frame_ptr, drop_slot);
                         const copy_slot = self.codegen.allocStackSlot(8);
                         const copy_reg = try self.allocTempGeneral();
                         try self.emitBuiltinAddress(copy_reg, .hot_reload_erased_callable_copy);
-                        try self.emitStore(.w64, frame_ptr, copy_slot, copy_reg);
+                        try self.emitStore(widths.word_width, frame_ptr, copy_slot, copy_reg);
                         self.codegen.freeGeneral(copy_reg);
                         try builder.addMemArg(frame_ptr, copy_slot);
                     } else {
@@ -18476,13 +18482,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const fn_slot = self.codegen.allocStackSlot(8);
                     const reg = try self.allocTempGeneral();
                     try self.emitBytesAddress(c.closure, reg);
-                    try self.emitLoad(.w64, reg, reg, 0);
-                    try self.emitStore(.w64, frame_ptr, closure_slot, reg);
+                    try self.emitLoad(widths.word_width, reg, reg, 0);
+                    try self.emitStore(widths.word_width, frame_ptr, closure_slot, reg);
                     try self.emitAddPtrImmAny(reg, reg, builtins.erased_callable.capture_offset);
-                    try self.emitStore(.w64, frame_ptr, capture_slot, reg);
-                    try self.emitLoad(.w64, reg, frame_ptr, closure_slot);
-                    try self.emitLoad(.w64, reg, reg, 0);
-                    try self.emitStore(.w64, frame_ptr, fn_slot, reg);
+                    try self.emitStore(widths.word_width, frame_ptr, capture_slot, reg);
+                    try self.emitLoad(widths.word_width, reg, frame_ptr, closure_slot);
+                    try self.emitLoad(widths.word_width, reg, reg, 0);
+                    try self.emitStore(widths.word_width, frame_ptr, fn_slot, reg);
                     self.codegen.freeGeneral(reg);
                     const dst = try self.dynTarget(dst_local);
                     if (c.deferred) {
@@ -18492,12 +18498,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (c.args) |args| {
                             const size_reg = try self.allocTempGeneral();
                             if (self.localDyn(args)) |dyn| {
-                                try self.emitLoad(.w64, size_reg, frame_ptr, self.localSlot(dyn.desc));
+                                try self.emitLoad(widths.word_width, size_reg, frame_ptr, self.localSlot(dyn.desc));
                                 try self.emitLoad(.w32, size_reg, size_reg, desc_size_offset);
                             } else {
-                                try self.codegen.emitLoadImm(size_reg, self.getLayoutSize(self.localLayout(args)));
+                                try self.emitLoadImm(widths.word_width, size_reg, self.getLayoutSize(self.localLayout(args)));
                             }
-                            try self.emitStore(.w64, frame_ptr, args_size_slot, size_reg);
+                            try self.emitStore(widths.word_width, frame_ptr, args_size_slot, size_reg);
                             self.codegen.freeGeneral(size_reg);
                         }
                         try builder.addMemArg(frame_ptr, self.pendingCellSlot());
@@ -18590,7 +18596,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_len => {
                     const reg = try self.allocTempGeneral();
                     try self.emitBytesAddress(GuardedList.at(all_args, 0), reg);
-                    try self.emitLoad(.w64, reg, reg, list_len_offset);
+                    try self.emitLoad(widths.word_width, reg, reg, list_len_offset);
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, reg);
                     self.codegen.freeGeneral(reg);
@@ -18616,7 +18622,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // The in-place branch is statically dead on this width.
                 const slot = self.codegen.allocStackSlot(8);
                 const reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(reg, 0);
+                try self.emitLoadImm(.w64, reg, 0);
                 try self.emitStore(.w64, frame_ptr, slot, reg);
                 self.codegen.freeGeneral(reg);
                 return self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
@@ -18635,15 +18641,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const req = self.codegen.allocStackSlot(@sizeOf(Request));
             const reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(reg);
-            try self.codegen.emitLoadImm(reg, @backingInt(list_op));
+            try self.emitLoadImm(widths.word_width, reg, @backingInt(list_op));
             try self.emitStore(.w32, frame_ptr, req + @offsetOf(Request, "op"), reg);
-            try self.codegen.emitLoadImm(reg, @intCast(extra.unique_args & 3));
+            try self.emitLoadImm(widths.word_width, reg, @intCast(extra.unique_args & 3));
             try self.emitStore(.w32, frame_ptr, req + @offsetOf(Request, "unique_args"), reg);
-            try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(elem_desc));
-            try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, "elem"), reg);
-            try self.codegen.emitLoadImm(reg, 0);
+            try self.emitLoad(widths.word_width, reg, frame_ptr, self.localSlot(elem_desc));
+            try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, "elem"), reg);
+            try self.emitLoadImm(widths.word_width, reg, 0);
             inline for (.{ "out_value", "ret_desc", "list", "list2", "element" }) |field| {
-                try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, field), reg);
+                try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, field), reg);
             }
 
             const Operands = struct { list: ?u32 = 0, list2: ?u32 = null, element: ?u32 = null, n: [3]?u32 = .{ null, null, null } };
@@ -18663,7 +18669,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             inline for (.{ "list", "list2", "element" }) |field| {
                 if (@field(operands, field)) |index| {
                     try self.emitBytesAddress(GuardedList.at(all_args, index), reg);
-                    try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, field), reg);
+                    try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, field), reg);
                 }
             }
             for (operands.n, 0..) |maybe_index, n| {
@@ -18695,11 +18701,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 break :blk .{ .closed = self.codegen.allocStackSlot(@max(size, 8)) };
             };
             try self.emitTargetAddress(dst, reg);
-            try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, "out"), reg);
+            try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, "out"), reg);
             if (list_op == .replace_unsafe) {
                 if (dynamic_target) {
-                    try self.emitLoad(.w64, reg, frame_ptr, self.localSlot(self.localDyn(dst_local).?.desc));
-                    try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, "ret_desc"), reg);
+                    try self.emitLoad(widths.word_width, reg, frame_ptr, self.localSlot(self.localDyn(dst_local).?.desc));
+                    try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, "ret_desc"), reg);
                 } else {
                     const record_layout = self.layout_store.getLayout(self.localLayout(dst_local));
                     if (record_layout.tag != .struct_) base.invariant("LIR/codegen invariant violated: list_replace_unsafe result is not a record", .{});
@@ -18709,9 +18715,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const first_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0));
                     const second_offset: i32 = @intCast(self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1));
                     try self.emitLeaStack(reg, dst.closed + if (first_is_list) first_offset else second_offset);
-                    try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, "out"), reg);
+                    try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, "out"), reg);
                     try self.emitLeaStack(reg, dst.closed + if (first_is_list) second_offset else first_offset);
-                    try self.emitStore(.w64, frame_ptr, req + @offsetOf(Request, "out_value"), reg);
+                    try self.emitStore(widths.word_width, frame_ptr, req + @offsetOf(Request, "out_value"), reg);
                 }
             }
 
@@ -18724,7 +18730,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // A list result of a dynamic target: move the list's words into
                 // its storage.
                 const to, const temp = try self.allocTempGenerals(2);
-                try self.emitLoad(.w64, to, frame_ptr, self.localSlot(dst_local));
+                try self.emitLoad(widths.word_width, to, frame_ptr, self.localSlot(dst_local));
                 try self.copyChunked(temp, frame_ptr, dst.closed, to, 0, roc_list_size);
                 self.freeGenerals(.{ temp, to });
                 return;
@@ -18762,9 +18768,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (param == capture_param) {
                     if (self.erased_capture_prefix != 0) {
                         const reg = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, reg, frame_ptr, capture_slot);
+                        try self.emitLoad(widths.word_width, reg, frame_ptr, capture_slot);
                         try self.emitAddPtrImmAny(reg, reg, @intCast(self.erased_capture_prefix));
-                        try self.emitStore(.w64, frame_ptr, capture_slot, reg);
+                        try self.emitStore(widths.word_width, frame_ptr, capture_slot, reg);
                         self.codegen.freeGeneral(reg);
                     }
                     try self.setLocalLocation(localKey(param), self.stackLocationForLayout(.opaque_ptr, capture_slot));
@@ -18787,7 +18793,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 const local_offset = self.codegen.allocStackSlot(size);
                 const args_reg, const temp = try self.allocTempGenerals(2);
-                try self.emitLoad(.w64, args_reg, frame_ptr, args_slot);
+                try self.emitLoad(widths.word_width, args_reg, frame_ptr, args_slot);
                 try self.copyChunked(temp, args_reg, 0, frame_ptr, local_offset, size);
                 self.freeGenerals(.{ temp, args_reg });
                 try self.setLocalLocation(localKey(param), self.stackLocationForLayout(param_layout, local_offset));
@@ -18829,14 +18835,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .general_reg => |reg| blk: {
                     std.debug.assert(value_size <= 8);
                     const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                     break :blk slot;
                 },
                 .immediate_i64 => |imm| blk: {
                     std.debug.assert(value_size <= 8);
                     const slot = self.codegen.allocStackSlot(@intCast(@max(value_size, @as(u32, 8))));
                     const tmp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(tmp, imm);
+                    try self.emitLoadImm(.w64, tmp, imm);
                     try self.emitStore(.w64, frame_ptr, slot, tmp);
                     self.codegen.freeGeneral(tmp);
                     break :blk slot;
@@ -19291,7 +19297,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (proc.abi == .erased_callable) {
                 self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                 const ret_ptr_reg = self.getArgumentRegister(1);
-                try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, ret_ptr_reg);
+                try self.codegen.emitStoreStack(widths.word_width, self.ret_ptr_slot.?, ret_ptr_reg);
                 try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args.get() orelse base.invariant("LIR/codegen invariant violated: erased-callable proc has no erased call args", .{}));
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
             } else if (proc.abi == .erased_record) {
@@ -19301,7 +19307,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (needs_ret_ptr) {
                     self.ret_ptr_slot = self.codegen.allocStackSlot(8);
                     const first_reg = self.getArgumentRegister(0);
-                    try self.codegen.emitStoreStack(.w64, self.ret_ptr_slot.?, first_reg);
+                    try self.codegen.emitStoreStack(widths.word_width, self.ret_ptr_slot.?, first_reg);
                 } else {
                     self.ret_ptr_slot = null;
                 }
@@ -19583,7 +19589,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Internal Roc proc calls use at most two general-purpose return registers.
         /// Larger runtime values use a hidden return pointer instead.
         const max_internal_return_words: u32 = 2;
-        const max_internal_return_size: u32 = max_internal_return_words * 8;
+        const max_internal_return_size: u32 = max_internal_return_words * target_ptr_size;
 
         /// Check if a return type exceeds the register limit and needs return-by-pointer.
         /// When true, the caller passes a hidden first argument (pointer to a pre-allocated
@@ -19649,8 +19655,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const runtime_layout = self.layout_store.getLayout(runtime_ret_layout);
                 if (runtime_layout.tag == .scalar and runtime_layout.getScalar().tag == .vector) {
                     const stack_offset = self.codegen.allocStackSlot(16);
-                    try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg_0);
-                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, ret_reg_1);
+                    try self.codegen.emitStoreStack(widths.word_width, stack_offset, ret_reg_0);
+                    try self.codegen.emitStoreStack(widths.word_width, stack_offset + target_ptr_size, ret_reg_1);
                     return self.stackLocationForLayout(runtime_ret_layout, stack_offset);
                 }
             }
@@ -19658,9 +19664,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Strings return one register per RocStr word
             if (runtime_ret_layout == .str) {
                 const stack_offset = self.codegen.allocStackSlot(roc_str_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + target_ptr_size, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 2 * target_ptr_size, ret_reg_2);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset + target_ptr_size, ret_reg_1);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset + 2 * target_ptr_size, ret_reg_2);
                 return .{ .stack_str = stack_offset };
             }
 
@@ -19673,9 +19679,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             if (is_list_return) {
                 const stack_offset = self.codegen.allocStackSlot(roc_list_size);
-                try self.emitStore(.w64, frame_ptr, stack_offset, ret_reg_0);
-                try self.emitStore(.w64, frame_ptr, stack_offset + target_ptr_size, ret_reg_1);
-                try self.emitStore(.w64, frame_ptr, stack_offset + 2 * target_ptr_size, ret_reg_2);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset, ret_reg_0);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset + target_ptr_size, ret_reg_1);
+                try self.emitStore(widths.word_width, frame_ptr, stack_offset + 2 * target_ptr_size, ret_reg_2);
                 return .{ .list_stack = .{
                     .struct_offset = stack_offset,
                     .data_offset = 0,
@@ -19689,9 +19695,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const layout_val = ls.getLayout(runtime_ret_layout);
                 if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
                     const size_align = ls.layoutSizeAlign(layout_val);
-                    if (size_align.size > 8) {
+                    if (size_align.size > target_ptr_size) {
                         const stack_offset = self.codegen.allocStackSlot(size_align.size);
-                        const num_regs = (size_align.size + 7) / 8;
+                        const num_regs = (size_align.size + target_ptr_size - 1) / target_ptr_size;
                         switch (isa) {
                             .aarch64 => {
                                 const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
@@ -19714,7 +19720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Spill scalar return value from the return register (X0/RAX) to the stack.
             const ret_reg = self.getReturnRegister();
             const stack_offset = self.codegen.allocStackSlot(8);
-            try self.codegen.emitStoreStack(.w64, stack_offset, ret_reg);
+            try self.codegen.emitStoreStack(widths.word_width, stack_offset, ret_reg);
             return .{ .stack = .{ .offset = stack_offset } };
         }
 
@@ -19772,7 +19778,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (reg_count + nr <= max_arg_regs) {
                     reg_count += nr;
                 } else {
-                    block.words += @as(u32, nr) * 8;
+                    block.words += @as(u32, nr) * target_ptr_size;
                     reg_count = max_arg_regs;
                 }
             }
@@ -19786,11 +19792,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var remaining = size;
             while (remaining >= lir.LIR.stack_probe_page_size) : (remaining -= lir.LIR.stack_probe_page_size) {
                 try self.emitSubStackPtr(lir.LIR.stack_probe_page_size);
-                try self.emitStore(.w64, stack_ptr, 0, scratch_reg);
+                try self.emitStore(widths.word_width, stack_ptr, 0, scratch_reg);
             }
             if (remaining > 0) {
                 try self.emitSubStackPtr(remaining);
-                if (size >= lir.LIR.stack_probe_page_size) try self.emitStore(.w64, stack_ptr, 0, scratch_reg);
+                if (size >= lir.LIR.stack_probe_page_size) try self.emitStore(widths.word_width, stack_ptr, 0, scratch_reg);
             }
         }
 
@@ -19820,7 +19826,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.debug.assert(info.num_regs > 0);
 
             if (pass_by_ptr or info.num_regs > 1) {
-                const size: u32 = @as(u32, info.num_regs) * 8;
+                const size: u32 = @as(u32, info.num_regs) * target_ptr_size;
                 const offset = switch (info.loc) {
                     .stack_i128, .stack_str => |off| off,
                     .stack => |s| s.offset,
@@ -19830,9 +19836,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const slot = self.codegen.allocStackSlot(@intCast(size));
                         const low: u64 = @truncate(@as(u128, @bitCast(val)));
                         const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
-                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(low));
+                        try self.emitLoadImm(.w64, scratch_reg, @bitCast(low));
                         try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
-                        try self.codegen.emitLoadImm(scratch_reg, @bitCast(high));
+                        try self.emitLoadImm(.w64, scratch_reg, @bitCast(high));
                         try self.emitStore(.w64, frame_ptr, slot + 8, scratch_reg);
                         break :blk slot;
                     },
@@ -19900,12 +19906,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_i64 => |val| {
                         const f32_val: f32 = @floatFromInt(val);
                         const bits: u32 = @bitCast(f32_val);
-                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitLoadImm(widths.word_width, scratch_reg, @as(i64, bits));
                         try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
                     },
                     .immediate_f32 => |val| {
                         const bits: u32 = @bitCast(val);
-                        try self.codegen.emitLoadImm(scratch_reg, @as(i64, bits));
+                        try self.emitLoadImm(widths.word_width, scratch_reg, @as(i64, bits));
                         try self.emitStore(.w32, frame_ptr, slot, scratch_reg);
                     },
                     .stack => |s| {
@@ -19949,7 +19955,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{
                         .stack_offset = offset,
                         .num_regs = 1,
-                        .value_size = .qword,
+                        .value_size = ValueSize.fromByteCount(target_ptr_size),
                         .pass_by_ptr = false,
                     };
                 },
@@ -19957,7 +19963,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{
                         .stack_offset = li.struct_offset,
                         .num_regs = 1,
-                        .value_size = .qword,
+                        .value_size = ValueSize.fromByteCount(target_ptr_size),
                         .pass_by_ptr = false,
                     };
                 },
@@ -19985,15 +19991,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(8);
             switch (info.loc) {
                 .general_reg => |reg| {
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
+                    try self.emitStore(widths.word_width, frame_ptr, slot, reg);
                 },
                 .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(scratch_reg, val);
+                    try self.emitLoadImm(.w64, scratch_reg, val);
                     try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
                 },
                 .immediate_f64 => |val| {
                     const bits: u64 = @bitCast(val);
-                    try self.codegen.emitLoadImm(scratch_reg, @bitCast(bits));
+                    try self.emitLoadImm(.w64, scratch_reg, @bitCast(bits));
                     try self.emitStore(.w64, frame_ptr, slot, scratch_reg);
                 },
                 .stack => |s| {
@@ -20047,7 +20053,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (reg_count + nr <= max_arg_regs) {
                         reg_count += nr;
                     } else {
-                        stack_arg_bytes += @as(i32, nr) * 8;
+                        stack_arg_bytes += @as(i32, nr) * target_ptr_size;
                         reg_count = max_arg_regs;
                     }
                 }
@@ -20154,16 +20160,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const reg0 = self.getArgumentRegister(reg_idx);
                         const reg1 = self.getArgumentRegister(reg_idx + 1);
                         const reg2 = self.getArgumentRegister(reg_idx + 2);
-                        try self.emitLoad(.w64, reg0, frame_ptr, frozen.stack_offset);
-                        try self.emitLoad(.w64, reg1, frame_ptr, frozen.stack_offset + 8);
-                        try self.emitLoad(.w64, reg2, frame_ptr, frozen.stack_offset + 16);
+                        try self.emitLoad(widths.word_width, reg0, frame_ptr, frozen.stack_offset);
+                        try self.emitLoad(widths.word_width, reg1, frame_ptr, frozen.stack_offset + target_ptr_size);
+                        try self.emitLoad(widths.word_width, reg2, frame_ptr, frozen.stack_offset + 2 * target_ptr_size);
                         reg_idx += 3;
                     } else if (info.num_regs > 1) {
                         // Multi-register struct (record > 8 bytes)
                         var ri: u8 = 0;
                         while (ri < info.num_regs) : (ri += 1) {
                             const r = self.getArgumentRegister(reg_idx + ri);
-                            try self.codegen.emitLoadStack(.w64, r, frozen.stack_offset + @as(i32, ri) * 8);
+                            try self.codegen.emitLoadStack(widths.word_width, r, frozen.stack_offset + @as(i32, ri) * target_ptr_size);
                         }
                         reg_idx += info.num_regs;
                     } else {
@@ -20180,7 +20186,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         stack_arg_offset,
                         info.num_regs,
                     );
-                    stack_arg_offset += @as(i32, info.num_regs) * 8;
+                    stack_arg_offset += @as(i32, info.num_regs) * target_ptr_size;
                     reg_idx = max_arg_regs;
                 }
             }
@@ -20252,9 +20258,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const temp_reg: GeneralReg = scratch_reg;
             var ri: u8 = 0;
             while (ri < num_regs) : (ri += 1) {
-                const off: i32 = @as(i32, ri) * 8;
-                try self.emitLoad(.w64, temp_reg, caller_base, caller_offset + off);
-                try self.emitStore(.w64, frame_ptr, local_offset + off, temp_reg);
+                const off: i32 = @as(i32, ri) * target_ptr_size;
+                try self.emitLoad(widths.word_width, temp_reg, caller_base, caller_offset + off);
+                try self.emitStore(widths.word_width, frame_ptr, local_offset + off, temp_reg);
             }
         }
 
@@ -20263,9 +20269,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// caller's outgoing stack-argument area.
         fn saveIncomingPointerArg(self: *Self, local_offset: i32, arg_index: u8) Allocator.Error!void {
             if (arg_index < max_arg_regs) {
-                try self.codegen.emitStoreStack(.w64, local_offset, self.getArgumentRegister(arg_index));
+                try self.codegen.emitStoreStack(widths.word_width, local_offset, self.getArgumentRegister(arg_index));
             } else {
-                const stack_offset = incoming_stack_arg_base_offset + @as(i32, arg_index - max_arg_regs) * 8;
+                const stack_offset = incoming_stack_arg_base_offset + @as(i32, arg_index - max_arg_regs) * target_ptr_size;
                 try self.copyFromCallerStack(self.callerStackArgBaseReg(), stack_offset, local_offset, 1);
             }
         }
@@ -20305,7 +20311,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 } else {
                     const local_offset = self.codegen.allocStackSlot(size_align.size);
                     const args_ptr_reg, const temp_reg = try self.allocTempGenerals(2);
-                    try self.emitLoad(.w64, args_ptr_reg, frame_ptr, args_ptr_slot);
+                    try self.emitLoad(widths.word_width, args_ptr_reg, frame_ptr, args_ptr_slot);
                     try self.copyChunked(
                         temp_reg,
                         args_ptr_reg,
@@ -20322,11 +20328,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_local = GuardedList.at(locals, explicit_count);
             const capture_stack = self.codegen.allocStackSlot(8);
             const capture_arg_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, capture_arg_reg, frame_ptr, capture_ptr_slot);
+            try self.emitLoad(widths.word_width, capture_arg_reg, frame_ptr, capture_ptr_slot);
             if (self.erased_capture_prefix != 0) {
                 try self.emitAddPtrImmAny(capture_arg_reg, capture_arg_reg, @intCast(self.erased_capture_prefix));
             }
-            try self.emitStore(.w64, frame_ptr, capture_stack, capture_arg_reg);
+            try self.emitStore(widths.word_width, frame_ptr, capture_stack, capture_arg_reg);
             self.codegen.freeGeneral(capture_arg_reg);
             try self.setLocalLocation(localKey(capture_local), self.stackLocationForLayout(.opaque_ptr, capture_stack));
 
@@ -20485,7 +20491,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     } else {
                         const caller_base = self.callerStackArgBaseReg();
                         ptr_reg = scratch_reg;
-                        try self.emitLoad(.w64, ptr_reg, caller_base, stack_arg_offset);
+                        try self.emitLoad(widths.word_width, ptr_reg, caller_base, stack_arg_offset);
                         stack_arg_offset += 8;
                         reg_idx = max_arg_regs;
                     }
@@ -20511,24 +20517,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
 
                 if (reg_idx + num_regs <= max_arg_regs) {
-                    const size: u32 = @as(u32, num_regs) * 8;
+                    const size: u32 = @as(u32, num_regs) * target_ptr_size;
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     var ri: u8 = 0;
                     while (ri < num_regs) : (ri += 1) {
                         const arg_reg = self.getArgumentRegister(reg_idx + ri);
-                        try self.codegen.emitStoreStack(.w64, stack_offset + @as(i32, ri) * 8, arg_reg);
+                        try self.codegen.emitStoreStack(widths.word_width, stack_offset + @as(i32, ri) * target_ptr_size, arg_reg);
                     }
                     const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
                     try self.bindParamLocation(local, stable_loc, pending and param_idx == param_count - 1);
                     reg_idx += num_regs;
                 } else {
                     const caller_base = self.callerStackArgBaseReg();
-                    const size: u32 = @as(u32, num_regs) * 8;
+                    const size: u32 = @as(u32, num_regs) * target_ptr_size;
                     const stack_offset = self.codegen.allocStackSlot(@intCast(size));
                     try self.copyFromCallerStack(caller_base, stack_arg_offset, stack_offset, num_regs);
                     const stable_loc = self.stackLocationForLayout(self.paramLayout(local), stack_offset);
                     try self.bindParamLocation(local, stable_loc, pending and param_idx == param_count - 1);
-                    stack_arg_offset += @as(i32, num_regs) * 8;
+                    stack_arg_offset += @as(i32, num_regs) * target_ptr_size;
                     reg_idx = max_arg_regs;
                 }
             }
@@ -20583,9 +20589,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .noreturn,
                         => unexpectedLocation("list return", loc),
                     };
-                    try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + target_ptr_size);
-                    try self.codegen.emitLoadStack(.w64, ret_reg_2, stack_offset + 2 * target_ptr_size);
+                    try self.codegen.emitLoadStack(widths.word_width, ret_reg_0, stack_offset);
+                    try self.codegen.emitLoadStack(widths.word_width, ret_reg_1, stack_offset + target_ptr_size);
+                    try self.codegen.emitLoadStack(widths.word_width, ret_reg_2, stack_offset + 2 * target_ptr_size);
                 },
                 // Scalars: dispatch by scalar kind
                 .scalar => {
@@ -20608,9 +20614,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .noreturn,
                                 => unexpectedLocation("Str return", loc),
                             };
-                            try self.codegen.emitLoadStack(.w64, ret_reg_0, stack_offset);
-                            try self.codegen.emitLoadStack(.w64, ret_reg_1, stack_offset + target_ptr_size);
-                            try self.codegen.emitLoadStack(.w64, ret_reg_2, stack_offset + 2 * target_ptr_size);
+                            try self.codegen.emitLoadStack(widths.word_width, ret_reg_0, stack_offset);
+                            try self.codegen.emitLoadStack(widths.word_width, ret_reg_1, stack_offset + target_ptr_size);
+                            try self.codegen.emitLoadStack(widths.word_width, ret_reg_2, stack_offset + 2 * target_ptr_size);
                         },
                         .frac => {
                             const precision = scalar.getFrac();
@@ -20629,12 +20635,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         const val = imm.get();
                                         const low: i64 = @truncate(val);
                                         const high: i64 = @truncate(val >> 64);
-                                        try self.codegen.emitLoadImm(ret_reg_0, low);
-                                        try self.codegen.emitLoadImm(ret_reg_1, high);
+                                        try self.emitLoadImm(.w64, ret_reg_0, low);
+                                        try self.emitLoadImm(.w64, ret_reg_1, high);
                                     },
                                     .immediate_i64 => |val| {
-                                        try self.codegen.emitLoadImm(ret_reg_0, @bitCast(val));
-                                        try self.codegen.emitLoadImm(ret_reg_1, if (val < 0) @as(i64, -1) else 0);
+                                        try self.emitLoadImm(.w64, ret_reg_0, @bitCast(val));
+                                        try self.emitLoadImm(.w64, ret_reg_1, if (val < 0) @as(i64, -1) else 0);
                                     },
                                     .general_reg,
                                     .float_reg,
@@ -20740,12 +20746,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         const val = imm.get();
                                         const low: i64 = @truncate(val);
                                         const high: i64 = @truncate(val >> 64);
-                                        try self.codegen.emitLoadImm(ret_reg_0, low);
-                                        try self.codegen.emitLoadImm(ret_reg_1, high);
+                                        try self.emitLoadImm(.w64, ret_reg_0, low);
+                                        try self.emitLoadImm(.w64, ret_reg_1, high);
                                     },
                                     .immediate_i64 => |val| {
-                                        try self.codegen.emitLoadImm(ret_reg_0, @bitCast(val));
-                                        try self.codegen.emitLoadImm(ret_reg_1, if (val < 0) @as(i64, -1) else 0);
+                                        try self.emitLoadImm(.w64, ret_reg_0, @bitCast(val));
+                                        try self.emitLoadImm(.w64, ret_reg_1, if (val < 0) @as(i64, -1) else 0);
                                     },
                                     .general_reg,
                                     .float_reg,
@@ -20770,8 +20776,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .immediate_i128 => |imm| blk: {
                                     const val = imm.get();
                                     const temp = self.codegen.allocStackSlot(16);
-                                    try self.codegen.emitLoadImm(ret_reg_0, @truncate(val));
-                                    try self.codegen.emitLoadImm(ret_reg_1, @truncate(val >> 64));
+                                    try self.emitLoadImm(.w64, ret_reg_0, @truncate(val));
+                                    try self.emitLoadImm(.w64, ret_reg_1, @truncate(val >> 64));
                                     try self.codegen.emitStoreStack(.w64, temp, ret_reg_0);
                                     try self.codegen.emitStoreStack(.w64, temp + 8, ret_reg_1);
                                     break :blk temp;
@@ -20797,7 +20803,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const size_align = ls.layoutSizeAlign(layout_val);
                     if (size_align.size == 0) {
                         // Zero-sized—nothing to move
-                    } else if (size_align.size <= 8) {
+                    } else if (size_align.size <= target_ptr_size) {
                         // 1 register
                         try self.moveOneRegToReturn(loc);
                     } else {
@@ -20816,7 +20822,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .noreturn,
                             => unexpectedLocation("multi-register return", loc),
                         };
-                        const num_regs = (size_align.size + 7) / 8;
+                        const num_regs = (size_align.size + target_ptr_size - 1) / target_ptr_size;
                         switch (isa) {
                             .aarch64 => {
                                 const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7, .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15 };
@@ -20853,14 +20859,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             switch (loc) {
                 .general_reg => |reg| {
                     if (reg != ret_reg) {
-                        try self.codegen.emit.movRegReg(.w64, ret_reg, reg);
+                        try self.codegen.emit.movRegReg(widths.word_width, ret_reg, reg);
                     }
                 },
                 .stack => |s| {
                     try self.emitSizedLoadStack(ret_reg, s.offset, s.size);
                 },
                 .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(ret_reg, @bitCast(val));
+                    try self.emitLoadImm(.w64, ret_reg, @bitCast(val));
                 },
                 .float_reg,
                 .vector_reg,
@@ -20915,7 +20921,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         // (both x86_64 masks exclude R11 and the aarch64 mask
                         // excludes X9), so the result value cannot alias
                         // ptr_reg.
-                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, ret_ptr_stack_slot);
                         try self.emitStoreScalarToPtr(ptr_reg, reg, ret_size);
                         self.codegen.freeGeneral(reg);
                         return;
@@ -20934,8 +20940,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .immediate_i64 => |val| switch (ret_size) {
                     1, 2, 4, 8 => {
-                        try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
-                        try self.codegen.emitLoadImm(temp_reg, val);
+                        try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+                        try self.emitLoadImm(.w64, temp_reg, val);
                         try self.emitStoreScalarToPtr(ptr_reg, temp_reg, ret_size);
                         return;
                     },
@@ -20951,7 +20957,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             };
 
             // Load the return pointer from the saved stack slot
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, ret_ptr_stack_slot);
+            try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, ret_ptr_stack_slot);
             const copy_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(copy_reg);
             try self.copyChunked(copy_reg, frame_ptr, result_offset, ptr_reg, 0, ret_size);
@@ -21386,7 +21392,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (site_reg) |reg| self.codegen.freeGeneral(reg);
                                 self.codegen.freeGeneral(cond_reg);
                             } else {
-                                try self.emitCmpImm(cond_reg, 0);
+                                try self.emitCmpImm(widths.word_width, cond_reg, 0);
                                 const skip_patch = try self.emitJumpIfNotEqual();
                                 self.codegen.freeGeneral(cond_reg);
                                 try self.emitRocExpectFailed();
@@ -21507,7 +21513,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 const cond_loc = try self.emitValueLocal(sw.cond);
                                 const branch = GuardedList.at(branches, 0);
                                 const cond_reg = try self.ensureInGeneralReg(cond_loc);
-                                try self.emitCmpImm(cond_reg, @bitCast(branch.value));
+                                try self.emitCmpImm(.w64, cond_reg, @bitCast(branch.value));
                                 const else_patch = try self.emitJumpIfNotEqual();
                                 self.codegen.freeGeneral(cond_reg);
                                 self.restoreStmtEnv(&switch_env);
@@ -21546,12 +21552,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                             const cond_mask: i64 = @bitCast(sw.cond_mask);
                             const compare_reg = try self.allocTempGeneral();
-                            try self.emitMovRegReg(compare_reg, cond_reg);
+                            try self.emitMovRegReg(.w64, compare_reg, cond_reg);
                             const mask_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(mask_reg, cond_mask);
+                            try self.emitLoadImm(.w64, mask_reg, cond_mask);
                             try self.codegen.emitAnd(.w64, compare_reg, compare_reg, mask_reg);
                             self.codegen.freeGeneral(mask_reg);
-                            try self.emitCmpImm(compare_reg, cond_mask);
+                            try self.emitCmpImm(.w64, compare_reg, cond_mask);
                             const else_patch = try self.emitJumpIfNotEqual();
                             self.freeGenerals(.{ compare_reg, cond_reg });
                             self.restoreStmtEnv(&switch_env);
@@ -21623,12 +21629,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             const cond_mask: i64 = @bitCast(dec.cond_mask);
                             const compare_reg = try self.allocTempGeneral();
-                            try self.emitMovRegReg(compare_reg, cond_reg);
+                            try self.emitMovRegReg(.w64, compare_reg, cond_reg);
                             const mask_reg = try self.allocTempGeneral();
-                            try self.codegen.emitLoadImm(mask_reg, cond_mask);
+                            try self.emitLoadImm(.w64, mask_reg, cond_mask);
                             try self.codegen.emitAnd(.w64, compare_reg, compare_reg, mask_reg);
                             self.codegen.freeGeneral(mask_reg);
-                            try self.emitCmpImm(compare_reg, cond_mask);
+                            try self.emitCmpImm(.w64, compare_reg, cond_mask);
                             const skip_patch = try self.emitJumpIfNotEqual();
                             self.freeGenerals(.{ compare_reg, cond_reg });
 
@@ -21722,7 +21728,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const cond_loc = try self.emitValueLocal(state.cond);
                     const cond_reg = try self.ensureInGeneralReg(cond_loc);
                     const branch = GuardedList.at(state.branches, state.index);
-                    try self.emitCmpImm(cond_reg, @bitCast(branch.value));
+                    try self.emitCmpImm(.w64, cond_reg, @bitCast(branch.value));
                     const skip_patch = try self.emitJumpIfNotEqual();
                     self.codegen.freeGeneral(cond_reg);
                     try work.append(wa, .{ .switch_branch_after = .{ .state = state_index, .skip_patch = skip_patch } });
@@ -21942,7 +21948,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const cursor_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(cursor_reg);
-            try self.codegen.emitLoadImm(cursor_reg, 0);
+            try self.emitLoadImm(widths.word_width, cursor_reg, 0);
 
             const prefix = self.store.getStringLiteral(str_match.prefix);
             if (prefix.len > 0) {
@@ -21955,7 +21961,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const step = GuardedList.at(steps, step_i);
                 const capture_start_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(capture_start_reg);
-                try self.emitMovRegReg(capture_start_reg, cursor_reg);
+                try self.emitMovRegReg(widths.word_width, capture_start_reg, cursor_reg);
 
                 const delimiter = self.store.getStringLiteral(step.delimiter);
                 const is_final_tail_capture = str_match.end == .tail and step_i + 1 == steps.len and delimiter.len == 0;
@@ -21964,7 +21970,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (capture_offsets[step_i]) |capture_offset| {
                         try self.emitStoreStrCapture(capture_offset, source.bytes, source.allocation, source.is_small, capture_start_reg, source.len);
                     }
-                    try self.emitMovRegReg(cursor_reg, source.len);
+                    try self.emitMovRegReg(widths.word_width, cursor_reg, source.len);
                     continue;
                 }
 
@@ -21981,7 +21987,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             switch (str_match.end) {
                 .exact => {
-                    try self.emitCmpReg(cursor_reg, source.len);
+                    try self.emitCmpReg(widths.word_width, cursor_reg, source.len);
                     try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
                 },
                 .tail => {},
@@ -22007,22 +22013,22 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const tmp_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(tmp_reg);
 
-            try self.emitLoad(.w64, len_reg, frame_ptr, source_offset + str_len_offset);
-            try self.codegen.emitLoadImm(tmp_reg, str_small_bit);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, len_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoad(widths.word_width, len_reg, frame_ptr, source_offset + str_len_offset);
+            try self.emitLoadImm(widths.word_width, tmp_reg, str_small_bit);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, len_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const small_patch = try self.codegen.emitCondJump(condCode(.not_equal));
 
-            try self.emitLoad(.w64, bytes_reg, frame_ptr, source_offset + str_bytes_offset);
-            try self.codegen.emitLoadImm(source_is_small_reg, 0);
-            try self.emitLoad(.w64, source_alloc_reg, frame_ptr, source_offset + str_capacity_offset);
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_tag);
-            try self.codegen.emitAnd(.w64, tmp_reg, tmp_reg, source_alloc_reg);
-            try self.emitCmpImm(tmp_reg, 0);
+            try self.emitLoad(widths.word_width, bytes_reg, frame_ptr, source_offset + str_bytes_offset);
+            try self.emitLoadImm(widths.word_width, source_is_small_reg, 0);
+            try self.emitLoad(widths.word_width, source_alloc_reg, frame_ptr, source_offset + str_capacity_offset);
+            try self.emitLoadImm(widths.word_width, tmp_reg, seamless_slice_tag);
+            try self.codegen.emitAnd(widths.word_width, tmp_reg, tmp_reg, source_alloc_reg);
+            try self.emitCmpImm(widths.word_width, tmp_reg, 0);
             const already_slice_patch = try self.codegen.emitCondJump(condCode(.not_equal));
-            try self.emitMovRegReg(source_alloc_reg, bytes_reg);
-            try self.codegen.emitLoadImm(tmp_reg, seamless_slice_tag);
-            try self.codegen.emitOr(.w64, source_alloc_reg, source_alloc_reg, tmp_reg);
+            try self.emitMovRegReg(widths.word_width, source_alloc_reg, bytes_reg);
+            try self.emitLoadImm(widths.word_width, tmp_reg, seamless_slice_tag);
+            try self.codegen.emitOr(widths.word_width, source_alloc_reg, source_alloc_reg, tmp_reg);
             const alloc_done_patch = try self.codegen.emitJump();
             const already_slice_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(already_slice_patch, already_slice_offset);
@@ -22033,11 +22039,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const small_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(small_patch, small_offset);
             try self.emitLeaStack(bytes_reg, source_offset);
-            try self.codegen.emitLoadImm(source_is_small_reg, 1);
-            try self.emitShiftImm(.shr, .w64, len_reg, len_reg, str_flag_byte_shift);
-            try self.codegen.emitLoadImm(tmp_reg, RocStr.small_str_len_mask);
-            try self.codegen.emitAnd(.w64, len_reg, len_reg, tmp_reg);
-            try self.codegen.emitLoadImm(source_alloc_reg, 0);
+            try self.emitLoadImm(widths.word_width, source_is_small_reg, 1);
+            try self.emitShiftImm(.shr, widths.word_width, len_reg, len_reg, str_flag_byte_shift);
+            try self.emitLoadImm(widths.word_width, tmp_reg, RocStr.small_str_len_mask);
+            try self.codegen.emitAnd(widths.word_width, len_reg, len_reg, tmp_reg);
+            try self.emitLoadImm(widths.word_width, source_alloc_reg, 0);
 
             const shape_done_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(shape_done_patch, shape_done_offset);
@@ -22056,13 +22062,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(limit_reg);
             defer self.codegen.freeGeneral(needed_reg);
 
-            try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(needed))));
-            try self.emitCmpReg(len_reg, needed_reg);
+            try self.emitLoadImm(widths.word_width, needed_reg, @bitCast(@as(u64, @intCast(needed))));
+            try self.emitCmpReg(widths.word_width, len_reg, needed_reg);
             try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.below)));
 
-            try self.emitMovRegReg(limit_reg, len_reg);
-            try self.codegen.emitSub(.w64, limit_reg, limit_reg, needed_reg);
-            try self.emitCmpReg(cursor_reg, limit_reg);
+            try self.emitMovRegReg(widths.word_width, limit_reg, len_reg);
+            try self.codegen.emitSub(widths.word_width, limit_reg, limit_reg, needed_reg);
+            try self.emitCmpReg(widths.word_width, cursor_reg, limit_reg);
             try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
         }
 
@@ -22084,27 +22090,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const needed_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(needed_reg);
 
-                try self.codegen.emitLoadImm(needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
-                try self.emitCmpReg(len_reg, needed_reg);
+                try self.emitLoadImm(widths.word_width, needed_reg, @bitCast(@as(u64, @intCast(delimiter.len))));
+                try self.emitCmpReg(widths.word_width, len_reg, needed_reg);
                 try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.below)));
 
-                try self.emitMovRegReg(limit_reg, len_reg);
-                try self.codegen.emitSub(.w64, limit_reg, limit_reg, needed_reg);
+                try self.emitMovRegReg(widths.word_width, limit_reg, len_reg);
+                try self.codegen.emitSub(widths.word_width, limit_reg, limit_reg, needed_reg);
             }
 
             const loop_start = self.codegen.currentOffset();
-            try self.emitCmpReg(cursor_reg, limit_reg);
+            try self.emitCmpReg(widths.word_width, cursor_reg, limit_reg);
             try miss_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
 
-            try self.emitMovRegReg(candidate_reg, bytes_reg);
-            try self.codegen.emitAdd(.w64, candidate_reg, candidate_reg, cursor_reg);
+            try self.emitMovRegReg(widths.word_width, candidate_reg, bytes_reg);
+            try self.codegen.emitAdd(widths.word_width, candidate_reg, candidate_reg, cursor_reg);
 
             const retry_patch = blk: {
                 const loaded_reg = try self.allocTempGeneral();
                 defer self.codegen.freeGeneral(loaded_reg);
 
                 try self.emitLoadW8(loaded_reg, candidate_reg, 0);
-                try self.emitCmpImm(loaded_reg, delimiter[0]);
+                try self.emitCmpImm(widths.word_width, loaded_reg, delimiter[0]);
                 break :blk try self.codegen.emitCondJump(condCode(.not_equal));
             };
 
@@ -22139,8 +22145,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var offset: usize = 0;
             while (offset < literal.len) {
                 const remaining = literal.len - offset;
-                const chunk_len: usize = if (remaining >= 8)
-                    8
+                const chunk_len: usize = if (remaining >= target_ptr_size)
+                    target_ptr_size
                 else if (remaining >= 4)
                     4
                 else if (remaining >= 2)
@@ -22149,20 +22155,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     1;
 
                 const offset_i32: i32 = @intCast(offset);
-                switch (chunk_len) {
-                    8 => try self.emitLoad(.w64, loaded_reg, ptr_reg, offset_i32),
+                if (chunk_len == target_ptr_size) {
+                    try self.emitLoad(widths.word_width, loaded_reg, ptr_reg, offset_i32);
+                } else switch (chunk_len) {
                     4 => try self.emitLoad(.w32, loaded_reg, ptr_reg, offset_i32),
                     2 => try self.emitLoadW16(loaded_reg, ptr_reg, offset_i32),
                     1 => try self.emitLoadW8(loaded_reg, ptr_reg, offset_i32),
-                    else => unreachable, // chunk_len is 8, 4, 2 or 1 by construction above
+                    else => unreachable, // chunk_len is a word, 4, 2 or 1 by construction above
                 }
 
                 var expected: u64 = 0;
                 for (literal[offset..][0..chunk_len], 0..) |byte, byte_i| {
                     expected |= @as(u64, byte) << @intCast(byte_i * 8);
                 }
-                try self.codegen.emitLoadImm(expected_reg, @bitCast(expected));
-                try self.emitCmpReg(loaded_reg, expected_reg);
+                try self.emitLoadImm(widths.word_width, expected_reg, @bitCast(expected));
+                try self.emitCmpReg(widths.word_width, loaded_reg, expected_reg);
                 try mismatch_patches.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
 
                 offset += chunk_len;
@@ -22181,10 +22188,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const capture_len_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(capture_len_reg);
 
-            try self.emitMovRegReg(capture_len_reg, end_reg);
-            try self.codegen.emitSub(.w64, capture_len_reg, capture_len_reg, start_reg);
+            try self.emitMovRegReg(widths.word_width, capture_len_reg, end_reg);
+            try self.codegen.emitSub(widths.word_width, capture_len_reg, capture_len_reg, start_reg);
 
-            try self.emitCmpImm(source_is_small_reg, 0);
+            try self.emitCmpImm(widths.word_width, source_is_small_reg, 0);
             const heap_patch = try self.codegen.emitCondJump(condCode(.equal));
 
             try self.emitStoreSmallStrCapture(dest_offset, source_bytes_reg, start_reg, capture_len_reg);
@@ -22213,26 +22220,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(dst_cur_reg);
             defer self.codegen.freeGeneral(src_cur_reg);
 
-            try self.emitMovRegReg(src_cur_reg, source_bytes_reg);
-            try self.codegen.emitAdd(.w64, src_cur_reg, src_cur_reg, start_reg);
+            try self.emitMovRegReg(widths.word_width, src_cur_reg, source_bytes_reg);
+            try self.codegen.emitAdd(widths.word_width, src_cur_reg, src_cur_reg, start_reg);
             try self.emitLeaStack(dst_cur_reg, dest_offset);
-            try self.emitMovRegReg(remaining_reg, capture_len_reg);
+            try self.emitMovRegReg(widths.word_width, remaining_reg, capture_len_reg);
 
             const loop_start = self.codegen.currentOffset();
-            try self.emitCmpImm(remaining_reg, 0);
+            try self.emitCmpImm(widths.word_width, remaining_reg, 0);
             const done_patch = try self.codegen.emitCondJump(condCode(.equal));
             try self.emitLoadW8(byte_reg, src_cur_reg, 0);
             try self.emitStoreW8(dst_cur_reg, 0, byte_reg);
             try self.emitAddUsizeImm(src_cur_reg, src_cur_reg, 1);
             try self.emitAddUsizeImm(dst_cur_reg, dst_cur_reg, 1);
-            try self.emitSubImm(.w64, remaining_reg, remaining_reg, 1);
+            try self.emitSubImm(widths.word_width, remaining_reg, remaining_reg, 1);
             const back_patch = try self.codegen.emitJump();
             try self.codegen.patchJump(back_patch, loop_start);
 
             const done_offset = self.codegen.currentOffset();
             try self.codegen.patchJump(done_patch, done_offset);
 
-            try self.emitMovRegReg(byte_reg, capture_len_reg);
+            try self.emitMovRegReg(widths.word_width, byte_reg, capture_len_reg);
             try self.emitAddUsizeImm(byte_reg, byte_reg, RocStr.small_str_flag);
             try self.emitStoreW8(frame_ptr, dest_offset + str_flag_byte_offset, byte_reg);
         }
@@ -22248,11 +22255,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slice_bytes_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(slice_bytes_reg);
 
-            try self.emitMovRegReg(slice_bytes_reg, source_bytes_reg);
-            try self.codegen.emitAdd(.w64, slice_bytes_reg, slice_bytes_reg, start_reg);
-            try self.emitStore(.w64, frame_ptr, dest_offset + str_bytes_offset, slice_bytes_reg);
-            try self.emitStore(.w64, frame_ptr, dest_offset + str_capacity_offset, source_alloc_reg);
-            try self.emitStore(.w64, frame_ptr, dest_offset + str_len_offset, capture_len_reg);
+            try self.emitMovRegReg(widths.word_width, slice_bytes_reg, source_bytes_reg);
+            try self.codegen.emitAdd(widths.word_width, slice_bytes_reg, slice_bytes_reg, start_reg);
+            try self.emitStore(widths.word_width, frame_ptr, dest_offset + str_bytes_offset, slice_bytes_reg);
+            try self.emitStore(widths.word_width, frame_ptr, dest_offset + str_capacity_offset, source_alloc_reg);
+            try self.emitStore(widths.word_width, frame_ptr, dest_offset + str_len_offset, capture_len_reg);
         }
 
         /// Register join parameters; storage is assigned by the procedure plan.
@@ -22286,8 +22293,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 inline for (0..RocStr.word_count) |word| {
                     const word_offset: i32 = word * target_ptr_size;
                     const chunk: u64 = @bitCast(bytes[@intCast(word_offset)..][0..target_ptr_size].*);
-                    try self.codegen.emitLoadImm(reg, @bitCast(chunk));
-                    try self.codegen.emitStoreStack(.w64, base_offset + word_offset, reg);
+                    try self.emitLoadImm(widths.word_width, reg, @bitCast(chunk));
+                    try self.codegen.emitStoreStack(widths.word_width, base_offset + word_offset, reg);
                 }
             } else {
                 const ptr_reg = try self.allocTempGeneral();
@@ -22297,7 +22304,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .native_execution => {
                         const static_backing_bytes = self.staticStringEntry(literal.backing).bytes;
                         verifyStaticStringBytes(static_backing_bytes);
-                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.offset))));
+                        try self.emitLoadImm(widths.word_width, ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.offset))));
                     },
                     .shim_execution, .object_file => {
                         const symbol = try self.staticStringSymbol(literal.backing);
@@ -22305,7 +22312,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.offset);
                     },
                 }
-                try self.codegen.emitStoreStack(.w64, base_offset + str_bytes_offset, ptr_reg);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + str_bytes_offset, ptr_reg);
                 switch (self.generation_mode) {
                     .native_execution => {
                         const static_backing_bytes = self.staticStringEntry(literal.backing).bytes;
@@ -22313,11 +22320,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             str_bytes.len << RocStr.capacity_shift
                         else
                             @intFromPtr(static_backing_bytes.ptr) | builtins.list.SEAMLESS_SLICE_TAG;
-                        try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
+                        try self.emitLoadImm(widths.word_width, ptr_reg, @intCast(cap_or_alloc));
                     },
                     .shim_execution, .object_file => {
                         if (whole_backing) {
-                            try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len << RocStr.capacity_shift));
+                            try self.emitLoadImm(widths.word_width, ptr_reg, @intCast(str_bytes.len << RocStr.capacity_shift));
                         } else {
                             const symbol = try self.staticStringSymbol(literal.backing);
                             try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
@@ -22325,9 +22332,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                 }
-                try self.codegen.emitStoreStack(.w64, base_offset + str_capacity_offset, ptr_reg);
-                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
-                try self.codegen.emitStoreStack(.w64, base_offset + str_len_offset, ptr_reg);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + str_capacity_offset, ptr_reg);
+                try self.emitLoadImm(widths.word_width, ptr_reg, @intCast(str_bytes.len));
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + str_len_offset, ptr_reg);
             }
 
             return .{ .stack_str = base_offset };
@@ -22344,18 +22351,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.codegen.freeGeneral(ptr_reg);
 
             if (bytes.len == 0) {
-                try self.codegen.emitLoadImm(ptr_reg, 0);
-                try self.codegen.emitStoreStack(.w64, base_offset + list_bytes_offset, ptr_reg);
-                try self.codegen.emitLoadImm(ptr_reg, literal.len);
-                try self.codegen.emitStoreStack(.w64, base_offset + list_len_offset, ptr_reg);
-                try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << RocList.capacity_shift);
-                try self.codegen.emitStoreStack(.w64, base_offset + list_capacity_offset, ptr_reg);
+                try self.emitLoadImm(widths.word_width, ptr_reg, 0);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_bytes_offset, ptr_reg);
+                try self.emitLoadImm(widths.word_width, ptr_reg, literal.len);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_len_offset, ptr_reg);
+                try self.emitLoadImm(widths.word_width, ptr_reg, @as(i64, literal.len) << RocList.capacity_shift);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_capacity_offset, ptr_reg);
             } else {
                 switch (self.generation_mode) {
                     .native_execution => {
                         const static_backing_bytes = self.staticStringEntry(literal.bytes.backing).bytes;
                         verifyStaticStringBytes(static_backing_bytes);
-                        try self.codegen.emitLoadImm(ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.bytes.offset))));
+                        try self.emitLoadImm(widths.word_width, ptr_reg, @bitCast(@as(u64, @intFromPtr(static_backing_bytes.ptr + literal.bytes.offset))));
                     },
                     .shim_execution, .object_file => {
                         const symbol = try self.staticStringSymbol(literal.bytes.backing);
@@ -22363,10 +22370,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try self.emitAddUsizeImm(ptr_reg, ptr_reg, literal.bytes.offset);
                     },
                 }
-                try self.codegen.emitStoreStack(.w64, base_offset + list_bytes_offset, ptr_reg);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_bytes_offset, ptr_reg);
 
-                try self.codegen.emitLoadImm(ptr_reg, literal.len);
-                try self.codegen.emitStoreStack(.w64, base_offset + list_len_offset, ptr_reg);
+                try self.emitLoadImm(widths.word_width, ptr_reg, literal.len);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_len_offset, ptr_reg);
 
                 switch (self.generation_mode) {
                     .native_execution => {
@@ -22375,11 +22382,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             @as(usize, literal.len) << RocList.capacity_shift
                         else
                             @intFromPtr(static_backing_bytes.ptr) | builtins.list.SEAMLESS_SLICE_TAG;
-                        try self.codegen.emitLoadImm(ptr_reg, @intCast(cap_or_alloc));
+                        try self.emitLoadImm(widths.word_width, ptr_reg, @intCast(cap_or_alloc));
                     },
                     .shim_execution, .object_file => {
                         if (whole_backing) {
-                            try self.codegen.emitLoadImm(ptr_reg, @as(i64, literal.len) << RocList.capacity_shift);
+                            try self.emitLoadImm(widths.word_width, ptr_reg, @as(i64, literal.len) << RocList.capacity_shift);
                         } else {
                             const symbol = try self.staticStringSymbol(literal.bytes.backing);
                             try self.codegen.emitLoadDataAddress(ptr_reg, symbol);
@@ -22387,7 +22394,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         }
                     },
                 }
-                try self.codegen.emitStoreStack(.w64, base_offset + list_capacity_offset, ptr_reg);
+                try self.codegen.emitStoreStack(widths.word_width, base_offset + list_capacity_offset, ptr_reg);
             }
 
             return .{ .list_stack = .{
@@ -22399,7 +22406,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn emitAddUsizeImm(self: *Self, dst: GeneralReg, src: GeneralReg, imm: usize) Allocator.Error!void {
             if (imm == 0) {
-                if (dst != src) try self.codegen.emit.movRegReg(.w64, dst, src);
+                if (dst != src) try self.codegen.emit.movRegReg(widths.word_width, dst, src);
                 return;
             }
             if (imm <= @as(usize, @intCast(std.math.maxInt(i32)))) {
@@ -22409,8 +22416,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const scratch = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(scratch);
-            try self.codegen.emitLoadImm(scratch, @intCast(imm));
-            try self.codegen.emitAdd(.w64, dst, src, scratch);
+            try self.emitLoadImm(widths.word_width, scratch, @intCast(imm));
+            try self.codegen.emitAdd(widths.word_width, dst, src, scratch);
         }
 
         fn staticStringEntry(self: *Self, str_idx: base.StringLiteral.Idx) StaticStringData.Entry {
@@ -22907,7 +22914,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const size = self.getLayoutSize(layout_idx);
             if (size == 0) return 0;
 
-            const abi_size = @as(u32, self.calcParamRegCount(layout_idx)) * 8;
+            const abi_size = @as(u32, self.calcParamRegCount(layout_idx)) * target_ptr_size;
             return @max(size, abi_size);
         }
 
@@ -23139,12 +23146,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .stack_value => |stack_value| {
                         const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                         const raw_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
-                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, 8));
+                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, target_ptr_size));
                         const slot = self.codegen.allocStackSlot(slot_size);
                         var copied: u32 = 0;
                         while (copied < raw_size) {
                             const remaining = raw_size - copied;
-                            const piece_size: u8 = if (remaining >= 8) 8 else if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
+                            const piece_size: u8 = if (remaining >= target_ptr_size) target_ptr_size else if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
                             try incoming_stack_copies.append(self.allocator, .{
                                 .dest_off = slot + @as(i32, @intCast(copied)),
                                 .incoming_byte_offset = stack_value.offset + copied,
@@ -23162,7 +23169,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .indirect => |location| {
                         const runtime_layout = self.runtimeRepresentationLayoutIdx(arg_layout);
                         const raw_size = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(runtime_layout)).size;
-                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, 8));
+                        const slot_size = @max(self.entrypointParamSlotSize(arg_layout), std.mem.alignForward(u32, raw_size, target_ptr_size));
                         const slot = self.codegen.allocStackSlot(slot_size);
                         switch (location) {
                             .register => |register_index| {
@@ -23208,7 +23215,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (cap.width <= 4) {
                         try self.emitStore(.w32, frame_ptr, cap.dest_off, reg);
                     } else {
-                        try self.emitStore(.w64, frame_ptr, cap.dest_off, reg);
+                        try self.emitStore(widths.word_width, frame_ptr, cap.dest_off, reg);
                     }
                 }
             }
@@ -23251,7 +23258,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (indirect_captures.items) |cap| {
                 if (cap.size == 0) continue;
                 const ptr_reg, const temp_reg = try self.allocTempGenerals(2);
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, cap.ptr_off);
+                try self.emitLoad(widths.word_width, ptr_reg, frame_ptr, cap.ptr_off);
                 try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, cap.dest_off, cap.size);
                 self.freeGenerals(.{ temp_reg, ptr_reg });
             }
@@ -23287,7 +23294,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 if (piece.size <= 4) {
                                     try self.emitLoad(.w32, reg, frame_ptr, src_off);
                                 } else {
-                                    try self.emitLoad(.w64, reg, frame_ptr, src_off);
+                                    try self.emitLoad(widths.word_width, reg, frame_ptr, src_off);
                                 }
                             },
                             .float, .vector => {
@@ -25263,7 +25270,7 @@ test "AArch64 compare immediate accepts large bit masks" {
     var codegen = try ArmCodeGen.init(allocator, &store, &test_state.layout_store, .{}, .default);
     defer codegen.deinit();
 
-    try codegen.emitCmpImm(aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
+    try codegen.emitCmpImm(.w64, aarch64.GeneralReg.X0, @bitCast(@as(u64, 1) << 63));
     try std.testing.expect(codegen.codegen.getCode().len > 4);
 }
 
