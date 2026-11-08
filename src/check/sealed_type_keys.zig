@@ -40,15 +40,14 @@ pub const SealedTypeKeys = struct {
     writer: ?canonical_type_keys.TypeWriter = null,
     /// Per variable: 0 while unknown, else 1 + whether a walk found the
     /// variable reaches an identity variable.
-    identity: []std.atomic.Value(u8),
+    identity: collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)),
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
     pub fn create(allocator: Allocator, io: std.Io, env: *const ModuleEnv) Allocator.Error!*SealedTypeKeys {
         const keys = try allocator.create(SealedTypeKeys);
         errdefer allocator.destroy(keys);
-        const identity = try allocator.alloc(std.atomic.Value(u8), @intCast(env.types.len()));
-        @memset(identity, .init(0));
+        const identity = try collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)).init(allocator, @intCast(env.types.len()));
         keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity };
         return keys;
     }
@@ -61,7 +60,7 @@ pub const SealedTypeKeys = struct {
             allocator.destroy(index);
         }
         if (self.writer) |*writer| writer.deinit();
-        allocator.free(self.identity);
+        self.identity.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -101,8 +100,8 @@ pub const SealedTypeKeys = struct {
     /// Whether `var_` reaches an identity variable, when a walk recorded it.
     pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
         const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.len);
-        return switch (self.identity[index].load(.acquire)) {
+        std.debug.assert(index < self.identity.items.len);
+        return switch (self.identity.items[index].load(.acquire)) {
             0 => null,
             1 => false,
             else => true,
@@ -112,8 +111,8 @@ pub const SealedTypeKeys = struct {
     /// Record whether `var_` reaches an identity variable.
     pub fn recordIdentity(self: *SealedTypeKeys, var_: Var, value: bool) void {
         const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.len);
-        self.identity[index].store(if (value) 2 else 1, .release);
+        std.debug.assert(index < self.identity.items.len);
+        self.identity.items[index].store(if (value) 2 else 1, .release);
     }
 
     /// The lowest reached checked representative of `view`'s store whose key

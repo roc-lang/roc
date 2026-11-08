@@ -5721,9 +5721,8 @@ const Inserter = struct {
         solved_regions: collections.DenseMapUnmanaged(LIR.LocalId, PlaceUseRegion) = .empty,
         /// Units waiting while a region is solved, kept between solves.
         region_work: std.ArrayList(PlaceUseRegion.Unit) = .empty,
-        node_stamp: []u32,
-        loop_stamp: []u32,
-        stamp: u32 = 0,
+        node_seen: collections.EpochSet(u32, .stamps, .internal),
+        loop_seen: collections.EpochSet(u32, .stamps, .internal),
     };
 
     /// The statement nodes and loops from which a root's place is used
@@ -5868,10 +5867,8 @@ const Inserter = struct {
             }
         }
 
-        const node_stamp = try allocator.alloc(u32, node_count);
-        @memset(node_stamp, std.math.maxInt(u32));
-        const loop_stamp = try allocator.alloc(u32, loop_count);
-        @memset(loop_stamp, std.math.maxInt(u32));
+        const node_seen = try collections.EpochSet(u32, .stamps, .internal).init(allocator, node_count);
+        const loop_seen = try collections.EpochSet(u32, .stamps, .internal).init(allocator, loop_count);
         self.place_use_facts = .{
             .forest = forest,
             .rebound_roots = rebound_roots,
@@ -5885,8 +5882,8 @@ const Inserter = struct {
             .component = components.component_of,
             .places_used_from = places_used_from,
             .rebind_component_end = rebind_component_end,
-            .node_stamp = node_stamp,
-            .loop_stamp = loop_stamp,
+            .node_seen = node_seen,
+            .loop_seen = loop_seen,
         };
         return &self.place_use_facts.?;
     }
@@ -5916,7 +5913,8 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
-        facts.stamp +%= 1;
+        facts.node_seen.reset();
+        facts.loop_seen.reset();
         const Unit = PlaceUseRegion.Unit;
         var region: PlaceUseRegion = .{
             .nodes = try .initEmpty(allocator, graph.nodes.items.len),
@@ -5927,12 +5925,10 @@ const Inserter = struct {
         const Reach = struct {
             fn reach(facts_: *PlaceUseFacts, transparency_: PlaceRootTransparency, work_: *std.ArrayList(Unit), allocator_: Allocator, node: u32) Allocator.Error!void {
                 if (transparency_.outermost(node)) |loop| {
-                    if (facts_.loop_stamp[loop] == facts_.stamp) return;
-                    facts_.loop_stamp[loop] = facts_.stamp;
+                    if (facts_.loop_seen.testAndInsert(loop)) return;
                     try work_.append(allocator_, .{ .loop = true, .index = loop });
                 } else {
-                    if (facts_.node_stamp[node] == facts_.stamp) return;
-                    facts_.node_stamp[node] = facts_.stamp;
+                    if (facts_.node_seen.testAndInsert(node)) return;
                     try work_.append(allocator_, .{ .loop = false, .index = node });
                 }
             }

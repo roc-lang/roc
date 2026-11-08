@@ -5077,13 +5077,11 @@ const UniquenessComponentTask = struct {
                     .id = self.domain.component,
                     .unresolved = self.component.unresolved,
                 },
-                .mark_gen = try persistent.alloc(u32, self.component.stmts.len),
-                .generation = 0,
+                .marks = try .init(persistent, self.component.stmts.len),
                 .marked_local = no_local,
                 .marked_uses = false,
                 .work = .empty,
             };
-            @memset(order.mark_gen, 0);
             owner.workspace = .{
                 .allocator = persistent,
                 .stmts = self.component.stmts,

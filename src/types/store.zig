@@ -44,7 +44,7 @@ const Rigid = types.Rigid;
 const RecordField = types.RecordField;
 const TagUnion = types.TagUnion;
 const Tag = types.Tag;
-const VarSafeList = Var.SafeList;
+const VarSafeList = collections.ReservedList(Var, .dense);
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeMultiList = Tag.SafeMultiList;
 const Descriptor = types.Descriptor;
@@ -71,8 +71,8 @@ const RootMeta = struct {
     checked_var: Var,
 };
 
-const RootMetaSafeMultiList = collections.SafeMultiList(RootMeta);
-const UnionRankSafeList = collections.SafeList(u8);
+const RootMetaSafeMultiList = collections.ReservedColumns(RootMeta, .dense);
+const UnionRankSafeList = collections.ReservedList(u8, .dense);
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct {
@@ -341,10 +341,10 @@ pub const Store = struct {
     /// Relocate the self-contained type store and its explicit nominal lookup index.
     pub fn rebindSourceReferences(store: *Store, mapper: anytype) @TypeOf(mapper.*).Error!void {
         store.debugAssertUnsealed();
-        for (0..store.descs.backing.items.len) |i| {
-            var desc = store.descs.backing.items.get(i);
+        for (0..store.descs.backing.len()) |i| {
+            var desc = store.descs.backing.get(@fromBackingInt(@intCast(i)));
             try rebindSourceReferenceValue(&desc.content, mapper);
-            store.descs.backing.items.set(i, desc);
+            store.descs.backing.set(@fromBackingInt(@intCast(i)), desc);
         }
         for (store.nominal_decls.items.items) |*decl| try rebindSourceReferenceValue(decl, mapper);
         for (store.nominal_decl_index.items.items) |*entry| entry.statement = try mapper.node(entry.origin_module, entry.statement);
@@ -354,10 +354,10 @@ pub const Store = struct {
                 return if (a.origin_module == b.origin_module) a.statement < b.statement else @backingInt(a.origin_module) < @backingInt(b.origin_module);
             }
         }.lessThan);
-        for (0..store.record_fields.items.len) |i| {
-            var field = store.record_fields.items.get(i);
+        for (0..store.record_fields.len()) |i| {
+            var field = store.record_fields.get(@fromBackingInt(@intCast(i)));
             try rebindSourceReferenceValue(&field, mapper);
-            store.record_fields.items.set(i, field);
+            store.record_fields.set(@fromBackingInt(@intCast(i)), field);
         }
     }
 
@@ -380,30 +380,44 @@ pub const Store = struct {
 
     /// Init the unification table
     pub fn initCapacity(gpa: Allocator, root_capacity: usize, child_capacity: usize) std.mem.Allocator.Error!Self {
-        return .{
+        var result: Self = .{
             .gpa = gpa,
             .frozen_anchors = .init(gpa),
 
             // slots & descriptors
-            .descs = try DescStore.init(gpa, root_capacity),
-            .slots = try SlotStore.init(gpa, root_capacity),
-            .root_metas = try RootMetaSafeMultiList.initCapacity(gpa, root_capacity),
-            .union_ranks = try UnionRankSafeList.initCapacity(gpa, root_capacity),
+            .descs = .{ .backing = .{} },
+            .slots = .{ .payloads = .{}, .kinds = .{} },
+            .root_metas = .{},
+            .union_ranks = .{},
 
             // everything else
-            .vars = try VarSafeList.initCapacity(gpa, child_capacity),
-            .record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity),
-            .tags = try TagSafeMultiList.initCapacity(gpa, child_capacity),
-            .interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity),
-            .numeral_infos = try NumeralInfo.SafeList.initCapacity(gpa, child_capacity),
+            .vars = .{},
+            .record_fields = .{},
+            .tags = .{},
+            .interpolation_parts = .{},
+            .numeral_infos = .{},
             .interpolation_metadata = .{},
-            .static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity),
+            .static_dispatch_constraints = .{},
 
             // nominal declaration table (modules typically declare few types)
-            .nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16),
-            .nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16),
+            .nominal_decls = .{},
+            .nominal_decl_index = .{},
             .invalid_nominal_decl_written = false,
         };
+        errdefer result.deinit();
+        result.descs = try DescStore.init(gpa, root_capacity);
+        result.slots = try SlotStore.init(gpa, root_capacity);
+        result.root_metas = try RootMetaSafeMultiList.initCapacity(gpa, root_capacity);
+        result.union_ranks = try UnionRankSafeList.initCapacity(gpa, root_capacity);
+        result.vars = try VarSafeList.initCapacity(gpa, child_capacity);
+        result.record_fields = try RecordFieldSafeMultiList.initCapacity(gpa, child_capacity);
+        result.tags = try TagSafeMultiList.initCapacity(gpa, child_capacity);
+        result.interpolation_parts = try InterpolationPartMetadata.SafeList.initCapacity(gpa, child_capacity);
+        result.numeral_infos = try NumeralInfo.SafeList.initCapacity(gpa, child_capacity);
+        result.static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, child_capacity);
+        result.nominal_decls = try NominalDecl.SafeList.initCapacity(gpa, 16);
+        result.nominal_decl_index = try NominalDeclIndexEntry.SafeList.initCapacity(gpa, 16);
+        return result;
     }
 
     /// Make this store read-only: checking has solved it, and every later
@@ -415,6 +429,14 @@ pub const Store = struct {
             if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
+        self.slots.payloads.seal();
+        self.slots.kinds.seal();
+        self.descs.backing.seal();
+        self.root_metas.seal();
+        self.union_ranks.seal();
+        self.vars.seal();
+        self.record_fields.seal();
+        self.tags.seal();
         self.sealed = true;
     }
 
@@ -449,12 +471,12 @@ pub const Store = struct {
             live_descs.set(@backingInt(storage.desc_idx));
         }
 
-        for (self.vars.items.items) |*var_| var_.* = self.representativeVar(var_.*);
-        for (0..self.record_fields.items.len) |index| {
-            var field = self.record_fields.items.get(index);
+        for (self.vars.items) |*var_| var_.* = self.representativeVar(var_.*);
+        for (0..self.record_fields.len()) |index| {
+            var field = self.record_fields.get(@fromBackingInt(@intCast(index)));
             field.presence.var_ = self.representativeVar(field.presence.var_);
             if (field.presence.presenceVar()) |presence| field.presence.presence_var = self.representativeVar(presence);
-            self.record_fields.items.set(index, field);
+            self.record_fields.set(@fromBackingInt(@intCast(index)), field);
         }
         for (self.nominal_decls.items.items) |*decl| decl.backing = self.representativeVar(decl.backing);
 
@@ -567,7 +589,7 @@ pub const Store = struct {
         try self.descs.backing.ensureTotalCapacity(self.gpa, capacity);
         try self.slots.ensureTotalCapacity(self.gpa, capacity);
         try self.root_metas.ensureTotalCapacity(self.gpa, capacity);
-        try self.union_ranks.items.ensureTotalCapacity(self.gpa, capacity);
+        try self.union_ranks.ensureTotalCapacity(self.gpa, capacity);
     }
 
     /// Deinit the unification table
@@ -650,7 +672,7 @@ pub const Store = struct {
     /// error state. Descriptors not referenced by a current slot are rollback
     /// history and do not affect checked output.
     pub fn containsErrContent(self: *const Self) bool {
-        for (self.slots.kinds.items.items, self.slots.payloads.items.items) |kind, payload| {
+        for (self.slots.kinds.items, self.slots.payloads.items) |kind, payload| {
             switch (kind) {
                 .root => {
                     if (self.descs.get(@fromBackingInt(payload)).content == .err) return true;
@@ -695,8 +717,8 @@ pub const Store = struct {
     /// trail restored all union-find state to exactly its pre-savepoint values.
     const VerifyClone = struct {
         slots: []Slot,
-        descs: std.MultiArrayList(Desc),
-        root_metas: std.MultiArrayList(RootMeta),
+        descs: collections.ReservedColumns(Desc, .dense),
+        root_metas: RootMetaSafeMultiList,
         union_ranks: []u8,
         derived_map_plans: []DerivedMapPlanEntry,
         fn deinit(self: *VerifyClone, gpa: Allocator) void {
@@ -718,13 +740,13 @@ pub const Store = struct {
         const slots = try self.slots.toOwnedSlots(self.gpa);
         errdefer self.gpa.free(slots);
 
-        var descs = try self.descs.backing.items.clone(self.gpa);
+        var descs = try self.descs.backing.clone(self.gpa);
         errdefer descs.deinit(self.gpa);
 
-        var root_metas = try self.root_metas.items.clone(self.gpa);
+        var root_metas = try self.root_metas.clone(self.gpa);
         errdefer root_metas.deinit(self.gpa);
 
-        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items.items);
+        const union_ranks = try self.gpa.dupe(u8, self.union_ranks.items);
         errdefer self.gpa.free(union_ranks);
         const derived_map_plans = try self.gpa.dupe(DerivedMapPlanEntry, self.derived_map_plans.items.items);
         return .{
@@ -766,9 +788,9 @@ pub const Store = struct {
             .desc_trail_len = self.desc_trail.items.len,
             .root_meta_trail_len = self.root_meta_trail.items.len,
             .union_rank_trail_len = self.union_rank_trail.items.len,
-            .vars_len = self.vars.items.items.len,
-            .record_fields_len = self.record_fields.items.len,
-            .tags_len = self.tags.items.len,
+            .vars_len = self.vars.items.len,
+            .record_fields_len = self.record_fields.len(),
+            .tags_len = self.tags.len(),
             .interpolation_parts_len = self.interpolation_parts.items.items.len,
             .numeral_infos_len = self.numeral_infos.items.items.len,
             .interpolation_metadata_len = self.interpolation_metadata.items.items.len,
@@ -784,7 +806,7 @@ pub const Store = struct {
         std.debug.assert(!self.derived_map_plans_journaled);
         self.savepoint_active = true;
         self.savepoint_baseline_slots = @intCast(self.slots.len());
-        self.savepoint_baseline_descs = @intCast(self.descs.backing.items.len);
+        self.savepoint_baseline_descs = @intCast(self.descs.backing.len());
 
         return savepoint;
     }
@@ -877,12 +899,12 @@ pub const Store = struct {
         // the store fields (also the journaling threshold); the rest come from
         // the savepoint.
         self.slots.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.descs.backing.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.root_metas.items.shrinkRetainingCapacity(self.savepoint_baseline_descs);
-        self.union_ranks.items.shrinkRetainingCapacity(self.savepoint_baseline_slots);
-        self.vars.items.shrinkRetainingCapacity(savepoint.vars_len);
-        self.record_fields.items.shrinkRetainingCapacity(savepoint.record_fields_len);
-        self.tags.items.shrinkRetainingCapacity(savepoint.tags_len);
+        self.descs.backing.shrinkRetainingCapacity(self.savepoint_baseline_descs);
+        self.root_metas.shrinkRetainingCapacity(self.savepoint_baseline_descs);
+        self.union_ranks.shrinkRetainingCapacity(self.savepoint_baseline_slots);
+        self.vars.shrinkRetainingCapacity(savepoint.vars_len);
+        self.record_fields.shrinkRetainingCapacity(savepoint.record_fields_len);
+        self.tags.shrinkRetainingCapacity(savepoint.tags_len);
         self.interpolation_parts.items.shrinkRetainingCapacity(savepoint.interpolation_parts_len);
         self.numeral_infos.items.shrinkRetainingCapacity(savepoint.numeral_infos_len);
         self.interpolation_metadata.items.shrinkRetainingCapacity(savepoint.interpolation_metadata_len);
@@ -921,19 +943,19 @@ pub const Store = struct {
         std.debug.assert(self.slots.len() == vclone.slots.len);
         for (vclone.slots, 0..) |b, i| std.debug.assert(std.meta.eql(self.slots.get(@fromBackingInt(@intCast(i))), b));
 
-        std.debug.assert(self.descs.backing.items.len == vclone.descs.len);
+        std.debug.assert(self.descs.backing.len() == vclone.descs.len());
         var i: usize = 0;
-        while (i < vclone.descs.len) : (i += 1) {
-            std.debug.assert(std.meta.eql(self.descs.backing.items.get(i), vclone.descs.get(i)));
+        while (i < vclone.descs.len()) : (i += 1) {
+            std.debug.assert(std.meta.eql(self.descs.backing.get(@fromBackingInt(@intCast(i))), vclone.descs.get(@fromBackingInt(@intCast(i)))));
         }
 
-        std.debug.assert(self.root_metas.items.len == vclone.root_metas.len);
+        std.debug.assert(self.root_metas.len() == vclone.root_metas.len());
         i = 0;
-        while (i < vclone.root_metas.len) : (i += 1) {
-            std.debug.assert(std.meta.eql(self.root_metas.items.get(i), vclone.root_metas.get(i)));
+        while (i < vclone.root_metas.len()) : (i += 1) {
+            std.debug.assert(std.meta.eql(self.root_metas.get(@fromBackingInt(@intCast(i))), vclone.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
 
-        std.debug.assert(std.mem.eql(u8, self.union_ranks.items.items, vclone.union_ranks));
+        std.debug.assert(std.mem.eql(u8, self.union_ranks.items, vclone.union_ranks));
 
         std.debug.assert(self.derived_map_plans.items.items.len == vclone.derived_map_plans.len);
         for (self.derived_map_plans.items.items, vclone.derived_map_plans) |entry, cloned| {
@@ -1224,7 +1246,7 @@ pub const Store = struct {
     pub fn freshRedirect(self: *Self, var_: Var) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
-        try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx = self.slots.appendAssumeCapacity(.{ .redirect = var_ });
         const rank_idx = self.union_ranks.appendAssumeCapacity(0);
         std.debug.assert(@backingInt(rank_idx) == @backingInt(slot_idx));
@@ -1235,7 +1257,7 @@ pub const Store = struct {
     pub fn register(self: *Self, desc: Desc) std.mem.Allocator.Error!Var {
         self.debugAssertUnsealed();
         try self.slots.ensureUnusedCapacity(self.gpa, 1);
-        try self.union_ranks.items.ensureUnusedCapacity(self.gpa, 1);
+        try self.union_ranks.ensureUnusedCapacity(self.gpa, 1);
         const slot_idx: SlotStore.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(self.slots.len()))));
         const checked_var = Self.slotIdxToVar(slot_idx);
         const desc_idx = try self.appendClass(desc, checked_var);
@@ -1874,7 +1896,7 @@ pub const Store = struct {
 
     fn sliceAliasesVars(self: *const Self, s: []const Var) bool {
         if (s.len == 0) return false;
-        const items = self.vars.items.items;
+        const items = self.vars.items;
         const items_start = @intFromPtr(items.ptr);
         const items_end = items_start + items.len * @sizeOf(Var);
         const source_start = @intFromPtr(s.ptr);
@@ -2791,21 +2813,36 @@ pub const Store = struct {
             var store = Store{
                 .gpa = gpa,
                 .frozen_anchors = .init(gpa),
-                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
-                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
-                .root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa),
-                .union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa),
-                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
-                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
-                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
-                .interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa),
-                .numeral_infos = try self.numeral_infos.deserializeWithCopy(base_addr, gpa),
-                .interpolation_metadata = try self.interpolation_metadata.deserializeWithCopy(base_addr, gpa),
-                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
-                .nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa),
-                .nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa),
-                .derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa),
+                .slots = .{ .payloads = .{}, .kinds = .{} },
+                .descs = .{ .backing = .{} },
+                .root_metas = .{},
+                .union_ranks = .{},
+                .vars = .{},
+                .record_fields = .{},
+                .tags = .{},
+                .interpolation_parts = .{},
+                .numeral_infos = .{},
+                .interpolation_metadata = .{},
+                .static_dispatch_constraints = .{},
+                .nominal_decls = .{},
+                .nominal_decl_index = .{},
+                .derived_map_plans = .{},
             };
+            errdefer store.deinit();
+            store.slots = try self.slots.deserializeWithCopy(base_addr, gpa);
+            store.descs = try self.descs.deserializeWithCopy(base_addr, gpa);
+            store.root_metas = try self.root_metas.deserializeWithCopy(base_addr, gpa);
+            store.union_ranks = try self.union_ranks.deserializeWithCopy(base_addr, gpa);
+            store.vars = try self.vars.deserializeWithCopy(base_addr, gpa);
+            store.record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa);
+            store.tags = try self.tags.deserializeWithCopy(base_addr, gpa);
+            store.interpolation_parts = try self.interpolation_parts.deserializeWithCopy(base_addr, gpa);
+            store.numeral_infos = try self.numeral_infos.deserializeWithCopy(base_addr, gpa);
+            store.interpolation_metadata = try self.interpolation_metadata.deserializeWithCopy(base_addr, gpa);
+            store.static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa);
+            store.nominal_decls = try self.nominal_decls.deserializeWithCopy(base_addr, gpa);
+            store.nominal_decl_index = try self.nominal_decl_index.deserializeWithCopy(base_addr, gpa);
+            store.derived_map_plans = try self.derived_map_plans.deserializeWithCopy(base_addr, gpa);
             store.invalid_nominal_decl_written = false;
             for (store.nominal_decls.items.items) |decl| store.noteNominalDeclWrite(decl);
             return store;
@@ -2822,15 +2859,15 @@ const SlotKind = enum(u8) { root, redirect };
 const SlotStore = struct {
     const Self = @This();
 
-    payloads: collections.SafeList(u32),
-    kinds: collections.SafeList(SlotKind),
+    payloads: collections.ReservedList(u32, .dense),
+    kinds: collections.ReservedList(SlotKind, .dense),
 
     fn init(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
-        var payloads = try collections.SafeList(u32).initCapacity(gpa, capacity);
+        var payloads = try collections.ReservedList(u32, .dense).initCapacity(gpa, capacity);
         errdefer payloads.deinit(gpa);
         return .{
             .payloads = payloads,
-            .kinds = try collections.SafeList(SlotKind).initCapacity(gpa, capacity),
+            .kinds = try collections.ReservedList(SlotKind, .dense).initCapacity(gpa, capacity),
         };
     }
 
@@ -2850,25 +2887,25 @@ const SlotStore = struct {
     }
 
     fn ensureTotalCapacity(self: *Self, gpa: Allocator, capacity: usize) Allocator.Error!void {
-        try self.payloads.items.ensureTotalCapacity(gpa, capacity);
-        try self.kinds.items.ensureTotalCapacity(gpa, capacity);
+        try self.payloads.ensureTotalCapacity(gpa, capacity);
+        try self.kinds.ensureTotalCapacity(gpa, capacity);
     }
 
     fn ensureUnusedCapacity(self: *Self, gpa: Allocator, additional: usize) Allocator.Error!void {
-        try self.payloads.items.ensureUnusedCapacity(gpa, additional);
-        try self.kinds.items.ensureUnusedCapacity(gpa, additional);
+        try self.payloads.ensureUnusedCapacity(gpa, additional);
+        try self.kinds.ensureUnusedCapacity(gpa, additional);
     }
 
     fn shrinkRetainingCapacity(self: *Self, new_len: usize) void {
-        self.payloads.items.shrinkRetainingCapacity(new_len);
-        self.kinds.items.shrinkRetainingCapacity(new_len);
+        self.payloads.shrinkRetainingCapacity(new_len);
+        self.kinds.shrinkRetainingCapacity(new_len);
     }
 
     /// Serialized representation of SlotStore
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
-        payloads: collections.SafeList(u32).Serialized,
-        kinds: collections.SafeList(SlotKind).Serialized,
+        payloads: collections.ReservedList(u32, .dense).Serialized,
+        kinds: collections.ReservedList(SlotKind, .dense).Serialized,
 
         /// Serialize a SlotStore into this Serialized struct, appending data to the writer
         pub fn serialize(
@@ -2918,15 +2955,15 @@ const SlotStore = struct {
     /// Set a value in the store
     pub fn set(self: *Self, idx: Idx, val: Slot) void {
         const i: usize = @backingInt(idx);
-        self.payloads.items.items[i] = payloadOf(val);
-        self.kinds.items.items[i] = val;
+        self.payloads.items[i] = payloadOf(val);
+        self.kinds.items[i] = val;
     }
 
     /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Slot {
         const i: usize = @backingInt(idx);
-        const payload = self.payloads.items.items[i];
-        return switch (self.kinds.items.items[i]) {
+        const payload = self.payloads.items[i];
+        return switch (self.kinds.items[i]) {
             .root => .{ .root = @fromBackingInt(payload) },
             .redirect => .{ .redirect = @fromBackingInt(payload) },
         };
@@ -2934,7 +2971,7 @@ const SlotStore = struct {
 
     /// Every slot, in order, as an owned slice.
     fn toOwnedSlots(self: *const Self, gpa: Allocator) Allocator.Error![]Slot {
-        const slots = try gpa.alloc(Slot, self.payloads.items.items.len);
+        const slots = try gpa.alloc(Slot, self.payloads.items.len);
         for (slots, 0..) |*slot, i| slot.* = self.get(@fromBackingInt(@intCast(i)));
         return slots;
     }
@@ -2958,7 +2995,7 @@ const SlotStore = struct {
 /// Indexes into the list are typesafe
 const DescStore = struct {
     const Self = @This();
-    const DescSafeMultiList = collections.SafeMultiList(Desc);
+    const DescSafeMultiList = collections.ReservedColumns(Desc, .dense);
 
     backing: DescSafeMultiList,
     /// False only while no descriptor in `backing` has ever held `.err`.
@@ -2973,7 +3010,7 @@ const DescStore = struct {
 
     fn fromContents(backing: DescSafeMultiList) Self {
         var err_written = false;
-        for (backing.items.items(.content)) |content| {
+        for (backing.items(.content)) |content| {
             if (content == .err) err_written = true;
         }
         return .{ .backing = backing, .err_written = err_written };
@@ -3437,7 +3474,7 @@ fn storageDescIdx(store: *const Store, var_: Var) DescStore.Idx {
 
 /// Whether some slot names `desc_idx`.
 fn descIsNamed(store: *const Store, desc_idx: DescStore.Idx) bool {
-    for (store.slots.kinds.items.items, store.slots.payloads.items.items) |kind, payload| {
+    for (store.slots.kinds.items, store.slots.payloads.items) |kind, payload| {
         switch (kind) {
             .root => if (payload == @backingInt(desc_idx)) return true,
             .redirect => {},
@@ -3811,13 +3848,13 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         // internal cross-check.
         const before_slots = try store.slots.toOwnedSlots(gpa);
         defer gpa.free(before_slots);
-        var before_descs = try store.descs.backing.items.clone(gpa);
+        var before_descs = try store.descs.backing.clone(gpa);
         defer before_descs.deinit(gpa);
-        var before_root_metas = try store.root_metas.items.clone(gpa);
+        var before_root_metas = try store.root_metas.clone(gpa);
         defer before_root_metas.deinit(gpa);
-        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items.items);
+        const before_union_ranks = try gpa.dupe(u8, store.union_ranks.items);
         defer gpa.free(before_union_ranks);
-        const before_vars_len = store.vars.items.items.len;
+        const before_vars_len = store.vars.items.len;
 
         // Verifying savepoint: copies the whole store up front; rollback asserts
         // the trail restored it byte-for-byte (same behavior as restoring a copy).
@@ -3843,18 +3880,18 @@ test "savepoint trail is byte-for-byte identical to a full store copy+rollback" 
         for (before_slots, 0..) |x, slot_index| {
             try std.testing.expect(std.meta.eql(x, store.slots.get(@fromBackingInt(@intCast(slot_index)))));
         }
-        try std.testing.expectEqual(before_descs.len, store.descs.backing.items.len);
+        try std.testing.expectEqual(before_descs.len(), store.descs.backing.len());
         var i: usize = 0;
-        while (i < before_descs.len) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_descs.get(i), store.descs.backing.items.get(i)));
+        while (i < before_descs.len()) : (i += 1) {
+            try std.testing.expect(std.meta.eql(before_descs.get(@fromBackingInt(@intCast(i))), store.descs.backing.get(@fromBackingInt(@intCast(i)))));
         }
-        try std.testing.expectEqual(before_root_metas.len, store.root_metas.items.len);
+        try std.testing.expectEqual(before_root_metas.len(), store.root_metas.len());
         i = 0;
-        while (i < before_root_metas.len) : (i += 1) {
-            try std.testing.expect(std.meta.eql(before_root_metas.get(i), store.root_metas.items.get(i)));
+        while (i < before_root_metas.len()) : (i += 1) {
+            try std.testing.expect(std.meta.eql(before_root_metas.get(@fromBackingInt(@intCast(i))), store.root_metas.get(@fromBackingInt(@intCast(i)))));
         }
-        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items.items);
-        try std.testing.expectEqual(before_vars_len, store.vars.items.items.len);
+        try std.testing.expectEqualSlices(u8, before_union_ranks, store.union_ranks.items);
+        try std.testing.expectEqual(before_vars_len, store.vars.items.len);
     }
 }
 
@@ -4492,7 +4529,7 @@ test "DescStore.Serialized roundtrip" {
     const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
-    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.items.len);
+    try std.testing.expectEqual(@as(usize, 2), deserialized.backing.len());
     try std.testing.expectEqual(desc1, deserialized.get(desc_idx_1));
     try std.testing.expectEqual(desc2, deserialized.get(desc_idx_2));
 }
@@ -4879,4 +4916,16 @@ pub fn rebindSourceReferenceValue(value: anytype, mapper: anytype) @TypeOf(mappe
         .spirv,
         => @compileError("source-reference storage needs explicit relocation for " ++ @typeName(T)),
     }
+}
+
+fn exerciseStoreConstructionFailure(gpa: Allocator) !void {
+    var store = try Store.initCapacity(gpa, 4, 4);
+    defer store.deinit();
+    const first = try store.fresh();
+    for (0..24) |_| _ = try store.freshRedirect(first);
+    try std.testing.expectEqual(@as(u64, 25), store.len());
+}
+
+test "reserved type columns preserve ownership on construction and growth failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseStoreConstructionFailure, .{});
 }

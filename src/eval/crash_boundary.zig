@@ -82,7 +82,9 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
                 fn body(guarded: *@This()) void {
                     const jumped = guarded.boundary.set();
                     guarded.jumped = jumped;
-                    if (jumped == 0) call(guarded.context);
+                    // setjmp's recovery frame must remain live until the
+                    // callback returns or longjmps into it.
+                    if (jumped == 0) @call(.never_tail, call, .{guarded.context});
                 }
             };
             var guarded: Guarded = .{ .boundary = self, .context = context };
@@ -101,4 +103,39 @@ pub fn CrashBoundary(comptime Env: type, comptime catches_stack_overflow: bool) 
             std.process.exit(134);
         }
     };
+}
+
+test "crash boundary retains its recovery frame across a tail-position callback" {
+    if (!sljmp.supported or !base.eval_stack.supported) return error.SkipZigTest;
+    const Env = struct {
+        jmp_buf: JmpBuf = undefined,
+        active_jmp_buf: ?*JmpBuf = null,
+        calls: usize = 0,
+    };
+    const Call = struct {
+        env: *Env,
+        entry: *const fn (*Env) callconv(.c) void,
+
+        fn invoke(self: *@This()) void {
+            self.entry(self.env);
+        }
+
+        noinline fn crash(env: *Env) callconv(.c) void {
+            // Overwrite a discarded caller frame so a return into it cannot
+            // accidentally succeed because the bytes happened to survive.
+            var scratch: [64]u64 = @splat(0xabababababababab);
+            std.mem.doNotOptimizeAway(&scratch);
+            env.calls += 1;
+            longjmp(env.active_jmp_buf.?, 7);
+        }
+    };
+    var env: Env = .{};
+    var context: Call = .{ .env = &env, .entry = &Call.crash };
+    for (0..3) |_| {
+        var boundary = CrashBoundary(Env, false).init(&env);
+        defer boundary.deinit();
+        try std.testing.expectEqual(@as(c_int, 7), try boundary.run(Call, &context, Call.invoke));
+    }
+    try std.testing.expectEqual(@as(usize, 3), env.calls);
+    try std.testing.expect(env.active_jmp_buf == null);
 }

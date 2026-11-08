@@ -264,23 +264,6 @@ pub fn certify(scratch_allocator: Allocator, graph: *const Graph, rows: []const 
 }
 
 /// Chains `node` onto `bit`'s seeds, listing `bit` the first time it is seeded.
-fn noteSeed(
-    comptime SeedLink: type,
-    allocator: Allocator,
-    heads: []u32,
-    seeds: *std.ArrayList(SeedLink),
-    seed_bits: *std.ArrayList(u32),
-    node: u32,
-    bit: u32,
-) Allocator.Error!void {
-    const no_link = std.math.maxInt(u32);
-    const position = std.math.cast(u32, seeds.items.len) orelse return error.OutOfMemory;
-    if (position == no_link) return error.OutOfMemory;
-    if (heads[bit] == no_link) try seed_bits.append(allocator, bit);
-    try seeds.append(allocator, .{ .index = node, .next = heads[bit] });
-    heads[bit] = position;
-}
-
 /// Solves every node's row. Rows and their shared subtrees live in
 /// `allocator`; all other work uses `scratch_allocator` and is freed.
 pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const Graph) Allocator.Error![]Row {
@@ -362,33 +345,19 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     // node, or the largest loop around a node that defines nothing of the
     // bit, whose whole body shares one answer.
     const Unit = struct { loop: bool, index: u32 };
-    // One bit found exposed at a node or carried by a loop; `next` chains
-    // the other bits of the same node or loop from its head.
-    const BitLink = struct { index: u32, bit: u32, next: u32 };
-    const no_link = std.math.maxInt(u32);
     const Search = struct {
         graph_: *const Graph,
         forest_: *const LoopForest,
         written_: []const Row,
         component_of_: []const u32,
         component: u32 = 0,
-        node_stamp: []u32,
-        loop_stamp: []u32,
-        stamp: u32 = 0,
+        node_seen: collections.EpochSet(u32, .stamps, .internal),
+        loop_seen: collections.EpochSet(u32, .stamps, .internal),
         bit: u32 = 0,
         work: std.ArrayList(Unit) = .empty,
-        node_heads: []u32,
-        loop_heads: []u32,
-        node_bits: std.ArrayList(BitLink) = .empty,
-        loop_bits: std.ArrayList(BitLink) = .empty,
+        node_bits: collections.SortedGroups(u32) = .{},
+        loop_bits: collections.SortedGroups(u32) = .{},
         allocator_: Allocator,
-
-        fn note(search: *@This(), heads: []u32, links: *std.ArrayList(BitLink), index: u32) Allocator.Error!void {
-            const position = std.math.cast(u32, links.items.len) orelse return error.OutOfMemory;
-            if (position == no_link) return error.OutOfMemory;
-            try links.append(search.allocator_, .{ .index = index, .bit = search.bit, .next = heads[index] });
-            heads[index] = position;
-        }
 
         fn transparent(search: *const @This(), loop: u32) bool {
             return !search.written_[loop].isSet(search.bit);
@@ -399,12 +368,10 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             const innermost = search.forest_.innermost[node];
             if (innermost != LoopForest.none and search.transparent(innermost)) {
                 const loop = search.forest_.outermostWhile(innermost, search, transparent);
-                if (search.loop_stamp[loop] == search.stamp) return;
-                search.loop_stamp[loop] = search.stamp;
+                if (search.loop_seen.testAndInsert(loop)) return;
                 try search.work.append(search.allocator_, .{ .loop = true, .index = loop });
             } else {
-                if (search.node_stamp[node] == search.stamp) return;
-                search.node_stamp[node] = search.stamp;
+                if (search.node_seen.testAndInsert(node)) return;
                 try search.work.append(search.allocator_, .{ .loop = false, .index = node });
             }
         }
@@ -421,25 +388,13 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         .forest_ = &forest,
         .written_ = written,
         .component_of_ = component_of,
-        .node_stamp = try scratch.alloc(u32, node_count),
-        .loop_stamp = try scratch.alloc(u32, loop_count),
-        .node_heads = try scratch.alloc(u32, node_count),
-        .loop_heads = try scratch.alloc(u32, loop_count),
+        .node_seen = try .init(scratch, node_count),
+        .loop_seen = try .init(scratch, loop_count),
         .allocator_ = scratch,
     };
-    @memset(search.node_stamp, std.math.maxInt(u32));
-    @memset(search.loop_stamp, std.math.maxInt(u32));
-    @memset(search.node_heads, no_link);
-    @memset(search.loop_heads, no_link);
     const carried = try scratch.alloc(Row, loop_count);
-    // A component's seed nodes grouped by bit: `seed_bits` lists each seeded
-    // bit once, and its nodes chain from `seed_heads[bit]` through `seeds`.
-    // Each bit's search is independent of the others and of seed order.
-    const SeedLink = struct { index: u32, next: u32 };
-    const seed_heads = try scratch.alloc(u32, graph.bit_len);
-    @memset(seed_heads, no_link);
-    var seeds = std.ArrayList(SeedLink).empty;
-    var seed_bits = std.ArrayList(u32).empty;
+    // Group seed nodes by bit without a directory over the whole bit domain.
+    var seeds: collections.SortedGroups(u32) = .{};
     // A component's non-header members, by how many of their successors in
     // the component that are not headers still lack a row.
     var pending = collections.DenseMap(u32, u32).init(scratch);
@@ -463,33 +418,36 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         // Seeds: reads inside the component, and bits exposed just past an
         // edge leaving it.
         seeds.clearRetainingCapacity();
-        seed_bits.clearRetainingCapacity();
         for (members) |member| {
-            for (graph.readsOf(member)) |bit| try noteSeed(SeedLink, scratch, seed_heads, &seeds, &seed_bits, member, bit);
+            for (graph.readsOf(member)) |bit| try seeds.add(scratch, bit, member);
             for (graph.successorsOf(member), graph.succ_starts[member]..) |successor, edge| {
                 if (component_of[successor] == component) continue;
                 const kills = graph.killsOf(edge);
                 var exposed = rows[successor].iterator();
                 while (exposed.next()) |bit| {
                     if (std.mem.findScalar(u32, kills, @intCast(bit)) != null) continue;
-                    try noteSeed(SeedLink, scratch, seed_heads, &seeds, &seed_bits, member, @intCast(bit));
+                    try seeds.add(scratch, @intCast(bit), member);
                 }
             }
         }
-        for (seed_bits.items) |bit| {
-            defer search.stamp += 1;
-            search.bit = bit;
-            var cursor = seed_heads[bit];
-            seed_heads[bit] = no_link;
-            while (cursor != no_link) : (cursor = seeds.items[cursor].next) {
-                const seed = seeds.items[cursor].index;
+        seeds.finish();
+        var seed_runs = seeds.runs();
+        while (seed_runs.next()) |run| {
+            search.node_seen.reset();
+            search.loop_seen.reset();
+            search.bit = run.key;
+            // Head-pushed chains visit the newest seed first.
+            var cursor = run.pairs.len;
+            while (cursor > 0) {
+                cursor -= 1;
+                const seed = run.pairs[cursor].item;
                 // An exit seed is exposed at its node only through the node's
                 // definition; a read is exposed regardless.
                 if (graph.reads_(seed, search.bit) or !graph.defines(seed, search.bit)) try search.reach(seed);
             }
             while (search.work.pop()) |unit| {
                 if (unit.loop) {
-                    try search.note(search.loop_heads, &search.loop_bits, unit.index);
+                    try search.loop_bits.add(scratch, unit.index, search.bit);
                     try search.reachPredecessorsOf(forest.loops[unit.index].header, unit.index);
                     for (side_entries[side_entry_starts[unit.index]..side_entry_starts[unit.index + 1]]) |entry| {
                         if (component_of[entry.predecessor] != component) continue;
@@ -498,11 +456,14 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
                 } else {
                     // Only a loop header's row is built from its exposed bits;
                     // every other member follows from its successors' rows.
-                    if (isHeader(&forest, unit.index)) try search.note(search.node_heads, &search.node_bits, unit.index);
+                    if (isHeader(&forest, unit.index)) try search.node_bits.add(scratch, unit.index, search.bit);
                     try search.reachPredecessorsOf(unit.index, null);
                 }
             }
         }
+
+        search.node_bits.finish();
+        search.loop_bits.finish();
 
         // Rows: the bits whole loops carry, shared down the component's loop
         // tree, plus the bits exposed at the node itself.
@@ -511,9 +472,11 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
             const parent = forest.loops[loop].parent;
             var row = if (parent != no_loop) carried[parent] else Row.initEmpty(graph.bit_len);
-            var cursor = search.loop_heads[loop];
-            while (cursor != no_link) : (cursor = search.loop_bits.items[cursor].next) {
-                try row.set(allocator, search.loop_bits.items[cursor].bit);
+            const bits = search.loop_bits.group(loop);
+            var cursor = bits.len;
+            while (cursor > 0) {
+                cursor -= 1;
+                try row.set(allocator, bits[cursor].item);
             }
             carried[loop] = row;
         }
@@ -532,9 +495,11 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         for (members) |member| {
             if (isHeader(&forest, member)) {
                 var row = carried[forest.innermost[member]];
-                var cursor = search.node_heads[member];
-                while (cursor != no_link) : (cursor = search.node_bits.items[cursor].next) {
-                    try row.set(allocator, search.node_bits.items[cursor].bit);
+                const bits = search.node_bits.group(member);
+                var cursor = bits.len;
+                while (cursor > 0) {
+                    cursor -= 1;
+                    try row.set(allocator, bits[cursor].item);
                 }
                 rows[member] = row;
                 continue;
@@ -557,8 +522,6 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
             }
         }
         if (built != pending.count()) invariant("ARC liveness component held a cycle that enters no loop header", .{});
-        for (search.loop_bits.items) |link| search.loop_heads[link.index] = no_link;
-        for (search.node_bits.items) |link| search.node_heads[link.index] = no_link;
     }
     try certify(scratch_allocator, graph, rows);
     return rows;

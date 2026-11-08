@@ -82,11 +82,9 @@ pub const UseOrder = struct {
         id: u32,
         unresolved: []const u32,
     } = null,
-    /// Generation stamps on block-first statements: a block's first
-    /// statement is marked for the current local when its stamp equals
-    /// `generation`.
-    mark_gen: []u32,
-    generation: u32,
+    /// Block-first statements marked for the current local. Whole orders
+    /// borrow the topology's stamps; compact component orders own their domain.
+    marks: collections.EpochSet(u32, .stamps, .internal),
     /// The local the current marks describe, and whether they were made
     /// from its reads (rather than a caller's statement set).
     marked_local: u32,
@@ -367,8 +365,7 @@ pub const UseOrder = struct {
         return .{
             .allocator = allocator,
             .topology = topology,
-            .mark_gen = topology.tables.mark_gen,
-            .generation = 0,
+            .marks = .borrow(topology.tables.mark_gen),
             .marked_local = no_local,
             .marked_uses = false,
             .work = .empty,
@@ -841,7 +838,8 @@ pub const UseOrder = struct {
 
     pub fn deinit(self: *UseOrder) void {
         // A whole order's marks live in its topology's tables.
-        if (self.component == null) self.topology.deinit(self.allocator) else self.allocator.free(self.mark_gen);
+        if (self.component == null) self.topology.deinit(self.allocator);
+        self.marks.deinit(self.allocator);
         self.work.deinit(self.allocator);
         self.mark_initial.deinit(self.allocator);
         self.mark_defs.deinit(self.allocator);
@@ -964,7 +962,7 @@ pub const UseOrder = struct {
 
     fn blockMarked(self: *const UseOrder, first: u32) bool {
         std.debug.assert(self.topology.block_first[self.topology.tables.stmtIndex(first)] == first);
-        return self.mark_gen[self.markIndex(first)] == self.generation;
+        return self.marks.contains(self.markIndex(first));
     }
 
     /// Backward reachability from `initial` and the unresolved statements:
@@ -972,11 +970,7 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks are kept per block, on the block's
     /// first statement; positions inside a block are resolved by `after`.
     fn markFrom(self: *UseOrder, local: LIR.LocalId, initial: []const u32) Allocator.Error!void {
-        self.generation +%= 1;
-        if (self.generation == 0) {
-            @memset(self.mark_gen, 0);
-            self.generation = 1;
-        }
+        self.marks.reset();
         self.work.clearRetainingCapacity();
         self.mark_initial.clearRetainingCapacity();
         self.mark_defs.clearRetainingCapacity();
@@ -1020,7 +1014,7 @@ pub const UseOrder = struct {
     }
 
     fn markBlock(self: *UseOrder, first: u32) Allocator.Error!void {
-        self.mark_gen[self.markIndex(first)] = self.generation;
+        self.marks.insert(self.markIndex(first));
         try self.work.append(self.allocator, first);
     }
 
@@ -1120,7 +1114,7 @@ test "use order compact procedure domain matches dense queries and excludes unre
     defer compact.deinit();
     var dense = try UseOrder.init(allocator, &store, &.{&.{ alias, done }});
     defer dense.deinit();
-    try testing.expectEqual(@as(usize, 2), compact.mark_gen.len);
+    try testing.expectEqual(@as(usize, 2), compact.marks.len());
     try testing.expectEqual(@as(usize, 2), compact.topology.reads_of.index.len.len);
     try testing.expectEqual(@as(usize, 2), compact.topology.preds.index.len.len);
     for ([_]LIR.CFStmtId{ alias, done }) |stmt| {

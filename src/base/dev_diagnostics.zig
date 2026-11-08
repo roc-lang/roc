@@ -48,6 +48,10 @@ pub const Var = enum {
     /// Write every wasm unit image a wasm build restores or builds into the
     /// named directory, one file per unit named by its unit key.
     dump_wasm_unit_images,
+    /// Print deterministic table storage counters (bytes filled, bytes copied
+    /// on growth, mappings, reservations, commits, trims, epoch wraps and
+    /// relocations) at exit.
+    storage_work,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -66,6 +70,7 @@ pub const Var = enum {
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
+            .storage_work => "ROC_STORAGE_WORK",
         };
     }
 };

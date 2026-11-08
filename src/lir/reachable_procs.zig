@@ -67,19 +67,19 @@ const Pass = struct {
     result: *LirProgram.Result,
     frozen: ?*LirProgram.FrozenStaticData,
     reachable_exports: []bool,
-    old_export_to_new: []?LirProgram.StaticDataSymbolId,
-    static_data_exports: []?LirProgram.StaticDataSymbolId,
+    old_export_to_new: collections.OptionalIndexColumn(LirProgram.StaticDataSymbolId),
+    static_data_exports: collections.OptionalIndexColumn(LirProgram.StaticDataSymbolId),
     store: *LirStore,
     allocator: Allocator,
     reachable: []bool,
-    old_to_new: []?LIR.LirProcSpecId,
+    old_to_new: collections.OptionalIndexColumn(LIR.LirProcSpecId),
     reachable_stmts: std.bit_set.DynamicBitSetUnmanaged,
     /// The compact id of each reachable statement; `pruned_stmt` for the rest.
     old_stmt_to_new: []LIR.CFStmtId,
     visited_stmts: std.bit_set.DynamicBitSetUnmanaged,
     visited_plans: []bool,
     reachable_static_data: []bool,
-    old_static_data_to_new: []?LIR.StaticDataId,
+    old_static_data_to_new: collections.OptionalIndexColumn(LIR.StaticDataId),
     proc_queue: std.ArrayList(LIR.LirProcSpecId),
     export_queue: std.ArrayList(LirProgram.StaticDataSymbolId),
     plan_stack: std.ArrayList(LirProgram.ConstPlanId),
@@ -123,9 +123,8 @@ const Pass = struct {
         errdefer allocator.free(reachable);
         @memset(reachable, false);
 
-        const old_to_new = try allocator.alloc(?LIR.LirProcSpecId, proc_count);
-        errdefer allocator.free(old_to_new);
-        @memset(old_to_new, null);
+        var old_to_new = try collections.OptionalIndexColumn(LIR.LirProcSpecId).initFilled(allocator, proc_count);
+        errdefer old_to_new.deinit(allocator);
 
         var visited_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
         errdefer visited_stmts.deinit(allocator);
@@ -145,26 +144,23 @@ const Pass = struct {
         errdefer allocator.free(reachable_static_data);
         @memset(reachable_static_data, false);
 
-        const old_static_data_to_new = try allocator.alloc(?LIR.StaticDataId, static_data_count);
-        errdefer allocator.free(old_static_data_to_new);
-        @memset(old_static_data_to_new, null);
+        var old_static_data_to_new = try collections.OptionalIndexColumn(LIR.StaticDataId).initFilled(allocator, static_data_count);
+        errdefer old_static_data_to_new.deinit(allocator);
 
         const export_count = if (frozen) |data| data.exports.len else 0;
         const reachable_exports = try allocator.alloc(bool, export_count);
         errdefer allocator.free(reachable_exports);
         @memset(reachable_exports, false);
-        const old_export_to_new = try allocator.alloc(?LirProgram.StaticDataSymbolId, export_count);
-        errdefer allocator.free(old_export_to_new);
-        @memset(old_export_to_new, null);
-        const static_data_exports = try allocator.alloc(?LirProgram.StaticDataSymbolId, static_data_count);
-        errdefer allocator.free(static_data_exports);
-        @memset(static_data_exports, null);
+        var old_export_to_new = try collections.OptionalIndexColumn(LirProgram.StaticDataSymbolId).initFilled(allocator, export_count);
+        errdefer old_export_to_new.deinit(allocator);
+        var static_data_exports = try collections.OptionalIndexColumn(LirProgram.StaticDataSymbolId).initFilled(allocator, static_data_count);
+        errdefer static_data_exports.deinit(allocator);
         if (frozen) |data| {
             for (data.exports, 0..) |item, index| {
                 if (item.value_id) |value_id| {
                     const raw = @backingInt(value_id);
-                    if (raw >= static_data_count or static_data_exports[raw] != null) reachableProcInvariant("frozen data slot identity is missing or duplicated");
-                    static_data_exports[raw] = @fromBackingInt(@intCast(index));
+                    if (raw >= static_data_count or static_data_exports.get(raw) != null) reachableProcInvariant("frozen data slot identity is missing or duplicated");
+                    static_data_exports.set(raw, @fromBackingInt(@intCast(index)));
                 }
             }
         }
@@ -194,20 +190,20 @@ const Pass = struct {
 
     fn deinit(self: *Pass) void {
         if (self.own_values) |*own| own.deinit(self.allocator);
-        self.allocator.free(self.static_data_exports);
-        self.allocator.free(self.old_export_to_new);
+        self.static_data_exports.deinit(self.allocator);
+        self.old_export_to_new.deinit(self.allocator);
         self.allocator.free(self.reachable_exports);
         self.stmt_stack.deinit(self.allocator);
         self.proc_queue.deinit(self.allocator);
         self.export_queue.deinit(self.allocator);
         self.plan_stack.deinit(self.allocator);
-        self.allocator.free(self.old_static_data_to_new);
+        self.old_static_data_to_new.deinit(self.allocator);
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
         self.visited_stmts.deinit(self.allocator);
         self.allocator.free(self.old_stmt_to_new);
         self.reachable_stmts.deinit(self.allocator);
-        self.allocator.free(self.old_to_new);
+        self.old_to_new.deinit(self.allocator);
         self.allocator.free(self.reachable);
     }
 
@@ -357,7 +353,7 @@ const Pass = struct {
     }
 
     fn markStaticDataOwner(self: *Pass, index: usize) Allocator.Error!void {
-        if (self.static_data_exports[index]) |export_id| {
+        if (self.static_data_exports.get(index)) |export_id| {
             try self.markFrozenExport(export_id);
         } else if (self.result.static_data_values.items[index].initializer) |initializer| {
             try self.markProc(initializer);
@@ -398,7 +394,7 @@ const Pass = struct {
         var next: u32 = 0;
         for (self.reachable, 0..) |is_reachable, old_index| {
             if (!is_reachable) continue;
-            self.old_to_new[old_index] = @fromBackingInt(@intCast(next));
+            self.old_to_new.set(old_index, @fromBackingInt(@intCast(next)));
             next += 1;
         }
     }
@@ -416,7 +412,7 @@ const Pass = struct {
         var next: u32 = 0;
         for (self.reachable_static_data, 0..) |is_reachable, old_index| {
             if (!is_reachable) continue;
-            self.old_static_data_to_new[old_index] = @fromBackingInt(@intCast(next));
+            self.old_static_data_to_new.set(old_index, @fromBackingInt(@intCast(next)));
             next += 1;
         }
     }
@@ -608,7 +604,7 @@ const Pass = struct {
         var count: usize = 0;
         for (self.reachable_exports, 0..) |keep, index| {
             if (!keep) continue;
-            self.old_export_to_new[index] = @fromBackingInt(@intCast(count));
+            self.old_export_to_new.set(index, @fromBackingInt(@intCast(count)));
             count += 1;
         }
         const compact = try data.allocator.alloc(LirProgram.StaticDataExport, count);
@@ -657,7 +653,7 @@ const Pass = struct {
                         }
                     },
                     .data_symbol => |old_target| {
-                        dest.target = .{ .data_symbol = self.old_export_to_new[@backingInt(old_target)] orelse
+                        dest.target = .{ .data_symbol = self.old_export_to_new.get(@backingInt(old_target)) orelse
                             reachableProcInvariant("retained frozen relocation targets pruned data") };
                     },
                 }
@@ -741,7 +737,7 @@ const Pass = struct {
     }
 
     fn remapProcDebugNames(self: *Pass) void {
-        self.store.compactProcDebugNames(self.old_to_new);
+        self.store.compactProcDebugNames(&self.old_to_new);
     }
 
     fn compactProcSpecs(self: *Pass) void {
@@ -822,14 +818,14 @@ const Pass = struct {
 
     fn maybeRemapProc(self: *Pass, old: LIR.LirProcSpecId) ?LIR.LirProcSpecId {
         const index = @backingInt(old);
-        if (index >= self.old_to_new.len) reachableProcInvariant("proc reference exceeds old proc_specs len");
-        return self.old_to_new[index];
+        if (index >= self.old_to_new.len()) reachableProcInvariant("proc reference exceeds old proc_specs len");
+        return self.old_to_new.get(index);
     }
 
     fn remapStaticData(self: *Pass, old: LIR.StaticDataId) LIR.StaticDataId {
         const index = @backingInt(old);
-        if (index >= self.old_static_data_to_new.len) reachableProcInvariant("static data reference exceeds old static_data_values len");
-        return self.old_static_data_to_new[index] orelse reachableProcInvariant("reachable static data edge pointed at pruned static data");
+        if (index >= self.old_static_data_to_new.len()) reachableProcInvariant("static data reference exceeds old static_data_values len");
+        return self.old_static_data_to_new.get(index) orelse reachableProcInvariant("reachable static data edge pointed at pruned static data");
     }
 
     fn remapStmt(self: *Pass, old: LIR.CFStmtId) LIR.CFStmtId {
