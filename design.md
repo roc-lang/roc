@@ -258,14 +258,14 @@ Table owners choose storage from the lifecycle, not the initial bit pattern:
 
 Fresh zero storage guarantees the initial state of a new mapping and newly
 accessible reservation suffix. It says nothing about retained capacity,
-rollback/regrowth, descriptor recycling, or publication to another thread.
+rollback/regrowth, descriptor recycling, or sharing with another thread.
 Every appended entry is written explicitly. Resetting a sparse mapping must
 guarantee zeros, not merely advise that its contents may be discarded.
 
 Optional-index columns preserve the owning domain's IDs. A zero-based shared
 domain stores `id + 1`, reserving the stored zero for absence. A private domain
-may instead reserve physical slot zero and issue IDs from one; its column
-stores those IDs unchanged, and every semantic iteration excludes the unused
+may instead reserve array slot zero and issue IDs from one; its column
+stores those IDs unchanged, and every iteration over entries excludes the unused
 slot. This choice never silently renumbers IDs crossing a compiler boundary.
 Borrowed column views own no allocation.
 
@@ -287,7 +287,7 @@ explicit: both collection builders preserve insertion order, so a consumer
 of a reverse-insertion chain must preserve its ordering deliberately.
 
 These primitives do not authorize blanket conversions. Each migration must
-preserve semantic padding and value-byte initialization, prove its lifecycle,
+preserve padding and value-byte initialization, prove its lifecycle,
 and pass the corpus performance gate. Reservation thresholds and commit-ahead
 policy remain measurement decisions, not guarantees of a speedup.
 
@@ -5537,14 +5537,14 @@ Generic allocator storage is not assumed to be zero. No bulk initialization,
 debug poisoning, slot destruction scan, huge-page advice or custom fault handler
 touches the mapping. Compile-time checks require the empty slot state to be
 encoded as zero and the atomic state representation to remain compatible.
-A slot's result is read only after its claimant writes it and publishes done.
+A slot's result is read only after its claimant writes it and stores done.
 The identity array and key computation remain unchanged.
 
 Compiler-WASM selects a different storage backend at compile time: a directory
-of fixed 64-slot heap pages, each explicitly initialized before publication.
+of fixed 64-slot heap pages, each explicitly initialized before readers can use it.
 WASM linear memory and its recycling allocator do not provide independent,
 releasable OS mappings. Unsupported native hosts require an explicit backend.
-An allocation failure never changes backends. Storage publication completes
+An allocation failure never changes backends. Storage initialization completes
 before the request claims a key or locks the shared writer. Directory, page
 and key claims have distinct kinds where present. Slot addresses never move,
 and their owner releases storage only after all readers finish. Native mapping
@@ -5555,7 +5555,7 @@ from reserved virtual key bytes. Neither measures resident RAM. It counts
 successful key computations under the existing writer lock, incrementing only
 after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
-before its slot publishes; quiescent counts equal completed keys. No key
+before its slot stores done; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
 
 There is no scheduling edge between modules. A module's analyses are never
@@ -14460,7 +14460,7 @@ for the cases listed:
   for every other size.
 - `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
   zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
-- `dyn_field_addr` with an immediate semantic index follows nominal `child`
+- `dyn_field_addr` with an immediate source-field index follows nominal `child`
   links to the record, reads the field's memory slot from that index's
   `entries` row, and adds that field's `offset` to the base. A field whose
   descriptor is a recursion box, and an index held in a `field_index` table
@@ -15420,7 +15420,7 @@ read. The module's remaining roots then restore the stored values.
 
 The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
 `.lss` evaluator fills, because a recipe means nothing to Monotype. Each producer
-publishes its own function representation without replacing the other's. A
+stores its own function representation without replacing the other's. A
 Boxy-first root leaves the LSS payload `.unevaluated`; an LSS-first root keeps
 its completed payload when Boxy adds its capture graph. The constant writer
 records whether the LSS root's materialization plan contains functions,
@@ -15431,12 +15431,12 @@ representation is pending even when the other strategy has completed its value.
 Coordinator object eligibility, evaluation selection and Boxy reads use this
 same view. Pending reads use the existing compile-time root slots; runtime
 lowering never reconstructs another strategy's callable captures. Non-function
-values remain shared. Publishing another representation replaces that root's
+values remain shared. Storing another representation replaces that root's
 previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before
 serialization, since its consumers cannot reopen it. A platform pairing keeps
 the declared requests for inherited values still missing either representation;
-semantic completion alone does not remove their producers from the schedule.
+completion under one strategy alone does not remove their producers from the schedule.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization
