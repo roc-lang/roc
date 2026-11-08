@@ -3631,12 +3631,21 @@ pub const Coordinator = struct {
                 const artifact = mod.checkedArtifact() orelse continue;
                 if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
                 if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
-                // A platform awaiting its app relation finalizes in the pass
-                // that evaluates the platform alone, which demands every root.
-                if (artifact.hasUnboundPlatformRequirements()) coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
+                // The platform-alone pass completed every demanded value.
+                // A different strategy can still need its function form.
+                if (artifact.hasUnboundPlatformRequirements()) {
+                    for (artifact.root_requests.compile_time_requests) |request| {
+                        const root = artifact.compile_time_roots.root(request.compile_time_root.?);
+                        if (root.needsEvaluation(self.specialization_strategy) and root.boxy_value == null and
+                            (root.payload == .pending or root.payload == .unevaluated))
+                        {
+                            coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
+                        }
+                    }
+                }
                 const state = try UnfinalizedReportDestinations.newState(self);
                 errdefer state.deinit();
-                try artifact.reopenForEvaluation();
+                try artifact.reopenForEvaluation(self.specialization_strategy);
                 mod.pending_evaluation = state;
                 mod.reopened_unevaluated = unevaluatedRequestCount(artifact, self.specialization_strategy);
             }
@@ -3855,10 +3864,7 @@ pub const Coordinator = struct {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            if (strategy == .lss and artifact.compile_time_roots.root(root).kind == .literal_argument) continue;
-            if (strategy == .boxy and artifact.compile_time_roots.root(root).boxy_value != null) continue;
-            if (artifact.compile_time_roots.root(root).payload == .unevaluated or
-                artifact.compile_time_roots.root(root).payload == .pending) count += 1;
+            if (artifact.compile_time_roots.root(root).needsEvaluation(strategy)) count += 1;
         }
         return count;
     }

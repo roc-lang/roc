@@ -22962,7 +22962,12 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
+        if (request.evaluation_order == null) continue;
+        // A paired platform may inherit a semantically completed value but
+        // still need the other strategy's function representation. Keep its
+        // declared request so that strategy can run the producer later.
+        const root = result.compile_time_roots.root(request.compile_time_root.?);
+        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -23989,8 +23994,30 @@ pub const CompileTimeRoot = struct {
     literal_argument: ?LiteralArgumentRoot = null,
     /// The value a `.boxy` compilation stored for a root holding a function
     /// value (design.md "Stored Function Values"). Only `.boxy` programs read
-    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    /// it. Until LSS produces its own form, its payload stays `unevaluated`.
     boxy_value: ?StoredConstTemplate = null,
+    /// The LSS producer's constant plan contains a function, possibly inside
+    /// an aggregate. Boxy must produce its own capture graph for this root.
+    /// Readiness never traverses a stored value or rediscovers its type.
+    lss_value_has_functions: bool = false,
+
+    /// The payload available to this strategy. A completed function in the
+    /// other strategy's representation is still pending for this producer.
+    pub fn payloadFor(self: CompileTimeRoot, strategy: base.SpecializationStrategy) CompileTimeRootPayload {
+        if (strategy == .boxy) {
+            if (self.boxy_value) |stored| return .{ .const_node = stored.node };
+            if (self.payload == .fn_value or self.lss_value_has_functions) return .pending;
+        }
+        return self.payload;
+    }
+
+    pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
+        if (strategy == .lss and self.kind == .literal_argument) return false;
+        return switch (self.payloadFor(strategy)) {
+            .pending, .unevaluated => true,
+            .const_node, .fn_value, .discarded, .expect, .runtime => false,
+        };
+    }
 
     /// The expression the root evaluates itself, or null when its entry
     /// evaluates a lowering-side construct instead: the one its
@@ -24304,6 +24331,7 @@ pub const CompileTimeRootTable = struct {
         }
         verifyCompileTimeRootPayloadMatchesKind(self.roots[index], payload);
         self.roots[index].payload = payload;
+        self.roots[index].lss_value_has_functions = false;
     }
 
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
@@ -30269,11 +30297,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            const payload = self.compile_time_roots.root(root).payload;
-            if (payload != .unevaluated and payload != .pending) continue;
-            if (strategy == .lss and self.compile_time_roots.root(root).kind == .literal_argument) continue;
-            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
-            return true;
+            if (self.compile_time_roots.root(root).needsEvaluation(strategy)) return true;
         }
         return false;
     }
@@ -30281,10 +30305,10 @@ pub const CheckedModuleArtifact = struct {
     /// Reopen a finalized artifact so this compilation can evaluate the roots
     /// earlier compilations did not demand (design.md "Demand-Driven
     /// Compile-Time Evaluation"). The evaluation columns move into storage
-    /// this artifact owns, every unevaluated root awaits evaluation again,
+    /// this artifact owns, this strategy's unevaluated roots await evaluation,
     /// and the artifact awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the artifact.
-    pub fn reopenForEvaluation(self: *CheckedModuleArtifact) Allocator.Error!void {
+    pub fn reopenForEvaluation(self: *CheckedModuleArtifact, strategy: base.SpecializationStrategy) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
         // A relocated cache entry's columns alias its buffer and a pairing
@@ -30318,7 +30342,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
         for (self.compile_time_roots.roots) |*root| {
-            if (root.payload == .unevaluated) root.payload = .pending;
+            if (root.payload == .unevaluated and root.needsEvaluation(strategy)) root.payload = .pending;
         }
         self.evaluation_state = .prepared;
     }

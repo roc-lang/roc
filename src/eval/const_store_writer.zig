@@ -116,9 +116,9 @@ pub const Writer = struct {
         self.boxy_functions = functions;
     }
 
-    /// Whether a value of plan `id` holds a function value a `.boxy`
-    /// compile-time program stores anywhere.
-    pub fn planHoldsBoxyFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+    /// The producer representation of functions in this plan, including
+    /// nested aggregates. One program's plans use one callable representation.
+    pub fn planFunctionStrategy(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!?base.SpecializationStrategy {
         var seen = collections.DenseMap(LirProgram.ConstPlanId, void).init(self.allocator);
         defer seen.deinit();
         var pending = std.ArrayList(LirProgram.ConstPlanId).empty;
@@ -128,15 +128,16 @@ pub const Writer = struct {
             if (seen.contains(plan_id)) continue;
             try seen.put(plan_id, {});
             switch (self.constPlan(plan_id)) {
-                .boxy_fn => return true,
-                .pending, .layout_only, .zst, .scalar, .str, .fn_value, .erased_fn => {},
+                .boxy_fn => return .boxy,
+                .fn_value, .erased_fn => return .lss,
+                .pending, .layout_only, .zst, .scalar, .str => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
                 .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
                 .tag_union => |variants| for (variants) |variant| try pending.appendSlice(self.allocator, variant.payloads),
                 .named => |named| try pending.append(self.allocator, named.backing),
             }
         }
-        return false;
+        return null;
     }
 
     fn pushBoxyFn(self: *Writer, node: checked.ConstNodeId, value: Value) Error!void {
@@ -1190,6 +1191,42 @@ fn writerInvariant(comptime message: []const u8) noreturn {
 
 test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
+}
+
+test "strategy root readiness classifies nested producer plans with allocation failure" {
+    const allocator = std.testing.allocator;
+    var program = try LirProgram.Result.init(allocator, .native);
+    defer program.deinit();
+    const leaf: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .scalar);
+    const recursive: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .pending);
+    const aggregate: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const children = try allocator.dupe(LirProgram.ConstPlanId, &.{ leaf, recursive, leaf });
+    program.const_plans.append(allocator, .{ .record = children }) catch |err| {
+        allocator.free(children);
+        return err;
+    };
+    program.const_plans.items[@backingInt(recursive)] = .{ .list = aggregate };
+    // The classification consumes plan tags/edges, never callable-set ids.
+    // The integration test exercises actual callable sets produced by LSS.
+    for ([_]struct { plan: LirProgram.ConstPlan, strategy: ?base.SpecializationStrategy }{
+        .{ .plan = .{ .fn_value = undefined }, .strategy = .lss },
+        .{ .plan = .{ .erased_fn = undefined }, .strategy = .lss },
+        .{ .plan = .boxy_fn, .strategy = .boxy },
+        .{ .plan = .scalar, .strategy = null },
+    }) |case| {
+        program.const_plans.items[@backingInt(leaf)] = case.plan;
+        try std.testing.checkAllAllocationFailures(allocator, expectPlanFunctionStrategy, .{ &program, aggregate, case.strategy });
+    }
+}
+
+fn expectPlanFunctionStrategy(allocator: Allocator, program: *const LirProgram.Result, root: LirProgram.ConstPlanId, expected: ?base.SpecializationStrategy) (Allocator.Error || error{TestExpectedEqual})!void {
+    var store = const_store.ConstStore.init(std.testing.allocator);
+    defer store.deinit();
+    var writer = Writer.initStore(allocator, &store, null, program);
+    defer writer.deinit();
+    try std.testing.expectEqual(expected, try writer.planFunctionStrategy(root));
 }
 
 fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Error!checked.CheckedModuleArtifact {

@@ -15339,10 +15339,24 @@ it is; if a program completes no root, the rest run once more and fail as they
 read. The module's remaining roots then restore the stored values.
 
 The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
-`.lss` evaluator fills, because a recipe means nothing to Monotype. The payload
-stays `.unevaluated`, so an `.lss` compilation of the same checked module
-evaluates the root itself and neither strategy reads the other's function
-values.
+`.lss` evaluator fills, because a recipe means nothing to Monotype. Each producer
+publishes its own function representation without replacing the other's. A
+Boxy-first root leaves the LSS payload `.unevaluated`; an LSS-first root keeps
+its completed payload when Boxy adds its capture graph. The constant writer
+records whether the LSS root's materialization plan contains functions,
+including functions nested inside aggregates. `CompileTimeRoot.payloadFor`
+selects the strategy's representation, and `needsEvaluation` derives readiness
+from that view without traversing stored graphs or types. A missing function
+representation is pending even when the other strategy has completed its value.
+Coordinator object eligibility, evaluation selection and Boxy reads use this
+same view. Pending reads use the existing compile-time root slots; runtime
+lowering never reconstructs another strategy's callable captures. Non-function
+values remain shared. Publishing another representation replaces that root's
+previous debug observations rather than replaying both copies in one command.
+The baked Builtin producer completes both function representations before
+serialization, since its consumers cannot reopen it. A platform pairing keeps
+the declared requests for inherited values still missing either representation;
+semantic completion alone does not remove their producers from the schedule.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization

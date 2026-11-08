@@ -1621,10 +1621,11 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
+                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending) invariant("a runtime entry wrapper has no completed Boxy value");
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
-                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payload) {
+                    .expect, .repl_expr, .callable_binding, .constant, .hoisted_constant, .numeral_conversion, .quote_conversion, .hoisted_validation => switch (root.payloadFor(.boxy)) {
                         // In a module's object, an evaluated root's wrapper
                         // produces the stored value: the object defines it
                         // for the other objects of a link that read the
@@ -1633,10 +1634,7 @@ pub const Builder = struct {
                             try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = self.currentWorker().ret, .root = wrapper.root } })
                         else
                             try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
-                        .fn_value => |fn_id| if (self.program.moduleUnit() != null)
-                            try self.restoreFn(.{ .module = self.module }, fn_id, self.currentWorker().ret)
-                        else
-                            try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
+                        .fn_value => invariant("a Boxy root view exposed an LSS function"),
                         .pending, .unevaluated, .discarded, .expect, .runtime => try self.tasks.append(self.allocator, .{ .root_body = wrapper.root }),
                     },
                     // A literal argument's body is the conversion its root
@@ -2353,6 +2351,13 @@ pub const Builder = struct {
         self.hole = body_start;
         const owner = self.program.moduleByKey(checked.constModuleId(request.const_locator));
         try self.tasks.append(self.allocator, .ret);
+        if (rootOfConstRef(owner, request.const_locator)) |root_id| {
+            if (owner.view.compile_time_roots.root(root_id).payloadFor(.boxy) == .pending) {
+                try self.pendingValueRead(owner.index, root_id, worker.ret);
+                try self.run();
+                return try self.finishProc(entry, body_start, &.{}, ret_layout);
+            }
+        }
         const boxy_value = if (rootOfConstRef(owner, request.const_locator)) |root_id| owner.view.compile_time_roots.root(root_id).boxy_value else null;
         if (boxy_value) |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = stored.node, .ty = worker.ret } }) else switch (owner.view.const_templates.get(request.const_locator).state) {
             .stored_const => |stored| try self.tasks.append(self.allocator, .{ .restore = .{ .source = .{ .module = owner.index }, .node = request.node orelse stored.node, .ty = worker.ret } }),
@@ -2948,8 +2953,8 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payload) {
-                    .fn_value => |fn_id| try self.restoreFn(.{ .module = eval.module }, fn_id, eval.ty),
+                switch (root.payloadFor(.boxy)) {
+                    .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
@@ -2957,7 +2962,8 @@ pub const Builder = struct {
                     // binding of the app a platform's roots name, or one
                     // whose evaluation failed where it was guarded): its
                     // entry wrapper computes it.
-                    .pending, .unevaluated, .runtime => {
+                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
+                    .unevaluated, .runtime => {
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -3134,7 +3140,8 @@ pub const Builder = struct {
         if (self.own_root) |own| if (own == entry.root) return null;
         const root = self.view.view.compile_time_roots.root(entry.root);
         if (root.boxy_value) |stored| return .{ .stored = stored };
-        if (root.payload == .runtime) return null;
+        if (root.payloadFor(.boxy) == .pending and self.view.view.const_templates.get(entry.const_ref).state == .stored_const) return .{ .pending = entry.root };
+        if (root.payloadFor(.boxy) == .runtime) return null;
         if (entry.pattern != null and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
             .stored_const => |stored| .{ .stored = stored },
@@ -3171,6 +3178,7 @@ pub const Builder = struct {
     /// in, and the evaluator reruns the reading root once the value
     /// completes (design.md "Compile-Time Evaluation Strategy").
     fn pendingValueRead(self: *Builder, module_index: ModuleIndex, root: checked.ComptimeRootId, ty: TypeId) Allocator.Error!void {
+        if (!self.program.input.compile_time) invariant("a runtime body reads a root without its completed Boxy representation");
         if (self.program.evaluatesRoot(module_index, root)) {
             if (!try self.closed(ty)) invariant("a compile-time root's value has an open type");
             const slot = try self.program.rootValueSlot(module_index, root, ty);
@@ -3905,7 +3913,7 @@ pub const Builder = struct {
         // its value from its slot once it completes; its wrapper converts
         // the literal only as the root's own evaluation. A validate-only
         // root stores no value, so its wrapper converts for every reader.
-        const slot_read = compile_time_root.payload == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
+        const slot_read = compile_time_root.payloadFor(.boxy) == .pending and !argument.validate_only and self.program.evaluatesRoot(self.module, root);
         const entry = if (slot_read)
             try self.program.rootSlotThunkWorker(self.module, root, try self.convert(argument.ty))
         else blk: {
@@ -4039,7 +4047,7 @@ pub const Builder = struct {
     /// at the root's edge.
     pub fn lowerLiteralArgumentRoot(self: *Builder, root_id: checked.ComptimeRootId, argument: checked.LiteralArgumentRoot) Allocator.Error!void {
         const worker = self.currentWorker().*;
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+        switch (self.view.view.compile_time_roots.root(root_id).payloadFor(.boxy)) {
             .const_node => |node| return try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = worker.ret, .root = root_id } }),
             .pending, .unevaluated, .discarded => {},
             inline .fn_value, .expect, .runtime => |_, tag| invariantFmt("a literal argument root holding {s} reached lowering", .{@tagName(tag)}),
@@ -4348,7 +4356,7 @@ pub const Builder = struct {
     }
 
     pub fn restoreConversionRoot(self: *Builder, root_id: checked.ComptimeRootId, at: LiteralAt, kind: LIR.LiteralRejectionKind, plan_id: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
-        switch (self.view.view.compile_time_roots.root(root_id).payload) {
+        switch (self.view.view.compile_time_roots.root(root_id).payloadFor(.boxy)) {
             .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = node, .ty = try self.literalType(at), .root = root_id } }),
             // The literal converts where it is reached: as the root's own
             // evaluation, or at a site no evaluation converts (a literal in
@@ -5182,6 +5190,7 @@ pub const Builder = struct {
     /// closed, and otherwise at the value's own stored type, re-tagged to
     /// `ty`.
     fn pushStoredRestore(self: *Builder, source: lower.ConstSource, stored: checked.StoredConstTemplate, ty: TypeId, root: ?checked.ComptimeRootId) Allocator.Error!void {
+        if (root) |id| if (self.program.module(source.module).view.compile_time_roots.root(id).needsEvaluation(.boxy)) invariant("a stored root read bypassed strategy readiness");
         if (self.program.store.isClosed(ty)) return try self.push(.{ .restore = .{ .source = source, .node = stored.node, .ty = ty, .root = root } });
         const stored_ty = try self.constType(source, stored.root_type);
         try self.push(.{ .retag = .{ .from = stored_ty, .to = ty } });
@@ -5199,9 +5208,11 @@ pub const Builder = struct {
     pub fn restoreConstUse(self: *Builder, expr_id: ExprId, use: checked.ConstUseTemplate, ty: TypeId) Allocator.Error!void {
         const owner = self.program.moduleByKey(use.const_ref.artifact);
         const template = owner.view.const_templates.get(use.const_ref);
-        if (rootOfConstRef(owner, use.const_ref)) |root_id| if (owner.view.compile_time_roots.root(root_id).boxy_value) |stored| {
-            return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
-        };
+        if (rootOfConstRef(owner, use.const_ref)) |root_id| {
+            const root = owner.view.compile_time_roots.root(root_id);
+            if (root.boxy_value) |stored| return try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, root_id);
+            if (root.payloadFor(.boxy) == .pending and template.state == .stored_const) return try self.pendingValueRead(owner.index, root_id, ty);
+        }
         switch (template.state) {
             .stored_const => |stored| try self.pushStoredRestore(.{ .module = owner.index }, stored, ty, rootOfConstRef(owner, use.const_ref)),
             // A constant this compile-time program evaluates is read from

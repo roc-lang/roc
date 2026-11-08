@@ -102,8 +102,8 @@ pub const Options = struct {
     /// dependency-ordered stages; `.boxy` lowers each dependency level as a
     /// Boxy program (design.md "Caching Under `.boxy`").
     strategy: base.SpecializationStrategy = .lss,
-    /// Evaluate the roots the other strategy's evaluator owns as well: a
-    /// literal argument root under `.lss` (design.md "Literal Arguments").
+    /// Produce both strategies' representations, including literal argument
+    /// roots under `.lss` (design.md "Literal Arguments").
     /// Set for an artifact no later compilation reopens, the baked Builtin,
     /// which must be complete for either strategy's programs.
     complete_baked_module: bool = false,
@@ -180,12 +180,17 @@ const DebugEvents = struct {
         /// from a root an earlier compilation evaluated.
         fresh: bool = true,
     };
+    const EventRoot = struct { module: [32]u8, root: checked.ComptimeRootId };
     allocator: Allocator,
     events: std.ArrayList(Event) = .empty,
+    /// A newly produced representation replaces this root's previous
+    /// observations; replay must not append both copies of the same dbg.
+    fresh_roots: std.AutoHashMapUnmanaged(EventRoot, void) = .empty,
 
     fn deinit(self: *DebugEvents) void {
         for (self.events.items) |event| self.allocator.free(event.message);
         self.events.deinit(self.allocator);
+        self.fresh_roots.deinit(self.allocator);
     }
 
     fn append(self: *DebugEvents, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8) Allocator.Error!void {
@@ -195,7 +200,9 @@ const DebugEvents = struct {
     fn appendEvent(self: *DebugEvents, module: checked.ModuleId, root: checked.CompileTimeRoot, message: []const u8, fresh: bool) Allocator.Error!void {
         const owned = try self.allocator.dupe(u8, message);
         errdefer self.allocator.free(owned);
+        if (fresh) try self.fresh_roots.ensureUnusedCapacity(self.allocator, 1);
         try self.events.append(self.allocator, .{ .module = module, .root = root.id, .sequence = self.events.items.len, .is_repl = root.kind == .repl_expr, .message = owned, .fresh = fresh });
+        if (fresh) self.fresh_roots.putAssumeCapacity(.{ .module = module.bytes, .root = root.id }, {});
     }
 
     fn lessThan(_: void, a: Event, b: Event) bool {
@@ -210,6 +217,7 @@ const DebugEvents = struct {
     /// compilation, the stored roots its program demands.
     fn appendStored(self: *DebugEvents, module: *const checked.CheckedModuleArtifact) Allocator.Error!void {
         for (module.compile_time_debug.entries) |entry| {
+            if (self.fresh_roots.contains(.{ .module = module.key.digest().bytes, .root = entry.root })) continue;
             try self.appendEvent(module.key.digest(), module.compile_time_roots.root(entry.root), module.compile_time_debug.message(entry), false);
         }
     }
@@ -227,7 +235,10 @@ const DebugEvents = struct {
         for (modules) |entry| {
             inputs.clearRetainingCapacity();
             const previous = entry.module.compile_time_debug;
-            for (previous.entries) |stored| try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
+            for (previous.entries) |stored| {
+                if (self.fresh_roots.contains(.{ .module = entry.module.key.digest().bytes, .root = stored.root })) continue;
+                try inputs.append(self.allocator, .{ .root = stored.root, .message = previous.message(stored) });
+            }
             for (self.events.items) |event| {
                 if (event.fresh and entry.module.key.digest().eql(event.module)) try inputs.append(self.allocator, .{ .root = event.root, .message = event.message });
             }
@@ -1091,7 +1102,7 @@ fn specializeAndEvaluate(
             // A reopened artifact's roots that an earlier compilation
             // evaluated are read from its store like any other module's.
             const root_id = compileTimeRootForRequest(entry.module, request);
-            if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
+            if (!entry.module.compile_time_roots.root(root_id).needsEvaluation(.lss)) continue;
             // A literal argument root is the `.boxy` evaluator's (design.md
             // "Literal Arguments").
             if (entry.module.compile_time_roots.root(root_id).kind == .literal_argument) continue;
@@ -1789,13 +1800,7 @@ fn finalizeProgramBoxy(
         if (entry_key.found_existing) continue;
         for (entry.module.root_requests.compile_time_requests) |request| {
             const root_id = compileTimeRootForRequest(entry.module, request);
-            if (entry.module.compile_time_roots.root(root_id).payload != .pending) continue;
-            // Reopening the module for another root reopened this one, whose
-            // value a `.boxy` evaluation stored.
-            if (entry.module.compile_time_roots.root(root_id).boxy_value != null) {
-                entry.module.compile_time_roots.fillPayload(root_id, .unevaluated);
-                continue;
-            }
+            if (!entry.module.compile_time_roots.root(root_id).needsEvaluation(.boxy)) continue;
             try roots.append(allocator, .{ .module = @intCast(index), .root = root_id, .request = request });
         }
     }
@@ -3791,6 +3796,12 @@ fn finalize(
         const lowering_imports = try finalizationImports(allocator, checked.importedView(module), imports, available_modules);
         defer allocator.free(lowering_imports);
 
+        if (options.strategy == .boxy) {
+            try finalizeBoxyModule(allocator, module, lowering_imports, relation_modules, problem_store, options);
+            if (options.timing) |timing| timing.finish(total_started_ns, .total);
+            return;
+        }
+
         var state = try RootCompletionState.init(allocator, module, requests);
         defer state.deinit();
 
@@ -3802,6 +3813,11 @@ fn finalize(
 
         for (requests, 0..) |request, request_index| {
             const root_id = state.rootIdForRequestIndex(request_index);
+            const payload = module.compile_time_roots.root(root_id).payloadFor(.lss);
+            if (payload != .pending and payload != .unevaluated) {
+                state.markDone(root_id);
+                continue;
+            }
             // A literal argument root is the `.boxy` evaluator's: a Solved
             // compilation leaves it for a `.boxy` compilation to evaluate
             // when it reopens the artifact, as it leaves any root it does
@@ -3850,6 +3866,14 @@ fn finalize(
                 options,
             );
         }
+        // The baked Builtin is never reopened by a consumer. Its producer
+        // must finish the Boxy capture graphs as well as the LSS payloads.
+        if (options.complete_baked_module and module.hasUnevaluatedRequests(.boxy)) {
+            var boxy_options = options;
+            boxy_options.strategy = .boxy;
+            boxy_options.complete_baked_module = false;
+            try finalizeBoxyModule(allocator, module, lowering_imports, relation_modules, problem_store, boxy_options);
+        }
     }
 
     if (problem_store) |store| {
@@ -3860,6 +3884,21 @@ fn finalize(
     if (requests.len != 0) {
         if (options.timing) |timing| timing.finish(total_started_ns, .total);
     }
+}
+
+fn finalizeBoxyModule(
+    allocator: Allocator,
+    module: *checked.CheckedModuleArtifact,
+    imports: []const checked.ImportedModuleView,
+    relations: []const checked.ImportedModuleView,
+    problem_store: ?*check.problem.Store,
+    options: Options,
+) FinalizeError!void {
+    var session = try finalizeProgramBoxy(allocator, &.{.{ .module = module, .problem_store = problem_store }}, .{
+        .root = checked.loweringViewWithRelations(module, relations),
+        .imports = imports,
+    }, .{ .requests = &.{} }, .{ .requests = &.{} }, null, options);
+    defer session.deinit();
 }
 
 const RootStatus = enum {
@@ -6367,7 +6406,7 @@ fn evalDevProgramRoots(
         };
         // A function value has no slot form: a reader of this root runs
         // again once its value is stored (`ModuleEvaluation.startFunctions`).
-        const publishes = options.publish_shared_slots and (failure_message != null or !try writer.planHoldsBoxyFunction(job.root.plan));
+        const publishes = options.publish_shared_slots and (failure_message != null or (try writer.planFunctionStrategy(job.root.plan)) != .boxy);
         if (publishes and failure_message == null) try native.publishRoot(lowered, job.root.owner, .{ .checked = job.root_id }, job.root.shape(), .{ .ptr = job.ret_buf.ptr });
         if (options.publish_shared_slots and failure_message != null) {
             const failed_at = native.failedAt(job.host.failure);
@@ -7284,13 +7323,16 @@ fn completeRoot(
     compile_time_root: checked.CompileTimeRoot,
     payload: checked.CompileTimeRootPayload,
 ) ConstStoreWriter.Error!void {
-    if (payload == .const_node and try writer.planHoldsBoxyFunction(root.plan)) {
-        module.compile_time_roots.fillPayload(root_id, .unevaluated);
-        module.compile_time_roots.fillBoxyValue(root_id, .{ .node = payload.const_node, .root = root_id, .root_type = try writer.storeRootType(root) });
+    const function_strategy = if (payload == .const_node or payload == .fn_value) try writer.planFunctionStrategy(root.plan) else null;
+    if (payload == .const_node and function_strategy == .boxy) {
+        // Finish all fallible work before publishing either completion marker.
+        const stored: checked.StoredConstTemplate = .{ .node = payload.const_node, .root = root_id, .root_type = try writer.storeRootType(root) };
+        const previous = module.compile_time_roots.root(root_id).payload;
+        if (previous == .pending or previous == .unevaluated) module.compile_time_roots.fillPayload(root_id, .unevaluated);
+        module.compile_time_roots.fillBoxyValue(root_id, stored);
         state.markDone(root_id);
         return;
     }
-    module.compile_time_roots.fillPayload(root_id, payload);
     const stored_root_type = switch (compile_time_root.kind) {
         .constant, .hoisted_constant => try writer.storeRootType(root),
         .hoisted_validation,
@@ -7301,6 +7343,16 @@ fn completeRoot(
         .repl_expr,
         .literal_argument,
         => null,
+    };
+    module.compile_time_roots.fillPayload(root_id, payload);
+    module.compile_time_roots.roots[@backingInt(root_id)].lss_value_has_functions = function_strategy == .lss and switch (payload) {
+        .fn_value => true,
+        .const_node => |node| switch (module.const_store.get(node)) {
+            .crash, .checked_error => false,
+            .pending => unreachable, // A completed root's stored node is fully published.
+            .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value, .boxy_fn => true,
+        },
+        .pending, .unevaluated, .discarded, .expect, .runtime => false,
     };
     finishConstRoot(module, compile_time_root, payload, stored_root_type);
     state.markDone(root_id);

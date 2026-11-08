@@ -1616,7 +1616,7 @@ fn lowerParsedProgramToLirWithOptions(
 ) Error!LoweredProgram {
     const import_views = try parsedImportViews(allocator, resources);
     defer allocator.free(import_views);
-    return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, import_views, target_usize, options);
+    return lowerCheckedRootWithViews(allocator, io, &resources.checked_artifact, resources.import_artifacts, import_views, target_usize, options);
 }
 
 /// Views of every module a parsed program imports, the borrowed Builtin first.
@@ -1661,13 +1661,14 @@ pub fn lowerCheckedModuleSetToLir(
     for (import_modules, 0..) |*module, i| {
         import_views[i] = check.CheckedArtifact.importedView(module);
     }
-    return lowerCheckedRootWithViews(allocator, io, root_module, import_views, target_usize, options);
+    return lowerCheckedRootWithViews(allocator, io, root_module, import_modules, import_views, target_usize, options);
 }
 
 fn lowerCheckedRootWithViews(
     allocator: Allocator,
     io: std.Io,
     root_module: *check.CheckedArtifact.CheckedModuleArtifact,
+    import_modules: []check.CheckedArtifact.CheckedModuleArtifact,
     import_views: []const check.CheckedArtifact.ImportedModuleView,
     target_usize: base.target.TargetUsize,
     options: LowerToLirOptions,
@@ -1679,13 +1680,21 @@ fn lowerCheckedRootWithViews(
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(LirImage.Header);
 
-    // Publication evaluates under `.lss`, which leaves the literal argument
-    // roots to a `.boxy` compilation: one reopens the artifact to evaluate
-    // them, as the coordinator does (design.md "Literal Arguments").
+    // Publication may have produced only LSS function values. Prepare the
+    // owned imports in their producer order as well as the root; borrowed
+    // Builtin artifacts already contain both representations.
+    var pending_modules = std.ArrayList(CompileTimeFinalization.ProgramModule).empty;
+    defer pending_modules.deinit(allocator);
+    if (options.specialization_strategy == .boxy) for (import_modules) |*module| {
+        if (!module.hasUnevaluatedRequests(.boxy)) continue;
+        if (module.evaluation_state == .finalized) try module.reopenForEvaluation(.boxy);
+        try pending_modules.append(allocator, .{ .module = module, .problem_store = null });
+    };
     const reopened = options.specialization_strategy == .boxy and
         root_module.evaluation_state == .finalized and
         root_module.hasUnevaluatedRequests(.boxy);
-    if (reopened) try root_module.reopenForEvaluation();
+    if (reopened) try root_module.reopenForEvaluation(.boxy);
+    if (options.specialization_strategy == .boxy) try pending_modules.append(allocator, .{ .module = root_module, .problem_store = null });
 
     const modules: lir.CheckedPipeline.CheckedModuleSet = .{
         .root = check.CheckedArtifact.loweringView(root_module),
@@ -1698,9 +1707,9 @@ fn lowerCheckedRootWithViews(
         // A `.boxy` runtime program reads the values compile-time evaluation
         // converts its literals to, as a compilation's runtime consumer does.
         .boxy => blk: {
-            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy });
+            var session = try CompileTimeFinalization.finalizeProgram(allocator, pending_modules.items, modules, roots, roots, target, .{ .strategy = .boxy });
             defer session.deinit();
-            if (reopened) root_module.evaluation_state = .finalized;
+            for (pending_modules.items) |module| module.module.evaluation_state = .finalized;
             break :blk try session.takeRuntime(allocator, roots, target);
         },
     };

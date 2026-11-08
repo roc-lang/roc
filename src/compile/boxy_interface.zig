@@ -316,15 +316,12 @@ pub const Digests = struct {
 
     fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
-        hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
-        switch (root.payload) {
+        const payload = root.payloadFor(.boxy);
+        hashTag(hasher, @tagName(std.meta.activeTag(payload)));
+        switch (payload) {
             .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
-        }
-        if (root.boxy_value) |stored| {
-            hashTag(hasher, "boxy_value");
-            try artifact.const_store.hashGraph(stored.node, hasher, context);
         }
     }
 };
