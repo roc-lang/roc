@@ -24557,11 +24557,15 @@ for a target word (pointers, lengths, sizes, addresses), `wide64_width` for a
 value that is 64 bits on every target (U64, I64, F64 bits, an i128 or Dec
 half), and `scalar_width` for an integer of up to 8 bytes held in one register
 whose width follows its layout. A width follows the kind of value, never an
-immediate's numeric value: a small U64 is still 64 bits. No helper has an
-implied width: every helper that works on a register either takes
-`comptime width: widths.RegisterWidth` or names its width: a fixed width in
-its name (`emitLoadW8`), or the word for an address helper (`emitLeaStack`).
-A call to a helper that takes a width does not compile without one. A 32-bit
+immediate's numeric value: a small U64 is still 64 bits. Every helper that
+works on a register says how wide the register is. Most take a
+`comptime width: widths.RegisterWidth` argument, so a call without one does
+not compile. The rest have the width in their name (`emitLoadW8`), or always
+use the word width because they work on addresses (`emitLeaStack`). A `u64` or
+`i64` argument to a C function is passed with a `…Wide64` builder method. In
+debug builds, each call checks its arguments against the function's
+parameters: there must be one argument per parameter, and the `…Wide64`
+arguments must sit exactly at the `u64` and `i64` parameters. A 32-bit
 instruction set's `RegisterWidth` has no `w64` member, so `wide64_width`,
 `scalar_width` and a stray `.w64` are compile errors on it until the driver
 routes those values through register pairs.

@@ -319,6 +319,7 @@ pub const HostedSymbolResolver = struct {
 /// builtin registry. Object-file generation emits `symbolName()` relocations;
 /// native execution calls the wrapper addresses directly.
 pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
+const ParamWidths = builtins.builtin_registry.ParamWidths;
 
 /// Special layout index for List I64 type (must match dev_evaluator.zig).
 /// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
@@ -10294,34 +10295,21 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         self.freeGenerals(.{ parts.low, parts.high });
                     } else {
-                        // The float `val` is argument position 1 (after `out`). On x86-64
-                        // it must flow through the CallBuilder so it lands in the right
-                        // register: Windows x64 shares positional slots between float and
-                        // integer args (val -> XMM1, target_bits -> R8), and only the
-                        // builder tracks that. On aarch64 (AAPCS) FP args use v0-v7
-                        // independently, so the single float arg goes in V0 directly.
+                        // The float `val` is the second argument, after `out`. The
+                        // CallBuilder picks its register. On Windows x64 the second
+                        // argument goes in XMM1 even when it is a float, and the next
+                        // integer goes in R8. Elsewhere the float goes in the first float
+                        // register (XMM0 on x86_64, V0 on aarch64).
                         const src_width: FloatWidth = if (spec.src == .f32) .f32 else .f64;
                         const freg = try self.ensureInFloatReg(src_loc, src_width);
-
-                        switch (isa) {
-                            .aarch64 => {
-                                if (freg != .V0) try self.codegen.emit.fmovRegReg(if (src_width == .f32) .single else .double, .V0, freg);
-                            },
-                            .x86_64 => {},
-                        }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_offset);
-                        switch (isa) {
-                            .x86_64 => {
-                                if (src_width == .f32)
-                                    try builder.addF32RegArg(freg)
-                                else
-                                    try builder.addF64RegArg(freg);
-                            },
-                            .aarch64 => {},
-                        }
+                        if (src_width == .f32)
+                            try builder.addF32RegArg(freg)
+                        else
+                            try builder.addF64RegArg(freg);
                         try builder.addImmArg(@intCast(target_bits));
                         try builder.addImmArg(@intCast(target_is_signed));
                         try builder.addImmArg(@intCast(val_size));
@@ -10349,28 +10337,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                         self.freeGenerals(.{ parts.low, parts.high });
                     } else {
-                        // f64 to f32. `val` is argument position 1 (after `out`); route it
-                        // through the CallBuilder on x86-64 to honor Windows x64 positional
-                        // float/int slot sharing, and place it in V0 directly on aarch64
-                        // (see the int branch above for details).
+                        // f64 to f32. The float `val` is the second argument, after
+                        // `out`. The CallBuilder picks its register, as in the int
+                        // branch above.
                         const freg = try self.ensureInFloatReg(src_loc, .f64);
-
-                        switch (isa) {
-                            .aarch64 => {
-                                if (freg != .V0) try self.codegen.emit.fmovRegReg(.double, .V0, freg);
-                            },
-                            .x86_64 => {},
-                        }
 
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
                         try builder.addLeaArg(frame_ptr, result_offset);
-                        switch (isa) {
-                            .x86_64 => {
-                                try builder.addF64RegArg(freg);
-                            },
-                            .aarch64 => {},
-                        }
+                        try builder.addF64RegArg(freg);
                         try builder.addImmArg(@intCast(offsets.success));
                         try builder.addImmArg(@intCast(offsets.value));
                         try self.callBuiltin(&builder, .f64_to_f32_try_unsafe);
@@ -16089,6 +16064,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// The native address is derived from `builtin_fn` itself, so native and object
         /// builds always target the same registry member.
         fn callBuiltin(self: *Self, builder: *Builder, builtin_fn: BuiltinFn) Allocator.Error!void {
+            builder.assertArgWidths(builtin_fn.symbolName(), builtin_fn.paramWidths());
             try self.spillAllVectorLocals();
             switch (self.generation_mode) {
                 .native_execution => {
@@ -16106,6 +16082,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `builtin_fn.wrapperAddress()`; the object-file symbol and relocation still
         /// target `builtin_fn`, so both build modes resolve to the same registry member.
         fn callBuiltinWithAdapter(self: *Self, builder: *Builder, adapter_addr: usize, builtin_fn: BuiltinFn) Allocator.Error!void {
+            builder.assertArgWidths(builtin_fn.symbolName(), builtin_fn.paramWidths());
             try self.spillAllVectorLocals();
             switch (self.generation_mode) {
                 .native_execution => {
@@ -17601,6 +17578,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Call the Boxy runtime entry point `name`: by its in-process address
         /// under native execution, by relocation everywhere else.
         fn callBoxyRuntime(self: *Self, builder: *Builder, comptime name: []const u8) Allocator.Error!void {
+            builder.assertArgWidths(name, comptime ParamWidths.of(@TypeOf(@field(boxy_runtime.exports, name))));
             try self.spillAllVectorLocals();
             switch (self.generation_mode) {
                 .native_execution => try builder.call(@intFromPtr(&@field(boxy_runtime.exports, name))),

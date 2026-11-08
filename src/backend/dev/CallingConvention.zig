@@ -24,6 +24,7 @@ const invariant = @import("base").invariant;
 const builtins = @import("builtins");
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
+const ParamWidths = builtins.builtin_registry.ParamWidths;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
@@ -140,6 +141,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
     const MoveStatus = enum { to_move, being_moved, moved };
 
+    // What `assertArgWidths` checks: how many arguments were added, and which
+    // of them came through a `…Wide64` method (bit i is argument i). Release
+    // builds do not check, so there it is an empty struct.
+    const ArgWidths = if (std.debug.runtime_safety) struct { count: u8 = 0, wide64: u64 = 0 } else struct {};
+
     return struct {
         const Self = @This();
 
@@ -166,6 +172,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Deferred register arguments, resolved via parallel move before call
         reg_args: [CC_EMIT.PARAM_REGS.len]DeferredRegArg = undefined,
         reg_arg_count: u8 = 0,
+        /// The arguments added so far, for `assertArgWidths`. The `…At`
+        /// methods, which put an argument in a given register or stack slot,
+        /// are not counted.
+        arg_widths: ArgWidths = .{},
 
         /// Initialize CallBuilder with automatic R12 handling for C function calls.
         ///
@@ -216,6 +226,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add argument from a general register
         pub fn addRegArg(self: *Self, src_reg: GeneralReg) Allocator.Error!void {
+            self.countArg();
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_reg = src_reg });
             } else {
@@ -226,14 +237,18 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a 64-bit argument (a U64 or I64, an i128 half) from a general
         /// register. At an 8-byte word it fills one register or stack slot,
         /// as `addRegArg` does. At a 4-byte word the value needs a register
-        /// pair, so `wide64_width` makes this a compile error.
+        /// pair, so `wide64_width` makes this a compile error. It marks the
+        /// argument as 64-bit, and `assertArgWidths` checks that the callee
+        /// has a `u64` or `i64` parameter there.
         pub fn addRegArgWide64(self: *Self, src_reg: GeneralReg) Allocator.Error!void {
-            comptime std.debug.assert(widths.wide64_width == .w64);
+            comptime std.debug.assert(widths.wide64_width == widths.word_width);
             try self.addRegArg(src_reg);
+            self.markLastArgWide64();
         }
 
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            self.countArg();
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_lea = .{ .base = base_reg, .offset = offset } });
             } else {
@@ -248,6 +263,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add argument by loading from stack memory
         pub fn addMemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            self.countArg();
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_mem = .{ .base = base_reg, .offset = offset } });
             } else {
@@ -258,8 +274,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Add a 64-bit argument by loading it from stack memory (see
         /// `addRegArgWide64`).
         pub fn addMemArgWide64(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
-            comptime std.debug.assert(widths.wide64_width == .w64);
+            comptime std.debug.assert(widths.wide64_width == widths.word_width);
             try self.addMemArg(base_reg, offset);
+            self.markLastArgWide64();
         }
 
         /// Add the RocList stored at `offset` as three consecutive integer-class
@@ -365,6 +382,37 @@ pub fn CallBuilder(comptime EmitType: type) type {
             try self.addStackArg(byte_offset, 8, src);
         }
 
+        /// Add 1 to the argument count. Each method that adds an argument
+        /// calls this first. The count lets a debug build catch a call that
+        /// passes too many or too few arguments. Release builds skip it.
+        fn countArg(self: *Self) void {
+            if (std.debug.runtime_safety) self.arg_widths.count += 1;
+        }
+
+        /// Mark the argument just added as 64-bit. The `…Wide64` methods call
+        /// this after adding their argument. This lets a debug build catch a
+        /// 64-bit value passed where the function takes a word, or the
+        /// reverse, which would break on 32-bit targets. Release builds skip
+        /// it.
+        fn markLastArgWide64(self: *Self) void {
+            if (std.debug.runtime_safety) self.arg_widths.wide64 |= @as(u64, 1) << @intCast(self.arg_widths.count - 1);
+        }
+
+        /// In debug builds, check the arguments against the parameters of
+        /// `callee`, given as `params`: there must be one argument per
+        /// parameter, and the `…Wide64` arguments must be exactly the `u64`
+        /// and `i64` parameters.
+        pub fn assertArgWidths(self: *const Self, callee: []const u8, params: ParamWidths) void {
+            if (!std.debug.runtime_safety) return;
+            const args = self.arg_widths;
+            if (args.count != params.count) {
+                invariant("dev backend invariant violated: a call to {s} passes {d} arguments to its {d} parameters", .{ callee, args.count, params.count });
+            }
+            if (args.wide64 != params.wide64) {
+                invariant("dev backend invariant violated: a call to {s} passes arguments 0b{b} through a Wide64 builder method, but its u64 and i64 parameters are 0b{b} (bit i is argument i)", .{ callee, args.wide64, params.wide64 });
+            }
+        }
+
         fn addDeferredRegArg(self: *Self, register_index: usize, src: ArgSource) void {
             std.debug.assert(register_index < CC_EMIT.PARAM_REGS.len);
             std.debug.assert(self.reg_arg_count < self.reg_args.len);
@@ -378,6 +426,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add immediate value argument
         pub fn addImmArg(self: *Self, value: i64) Allocator.Error!void {
+            self.countArg();
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_imm = value });
             } else {
@@ -387,8 +436,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
         /// Add a 64-bit immediate argument (see `addRegArgWide64`).
         pub fn addImmArgWide64(self: *Self, value: i64) Allocator.Error!void {
-            comptime std.debug.assert(widths.wide64_width == .w64);
+            comptime std.debug.assert(widths.wide64_width == widths.word_width);
             try self.addImmArg(value);
+            self.markLastArgWide64();
         }
 
         /// Add a float argument from a float register.
@@ -396,6 +446,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         ///              A float arg at position 1 goes in XMM1, consuming both int and float slots.
         /// System V / AAPCS64: Uses a separate float register pool.
         pub fn addFloatRegArg(self: *Self, src_reg: FloatReg, is_f64: bool) Allocator.Error!void {
+            self.countArg();
             if (comptime uses_position_based_float_args) {
                 // Windows x64: float args use same position as int args
                 // XMM0 for arg 0, XMM1 for arg 1, etc.
@@ -454,6 +505,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// Windows x64: Uses position-based registers (XMM0-3 mirror arg positions 0-3).
         /// System V / AAPCS64: Uses a separate float register pool.
         pub fn addFloatMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: u8) Allocator.Error!void {
+            self.countArg();
             if (comptime uses_position_based_float_args) {
                 // Windows x64: float args use same position as int args
                 if (self.int_arg_index < CC_EMIT.FLOAT_PARAM_REGS.len) {
@@ -1169,6 +1221,57 @@ test "CallBuilder on Linux x64 doesn't allocate R12 slot" {
     // No code should be emitted yet
     try std.testing.expectEqual(@as(usize, 0), emit.buf.items.len);
     try std.testing.expectEqual(@as(?i32, null), builder.r12_save_offset);
+}
+
+test "CallBuilder records which arguments are 64-bit, in parameter order" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
+
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
+
+    try builder.addLeaArg(.RBP, -24);
+    try builder.addRegArgWide64(.RAX);
+    try builder.addImmArg(4);
+    try builder.addListBytesLenCapMemArgs(.RBP, -48);
+    try builder.addImmArgWide64(-1);
+
+    if (std.debug.runtime_safety) {
+        try std.testing.expectEqual(7, builder.arg_widths.count);
+        try std.testing.expectEqual(0b1000010, builder.arg_widths.wide64);
+    }
+    builder.assertArgWidths("test", .of(fn (*RocList, u64, u32, ?[*]u8, usize, usize, i64) callconv(.c) void));
+}
+
+test "CallBuilder on aarch64 counts float arguments in parameter order" {
+    const Emit = aarch64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
+
+    // On aarch64 floats go in their own registers: the float goes in V0 and
+    // the integers in X0, X1 and so on. The count still follows parameter
+    // order, so the float is argument 1.
+    try builder.addLeaArg(.FP, -24);
+    try builder.addF64RegArg(.V3);
+    try builder.addRegArgWide64(.X9);
+    try builder.addImmArg(4);
+    try builder.addImmArgWide64(-1);
+
+    if (std.debug.runtime_safety) {
+        try std.testing.expectEqual(5, builder.arg_widths.count);
+        try std.testing.expectEqual(0b10100, builder.arg_widths.wide64);
+    }
+    builder.assertArgWidths("test", .of(fn ([*]u8, f64, u64, u32, i64) callconv(.c) void));
 }
 
 test "CallBuilder 4-arg call with immediates on Linux x64" {
