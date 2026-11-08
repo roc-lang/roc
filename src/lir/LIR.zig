@@ -1167,8 +1167,9 @@ pub const StrMatchData = struct {
 /// A read of a static data value.
 pub const StaticDataLiteral = struct {
     id: StaticDataId,
-    /// Set only for a read of a compile-time list of copies; `none`
-    /// otherwise.
+    /// Set only for a read of a compile-time value with a fresh form: a list
+    /// of copies, or a value a list or string on whose spine was evaluated
+    /// with spare capacity; `none` otherwise.
     copies: StmtRowId(LiteralExtra) = .none,
 };
 
@@ -1213,16 +1214,16 @@ pub const TailCallLink = enum(u32) {
 pub const max_cf_stmt_count: u32 = std.math.maxInt(u32) - 1;
 
 /// The fields of a `LiteralValue.static_data` read set only for a
-/// compile-time list of copies of one value, stored out of line.
+/// compile-time value with a fresh form, stored out of line.
 pub const LiteralExtra = struct {
-    /// The argument-free procedure that builds the same list fresh. ARC
+    /// The argument-free procedure that builds the same value fresh. ARC
     /// chooses one form per read—the static datum when nothing the value
     /// reaches needs it unique, the fresh build when its birth lets ARC
     /// prove a mutating consumer's argument unique—and clears this, so no
     /// consumer after ARC sees it set.
     fresh_alternative: ?LirProcSpecId = null,
-    /// The list's item count, which the read's value has in either form ARC
-    /// chooses. Range proving binds it as the list's length.
+    /// A list of copies' item count, which the read's value has in either
+    /// form ARC chooses. Range proving binds it as the list's length.
     list_len: ?u64 = null,
 };
 

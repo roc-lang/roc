@@ -600,3 +600,181 @@ test "a constant aggregate's image does not grow with its copies, and every cons
         try std.testing.expect(sizes[1].widest_list < small_count);
     }
 }
+
+/// Whether every call of `op` has its first argument proven unique, and how
+/// many calls there are.
+fn firstArgsProvenUnique(result: *const lir.Program.Result, op: lir.LIR.LowLevel) struct { calls: usize, unique: usize } {
+    var calls: usize = 0;
+    var unique: usize = 0;
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level or stmt.assign_low_level.op != op) continue;
+        calls += 1;
+        if (result.store.stmtRowOrDefault(stmt.assign_low_level.extra).unique_args & 1 != 0) unique += 1;
+    }
+    return .{ .calls = calls, .unique = unique };
+}
+
+const reserved_list_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    \\main! = |args| {
+    \\    room = List.reserve([1.U8, 2, 3], 100)
+    \\
+;
+
+test "a hoisted reserved list only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, reserved_list_source ++
+        \\    Echo.line!(Str.inspect(List.get(room, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read only borrows the list, so it rides in static data and
+        // its fresh form leaves with ARC's choice.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_concat));
+    }
+}
+
+test "a hoisted reserved list an append consumes is built fresh with its capacity and appended in place" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, reserved_list_source ++
+        \\    written = List.append(room, List.len(args).to_u8_wrap())
+        \\    Echo.line!(Str.inspect(written))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read takes its fresh form: a list with the room it was
+        // evaluated with, three items plus the hundred reserved, given the
+        // static datum's items. Every checked list operation, the append's
+        // reserve among them, finds its list proven unique, so nothing
+        // copies, and the append fits in the reserved room.
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_with_capacity));
+        try std.testing.expect(hasIntLiteral(result, 103));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_concat));
+        var masks: std.ArrayList(u64) = .empty;
+        defer masks.deinit(gpa);
+        try checkedListOpUniqueMasks(result, &masks, gpa);
+        try std.testing.expect(masks.items.len > 0);
+        for (masks.items) |mask| try std.testing.expectEqual(@as(u64, 1), mask & 1);
+    }
+}
+
+const reserved_string_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    \\main! = |args| {
+    \\    room = Str.reserve("abc", 50)
+    \\
+;
+
+test "a hoisted reserved string only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, reserved_string_source ++
+        \\    Echo.line!(room)
+        \\    Echo.line!(Str.inspect(List.len(args)))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .str_with_capacity));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .str_concat));
+    }
+}
+
+test "a hoisted reserved string a concatenation consumes is built fresh with its capacity and extended in place" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, reserved_string_source ++
+        \\    Echo.line!(Str.concat(room, Str.inspect(List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read takes its fresh form, a string with room for the three
+        // bytes plus the fifty reserved, given the datum's bytes; both
+        // concatenations, the fresh form's and the program's, extend a
+        // string proven unique.
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .str_with_capacity));
+        try std.testing.expect(hasIntLiteral(result, 53));
+        const concats = firstArgsProvenUnique(result, .str_concat);
+        try std.testing.expectEqual(@as(usize, 2), concats.calls);
+        try std.testing.expectEqual(concats.calls, concats.unique);
+    }
+}
+
+/// Calls of `op` in the procedures the program runs: every procedure but a
+/// static initializer, which static data materialization evaluates instead.
+fn countRuntimeLowLevel(result: *lir.Program.Result, op: lir.LIR.LowLevel) std.mem.Allocator.Error!usize {
+    var count: usize = 0;
+    for (result.store.getProcSpecs()) |proc| {
+        if (proc.is_static_initializer) continue;
+        const body = proc.body orelse continue;
+        var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+        defer statements.deinit();
+        while (try statements.next()) |stmt_id| {
+            const stmt = result.store.getCFStmt(stmt_id);
+            if (stmt == .assign_low_level and stmt.assign_low_level.op == op) count += 1;
+        }
+    }
+    return count;
+}
+
+// `Dict.reserve` is a Roc procedure over the dictionary's lists, not a
+// low-level operation.
+const reserved_dict_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    \\room : Dict(U64, Str)
+    \\room = Dict.empty().reserve(8)
+    \\main! = |args| {
+    \\
+;
+
+test "a reserved dictionary constant only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, reserved_dict_source ++
+        \\    Echo.line!(Str.inspect(Dict.get(room, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read only borrows the dictionary, so neither of its lists is
+        // built at runtime; only the static initializer that freezes the
+        // restored dictionary names its entries' capacity.
+        try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_with_capacity));
+        try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_concat));
+    }
+}

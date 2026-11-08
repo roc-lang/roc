@@ -944,10 +944,13 @@ test "an empty compile-time list rebuilds with the capacity it was evaluated wit
     }.inspect);
 }
 
-test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+test "a compile-time record of an empty list with capacity and a scalar keeps its static datum where a callee writes its list" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
-    // whose empty list carries no capacity.
+    // whose empty list carries no capacity. Its list was evaluated with room,
+    // so the record keeps its slot and names a fresh form; the append that
+    // would write the list in place is a callee's, through its record
+    // parameter's field, so the read keeps the static datum.
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -961,9 +964,7 @@ test "a compile-time record of an empty list and a scalar lowers as its construc
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 8);
+            try std.testing.expectEqual(@as(usize, 1), result.static_data_values.items.len);
             return 0;
         }
     }.inspect);
