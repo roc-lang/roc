@@ -1746,6 +1746,14 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        // Standalone in-process objects have no separately linked readonly
+        // object. Declare the whole image first so cyclic data references
+        // and procedure bodies resolve through the same symbol map.
+        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null)
+            try self.declareStaticDataDefinitions()
+        else
+            &.{};
+        defer self.allocator.free(static_globals);
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
         if (self.stack_checks) try self.computeStackCheckProcs(procs);
@@ -1764,6 +1772,11 @@ pub const MonoLlvmCodeGen = struct {
             const proc = procs[i];
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@fromBackingInt(i), proc);
+        }
+        const builder = self.builder orelse return error.CompilationFailed;
+        for (static_globals, self.static_data_exports[0..static_globals.len]) |variable, data_export| {
+            const image = (try self.frozenExportImage(data_export, true)) orelse return error.CompilationFailed;
+            variable.setInitializer(image.value, builder) catch return error.OutOfMemory;
         }
     }
 
@@ -9311,8 +9324,8 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
     }
 
-    /// Records the readonly object's exports so relocation-free value slots
-    /// can be defined as constants in this module.
+    /// Records frozen exports for standalone emission, or constant folding
+    /// from the separate readonly object of a linked program.
     pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Error!void {
         self.static_data_exports = exports;
         self.static_data_export_rows.clearRetainingCapacity();
@@ -9320,6 +9333,26 @@ pub const MonoLlvmCodeGen = struct {
             const value_id = data_export.value_id orelse continue;
             try self.static_data_export_rows.put(@backingInt(value_id), @intCast(row));
         }
+    }
+
+    fn declareStaticDataDefinitions(self: *MonoLlvmCodeGen) Error![]LlvmBuilder.Variable.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const variables = try self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len);
+        errdefer self.allocator.free(variables);
+        for (self.static_data_exports, variables, 0..) |data_export, *variable, index| {
+            const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
+            const name = builder.strtabStringFmt(".roc.frozen.{d}", .{index}) catch return error.OutOfMemory;
+            variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
+            variable.ptrConst(builder).global.setLinkage(.internal, builder);
+            variable.setMutability(.constant, builder);
+            variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(data_export.alignment), builder);
+            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
+            const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
+            const key = try self.allocator.dupe(u8, data_export.symbol_name);
+            errdefer self.allocator.free(key);
+            try self.static_data_symbols.put(key, address);
+        }
+        return variables;
     }
 
     fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
@@ -9367,11 +9400,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// relocation replaced by the target's address plus the addend. Null when
-    /// a relocation has no constant expression here: a function pointer
-    /// outside an object-cache pack, whose object defines every function its
-    /// constants point at, or a pointer field the target's word alignment
-    /// cannot place in a packed struct.
+    /// relocation replaced by the target's address plus the addend. Linked
+    /// programs leave function pointers in their separate readonly object;
+    /// standalone in-process modules define the complete image themselves.
+    /// Unaligned pointer fields have no constant expression here.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
         return image.value;
@@ -9393,7 +9425,7 @@ pub const MonoLlvmCodeGen = struct {
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (relocation.kind == .function_pointer) return null;
+            if (relocation.kind == .function_pointer and self.program_kind != .in_process) return null;
             if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
@@ -9421,7 +9453,15 @@ pub const MonoLlvmCodeGen = struct {
             if (with_value) {
                 const target = switch (relocation.kind) {
                     .address => try self.staticDataSymbol(relocation.target_symbol_name),
-                    .function_pointer => unreachable, // Rejected above.
+                    .function_pointer => function_pointer: {
+                        const target_fn = if (relocation.procedure) |proc|
+                            self.proc_registry.get(@backingInt(proc)) orelse return error.CompilationFailed
+                        else if (relocation.rc_helper) |helper|
+                            (try self.declareRcHelper(helper, .atomic)) orelse return error.CompilationFailed
+                        else
+                            return error.CompilationFailed;
+                        break :function_pointer target_fn.toConst(builder);
+                    },
                 };
                 const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
                 const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
@@ -15182,6 +15222,68 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .body = body,
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    const exports = [_]lir.Program.StaticDataExport{
+        .{
+            .symbol_name = "first",
+            .bytes = &(@as([16]u8, @splat(0))),
+            .symbol_offset = 8,
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 8, .target_symbol_name = "second" }},
+        },
+        .{
+            .symbol_name = "second",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "first" }},
+        },
+        .{
+            .symbol_name = "callable",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
+        },
+    };
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("standalone_static_data");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
+    try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
+    for (builder.variables.items[0..exports.len]) |variable| {
+        try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
+        try std.testing.expectEqual(.constant, variable.mutability);
+        try std.testing.expect(variable.init != .no_init);
+    }
+    const expected = try builder.gepConst(.normal, .i8, LlvmBuilder.Variable.Index.toConst(@fromBackingInt(0), &builder), null, &.{try builder.intConst(.i64, 8)});
+    try std.testing.expectEqual(expected, codegen.static_data_symbols.get("first").?);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
