@@ -30,18 +30,25 @@ const CheckedTypeId = @import("checked_ids.zig").CheckedTypeId;
 const KeySlot = collections.OnceSlot(TypeKeyInfo, .sealed_type_key);
 const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
 
-/// A canonical id memo. The extra bit distinguishes an empty slot from every
-/// valid source or synthesized id, including the largest synthesized id.
+/// A canonical id memo using atomics supported by every compiler host.
+/// The extra bit distinguishes an empty slot from the largest valid id;
+/// all other ids need only the word load.
 pub const CanonicalIdSlot = struct {
-    value: std.atomic.Value(u64) = .init(0),
+    value: std.atomic.Value(u32) = .init(std.math.maxInt(u32)),
+    largest_ready: std.atomic.Value(bool) = .init(false),
 
     pub fn get(self: *const CanonicalIdSlot) ?CheckedTypeId {
-        const encoded = self.value.load(.acquire);
-        return if (encoded == 0) null else @fromBackingInt(@as(u32, @intCast(encoded - 1)));
+        const raw = self.value.load(.acquire);
+        if (raw == std.math.maxInt(u32) and !self.largest_ready.load(.acquire)) return null;
+        return @fromBackingInt(raw);
     }
 
+    /// Concurrent publishers must publish the same immutable answer.
     pub fn put(self: *CanonicalIdSlot, id: CheckedTypeId) void {
-        self.value.store(@as(u64, @backingInt(id)) + 1, .release);
+        const raw = @backingInt(id);
+        if (raw == std.math.maxInt(u32)) {
+            self.largest_ready.store(true, .release);
+        } else self.value.store(raw, .release);
     }
 };
 
@@ -181,9 +188,9 @@ pub const SealedTypeKeys = struct {
 };
 
 test "canonical id slots distinguish unknown from every boundary id" {
-    var slot: CanonicalIdSlot = .{};
-    try std.testing.expect(slot.get() == null);
     for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) }) |raw| {
+        var slot: CanonicalIdSlot = .{};
+        try std.testing.expect(slot.get() == null);
         const id: CheckedTypeId = @fromBackingInt(raw);
         slot.put(id);
         try std.testing.expectEqual(id, slot.get().?);
