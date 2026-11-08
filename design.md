@@ -5479,23 +5479,35 @@ and `unreachable` in release builds:
   module imports are acyclic: a claim in the imported module never waits on
   the importer.
 
-A sealed source type's key slot is stored in a fixed page of 64 slots. The
-first key request allocates a directory with one page-pointer slot per 64
-solver variables. Each page is allocated and initialized by the first request
-for a key in that page, through its own write-once slot. Directory entries
-and pages never move, and their owner frees them after all readers finish.
-Directory and page claims finish before the request claims its key slot or
-locks the shared key writer. They only allocate and initialize storage; they
-do not compute keys. Allocation failure abandons the corresponding claim,
-so another request can retry. Directory, page and key slots use distinct
-claim kinds. Fixed paging changes storage allocation alone: type identities,
-key encodings, proof bits and the reverse index remain unchanged.
+On native compiler hosts, the first source-key request reserves one contiguous
+OS-zeroed mapping for the module's key slots. Linux, macOS and supported BSD
+hosts use fresh private anonymous mappings; Windows reserves and commits fresh
+virtual memory. Storage is obtained directly from `PageAllocator.map`, whose
+zero guarantee the implementation requires, and released by direct unmap.
+Generic allocator storage is not assumed to be zero. No bulk initialization,
+debug poisoning, slot destruction scan, huge-page advice or custom fault handler
+touches the mapping. Compile-time checks require the empty slot state to be
+encoded as zero and the atomic state representation to remain compatible.
+A slot's result is read only after its claimant writes it and publishes done.
+The identity array and key computation remain unchanged.
 
-The completed read path acquires the directory, its page and then the key.
-The existing trace_boxy_work memory report counts allocated pages and their
-slot capacity, including final-page slack, and reports directory_bytes
-separately. slot_bytes covers allocated key pages; total_bytes includes both
-the pages and the directory. None of these structures is serialized.
+Compiler-WASM selects a different storage backend at compile time: a directory
+of fixed 64-slot heap pages, each explicitly initialized before publication.
+WASM linear memory and its recycling allocator do not provide independent,
+releasable OS mappings. Unsupported native hosts require an explicit backend.
+An allocation failure never changes backends. Storage publication completes
+before the request claims a key or locks the shared writer. Directory, page
+and key claims have distinct kinds where present. Slot addresses never move,
+and their owner releases storage only after all readers finish. Native mapping
+size arithmetic is checked; overflow or mapping failure reports OutOfMemory.
+
+The existing trace_boxy_work report separates allocator-requested heap bytes
+from reserved virtual key bytes. Neither measures resident RAM. It counts
+successful key computations under the existing writer lock, incrementing only
+after the key writer succeeds. Key hits do no extra work, and tracing does not
+scan the native mapping. A concurrent snapshot can count a successful result
+before its slot publishes; quiescent counts equal completed keys. No key
+storage, diagnostic counter or derived result is serialized.
 
 There is no scheduling edge between modules. A module's analyses are never
 ordered after its importers, nothing waits for demand to flow top-down, and
