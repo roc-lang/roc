@@ -77,6 +77,8 @@ fn appendText(allocator: Allocator, text: *std.ArrayList(u8), bytes: []const u8)
 /// Borrow checker storage until serialization; flatten pointer-bearing strings
 /// and multi-lists into arena-owned arrays with deterministic index order.
 pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+    // No diagnostic consumer means no snapshot/region publication input.
+    if (checker.problems.problems.items.len == 0 and checker.problems.pending_static_exhaustiveness.items.len == 0) return .{};
     const snapshots = &checker.snapshots;
     var text = std.ArrayList(u8).empty;
     var tags = std.ArrayList(Tag).empty;
@@ -128,22 +130,6 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
         if (!base.ModuleIdentity.eql(&source.digest, &hash)) return false;
     }
     return true;
-}
-
-/// Check diagnostic text ranges before restoring optional cache data.
-pub fn validate(self: Self) error{CorruptArtifact}!void {
-    for (self.tags) |tag| try self.validateText(tag.text);
-    for (self.formatted) |formatted| {
-        if (@backingInt(formatted.snapshot) >= self.contents.len) return error.CorruptArtifact;
-        try self.validateText(formatted.text);
-    }
-    for (self.missing_patterns) |range| {
-        if (range.start > self.extra_strings.len or range.count > self.extra_strings.len - range.start) return error.CorruptArtifact;
-    }
-}
-
-fn validateText(self: Self, range: Text) error{CorruptArtifact}!void {
-    if (@as(u64, range.start) + range.len > self.text.len) return error.CorruptArtifact;
 }
 
 /// Restore exactly the pre-publication problem store, including deferred

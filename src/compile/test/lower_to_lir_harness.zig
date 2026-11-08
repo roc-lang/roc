@@ -115,6 +115,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     lir.CheckedPipeline.LowerResourceError ||
+    @import("static_data").MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -172,7 +173,6 @@ pub const LirLoweringOptions = struct {
     shared_comptime_reads: bool = false,
 
     specialization_strategy: base.SpecializationStrategy = .lss,
-    boxy_composition_sites: bool = true,
     /// Number of coordinator workers available to post-check lowering.
     /// The default retains the harness's existing single-threaded behavior.
     specialization_workers: usize = 1,
@@ -1203,6 +1203,7 @@ fn lowerAppPathToLir(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = opts.specialization_strategy;
 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
@@ -1304,7 +1305,6 @@ fn lowerAppPathToLir(
     const lower_target: lir.CheckedPipeline.TargetConfig = .{
         .comptime_value_reads = opts.shared_comptime_reads,
         .specialization_strategy = opts.specialization_strategy,
-        .boxy_composition_sites = opts.boxy_composition_sites,
         .target_usize = opts.target_usize,
         .inline_mode = opts.inline_mode,
         .spec_constr_clone_inlining = opts.spec_constr_clone_inlining,
@@ -1331,6 +1331,16 @@ fn lowerAppPathToLir(
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
+    if (inspect_lowered != null) {
+        // Executing a lowered program requires the same static-data
+        // materialization that a linked program receives.
+        const exports = try @import("static_data").buildStaticDataForWidth(gpa, .{
+            .root = lower_modules.root,
+            .imports = lower_modules.imports,
+        }, &lowered, opts.target_usize, .{});
+        if (lowered.frozen_static_data) |*previous| previous.deinit();
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
 
     if (dump) |writer| {
         const store = &lowered.lir_result.store;

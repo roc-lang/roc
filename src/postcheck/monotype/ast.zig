@@ -1443,9 +1443,7 @@ pub const StaticDataCandidate = struct {
 
 /// What a static data candidate's value is built from.
 pub const StaticDataCandidateValue = union(enum) {
-    /// The value's construction: it lowers as runtime code where no target
-    /// storage holds the value, and the candidate's static initializer
-    /// freezes it.
+    /// Compiler-only data initializer. Runtime code reads its frozen value.
     runtime: ExprId,
     /// A non-empty list stored in a checked module's `ConstStore` whose items
     /// reach no function value, crash, or checked error. Static data freezes
@@ -1454,13 +1452,11 @@ pub const StaticDataCandidateValue = union(enum) {
     /// so no expression builds it or any of its items.
     stored: StoredStaticList,
 
-    /// The candidate's one subexpression: its construction, or the restored
-    /// item a stored list of one repeated value names. A stored list of
-    /// differing items has none.
+    /// The compiler-only initializer expression, when one is needed.
     pub fn subexpression(self: StaticDataCandidateValue) ?ExprId {
         return switch (self) {
             .runtime => |expr| expr,
-            .stored => |stored| stored.uniform_item,
+            .stored => null,
         };
     }
 
@@ -1469,7 +1465,7 @@ pub const StaticDataCandidateValue = union(enum) {
     pub fn subexpressionPtr(self: *StaticDataCandidateValue) ?*ExprId {
         return switch (self.*) {
             .runtime => |*expr| expr,
-            .stored => |*stored| if (stored.uniform_item) |*item| item else null,
+            .stored => null,
         };
     }
 };
@@ -1477,9 +1473,6 @@ pub const StaticDataCandidateValue = union(enum) {
 /// A stored list that static data freezes from its `ConstStore` node.
 pub const StoredStaticList = struct {
     item_count: u32,
-    /// The restored item of a list whose items are all one stored value,
-    /// which the list's fresh form repeats; null when they differ.
-    uniform_item: ?ExprId,
 };
 
 /// Explicit result relation between independently specialized Monotype graphs.

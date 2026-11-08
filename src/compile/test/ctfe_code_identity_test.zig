@@ -45,6 +45,141 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
     },
 };
 
+test "linked Boxy CTFE roots omit unrelated workers while both producer modes export them" {
+    if (is_freestanding) return error.SkipZigTest;
+    const boxy = @import("postcheck").Boxy;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    for (echo_platform) |file| {
+        if (std.fs.path.dirname(file.path)) |dir| try tmp_dir.dir.createDirPath(io, dir);
+        try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
+    }
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import Library
+        \\main! = |_args| Ok(Library.answer)
+    });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "Library.roc", .data =
+        \\module [answer, used, unrelated]
+        \\used : {} -> {}
+        \\used = |value| value
+        \\answer = used({})
+        \\unrelated : a -> a
+        \\unrelated = |value| value
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
+    defer allocator.free(app_path);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, io);
+    defer builtin_modules.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_compatibility_id,
+        null,
+        CoreCtx.os(allocator, allocator, io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
+    var arena = base.SingleThreadArena.init(allocator);
+    defer arena.deinit();
+    try coord.start();
+    try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    // Leave the constant pending: exercise lowering its requested root,
+    // without evaluating it or generating native code during setup.
+    const app_imports = try coord.collectImportedArtifactViews(arena.allocator(), coord.appRootCheckedArtifact());
+    const library = for (app_imports) |view| {
+        if (std.mem.eql(u8, view.module_env.module_name, "Library")) {
+            break coord.checkedArtifactByKey(view.key.digest()) orelse return error.TestUnexpectedResult;
+        }
+    } else return error.TestUnexpectedResult;
+    const library_view = check.CheckedArtifact.importedView(library);
+    const imports = try coord.collectImportedArtifactViews(arena.allocator(), library);
+    const views = try arena.allocator().alloc(check.CheckedArtifact.ImportedModuleView, imports.len + 1);
+    views[0] = library_view;
+    @memcpy(views[1..], imports);
+    var names = try lir.CheckedPipeline.BoxyModuleNames.fromViews(allocator, views);
+    defer names.deinit(allocator);
+    var interfaces = lir.CheckedPipeline.BoxyExportInterfaces.init(allocator, io);
+    defer interfaces.deinit();
+
+    // Identify the worker from the checked declaration, independently of the
+    // lowering's export inventory. Its generic argument also requires a table
+    // contract in producer mode, even though no root calls it.
+    const unrelated_template = for (library.checked_procedure_templates.templates.items) |template| {
+        const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "unrelated")) break template.template_id;
+    } else return error.TestUnexpectedResult;
+    const unrelated_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), unrelated_template);
+    const used_template = for (library.checked_procedure_templates.templates.items) |template| {
+        const name = library.canonical_names.procBase(template.proc_base).export_name orelse continue;
+        if (std.mem.eql(u8, library.canonical_names.exportNameText(name), "used")) break template.template_id;
+    } else return error.TestUnexpectedResult;
+    const used_identity = lir.CheckedPipeline.boxyTemplateWorkerIdentity(names.of(library_view), used_template);
+    const roots = library.root_requests.compile_time_requests;
+    try std.testing.expect(roots.len != 0);
+
+    const Case = struct {
+        compile_time: bool,
+        stored_functions: bool = false,
+        function_unit: ?[32]u8 = null,
+        exports_unrelated: bool,
+    };
+    var completed = false;
+    for ([_]Case{
+        .{ .compile_time = true, .exports_unrelated = false },
+        .{ .compile_time = false, .exports_unrelated = true },
+        .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
+    }) |case| {
+        // Runtime producers consume completed roots, unlike the evaluator
+        // consumer above whose pending roots are the subject of the test.
+        if (!case.compile_time and !completed) {
+            try coord.finishCheckedProgram(.executable_artifacts);
+            completed = true;
+        }
+        var output = try boxy.run(allocator, .{
+            .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
+            .roots = .{ .requests = if (case.compile_time) roots else &.{} },
+            .target_usize = base.target.TargetUsize.native,
+            .compile_time = case.compile_time,
+            .stored_functions = case.stored_functions,
+            .function_unit = case.function_unit,
+            .unit = .{ .module = .{ .imports = &interfaces, .root = false, .names = &names } },
+        });
+        defer output.lir_result.deinit();
+        defer static_data_exports.deinitStaticData(allocator, output.static_data);
+        defer if (output.retained) |retained| retained.deinit();
+
+        const has_used_body = for (output.lir_result.store.getProcSpecs()) |proc| {
+            if (std.meta.eql(proc.identity, used_identity) and !proc.linked) break true;
+        } else false;
+        try std.testing.expect(has_used_body);
+        const has_unrelated_body = for (output.lir_result.store.getProcSpecs()) |proc| {
+            if (std.meta.eql(proc.identity, unrelated_identity) and !proc.linked) break true;
+        } else false;
+        const exports_unrelated = for (output.lir_result.exported_procs.items) |proc| {
+            if (std.meta.eql(output.lir_result.store.getProcSpec(proc).identity, unrelated_identity)) break true;
+        } else false;
+        try std.testing.expectEqual(case.exports_unrelated, has_unrelated_body);
+        try std.testing.expectEqual(case.exports_unrelated, exports_unrelated);
+        try std.testing.expectEqual(case.exports_unrelated, output.lir_result.boxy_table_needs.contains(unrelated_identity));
+        try std.testing.expectEqual(case.stored_functions, output.retained != null);
+        if (case.compile_time) {
+            try std.testing.expectEqual(roots.len, output.lir_result.const_roots.items.len);
+            try std.testing.expectEqual(@as(usize, 0), output.lir_result.exported_procs.items.len);
+            try std.testing.expectEqual(@as(usize, 0), output.lir_result.boxy_table_needs.count());
+        }
+    }
+}
+
 /// How two artifacts of one procedure differ, or null when they are the same
 /// code: the same bytes, frame, references, relocations, lines, and failure
 /// sites. Compile-time evaluation's combined artifacts name each constant by

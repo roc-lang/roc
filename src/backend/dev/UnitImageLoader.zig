@@ -18,11 +18,15 @@
 //! for a macOS one, either for a Windows one, so this loads them only on
 //! those hosts (`backend.dev.UnitImageLoader` is `void` elsewhere). A
 //! Windows image's unwind tables are loaded after the stubs and registered
-//! with the process, so the unwinder knows the loaded functions.
+//! with the process, so the unwinder knows the loaded functions. With the
+//! developer diagnostic `ROC_PERF_MAP` set, each loaded image's functions
+//! are appended to the process's perf map (`PerfMap`).
 
 const std = @import("std");
 const builtin = @import("builtin");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const UnitImage = @import("UnitImage.zig");
+const PerfMap = @import("PerfMap.zig");
 
 const page_size = std.heap.page_size_min;
 const stub_size: usize = 16;
@@ -113,11 +117,6 @@ pub const Loaded = struct {
     /// The address of `symbol`, one the image defines.
     pub fn symbolAddress(self: *const Loaded, symbol: UnitImage.Symbol) usize {
         return self.regionAddress(@fromBackingInt(symbol.region)) + symbol.value;
-    }
-
-    /// Return the zero-fill to its loaded state: all zeros.
-    pub fn resetZeroFill(self: *const Loaded) void {
-        @memset(self.memory[self.bss_offset..][0..self.view.bssSize()], 0);
     }
 
     /// Release the image's memory.
@@ -260,6 +259,7 @@ pub fn load(gpa: std.mem.Allocator, view: UnitImage.View, resolver: Resolver, di
         const executable: std.posix.PROT = .{ .READ = true, .EXEC = true };
         if (std.c.mprotect(@ptrCast(memory.ptr), exec_len, executable) != 0) return error.OutOfMemory;
     }
+    if (dev_diagnostics.isSet(.perf_map)) PerfMap.appendImage(gpa, view, @as(*const Loaded, &loaded), Loaded.symbolAddress);
     return loaded;
 }
 
@@ -507,8 +507,6 @@ test "a loaded image runs, calls its imports and resets its zero-fill" {
     try std.testing.expectEqual(@as(i32, 7), call_ext());
     try std.testing.expectEqual(@as(i32, 1), bump());
     try std.testing.expectEqual(@as(i32, 2), bump());
-    loaded.resetZeroFill();
-    try std.testing.expectEqual(@as(i32, 1), bump());
     const pointer: *const Fn = @ptrFromInt(exportAddress(&loaded, "answer_pointer"));
     try std.testing.expectEqual(@as(i32, 42), pointer.*());
     try std.testing.expectEqual(@as(usize, if (arm64) 64 else 40), loaded.text().len);
