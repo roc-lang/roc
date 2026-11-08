@@ -883,7 +883,12 @@ pub fn compileForTarget(
     parse_options: ParseOptions,
     specialization_strategy: base.SpecializationStrategy,
 ) Error!CompiledTargetProgram {
-    var resources = try parseProgram(allocator, source_kind, source, imports, parse_options);
+    // Evaluation runs in the address space of the program it is lowered for.
+    std.debug.assert(parse_options.ctfe_options == null);
+    const target_ctfe_options: CompileTimeFinalization.Options = .{ .address_space = target_usize };
+    var target_parse_options = parse_options;
+    target_parse_options.ctfe_options = &target_ctfe_options;
+    var resources = try parseProgram(allocator, source_kind, source, imports, target_parse_options);
     errdefer cleanupParseAndCanonical(allocator, resources);
 
     // If checking rejected the explicit evaluation root, publication leaves
@@ -960,11 +965,20 @@ pub fn compileInspectedProgramWithOptions(
     imports: []const ModuleSource,
     options: InspectedCompileOptions,
 ) Error!CompiledProgram {
+    // One evaluation serves the native program and, unless skipped, the
+    // wasm32 one, so it runs in the narrower address space of the two.
+    const ctfe_options: CompileTimeFinalization.Options = .{
+        .address_space = switch (options.wasm) {
+            .lower => .u32,
+            .skip => .u64,
+        },
+    };
     const resources = try parseProgram(allocator, source_kind, source, imports, .{
         .io = io,
         .roots = .inspected,
         .pre_published_builtin = options.pre_published_builtin,
         .roc_ctx = options.roc_ctx,
+        .ctfe_options = &ctfe_options,
     });
     return lowerInspected(allocator, io, resources, options.specialization_strategy, options.wasm);
 }
@@ -1699,7 +1713,7 @@ fn lowerCheckedRootWithViews(
         // A `.boxy` runtime program reads the values compile-time evaluation
         // converts its literals to, as a compilation's runtime consumer does.
         .boxy => blk: {
-            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy });
+            var session = try CompileTimeFinalization.finalizeProgram(allocator, &.{.{ .module = root_module, .problem_store = null }}, modules, roots, roots, target, .{ .strategy = .boxy, .address_space = target_usize });
             defer session.deinit();
             if (reopened) root_module.evaluation_state = .finalized;
             break :blk try session.takeRuntime(allocator, roots, target);

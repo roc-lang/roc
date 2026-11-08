@@ -23530,6 +23530,30 @@ either width; one too large for its destination's widths (a 32-bit target's
 lengths, or the ConstStore's) is `error.OutOfMemory`, as it would be on that
 target at runtime.
 
+Compile-time evaluation gives the same result on every compiler host and for
+every target, except when it runs out of memory: heap exhaustion, stack
+overflow, or exhaustion of the virtual address space it runs in. Running out
+of memory is an out-of-memory crash of the root at the operation that asked,
+never an error of the compilation: it is reported, or for a guarded root
+deferred to runtime, exactly like any other compile-time crash. Only the
+host's own bookkeeping running out of memory fails the compilation.
+
+Evaluation runs in the address space of the program it completes values
+for, which a compilation names explicitly
+(`CompileTimeFinalization.Options.address_space`): the narrower of the
+compiler host's and its runtime program's, and a 64-bit one when it has no
+runtime program, as in `roc check`. Evaluating for a 32-bit program, such as
+a wasm32 build, is that program running out of address space where it
+would: both evaluators' hosts refuse an allocation request larger than a
+32-bit `roc_alloc` can be asked for, without asking the compiler's memory
+for it, and the root crashes there. A 64-bit program's evaluation is refused
+only what the compiler's memory cannot satisfy. Nothing else about
+evaluation depends on the target: values are computed at the compiler
+host's pointer width and laid into each program at its own layouts, as
+above. A host-width representation is never smaller than a 32-bit one, so a
+request the host refuses can stand for a smaller one on the target; that is
+a difference only in running out of memory.
+
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
 empirical exhaustiveness diagnostics, literal conversion diagnostics, or
@@ -25104,9 +25128,10 @@ The contract is carried by types rather than prose: the Zig ABI declarations
 return a non-optional pointer, generated Rust glue returns `NonNull<c_void>`,
 generated C glue declares both symbols `returns_nonnull`, and the LLVM backend
 marks their declarations' return values `nonnull` in the linked module.
-Compiler-internal hosts follow the same contract: the compile-time evaluator's
-host turns allocation failure into a Roc crash by unwinding the interpreter it
-serves, rather than signaling it with null.
+Compiler-internal hosts follow the same contract: both compile-time
+evaluators' hosts turn allocation failure into a Roc crash, unwinding the
+interpreter they serve or the generated code they called, rather than
+signaling it with null (see "Compile-Time Constants").
 
 `roc_crashed` never returns to Roc. A platform host ends the process; a host
 that keeps running, like the compiler's own hosts, longjmps to a crash

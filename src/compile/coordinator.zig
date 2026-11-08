@@ -2200,6 +2200,10 @@ pub const Coordinator = struct {
     /// which requires a checked app root.
     checked_program: bool = false,
     runtime_lowering: ?compile_build.RuntimeLoweringConfig = null,
+    /// The pointer width of the runtime program this compilation lays its
+    /// compile-time values into, set with `runtime_lowering` and kept while
+    /// a platform evaluates without it.
+    program_address_space: base.target.TargetUsize = .u64,
     /// The strategy whose compile-time evaluator completes every module's
     /// compile-time roots: `.boxy` under `--specialize=no`, `.lss`
     /// otherwise (design.md "Caching Under `.boxy`"). It is part of each
@@ -3811,6 +3815,7 @@ pub const Coordinator = struct {
             if (self.checked_program) try objects.offerPending();
         }
         options.cancel_request = self.cancel_request;
+        options.address_space = self.compileTimeAddressSpace();
         options.keep_artifacts = self.keep_compile_time_artifacts;
         options.cached_debug_modules = cached_debug_modules.items;
         if (self.runtime_lowering) |config| {
@@ -3866,6 +3871,22 @@ pub const Coordinator = struct {
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores);
         try self.writePendingStores(stores.items);
         try unfinalized.commit();
+    }
+
+    /// The address space this compilation's compile-time evaluation runs
+    /// in: the narrower of the compiler host's and the runtime program's.
+    /// Evaluating for a 32-bit program runs out of address space where that
+    /// program would (design.md "Compile-Time Constants").
+    fn compileTimeAddressSpace(self: *const Coordinator) base.target.TargetUsize {
+        if (base.target.TargetUsize.native == .u32) return .u32;
+        return self.program_address_space;
+    }
+
+    /// Configure the runtime program this compilation lowers, and with it
+    /// the address space its compile-time evaluation runs in.
+    pub fn setRuntimeLowering(self: *Coordinator, config: compile_build.RuntimeLoweringConfig) void {
+        self.runtime_lowering = config;
+        self.program_address_space = config.target.target_usize;
     }
 
     fn cacheEnabled(self: *const Coordinator) bool {
@@ -7404,6 +7425,7 @@ pub const Coordinator = struct {
         const ctfe_timing = &local_ctfe_timing;
         var ctfe_options = compile_package.compileTimeFinalizationOptions(self.max_threads, &self.roc_ctx, ctfe_timing);
         ctfe_options.strategy = self.specialization_strategy;
+        ctfe_options.address_space = self.compileTimeAddressSpace();
         // Import resolution runs inside the type-check task and records its
         // own diagnostics on the env, after the canonicalize task already
         // reported the ones canonicalization recorded.
