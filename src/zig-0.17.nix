@@ -5,9 +5,9 @@ let
   # Reuse its source-build recipe so native libc detection is patched before
   # compiling Zig. Patching the prebuilt distribution's library cannot change
   # the compiler's baked-in /usr/bin/env probe, which fails in the Nix sandbox.
-  sourceHash = "b6c7f1728f043700d6529bac980800792f824256a9d2f1839b3d62beed0b8abd";
+  sourceHash = "1e89bf06610b769a8c77676c6c8d54b093a0db60f4891f2f91014829012f0e24";
   zig = callPackage (path + "/pkgs/development/compilers/zig/generic.nix") {
-    version = "0.17.0";
+    version = "0.17.1";
     hash = sourceHash;
     llvmPackages = llvmPackages_22;
   };
@@ -16,10 +16,10 @@ zig.overrideAttrs (previous: {
   # Official source archive hash from https://ziglang.org/download/index.json;
   # this replaces the generic recipe's Codeberg source entirely.
   src = fetchurl {
-    url = "https://ziglang.org/download/0.17.0/zig-0.17.0.tar.xz";
+    url = "https://ziglang.org/download/0.17.1/zig-0.17.1.tar.xz";
     sha256 = sourceHash;
   };
-  cmakeFlags = previous.cmakeFlags ++ [ (lib.cmakeFeature "ZIG_VERSION" "0.17.0") ]
+  cmakeFlags = previous.cmakeFlags ++ [ (lib.cmakeFeature "ZIG_VERSION" "0.17.1") ]
     ++ lib.optionals stdenv.hostPlatform.isLinux [
       # A native Zig target embeds the builder's kernel version. Pin the OS
       # minimum and libc from the locked toolchain for reproducible host code.
@@ -46,7 +46,7 @@ zig.overrideAttrs (previous: {
   # generic recipe builds it again using a removed build-runner argument.
   postBuild = "";
   postInstall = ''
-    install -Dm444 stage3/doc/langref.html -t "$doc/share/doc/zig-0.17.0/html"
+    install -Dm444 stage3/doc/langref.html -t "$doc/share/doc/zig-0.17.1/html"
   '' + lib.optionalString stdenv.hostPlatform.isLinux ''
     # An explicit target does not import native NIX_LDFLAGS. These libraries
     # come from the locked recipe; fixup removes unused search directories.
@@ -57,7 +57,7 @@ zig.overrideAttrs (previous: {
     runHook preInstallCheck
     export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-global-cache"
     export ZIG_LOCAL_CACHE_DIR="$TMPDIR/zig-local-cache"
-    test "$($out/bin/zig version)" = "0.17.0"
+    test "$($out/bin/zig version)" = "0.17.1"
     "$out/bin/zig" env
     # Executing a native libc binary also checks the detected dynamic loader.
     printf 'int main(void) { return 0; }\n' > "$TMPDIR/native.c"

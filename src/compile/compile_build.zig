@@ -2542,15 +2542,8 @@ pub const BuildEnv = struct {
 
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
-        /// Hits that restored inference and published current implementation artifacts.
-        inference_cache_hits: u32 = 0,
         /// Producer interface constructions, with no inference hidden in hashing.
         checking_interfaces_built: u32 = 0,
-        /// Dense owner identities explicitly bound when inference was reused.
-        checking_owner_bindings: u32 = 0,
-        checking_reference_bindings: u32 = 0,
-        checking_diagnostics_replayed: u32 = 0,
-
         /// Module compile time tracking (for non-cached modules)
         /// Time is for full module compilation: parse -> canonicalize -> type-check
         module_time_min_ns: u64 = std.math.maxInt(u64),
@@ -2584,6 +2577,14 @@ pub const BuildEnv = struct {
         const coordinator = self.coordinator orelse return;
         const objects = &(coordinator.boxy_objects orelse return);
         try digests.adoptExports(&objects.digests, artifact);
+    }
+
+    /// Transfer the calling contracts of objects already prepared by CTFE
+    /// before the consumer compiles its own units against those objects.
+    pub fn boxyAdoptInterfaces(self: *BuildEnv, interfaces: *eval.CompileTimeFinalization.ExportInterfaces) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try interfaces.copyFrom(objects.interfaces);
     }
 
     pub const BoxyKnownObject = struct {

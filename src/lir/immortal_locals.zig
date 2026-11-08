@@ -4,7 +4,9 @@
 //! refcount word set to `REFCOUNT_STATIC_DATA` (zero), and both `increfRcPtr`
 //! and `decrefRcPtr` return without touching a count when they read that
 //! value. A retain or release on such a value is therefore a call, a load and
-//! a compare that can only ever decide to do nothing.
+//! a compare that can only ever decide to do nothing. A word read from a
+//! `.boxy` type table (`DynOp.table_entry`) is the same: a table is static
+//! data, and every word it holds addresses image data too.
 //!
 //! This is deliberately not an ARC question. ARC still gives these values an
 //! ownership unit, still places the retains and releases, and the debug
@@ -40,7 +42,8 @@ const Body = @import("body_clone.zig");
 
 /// Locals whose every write is a static-backed literal.
 pub const ImmortalLocals = struct {
-    /// Written at least once by a `static_data` or `bytes_literal` literal.
+    /// Written at least once by a `static_data` or `bytes_literal` literal,
+    /// or a type table read.
     static_written: std.DynamicBitSetUnmanaged,
     /// Written by anything other than a static-backed literal. A local several
     /// static literals write on different paths still holds image data on every
@@ -117,6 +120,11 @@ const Pass = struct {
                 .proc_ref,
                 => self.markOther(s.target),
             },
+            // A type table word is image data, as a static-data literal is.
+            .dyn => |s| if (self.store.stmtRow(s.data) == .table_entry)
+                self.markStatic(s.target.?)
+            else
+                Body.visitStmtDefinitions(self.store, self, stmt_id),
             .set_local => |s| self.markOther(s.target),
             inline .store_struct, .store_tag => |s| self.markOther(s.dest),
             .init_uninitialized,
@@ -128,7 +136,6 @@ const Pass = struct {
             .assign_list,
             .assign_struct,
             .assign_tag,
-            .dyn,
             .debug,
             .expect,
             .expect_err,

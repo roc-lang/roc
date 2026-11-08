@@ -89,7 +89,7 @@ def main() -> None:
         (root / "ci/probe.py").write_text(PROBE)
         for name in ("build.zig.zon", "design.md", "legal_details"):
             (root / name).write_text("fixture metadata\n")
-        (root / "build.zig.zon").write_text('.{ .name = .fixture_probe, .version = "0.0.0", .fingerprint = 0xceb1d2ec669ad2f3, .minimum_zig_version = "0.17.0", .paths = .{""} }\n')
+        (root / "build.zig.zon").write_text('.{ .name = .fixture_probe, .version = "0.0.0", .fingerprint = 0xceb1d2ec669ad2f3, .minimum_zig_version = "0.17.1", .paths = .{""} }\n')
         (root / "test/input.roc").write_text("fixture input\n")
         (root / "README.md").write_text("readme string import\n")
         (root / "CONTRIBUTING/profiling/bench_repeated_check_ORIGINAL.roc").write_text("profiling string import\n")

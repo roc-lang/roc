@@ -1067,7 +1067,9 @@ fn noteAddressedOperands(self: *Self, store: *const LirStore, stmt: lir.LIR.CFSt
     switch (stmt) {
         // Writes nothing: the local keeps whatever it held.
         .init_uninitialized => {},
-        .assign_ref => |assign| switch (assign.op.kind) {
+        .assign_ref => |assign| if (store.getLocal(assign.target).dyn != null) {
+            self.noteAllAddressed(store, stmt);
+        } else switch (assign.op.kind) {
             // A copy reads and writes values in either representation.
             .local, .list_reinterpret, .nominal => {},
             // The aggregate is read in memory; the result is a value.

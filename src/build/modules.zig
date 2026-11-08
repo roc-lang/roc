@@ -687,7 +687,6 @@ pub const RocModules = struct {
 
         // `embedded_lld` needs `collections` for the single-threaded arena.
         self.embedded_lld.addImport("collections", self.collections);
-        self.boxy_runtime.addImport("raw_pages", self.raw_pages);
 
         // The vendored Mach-O code-signing helpers use the build-time `tracy`
         // tracing shim.

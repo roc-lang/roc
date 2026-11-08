@@ -18,7 +18,7 @@ Padded := {
     check! : Padded => Str
 
     ## A generic padded nominal: `new` is one body at every `v`, so it builds the
-    ## record from a descriptor it composes at runtime. z@0, four padding bytes,
+    ## record from a descriptor in its type table. z@0, four padding bytes,
     ## value@8, where the structural order would put `value` first.
     Slot(v) := {
         z : U32,

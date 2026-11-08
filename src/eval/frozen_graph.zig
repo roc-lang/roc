@@ -33,8 +33,6 @@ pub const Node = struct {
     bytes: []u8,
     alignment: u32,
     relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
-    /// The evaluated capacities of the empty lists inside the root value.
-    empty_list_capacities: std.ArrayList(static_data.EmptyListCapacity) = .empty,
 };
 
 /// A graph for the root of `slot` in `program`. `AllocationKey` identifies a
@@ -157,14 +155,12 @@ pub fn Graph(comptime AllocationKey: type) type {
                         if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
                     }
                     allocator.free(export_.relocations);
-                    allocator.free(export_.empty_list_capacities);
                 }
                 allocator.free(exports);
             }
             for (self.nodes.items, exports, 0..) |source, *dest, index| {
                 const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
                 errdefer allocator.free(relocations);
-                const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
                 // All names are assigned in a separate pass once every symbol exists.
                 for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
                 dest.* = .{
@@ -175,7 +171,6 @@ pub fn Graph(comptime AllocationKey: type) type {
                     .is_global = false,
                     .is_exported = false,
                     .relocations = relocations,
-                    .empty_list_capacities = capacities,
                 };
                 done += 1;
             }
