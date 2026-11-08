@@ -223,6 +223,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Add a 64-bit argument (a U64 or I64, an i128 half) from a general
+        /// register. At an 8-byte word it fills one register or stack slot,
+        /// as `addRegArg` does. At a 4-byte word the value needs a register
+        /// pair, so `wide64_width` makes this a compile error.
+        pub fn addRegArgWide64(self: *Self, src_reg: GeneralReg) Allocator.Error!void {
+            comptime std.debug.assert(widths.wide64_width == .w64);
+            try self.addRegArg(src_reg);
+        }
+
         /// Add argument by loading a pointer (LEA) to a stack location
         pub fn addLeaArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
@@ -244,6 +253,13 @@ pub fn CallBuilder(comptime EmitType: type) type {
             } else {
                 try self.addImplicitStackArg(.{ .from_mem = .{ .base = base_reg, .offset = offset } });
             }
+        }
+
+        /// Add a 64-bit argument by loading it from stack memory (see
+        /// `addRegArgWide64`).
+        pub fn addMemArgWide64(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            comptime std.debug.assert(widths.wide64_width == .w64);
+            try self.addMemArg(base_reg, offset);
         }
 
         /// Add the RocList stored at `offset` as three consecutive integer-class
@@ -367,6 +383,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
             } else {
                 try self.addImplicitStackArg(.{ .from_imm = value });
             }
+        }
+
+        /// Add a 64-bit immediate argument (see `addRegArgWide64`).
+        pub fn addImmArgWide64(self: *Self, value: i64) Allocator.Error!void {
+            comptime std.debug.assert(widths.wide64_width == .w64);
+            try self.addImmArg(value);
         }
 
         /// Add a float argument from a float register.
