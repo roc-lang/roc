@@ -18,7 +18,6 @@ const wasm32v1_builtins = @import("wasm32v1_builtins");
 
 const Allocator = std.mem.Allocator;
 const object_image = @import("object_image.zig");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 const ExecutableMemory = backend.ExecutableMemory;
 const HostLirCodeGen = backend.HostLirCodeGen;
 const Interpreter = @import("interpreter.zig").Interpreter;
@@ -430,11 +429,6 @@ fn runDev(allocator: Allocator, program: Program) DevError!Result {
         defer allocator.free(ret_buf);
         @memset(ret_buf, 0);
 
-        const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
-        defer if (composition) |owned| owned.destroy();
-        const composing = if (composition) |owned| owned.enter() else null;
-        defer if (composing) |entered| BoxyInProcessState.leave(entered);
-
         var crash_boundary = runtime_env.enterCrashBoundary();
         defer crash_boundary.deinit();
         const entered = builtins.in_process_host.enter(runtime_env.get_ops(), null);
@@ -671,11 +665,6 @@ fn runLlvm(allocator: Allocator, program: Program) LlvmError!Result {
     const ret_buf = try allocator.alignedAlloc(u8, collections.max_roc_alignment, @max(size_align.size, 1));
     defer allocator.free(ret_buf);
     @memset(ret_buf, 0);
-
-    const composition = if (program.store.runtime_contract == .boxy) try BoxyInProcessState.create(allocator) else null;
-    defer if (composition) |owned| owned.destroy();
-    const composing = if (composition) |owned| owned.enter() else null;
-    defer if (composing) |entered| BoxyInProcessState.leave(entered);
 
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();

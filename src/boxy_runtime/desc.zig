@@ -4,13 +4,20 @@
 //! operations a generic body cannot inline (design.md "Type Descriptors").
 //! Descriptors are immutable and immortal. The compiler emits static
 //! descriptors as readonly data with relocations for the target's pointer
-//! width; the runtime composes descriptors in the same format at the native
-//! width. Every struct here is therefore an `extern struct` whose pointer
-//! fields are native pointers, and `ExternLayout` gives the byte offsets of
-//! each field for either pointer width so the compiler emits bytes without
-//! restating the format.
+//! width, and the runtime reads them as these structs at the native width.
+//! Every struct here is therefore an `extern struct` whose pointer fields are
+//! native pointers, and `ExternLayout` gives the byte offsets of each field
+//! for either pointer width so the compiler emits bytes without restating the
+//! format.
 
 const std = @import("std");
+const builtins = @import("builtins");
+const shape = @import("layout_shape");
+
+const SortKey = shape.SortKey;
+const RocStr = builtins.str.RocStr;
+
+const pointer_size: u32 = @sizeOf(usize);
 
 /// What a descriptor describes, and so which of its fields are meaningful.
 pub const Kind = enum(u8) {
@@ -35,7 +42,7 @@ pub const Kind = enum(u8) {
     /// A function value: the data pointer of a boxed erased callable.
     erased_callable,
     /// `child` is the backing descriptor, whose layout this one shares;
-    /// `methods` holds the type's overrides and `name` its name.
+    /// `methods` holds the type's overrides.
     nominal,
     /// The box a layout inserts to break a recursive type. `child` is the
     /// payload; inspection, equality, and hashing see through it.
@@ -97,7 +104,8 @@ pub const Flags = packed struct(u8) {
     _: u3 = 0,
 };
 
-/// A field label, tag name, or nominal type name. Static and immortal.
+/// A field label or tag name, which a names block holds (`Names`). Static
+/// and immortal.
 ///
 /// A name's identity is its content (design.md "Name Identity"): the SHA-256
 /// digest of a label's or tag's text, or of a nominal declaration's declaring
@@ -108,22 +116,16 @@ pub const Name = extern struct {
     /// The content digest, as four little-endian words.
     id: NameId,
     len: u32,
-    /// UTF-8 text, used for ordering and inspection.
+    /// UTF-8 text, which inspection prints.
     bytes: [*]const u8,
 
     pub fn text(self: *const Name) []const u8 {
         return self.bytes[0..self.len];
     }
-
-    /// Whether two names are one name.
-    pub fn eql(a: *const Name, b: *const Name) bool {
-        if (a == b) return true;
-        return a.id[0] == b.id[0] and a.id[1] == b.id[1] and a.id[2] == b.id[2] and a.id[3] == b.id[3];
-    }
 };
 
 /// A name's content digest: 32 bytes as four words, so a comparison is four
-/// word compares and a composition key embeds it as four key words.
+/// word compares.
 pub const NameId = [4]u64;
 
 /// The `NameId` of the 32-byte digest `digest`.
@@ -184,15 +186,11 @@ test "a name id round-trips through its digest and tells names apart by content"
     // module, are different names.
     try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(2), 0, "Point")));
     try std.testing.expect(!std.meta.eql(nominalId(@splat(1), 0, "Point"), nominalId(@splat(1), 1, "Point")));
-    const text = "label";
-    const node_a: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
-    const node_b: Name = .{ .id = labelId(text), .len = text.len, .bytes = text.ptr };
-    try std.testing.expect(node_a.eql(&node_b));
-    const other: Name = .{ .id = labelId("other"), .len = 5, .bytes = "other" };
-    try std.testing.expect(!node_a.eql(&other));
 }
 
-/// An immutable, immortal description of one type's representation.
+/// An immutable, immortal description of one type's representation. It
+/// holds no names: a type's field labels and tag names are in its names block
+/// (`Names`), which only code that prints a value reads.
 pub const TypeDesc = extern struct {
     size: u32,
     /// In bytes.
@@ -216,8 +214,6 @@ pub const TypeDesc = extern struct {
     /// by a u32 count and that many u32 memory-slot indices, in ascending
     /// order, naming exactly its non-padding reference-containing fields.
     entries: ?*const anyopaque,
-    /// A nominal's name.
-    name: ?*const Name,
     /// A nominal's overrides, or a SIMD vector's `to_inspect`.
     methods: ?*const Methods,
 
@@ -282,7 +278,7 @@ pub const TypeDesc = extern struct {
             2 => std.mem.readInt(u16, at[0..2], .little),
             4 => std.mem.readInt(u32, at[0..4], .little),
             8 => @intCast(std.mem.readInt(u64, at[0..8], .little)),
-            else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+            else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
         };
     }
 
@@ -304,8 +300,6 @@ pub const Field = extern struct {
     /// `field_index` equals this entry's own index, so walks in semantic
     /// order need no search.
     field_slot: u32,
-    /// Null for tuple elements and padding.
-    name: ?*const Name,
     desc: *const TypeDesc,
 
     pub fn layout(width: PointerWidth) ExternLayout(Field) {
@@ -318,7 +312,6 @@ pub const Variant = extern struct {
     discriminant: u32,
     /// The number of tag arguments.
     payload_count: u32,
-    name: *const Name,
     /// No arguments: a zero-sized descriptor. One: that argument's
     /// descriptor. More: a `.tuple` descriptor whose element `i` is argument
     /// `i`, laid out structurally.
@@ -344,6 +337,230 @@ pub const Methods = extern struct {
         return externLayout(Methods, width);
     }
 };
+
+// Names blocks.
+
+/// The field labels and tag names of one type, parallel to its descriptor
+/// (design.md "Names Blocks"). Only code that reflects over a type reads
+/// one: inspection prints a value's labels and tag names from it. A type
+/// with no record field or tag in its reach has no names block (null), so a
+/// program that prints no value of a type carries none of its names.
+pub const Names = extern struct {
+    /// Record, tuple: one `NamesEntry` per field, in the descriptor's memory
+    /// order. Tag union: one per variant, in discriminant order.
+    entries: ?*const anyopaque,
+    /// A list element's, box or recursion box payload's, or nominal
+    /// backing's names.
+    child: ?*const Names,
+
+    pub fn entry(self: *const Names, index: usize) *const NamesEntry {
+        const first: [*]const NamesEntry = @ptrCast(@alignCast(self.entries.?));
+        return &first[index];
+    }
+
+    pub fn layout(width: PointerWidth) ExternLayout(Names) {
+        return externLayout(Names, width);
+    }
+};
+
+/// One field's or variant's names.
+pub const NamesEntry = extern struct {
+    /// A record field's label or a variant's tag name; null for a tuple
+    /// element or padding.
+    label: ?*const Name,
+    /// The names of the field's type or the variant's payload.
+    names: ?*const Names,
+
+    pub fn layout(width: PointerWidth) ExternLayout(NamesEntry) {
+        return externLayout(NamesEntry, width);
+    }
+};
+
+// Coercion plans.
+
+/// What one node of a coercion plan does (`AdaptPlan`).
+pub const AdaptKind = enum(u8) {
+    /// Copy `to.size` bytes and retain what they reference: the two sides
+    /// share one representation.
+    copy,
+    /// Wrap the value as `#Present` of the presence slot `to`: write
+    /// `discriminant`, then convert the payload by `child`.
+    wrap,
+    /// Unwrap the presence slot `from`, whose `#Present` is `discriminant`
+    /// (a `#Missing` value crashes), converting the payload by `child`.
+    unwrap,
+    /// Write the `#Missing` discriminant `discriminant` of the presence slot
+    /// `to` over zeroed bytes: a destination field the source lacks.
+    missing,
+    /// Re-tag: `entries` is `from.count` `AdaptVariant`s, one per source
+    /// discriminant, giving the destination's discriminant under `to` and
+    /// the payload's plan. A Bool side is the union `[False, True]`.
+    retag,
+    /// A record or tuple: `entries` is `count` `AdaptField`s, one per
+    /// destination field that is not padding.
+    record,
+    /// A list: each element converted by `child`, from `from.child` to
+    /// `to.child`.
+    list,
+    /// A box or recursion box: its payload converted by `child`, from
+    /// `from.child` to `to.child`.
+    box,
+    /// The two sides describe different kinds of value; reaching it is a
+    /// compiler bug.
+    mismatch,
+};
+
+/// One node of a coercion plan: how a value `from` describes is rebuilt as
+/// the value `to` describes (design.md "Coercion Plans"). The compiler
+/// builds a plan for each pair of descriptors a coercion converts between,
+/// so the conversion follows indices and offsets only.
+pub const AdaptPlan = extern struct {
+    kind: AdaptKind,
+    /// The number of `entries`.
+    count: u32,
+    /// `wrap`, `unwrap`, `missing`: the presence slot's discriminant.
+    discriminant: u32,
+    from: ?*const TypeDesc,
+    to: ?*const TypeDesc,
+    child: ?*const AdaptPlan,
+    /// `[*]const AdaptField` (record) or `[*]const AdaptVariant` (retag).
+    entries: ?*const anyopaque,
+
+    pub fn fields(self: *const AdaptPlan) []const AdaptField {
+        std.debug.assert(self.kind == .record);
+        if (self.count == 0) return &.{};
+        const first: [*]const AdaptField = @ptrCast(@alignCast(self.entries.?));
+        return first[0..self.count];
+    }
+
+    pub fn variants(self: *const AdaptPlan) []const AdaptVariant {
+        std.debug.assert(self.kind == .retag);
+        if (self.count == 0) return &.{};
+        const first: [*]const AdaptVariant = @ptrCast(@alignCast(self.entries.?));
+        return first[0..self.count];
+    }
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptPlan) {
+        return externLayout(AdaptPlan, width);
+    }
+};
+
+/// One destination field of a record plan: the bytes at `from_offset` in
+/// the source become those at `to_offset` in the destination through
+/// `plan`.
+pub const AdaptField = extern struct {
+    to_offset: u32,
+    from_offset: u32,
+    plan: *const AdaptPlan,
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptField) {
+        return externLayout(AdaptField, width);
+    }
+};
+
+/// The destination of one source variant of a re-tag plan: `discriminant`
+/// under the destination's union, its payload converted by `plan` (null for
+/// a variant without arguments). `absent` marks a source variant the
+/// destination's row lacks, which no value reaching the conversion holds.
+pub const AdaptVariant = extern struct {
+    discriminant: u32,
+    plan: ?*const AdaptPlan,
+
+    pub const absent: u32 = std.math.maxInt(u32);
+
+    pub fn layout(width: PointerWidth) ExternLayout(AdaptVariant) {
+        return externLayout(AdaptVariant, width);
+    }
+};
+
+/// A record update plan (`DynOp.record_update`) is one `u32` per memory slot
+/// of the result's record descriptor: for a field the update sets, this
+/// flag and the position of its value among the update's values; for any
+/// other field, the memory slot of the base's field it copies. A padding
+/// slot's entry is unread.
+pub const update_value_flag: u32 = 1 << 31;
+
+// Leaf descriptors.
+
+/// A descriptor of no components: its kind, scalar, shape, and whether its
+/// value holds a reference count.
+pub fn leaf(kind: Kind, scalar: Scalar, size: u32, alignment: u32, sort_key: SortKey, contains_refcounted: bool) TypeDesc {
+    return .{
+        .size = size,
+        .alignment = alignment,
+        .kind = kind,
+        .scalar = scalar,
+        .sort_key = @backingInt(sort_key),
+        .flags = .{ .contains_refcounted = contains_refcounted },
+        .count = 0,
+        .discriminant_offset = 0,
+        .discriminant_size = 0,
+        .child = null,
+        .entries = null,
+        .methods = null,
+    };
+}
+
+const zst_leaf: TypeDesc = leaf(.zst, .u8, 0, 1, .align_1, false);
+const str_leaf: TypeDesc = leaf(.str, .u8, RocStr.word_count * pointer_size, pointer_size, .pointer, true);
+const erased_callable_leaf: TypeDesc = leaf(.erased_callable, .u8, pointer_size, pointer_size, .pointer, true);
+const bool_leaf: TypeDesc = blk: {
+    var bool_desc = leaf(.bool, .u8, 1, 1, .align_1, false);
+    bool_desc.count = 2;
+    bool_desc.discriminant_size = 1;
+    break :blk bool_desc;
+};
+
+fn scalarSize(scalar: Scalar) u32 {
+    return switch (scalar) {
+        .u8, .i8 => 1,
+        .u16, .i16 => 2,
+        .u32, .i32, .f32 => 4,
+        .u64, .i64, .f64 => 8,
+        .u128, .i128, .dec => 16,
+        .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => 16,
+        .opaque_ptr => pointer_size,
+    };
+}
+
+const scalar_leaves = blk: {
+    const scalars = @typeInfo(Scalar).@"enum".field_names;
+    var leaves: [scalars.len]TypeDesc = undefined;
+    for (&leaves, 0..) |*slot, index| {
+        const scalar: Scalar = @fromBackingInt(index);
+        const size = scalarSize(scalar);
+        const sort_key: SortKey = if (scalar == .opaque_ptr) .pointer else SortKey.fromAlignBytes(size);
+        slot.* = leaf(.scalar, scalar, size, size, sort_key, false);
+    }
+    break :blk leaves;
+};
+
+/// The zero-sized descriptor: the empty record, the empty tuple, a
+/// payload-free variant's payload.
+pub fn zstDesc() *const TypeDesc {
+    return &zst_leaf;
+}
+
+/// The descriptor of `Str`.
+pub fn strDesc() *const TypeDesc {
+    return &str_leaf;
+}
+
+/// The descriptor of `Bool`.
+pub fn boolDesc() *const TypeDesc {
+    return &bool_leaf;
+}
+
+/// The descriptor every function value shares.
+pub fn erasedCallableDesc() *const TypeDesc {
+    return &erased_callable_leaf;
+}
+
+/// A scalar's descriptor. A SIMD vector's carries no `to_inspect`; the
+/// compiler emits vector descriptors with theirs.
+pub fn scalarDesc(scalar: Scalar) *const TypeDesc {
+    return &scalar_leaves[@backingInt(scalar)];
+}
 
 /// A target pointer width.
 pub const PointerWidth = enum {
@@ -441,19 +658,24 @@ test "descriptor layouts match the native extern layout" {
     try expectNativeLayout(Variant);
     try expectNativeLayout(Methods);
     try expectNativeLayout(Name);
+    try expectNativeLayout(AdaptPlan);
+    try expectNativeLayout(AdaptField);
+    try expectNativeLayout(AdaptVariant);
+    try expectNativeLayout(Names);
+    try expectNativeLayout(NamesEntry);
 }
 
 test "descriptor layouts at both pointer widths" {
     const t32 = TypeDesc.layout(.u32);
     const t64 = TypeDesc.layout(.u64);
     try std.testing.expectEqual(@as(u32, 24), t32.of(.child));
-    try std.testing.expectEqual(@as(u32, 36), t32.of(.methods));
-    try std.testing.expectEqual(@as(u32, 40), t32.size);
+    try std.testing.expectEqual(@as(u32, 32), t32.of(.methods));
+    try std.testing.expectEqual(@as(u32, 36), t32.size);
     try std.testing.expectEqual(@as(u32, 24), t64.of(.child));
-    try std.testing.expectEqual(@as(u32, 48), t64.of(.methods));
-    try std.testing.expectEqual(@as(u32, 56), t64.size);
-    try std.testing.expectEqual(@as(u32, 24), Field.layout(.u32).size);
-    try std.testing.expectEqual(@as(u32, 32), Field.layout(.u64).size);
-    try std.testing.expectEqual(@as(u32, 16), Variant.layout(.u32).size);
-    try std.testing.expectEqual(@as(u32, 24), Variant.layout(.u64).size);
+    try std.testing.expectEqual(@as(u32, 40), t64.of(.methods));
+    try std.testing.expectEqual(@as(u32, 48), t64.size);
+    try std.testing.expectEqual(@as(u32, 20), Field.layout(.u32).size);
+    try std.testing.expectEqual(@as(u32, 24), Field.layout(.u64).size);
+    try std.testing.expectEqual(@as(u32, 12), Variant.layout(.u32).size);
+    try std.testing.expectEqual(@as(u32, 16), Variant.layout(.u64).size);
 }

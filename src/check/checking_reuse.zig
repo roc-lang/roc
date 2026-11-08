@@ -1,5 +1,5 @@
 //! Publication inputs produced by inference, before evaluation. These records
-//! accompany the solved source in the inference cache; a hit republishes them
+//! accompany the solved source in the combined checking entry; a hit republishes them
 //! against current implementation artifacts.
 
 const std = @import("std");
@@ -46,11 +46,6 @@ pub fn fromChecker(allocator: Allocator, checker: anytype, scope: *const depende
         .outcome = try @import("checking_outcome.zig").capture(allocator, checker, scope),
         .foreign_references = references.items,
     };
-}
-
-/// Validate side-list ranges before installing untrusted cache metadata.
-pub fn validate(self: Self) error{CorruptArtifact}!void {
-    try self.outcome.validate();
 }
 
 /// Restore the owning stage's explicit outputs. Initializing the checker only
@@ -152,11 +147,11 @@ const Binding = struct {
     }
 };
 
-test "inference references require exact producer slots" {
+test "checking reuse references require exact producer slots" {
     try testInferenceReferenceBinding(false);
 }
 
-test "inference reference indexes release partial allocation state" {
+test "checking reuse reference indexes release partial allocation state" {
     try testInferenceReferenceBinding(true);
 }
 
