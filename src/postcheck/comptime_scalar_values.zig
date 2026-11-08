@@ -949,6 +949,9 @@ pub const Decoder = struct {
     /// the capacities its export keeps; null when none of the lists or
     /// strings on its spine was evaluated with spare capacity.
     pub fn decodeFresh(self: *Decoder, data_export: *const Program.StaticDataExport, bytes: []const u8, offset: usize, plan: Program.ConstPlanId, layout_idx: layout.Idx) Allocator.Error!?FreshPart {
+        // The freezer records every spare capacity. Without one, there is
+        // no fresh form to construct, regardless of the value's shape.
+        if (data_export.capacities.len == 0) return null;
         // Nested parts wait in frames on an explicit stack, so a value's
         // nesting never becomes native call depth.
         var frames: std.ArrayList(FreshFrame) = .empty;

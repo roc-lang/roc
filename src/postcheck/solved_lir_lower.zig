@@ -3529,6 +3529,9 @@ const Lowerer = struct {
     /// wait in frames on an explicit stack, so expression nesting never
     /// becomes native call depth.
     fn freshFormOfCandidate(self: *Lowerer, arena: std.mem.Allocator, candidate: Mono.StaticDataCandidate, ty: Type.TypeId, layout_idx: layout.Idx) Common.LowerError!?postcheck_values.FreshPart {
+        // Restoration already records whether the spine has spare capacity;
+        // do not walk and allocate a form that would only be discarded.
+        if (!candidate.fresh_form) return null;
         var frames: std.ArrayList(FreshFrame) = .empty;
         var spare = false;
         var child = FreshChild{ .value = .{ .candidate = candidate }, .ty = ty, .layout_idx = layout_idx };
