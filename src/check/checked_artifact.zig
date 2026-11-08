@@ -1235,9 +1235,10 @@ pub const RootRequestTable = struct {
         }
         for (requests.items) |*request| {
             if (request.root_evidence != null) continue;
-            // An app entry selected for discovery or execution is the same
-            // checked platform invocation, not a second use of its raw scheme.
-            for (platform_solutions, platform_root_evidence) |solution, evidence| {
+            // A direct app entry invokes the checked platform instance. A
+            // compile-time wrapper constructs the value instead; it retains
+            // its own callable type and construction evidence.
+            if (request.compile_time_root == null) for (platform_solutions, platform_root_evidence) |solution, evidence| {
                 if (!solution.is_function or solution.outcome != .success) continue;
                 const matches = switch (request.source) {
                     .def => |def| def == solution.def,
@@ -1249,7 +1250,7 @@ pub const RootRequestTable = struct {
                     checkedArtifactInvariant("platform invocation root type was not published", .{});
                 request.root_evidence = .{ .checked_module = artifact_key.digest(), .span = evidence };
                 break;
-            }
+            };
             if (request.root_evidence != null) continue;
             const template_ref = request.procedure_template orelse
                 aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
