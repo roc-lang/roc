@@ -565,6 +565,7 @@ pub const Builder = struct {
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
+        try program.module(worker.module).bodies().demandIndex();
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
         // A `List(U8)` worker's body, and its lambdas', is lowered with the
@@ -2477,7 +2478,9 @@ pub const Builder = struct {
         const origin_module = default.origin() orelse invariant("a field default has no declaring module");
         const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
             invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+        const default_bodies = self.program.module(module_index).bodies();
+        try default_bodies.demandIndex();
+        const expr = default_bodies.defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
         const worker = try self.program.defaultWorker(module_index, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);

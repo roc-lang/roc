@@ -1786,7 +1786,7 @@ const BoxyObjects = struct {
             },
             .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
         };
-        try self.digests.recordExports(artifact, built.exports);
+        try self.digests.recordExportsDigest(artifact, built.exports_digest);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
         code_stored = true;
@@ -13183,7 +13183,8 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
 
 test "Boxy object record reservation OOM releases the transferred unit" {
     const allocator = std.testing.allocator;
-    const encoded = try boxy_object_cache.encode(allocator, .{
+    var input_entry: boxy_object_cache.Entry = .{
+        .exports_digest = undefined,
         .exports = &.{.{
             .identity = @splat(1),
             .rc_borrowed_params = 0,
@@ -13203,7 +13204,9 @@ test "Boxy object record reservation OOM releases the transferred unit" {
         .image = "image bytes",
         .code_locations = "locations",
         .function_metadata = "metadata",
-    });
+    };
+    input_entry.exports_digest = try boxy_object_cache.exportRecordsDigest(allocator, input_entry.exports);
+    const encoded = try boxy_object_cache.encode(allocator, input_entry);
     defer allocator.free(encoded);
 
     // Reserve the preceding containers before arming failure, so each of
@@ -13251,6 +13254,7 @@ test "Boxy object record reservation OOM releases the transferred unit" {
                 .image = .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .owned },
                 .function_metadata = entry.function_metadata,
                 .exports = entry.exports,
+                .exports_digest = entry.exports_digest,
                 .hosted_symbols = entry.hosted_symbols,
                 .expect_sites = entry.expect_sites,
                 .test_roots = entry.test_roots,

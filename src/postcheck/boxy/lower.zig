@@ -716,6 +716,7 @@ pub const Program = struct {
         const allocator = self.allocator;
         const view = self.module(module_index);
         const bodies = view.bodies();
+        try bodies.demandIndex();
         for (view.view.checked_procedure_templates.dispatch_scopes, 0..) |scope, index| {
             const id: checked.DispatchScopeId = @fromBackingInt(@intCast(index));
             try program.local_scopes.put(allocator, .{ .module = view.index, .expr = scope.checked_expr }, id);
@@ -2589,6 +2590,7 @@ pub const Program = struct {
         const span = table.sites[site_index].runtime_captures;
         const listed = table.runtime_captures[span.start..][0..span.len];
         const bodies = view.bodies();
+        try bodies.demandIndex();
         var kept: std.ArrayList(checked.CheckedCapture) = .empty;
         for (listed) |capture| {
             if (bodies.binder(capture.pattern).is_scheme_alias) continue;
@@ -2602,6 +2604,7 @@ pub const Program = struct {
         const key: WorkerKey = .{ .default = .{ .module = module_index, .expr = expr } };
         if (self.worker_ids.get(key)) |existing| return existing;
         const view = self.module(module_index);
+        try view.bodies().demandIndex();
         const ret = try self.converter().convert(module_index, view.bodies().exprType(expr), .{ .module = module_index, .vars = &.{}, .bound = &.{} });
         const id: WorkerId = @fromBackingInt(@intCast(self.workers.items.len));
         const identity = self.workerIdentity(key);
@@ -3550,6 +3553,7 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
+        try view.bodies().demandIndex();
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
             if (!unitEmitsTemplate(view, template)) continue;
             if (try templateRejected(program, view, template)) continue;

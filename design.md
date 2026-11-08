@@ -14961,7 +14961,15 @@ and Per-Module Output is the invariant that makes it possible:
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, which
-  Per-Module Output makes a function of the module and its imports). There
+  Per-Module Output makes a function of the module and its imports), with
+  the digest of those records (`exportRecordsDigest`). An importer's key
+  folds in the module's export digest, which combines that records digest
+  with its imports' export digests (`Digests.recordExportsDigest`), so a
+  restored object's records are not hashed again. This is a semantic
+  interface digest, never a payload-integrity hash. The v2 export digest
+  composition changes hash bytes; object format 18 invalidates the older
+  entries. Its inputs remain the module's own export records and its imports,
+  never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored object and compares the bytes, so a key that misses an input
@@ -15257,6 +15265,29 @@ source traversal, guessed reachability, or persistent cache. Imports used only
 through linked code do not require their private body indexes. Allocation
 failure propagates, and the index is marked complete only after registration of
 all its records succeeds.
+
+A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
+its bodies reach, the top-level unit owning each, and per-binding declaration
+facts) follows the same rule one level down. It is a pure function of the
+module's CIR and promoted local procedures, so it is built on first demand into
+a write-once slot of the module's `BodyAnalyses`, like every other body fact,
+and is never serialized. Publishing a freshly checked module demands it, since
+publication reads it; installing a cached checked entry does not. A consumer
+demands the index of every module whose bodies it reads before reading any:
+LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
+demand, and platform pairing. Boxy registration and preparation demand none:
+its body-metadata index, worker-body builder, capture reader and default-worker
+consumers demand only their own module. Unit worker seeding demands only the
+modules the unit owns. An import used through linked procedures therefore keeps
+its checked body index unbuilt. Reading the index of a module no consumer
+demanded is a compiler invariant violation. A run whose checked modules all
+come from the cache and that lowers nothing, such as a `roc test` whose every
+outcome is reused, builds no index. The index is not filed in the checked
+entry: it is several bytes per CIR node, so reading it back would cost about
+what building it costs, and a run that lowers nothing would still pay it for
+every module. The export interface digest reads only the number of
+defaulted-field defaults, which it counts from the CIR directly
+(`defaultExprCount`).
 
 #### Error-Type Reachability
 
