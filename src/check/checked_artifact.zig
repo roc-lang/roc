@@ -29655,14 +29655,6 @@ pub const CompileTimeDebugStore = struct {
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
 
-/// The checked roots each evaluated compile-time root's body reads (design.md
-/// "Demand-Driven Compile-Time Evaluation"). A compilation that demands a root
-/// whose value it restores from this module also demands every root listed
-/// here for it, exactly as if it had lowered the root's body itself, so the
-/// demanded set never depends on which values a cache already held.
-///
-/// Rows are dense by root id. A root that was never evaluated has no row
-/// content; its payload says so.
 /// The address spaces whose compilations a module's evaluation results serve
 /// (design.md "Compile-Time Constants").
 pub const EvaluatedAddressSpace = enum(u8) {
@@ -29727,6 +29719,14 @@ test "evaluation results serve the address spaces whose evaluation answers their
     }
 }
 
+/// The checked roots each evaluated compile-time root's body reads (design.md
+/// "Demand-Driven Compile-Time Evaluation"). A compilation that demands a root
+/// whose value it restores from this module also demands every root listed
+/// here for it, exactly as if it had lowered the root's body itself, so the
+/// demanded set never depends on which values a cache already held.
+///
+/// Rows are dense by root id. A root that was never evaluated has no row
+/// content; its payload says so.
 pub const CompileTimeRootReadTable = struct {
     /// A read root, named by its module's identity bytes.
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
