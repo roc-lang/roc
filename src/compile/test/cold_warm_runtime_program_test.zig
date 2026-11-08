@@ -266,6 +266,7 @@ test "strategy root readiness preserves nested callable representations across a
         \\import pf.Echo
         \\make : U64 -> (U64 -> U64)
         \\make = |offset| |value| value + offset
+        \\stored : { first : (U64 -> U64), second : (U64 -> U64) }
         \\stored = {
         \\    dbg "strategy root produced"
         \\    { first: make(7), second: make(11) }
