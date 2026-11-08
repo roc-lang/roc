@@ -27,6 +27,7 @@ const RocList = builtins.list.RocList;
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
+const Widths = @import("widths.zig").Widths;
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
@@ -92,6 +93,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
     const FloatReg = EmitType.FloatReg;
     const machine_abi = EmitType.code_abi;
     const isa = machine_abi.isa();
+    // The register widths, named by kind of value (`widths.zig`).
+    const widths = Widths(machine_abi);
     const is_windows = machine_abi.isWindows();
     const uses_position_based_float_args = switch (isa) {
         .x86_64 => is_windows,
@@ -501,7 +504,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) Allocator.Error!void {
             switch (src) {
                 .from_reg => |reg| {
-                    if (dst != reg) try self.emit.movRegReg(.w64, dst, reg);
+                    if (dst != reg) try self.emit.movRegReg(widths.word_width, dst, reg);
                 },
                 .from_lea => |lea| {
                     switch (isa) {
@@ -855,7 +858,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         },
                         .being_moved => {
                             // CYCLE: save j's source to SCRATCH_REG.
-                            try self.emit.movRegReg(.w64, CC_EMIT.SCRATCH_REG, src_reg);
+                            try self.emit.movRegReg(widths.word_width, CC_EMIT.SCRATCH_REG, src_reg);
                             sources[j] = .{ .from_reg = CC_EMIT.SCRATCH_REG };
                         },
                         .moved => {}, // already handled
