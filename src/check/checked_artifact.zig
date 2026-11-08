@@ -28836,6 +28836,7 @@ const ImportedTemplateClosureContext = struct {
     entry_wrappers: *const EntryWrapperTable,
     const_templates_table: *const ConstTemplateTable,
     resolved_value_refs_table: *const ResolvedValueRefTable,
+    static_dispatch_plans: *const static_dispatch.StaticDispatchPlanTable,
     top_level_bindings: *const TopLevelProcedureBindingTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
     imports: []const PublishImportArtifact,
@@ -28931,6 +28932,7 @@ const ImportedTemplateClosureBuilder = struct {
                 try self.appendResolvedValueRefs(template.resolved_value_refs);
                 try self.appendStaticDispatchPlans(template.static_dispatch_plans);
                 try self.appendDirectProcedureDependencies(template.resolved_value_refs, pending);
+                try self.appendDirectDispatchTargets(template.static_dispatch_plans, pending);
             },
             .direct_dependency => |resolved| {
                 if (try self.appendImportedTemplateClosureForResolvedRef(resolved)) return;
@@ -29043,6 +29045,76 @@ const ImportedTemplateClosureBuilder = struct {
             const raw = @backingInt(ref_id);
             if (raw >= self.context.resolved_value_refs_table.records.len) checkedArtifactInvariant("checked template resolved-ref id was outside table", .{});
             try pending.append(self.context.allocator, .{ .direct_dependency = self.context.resolved_value_refs_table.records[raw].ref });
+        }
+    }
+
+    /// The procedures a template's direct dispatch plans select are its
+    /// dependencies as much as the procedures it names: a method call
+    /// `view.shown()` reaches `View.shown` only through its plan, so without
+    /// this a closure that names no other part of `View` would leave `View`
+    /// out of the lowering input of every module that imports this one. A
+    /// local target's own closure is walked; an imported target is recorded
+    /// as an imported procedure or callable-eval binding is.
+    fn appendDirectDispatchTargets(
+        self: *ImportedTemplateClosureBuilder,
+        table: StaticDispatchPlanTableRef,
+        pending: *std.ArrayListUnmanaged(ClosureStep),
+    ) Allocator.Error!void {
+        const plans = self.context.static_dispatch_plans;
+        var evidence_nodes: std.ArrayListUnmanaged(static_dispatch.EvidenceNodeId) = .empty;
+        defer evidence_nodes.deinit(self.context.allocator);
+        for (plans.template_refs[table.start..][0..table.len]) |plan_id| {
+            switch (plans.plans[@backingInt(plan_id)].resolution) {
+                .direct_closed, .direct_parametric => |direct| try evidence_nodes.append(self.context.allocator, direct.evidence),
+                .direct_pending => |evidence| try evidence_nodes.append(self.context.allocator, evidence),
+                .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
+            }
+        }
+        while (evidence_nodes.pop()) |node_id| {
+            const node = plans.evidenceNode(node_id);
+            switch (node.target.kind) {
+                .procedure => |procedure| {
+                    const target = procedure.template;
+                    if (ModuleId.eql(target.artifact, self.context.artifact_key.digest())) {
+                        try pending.append(self.context.allocator, .{ .template = .{
+                            .ref = target,
+                            .template = self.context.checked_templates.get(target.template),
+                        } });
+                    } else {
+                        _ = try self.checked_procedure_templates.append(self.context.allocator, target);
+                    }
+                },
+                .callable_binding => |binding| {
+                    if (binding.module.eql(self.context.artifact_key.digest())) {
+                        try pending.append(self.context.allocator, .{ .callable_eval_template = binding.template });
+                    } else {
+                        _ = try self.callable_eval_templates.append(self.context.allocator, .{
+                            .artifact = binding.module,
+                            .template = binding.template,
+                        });
+                    }
+                },
+                .local_proc, .structural => {},
+            }
+            switch (node.nested) {
+                .resolved => for (plans.nestedEvidence(node)) |nested| try appendDirectEvidence(self.context.allocator, plans, nested, &evidence_nodes),
+                .from_callable, .through_alias => {},
+            }
+        }
+    }
+
+    fn appendDirectEvidence(
+        allocator: Allocator,
+        plans: *const static_dispatch.StaticDispatchPlanTable,
+        evidence: static_dispatch.CheckedEvidence,
+        evidence_nodes: *std.ArrayListUnmanaged(static_dispatch.EvidenceNodeId),
+    ) Allocator.Error!void {
+        for (plans.evidence_refs[evidence.callable_contracts.start..][0..evidence.callable_contracts.len]) |contract| {
+            try appendDirectEvidence(allocator, plans, contract, evidence_nodes);
+        }
+        switch (evidence.resolution) {
+            .direct => |node_id| try evidence_nodes.append(allocator, node_id),
+            .structural, .checked_error, .unreachable_value, .constraint, .from_callable, .from_scheme => {},
         }
     }
 
@@ -34573,6 +34645,7 @@ pub fn publishFromTypedModule(
         .entry_wrappers = &entry_wrappers,
         .const_templates_table = &const_templates,
         .resolved_value_refs_table = &resolved_value_refs,
+        .static_dispatch_plans = &static_dispatch_plans,
         .top_level_bindings = &top_level_procedure_bindings,
         .platform_required_bindings = &platform_required_bindings,
         .imports = inputs.imports,
