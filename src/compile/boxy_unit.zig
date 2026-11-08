@@ -392,13 +392,15 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
     var restore_scope = lir.CheckedPipeline.PipelineStageScope.begin(unit.config.timing, .boxy_unit_restore);
     defer restore_scope.end();
     if (try restoreMapped(gpa, unit.cache_manager, unit.key, unit.target, unit.interfaces, unit.config.boxy_function_unit != null)) |restored| {
-        defer object_cache.deinitEntryView(gpa, restored.entry);
+        // The view's export records, allocated from `gpa`, move into the
+        // returned `Built`; the view releases everything else it allocated.
+        var entry = restored.entry;
+        defer object_cache.deinitEntryView(gpa, entry);
         // The mapping stays alive as the image's owner; otherwise it is
         // released once the pieces are decoded.
         const keeps_mapping = imageKind(unit.target) != .none;
         defer if (!keeps_mapping) restored.data.deinit(gpa);
         errdefer if (keeps_mapping) restored.data.deinit(gpa);
-        const entry = restored.entry;
         if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: object cache hit for {s} key {s}\n", .{ module_name, &std.fmt.bytesToHex(unit.key.bytes[0..8], .lower) });
         std.debug.assert(entry.image.len != 0 or !keeps_mapping);
         if (dev_diagnostics.isSet(.verify_boxy_object_reuse)) {
@@ -438,14 +440,12 @@ pub fn restoreOrBuild(unit: Unit) BuildError!Built {
         errdefer gpa.free(expect_sites);
         const test_roots = try gpa.dupe(object_cache.TestRootRecord, entry.test_roots);
         errdefer gpa.free(test_roots);
-        const exports = try dupeRecords(gpa, entry.exports);
-        errdefer {
-            for (exports) |record| gpa.free(record.rc_ret_conditions);
-            gpa.free(exports);
-        }
+        const function_metadata = try gpa.dupe(u8, entry.function_metadata);
+        const exports = entry.exports;
+        entry.exports = &.{};
         return .{
             .restored = true,
-            .function_metadata = try gpa.dupe(u8, entry.function_metadata),
+            .function_metadata = function_metadata,
             .pieces = pieces,
             .image = if (keeps_mapping) .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .{ .mapped = restored.data } } else null,
             .hosted_symbols = hosted_symbols,
