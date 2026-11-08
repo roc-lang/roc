@@ -14390,6 +14390,32 @@ descriptor explicitly as an operand:
   `Box` whose payload `desc` describes, and `dyn_slot_store(dst, slot, value,
   desc)` moves the built value into it ("Recursive values" above).
 
+The native dev backend emits five of these operations inline, reading the
+same descriptor fields the runtime helper reads, and calls the helper only
+for the cases listed:
+
+- `dyn_copy` loads `size` and copies a 1-, 2-, 4-, 8-, or 16-byte value with
+  loads and then stores, copies nothing for size 0, and calls `roc_desc_copy`
+  for every other size.
+- `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
+  zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
+- `dyn_field_addr` with an immediate semantic index follows nominal `child`
+  links to the record, reads the field's memory slot from that index's
+  `entries` row, and adds that field's `offset` to the base. A field whose
+  descriptor is a recursion box, and an index held in a `field_index` table
+  word (`LIR.DynIndex.local`), call `roc_desc_field_addr`.
+- `dyn_tag_discriminant` follows nominal `child` links to the union and
+  loads `discriminant_size` bytes at `discriminant_offset`, or yields 0 for
+  size 0. It never calls the runtime.
+- `list_get_unsafe`, `list_map_extract_unsafe`, and `list_move_out_unsafe`
+  with an element descriptor write nothing for a zero-sized item or a list
+  without bytes. Otherwise they copy the item as `dyn_copy` does.
+
+Every other dynamic statement, everything that allocates, and every
+reference count operation calls the runtime. The wasm backend, the LLVM
+backend, and the interpreter call the helpers for these five as well, and
+produce the same bytes.
+
 A literal whose conversion depends on its instance never converts at a type
 the body does not know: its converted value is a literal argument of the
 body ("Literal Arguments"), or the body converts it through its dictionary.
@@ -14764,6 +14790,11 @@ and no table a backend must renumber. Static descriptors, static
 dictionaries, static callables, type tables, and the name table are static
 data of the program, immutable, so the runtime and the code calling it share
 nothing mutable between threads or between programs in one process.
+
+A helper that copies a value's bytes (copy, construction, adaptation, list
+item reads, writes, and sets) copies a 1-, 2-, 4-, 8-, or 16-byte value with
+one load and one store and every other size with `memmove`. Overlapping
+operands therefore copy as `memmove` copies them, whatever the size.
 
 Traversal stacks and other temporary buffers do not escape the operation
 that allocates them. In-process execution allocates these from the

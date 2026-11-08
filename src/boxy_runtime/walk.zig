@@ -140,10 +140,38 @@ pub fn Stack(comptime T: type, comptime inline_count: usize) type {
 
 // Copy.
 
-/// Copy a value's `desc.size` bytes. Reference counts are untouched.
-/// Copy the bytes of a value described by `desc` from `src` to `dst`.
+/// Copy the `desc.size` bytes of a value described by `desc` from `src` to
+/// `dst`. The two may overlap. Reference counts are untouched.
 pub fn copy(desc: *const TypeDesc, dst: [*]u8, src: [*]const u8) void {
-    @memmove(dst[0..desc.size], src[0..desc.size]);
+    copyBytes(dst, src, desc.size);
+}
+
+/// Copy `size` bytes from `src` to `dst`, which may overlap. A 1-, 2-, 4-,
+/// 8-, or 16-byte value is one load and one store; other sizes move through
+/// `@memmove`.
+pub inline fn copyBytes(dst: [*]u8, src: [*]const u8, size: usize) void {
+    switch (size) {
+        0 => {},
+        1 => dst[0] = src[0],
+        2 => copyScalar(u16, dst, src),
+        4 => copyScalar(u32, dst, src),
+        8 => copyScalar(u64, dst, src),
+        16 => copyScalar(u128, dst, src),
+        else => @memmove(dst[0..size], src[0..size]),
+    }
+}
+
+/// Load all of `src`'s `T` before storing it, so overlapping operands copy
+/// as `@memmove` copies them.
+inline fn copyScalar(comptime T: type, dst: [*]u8, src: [*]const u8) void {
+    const value = @as(*align(1) const T, @ptrCast(src)).*;
+    @as(*align(1) T, @ptrCast(dst)).* = value;
+}
+
+/// The builtin list operations' element copy (`list.CopyFallbackFn`) for
+/// elements a descriptor describes: `copyBytes` over the element width.
+pub fn elemCopy(dst: ?[*]u8, src: ?[*]u8, width: usize) callconv(.c) void {
+    copyBytes(dst.?, src.?, width);
 }
 
 // Incref.
