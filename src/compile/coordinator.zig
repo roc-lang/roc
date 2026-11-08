@@ -220,14 +220,16 @@ fn readStageTimer(io: std.Io, timer: *?StageTimer) u64 {
     return 0;
 }
 
-const checked_module_cache_magic = "roc-mod-cache-v12";
+const checked_module_cache_magic = "roc-mod-cache-v13";
 
 // Header: magic, entry-version hash (32), artifact key (32), env-blob length
-// (u64), artifact-blob length (u64), pin-validation stamp (32), and zero bytes
-// up to the next multiple of the 16-byte serialization alignment. The env body
-// follows the header, then zero bytes up to the next aligned offset, then the
-// artifact body, so both bodies are 16-byte aligned wherever the entry is and
-// a cache hit relocates them in place. Checked-module and platform-pairing
+// (u64), artifact-blob length (u64), reports-blob length (u64),
+// pin-validation stamp (32), and zero bytes up to the next multiple of the
+// 16-byte serialization alignment. The env body follows the header, then zero
+// bytes up to the next aligned offset, then the artifact body, then (for an
+// entry with reports) zero bytes up to the next aligned offset and the reports
+// body, so every body is 16-byte aligned wherever the entry is and a cache hit
+// relocates them in place. Checked-module and platform-pairing
 // entries share this envelope; the entry-version hash is
 // `cache_versioning.entryVersionHash` for the entry's kind, so a stale envelope
 // or body is rejected by one admission check.
@@ -238,12 +240,12 @@ const checked_module_cache_magic = "roc-mod-cache-v12";
 // stale or wrong entries, and relocation bounds-checks every marker against the blob.
 // A corrupt-but-right-length body is the only residue, which for a recomputable local
 // cache does not justify hashing the whole blob on every read and write.
-const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 32;
+const checked_module_cache_header_fields_len: usize = checked_module_cache_magic.len + 32 + 32 + 8 + 8 + 8 + 32;
 const checked_module_cache_header_len: usize = std.mem.alignForward(usize, checked_module_cache_header_fields_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits());
 
-/// Zero bytes between an env body of `env_len` bytes and the artifact body.
-fn checkedModuleCacheEnvPadding(env_len: usize) usize {
-    return std.mem.alignForward(usize, env_len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - env_len;
+/// Zero bytes after a body of `len` bytes, so the body after it is aligned.
+fn checkedModuleCacheBodyPadding(len: usize) usize {
+    return std.mem.alignForward(usize, len, CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) - len;
 }
 
 const checked_module_cache_zero_padding: [CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()]u8 = @splat(0);
@@ -261,22 +263,26 @@ const CheckedEnvelopeEntry = enum {
     }
 };
 
-/// A decoded checked-module cache entry's relocatable env and artifact bodies.
+/// A decoded checked-module cache entry's relocatable env, artifact and
+/// reports bodies. An empty reports body is an entry with no reports.
 const CheckedModuleCacheBodies = struct {
     env_body: []const u8,
     artifact_body: []const u8,
+    reports_body: []const u8,
     pin_validation_hash: [32]u8,
 };
 
 /// Write the fixed-size checked-module cache header into the first
 /// `checked_module_cache_header_len` bytes of `dest`. The caller gathers the
-/// relocatable bodies (env blob then artifact blob) into `dest` after the header.
+/// relocatable bodies (env blob, artifact blob, then reports blob, each
+/// padded to the next aligned offset) into `dest` after the header.
 fn writeCheckedModuleCacheHeader(
     comptime entry: CheckedEnvelopeEntry,
     dest: []u8,
     key: check.CheckedArtifact.CheckedModuleArtifactKey,
     env_len: usize,
     artifact_len: usize,
+    reports_len: usize,
     pin_validation_hash: [32]u8,
 ) void {
     var offset: usize = 0;
@@ -289,6 +295,8 @@ fn writeCheckedModuleCacheHeader(
     std.mem.writeInt(u64, dest[offset..][0..8], env_len, .little);
     offset += 8;
     std.mem.writeInt(u64, dest[offset..][0..8], artifact_len, .little);
+    offset += 8;
+    std.mem.writeInt(u64, dest[offset..][0..8], reports_len, .little);
     offset += 8;
     @memcpy(dest[offset..][0..32], &pin_validation_hash);
     offset += 32;
@@ -318,22 +326,30 @@ fn decodeCheckedCacheEnvelope(
     offset += 8;
     const artifact_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
     offset += 8;
+    const reports_len = std.math.cast(usize, std.mem.readInt(u64, bytes[offset..][0..8], .little)) orelse return null;
+    offset += 8;
     const pin_validation_hash = bytes[offset..][0..32].*;
     offset = checked_module_cache_header_len;
 
-    const remaining = bytes.len - offset;
+    var remaining = bytes.len - offset;
     if (env_len > remaining) return null;
-    const env_padding = checkedModuleCacheEnvPadding(env_len);
+    const env_padding = checkedModuleCacheBodyPadding(env_len);
     if (env_padding > remaining - env_len) return null;
-    if (artifact_len != remaining - env_len - env_padding) return null;
+    remaining -= env_len + env_padding;
+    const artifact_padding = if (reports_len == 0) 0 else checkedModuleCacheBodyPadding(artifact_len);
+    if (artifact_len > remaining or artifact_padding > remaining - artifact_len) return null;
+    if (reports_len != remaining - artifact_len - artifact_padding) return null;
 
     const env_body = bytes[offset..][0..env_len];
     offset += env_len + env_padding;
     const artifact_body = bytes[offset..][0..artifact_len];
+    offset += artifact_len + artifact_padding;
+    const reports_body = bytes[offset..][0..reports_len];
 
     return .{
         .env_body = env_body,
         .artifact_body = artifact_body,
+        .reports_body = reports_body,
         .pin_validation_hash = pin_validation_hash,
     };
 }
@@ -342,6 +358,7 @@ fn decodeCheckedModuleCacheEntry(key: CheckedArtifact.CheckedModuleArtifactKey, 
     const bodies = decodeCheckedCacheEnvelope(.checked_module, key, bytes) orelse return null;
     if (bodies.env_body.len < @sizeOf(ModuleEnv.Serialized)) return null;
     if (bodies.artifact_body.len < @sizeOf(CheckedArtifact.CheckedModuleArtifact.Serialized)) return null;
+    if (bodies.reports_body.len != 0 and bodies.reports_body.len < @sizeOf(check.CheckedReports.Serialized)) return null;
     return bodies;
 }
 
@@ -355,17 +372,18 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     const key = checkedModuleCacheTestKey(0xAB);
     const env_len = @sizeOf(ModuleEnv.Serialized);
     const artifact_len = @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized);
-    const total_len = checked_module_cache_header_len + env_len + comptime checkedModuleCacheEnvPadding(env_len) + artifact_len;
+    const total_len = checked_module_cache_header_len + env_len + comptime checkedModuleCacheBodyPadding(env_len) + artifact_len;
     const env_len_offset = checked_module_cache_magic.len + 32 + 32;
     const artifact_len_offset = env_len_offset + 8;
 
     var entry: [total_len]u8 = undefined;
     @memset(&entry, 0);
-    writeCheckedModuleCacheHeader(.checked_module, entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
+    writeCheckedModuleCacheHeader(.checked_module, entry[0..checked_module_cache_header_len], key, env_len, artifact_len, 0, @splat(0));
 
     const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
     try std.testing.expectEqual(@as(usize, env_len), bodies.env_body.len);
     try std.testing.expectEqual(@as(usize, artifact_len), bodies.artifact_body.len);
+    try std.testing.expectEqual(@as(usize, 0), bodies.reports_body.len);
     const alignment = CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits();
     try std.testing.expect(std.mem.isAligned(@intFromPtr(bodies.env_body.ptr) - @intFromPtr(&entry), alignment));
     try std.testing.expect(std.mem.isAligned(@intFromPtr(bodies.artifact_body.ptr) - @intFromPtr(&entry), alignment));
@@ -399,10 +417,33 @@ test "checked module cache header decodes bodies and rejects corrupt envelope" {
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &extra_byte) == null);
 
     var pairing_entry = entry;
-    writeCheckedModuleCacheHeader(.platform_pairing, pairing_entry[0..checked_module_cache_header_len], key, env_len, artifact_len, @splat(0));
+    writeCheckedModuleCacheHeader(.platform_pairing, pairing_entry[0..checked_module_cache_header_len], key, env_len, artifact_len, 0, @splat(0));
     try std.testing.expect(decodeCheckedModuleCacheEntry(key, &pairing_entry) == null);
     try std.testing.expect(decodeCheckedCacheEnvelope(.platform_pairing, key, &pairing_entry) != null);
     try std.testing.expect(decodeCheckedCacheEnvelope(.platform_pairing, key, &entry) == null);
+}
+
+test "checked module cache header places a reports body after the aligned artifact body" {
+    const key = checkedModuleCacheTestKey(0xCD);
+    const env_len = @sizeOf(ModuleEnv.Serialized);
+    const artifact_len = @sizeOf(check.CheckedArtifact.CheckedModuleArtifact.Serialized) + 1;
+    const reports_len = @sizeOf(check.CheckedReports.Serialized);
+    const reports_offset = checked_module_cache_header_len + env_len + comptime checkedModuleCacheBodyPadding(env_len) + artifact_len + checkedModuleCacheBodyPadding(artifact_len);
+    const total_len = reports_offset + reports_len;
+
+    var entry: [total_len]u8 = undefined;
+    @memset(&entry, 0);
+    writeCheckedModuleCacheHeader(.checked_module, entry[0..checked_module_cache_header_len], key, env_len, artifact_len, reports_len, @splat(0));
+
+    const bodies = decodeCheckedModuleCacheEntry(key, &entry) orelse return error.TestExpectedEqual;
+    try std.testing.expectEqual(@as(usize, artifact_len), bodies.artifact_body.len);
+    try std.testing.expectEqual(@as(usize, reports_len), bodies.reports_body.len);
+    try std.testing.expectEqual(@as(usize, reports_offset), @intFromPtr(bodies.reports_body.ptr) - @intFromPtr(&entry));
+
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, entry[0 .. total_len - 1]) == null);
+    var short_reports = entry;
+    writeCheckedModuleCacheHeader(.checked_module, short_reports[0..checked_module_cache_header_len], key, env_len, artifact_len, reports_len - 1, @splat(0));
+    try std.testing.expect(decodeCheckedModuleCacheEntry(key, &short_reports) == null);
 }
 
 const canonicalized_module_cache_magic = "roc-can-cache-v1";
@@ -708,11 +749,10 @@ pub const ModuleState = struct {
     external_dependents: std.ArrayList(ModuleRef),
     /// Diagnostic reports
     reports: std.ArrayList(Report),
-    /// Reports already present before checked-cache lookup: parsing and
-    /// canonicalization produced them, and their own caches reproduce them.
-    /// Checking (including the deferred import drain) and evaluation append
-    /// to the same report list without removing these earlier reports.
-    pre_check_report_count: usize = 0,
+    /// The reports of the checked cache entry this module was loaded from,
+    /// borrowed from that entry, which the module's checked artifact keeps
+    /// alive. Evaluation that reopens the module continues from them.
+    cached_reports: check.CheckedReports = .{},
     /// Minimum dependency depth from root
     depth: u32,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
@@ -746,13 +786,6 @@ pub const ModuleState = struct {
             return semantic.module_env;
         }
         return null;
-    }
-
-    /// Earlier-stage reports have already been replayed before checked-cache
-    /// lookup. Staging and publication allow them, but no new checking or
-    /// evaluation reports, which the checked cache does not replay.
-    fn hasOnlyPreCheckReports(self: *const ModuleState) bool {
-        return self.reports.items.len == self.pre_check_report_count;
     }
 
     pub fn checkedArtifact(self: *ModuleState) ?*check.CheckedArtifact.CheckedModuleArtifact {
@@ -2994,7 +3027,9 @@ pub const Coordinator = struct {
                     // App checking and runtime roots still share one program.
                     var stores = std.ArrayList(PendingStore).empty;
                     defer stores.deinit(self.gpa);
-                    try self.commitPreparedModule(platform_root.mod, &stores);
+                    var report_arena = base.SingleThreadArena.init(self.gpa);
+                    defer report_arena.deinit();
+                    try self.commitPreparedModule(platform_root.mod, &stores, report_arena.allocator());
                     try self.writePendingStores(stores.items);
                 } else {
                     const runtime = self.runtime_lowering;
@@ -3056,7 +3091,7 @@ pub const Coordinator = struct {
         const app = app_root.mod.checkedArtifact().?;
         const platform = platform_root.mod.checkedArtifact().?;
         if (self.tryLoadCachedPlatformPairing(platform, app)) |loaded| {
-            var paired = loaded;
+            var paired = loaded.artifact;
             const paired_ptr = allocateCheckedArtifact(paired) catch |err| {
                 paired.deinitRetainingModuleEnv(self.gpa);
                 return err;
@@ -3067,6 +3102,18 @@ pub const Coordinator = struct {
             try platform_root.mod.replaceWithPairedCheckedArtifact(paired_ptr, &self.retired_checked_artifacts, self.gpa);
             owned = false;
             try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
+            // The pairing's evaluation reports, rendered as the compilation
+            // that stored them rendered them when it committed the pairing.
+            platform_root.mod.cached_reports = loaded.reports;
+            try check.module_reports.appendStored(
+                self.gpa,
+                &platform_root.mod.reports,
+                platform_root.mod.moduleEnv().?,
+                &platform_root.mod.cached_reports,
+                platform_root.mod.path,
+                &.{},
+                null,
+            );
             return;
         }
         self.platform_pairing_count += 1;
@@ -3102,6 +3149,7 @@ pub const Coordinator = struct {
         self.unregisterCheckedArtifact(platform_root.mod);
         try platform_root.mod.replaceWithPairedCheckedArtifact(paired_ptr, &self.retired_checked_artifacts, self.gpa);
         pointer_owned = false;
+        platform_root.mod.cached_reports = .{};
         platform_root.mod.pending_evaluation = state;
         state_owned = false;
         try self.registerCheckedArtifact(platform_root.pkg, platform_root.mod);
@@ -3652,7 +3700,8 @@ pub const Coordinator = struct {
         // (design.md "Demand-Driven Compile-Time Evaluation").
         var reopen = self.packages.iterator();
         while (reopen.next()) |package| {
-            for (package.value_ptr.*.modules.items) |*mod| {
+            const reopen_pkg = package.value_ptr.*;
+            for (reopen_pkg.modules.items) |*mod| {
                 if (mod.pending_evaluation != null) continue;
                 const artifact = mod.checkedArtifact() orelse continue;
                 if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests(self.specialization_strategy)) continue;
@@ -3660,7 +3709,7 @@ pub const Coordinator = struct {
                 // A platform awaiting its app relation finalizes in the pass
                 // that evaluates the platform alone, which demands every root.
                 if (artifact.hasUnboundPlatformRequirements()) coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
-                const state = try UnfinalizedReportDestinations.newState(self);
+                const state = try self.reopenedEvaluationState(reopen_pkg, mod);
                 errdefer state.deinit();
                 try artifact.reopenForEvaluation();
                 mod.pending_evaluation = state;
@@ -3863,7 +3912,9 @@ pub const Coordinator = struct {
         }
         var stores = std.ArrayList(PendingStore).empty;
         defer stores.deinit(self.gpa);
-        for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores);
+        var report_arena = base.SingleThreadArena.init(self.gpa);
+        defer report_arena.deinit();
+        for (entries.items) |entry| try self.commitPreparedModule(entry.mod, &stores, report_arena.allocator());
         try self.writePendingStores(stores.items);
         try unfinalized.commit();
     }
@@ -3885,6 +3936,30 @@ pub const Coordinator = struct {
                 artifact.compile_time_roots.root(root).payload == .pending) count += 1;
         }
         return count;
+    }
+
+    /// The evaluation state of a cached module this compilation reopens: its
+    /// entry's problems, which it already reported, and the imports and
+    /// display names its reports render with, so the reports it adds and the
+    /// entry it writes again are those of one uninterrupted evaluation. A
+    /// pairing's reports render without imports, as when it was composed.
+    fn reopenedEvaluationState(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!*messages.PendingEvaluationState {
+        const state = try UnfinalizedReportDestinations.newState(self);
+        errdefer state.deinit();
+        if (mod.checkedArtifact().?.pairing_arena == null) state.imported_envs = try self.buildTypecheckImportedEnvs(pkg, mod, self.gpa);
+        const stored = &mod.cached_reports;
+        if (stored.isEmpty()) return state;
+        var problems = try stored.instantiateProblems(self.gpa);
+        errdefer problems.deinit();
+        var import_mapping = try stored.instantiateImportMapping(self.gpa);
+        errdefer import_mapping.deinit();
+        state.problems.deinit();
+        state.problems = problems;
+        state.import_mapping.deinit();
+        state.import_mapping = import_mapping;
+        state.reported_problem_count = problems.problems.items.len;
+        state.checking = stored.*;
+        return state;
     }
 
     /// Report destinations for checked modules whose finalization completed
@@ -3997,9 +4072,10 @@ pub const Coordinator = struct {
         coordinator: *Coordinator,
         mod: *ModuleState,
         artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+        reports: check.CheckedReports,
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *PendingStore = @ptrCast(@alignCast(context));
-            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact);
+            self.coordinator.storeCheckedModuleInCache(self.mod, self.artifact, &self.reports);
             return null;
         }
     };
@@ -4025,7 +4101,21 @@ pub const Coordinator = struct {
         }
     }
 
-    fn commitPreparedModule(self: *Coordinator, mod: *ModuleState, stores: *std.ArrayList(PendingStore)) CoordinatorError!void {
+    /// Whether any requested root of `artifact` is unevaluated under some
+    /// specialization strategy, so a later compilation can reopen it.
+    fn hasUnevaluatedRequestsUnderAnyStrategy(artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
+        for (artifact.root_requests.compile_time_requests) |request| {
+            const root = request.compile_time_root orelse continue;
+            const payload = artifact.compile_time_roots.root(root).payload;
+            if (payload == .unevaluated or payload == .pending) return true;
+        }
+        return false;
+    }
+
+    /// Commit a finalized module and, when its checked entry can reproduce
+    /// everything it reported, queue that entry's write. `report_arena` holds
+    /// the queued entries' reports until they are written.
+    fn commitPreparedModule(self: *Coordinator, mod: *ModuleState, stores: *std.ArrayList(PendingStore), report_arena: Allocator) CoordinatorError!void {
         const state = mod.pending_evaluation.?;
         const artifact = mod.checkedArtifact().?;
         try eval.CompileTimeFinalization.finishPendingExhaustiveness(artifact, &state.problems);
@@ -4057,16 +4147,29 @@ pub const Coordinator = struct {
         // compilation evaluated roots it lacked.
         const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact, self.specialization_strategy) < before else true;
         mod.reopened_unevaluated = null;
-        if (mod.hasOnlyPreCheckReports() and evaluated_more) {
+        // The entry reproduces every report checking and evaluation added;
+        // a problem it cannot reproduce (`unreproducible_reports`) keeps it
+        // from being written. Evaluation reports
+        // are stored only once no later compilation can reopen the entry, so
+        // a hit never adds evaluation reports after stored ones in an order
+        // a single evaluation would not produce.
+        const checking_count = state.checking.checking_problem_count;
+        const evaluation_reported = state.problems.problems.items.len != checking_count;
+        const reproducible = !state.problems.unreproducible_reports and
+            !(evaluation_reported and hasUnevaluatedRequestsUnderAnyStrategy(artifact));
+        if (reproducible and evaluated_more and self.cacheEnabled()) {
+            const reports: check.CheckedReports = if (state.problems.problems.items.len == 0)
+                .{}
+            else
+                try check.CheckedReports.fromStore(report_arena, state.checking.outcome, @intCast(checking_count), &state.problems, &state.import_mapping);
             if (artifact.pairing_arena == null) {
-                if (self.cacheEnabled()) {
-                    try stores.append(self.gpa, .{
-                        .coordinator = self,
-                        .mod = mod,
-                        .artifact = artifact,
-                    });
-                }
-            } else self.storePlatformPairingInCache(artifact);
+                try stores.append(self.gpa, .{
+                    .coordinator = self,
+                    .mod = mod,
+                    .artifact = artifact,
+                    .reports = reports,
+                });
+            } else self.storePlatformPairingInCache(artifact, &reports);
         }
         state.deinit();
         mod.pending_evaluation = null;
@@ -4703,7 +4806,7 @@ pub const Coordinator = struct {
         return true;
     }
 
-    fn storePlatformPairingInCache(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact) void {
+    fn storePlatformPairingInCache(self: *Coordinator, artifact: *const CheckedArtifact.CheckedModuleArtifact, reports: *const check.CheckedReports) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
         const app_root = self.findRootModule(.app) orelse self.findRootModule(.default_app).?;
@@ -4725,16 +4828,36 @@ pub const Coordinator = struct {
             manager.recordStoreFailure();
             return;
         };
-        const bytes = allocator.alloc(u8, checked_module_cache_header_len + writer.total_bytes) catch {
+        var reports_writer = CompactWriter.init();
+        if (!reports.isEmpty()) serializeForCache(check.CheckedReports, reports, &reports_writer, allocator) catch {
             manager.recordStoreFailure();
             return;
         };
-        writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
-        _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable; // bytes was allocated with writer.total_bytes after the header
+        const artifact_len = writer.total_bytes;
+        const reports_len = reports_writer.total_bytes;
+        const artifact_padding = if (reports_len == 0) 0 else checkedModuleCacheBodyPadding(artifact_len);
+        const bytes = allocator.alloc(u8, checked_module_cache_header_len + artifact_len + artifact_padding + reports_len) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+        writeCheckedModuleCacheHeader(.platform_pairing, bytes[0..checked_module_cache_header_len], key, 0, artifact_len, reports_len, @splat(0));
+        var offset: usize = checked_module_cache_header_len;
+        _ = writer.writeToBuffer(bytes[offset..][0..artifact_len]) catch unreachable; // bytes was allocated with every body's length after the header
+        offset += artifact_len;
+        @memset(bytes[offset..][0..artifact_padding], 0);
+        offset += artifact_padding;
+        if (reports_len != 0) _ = reports_writer.writeToBuffer(bytes[offset..][0..reports_len]) catch unreachable; // bytes was allocated with every body's length after the header
         manager.storeFamilyBytes(.pairing, key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
-    fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
+    /// A platform pairing loaded from its cache entry, with the reports its
+    /// evaluation produced, which live in the pairing's arena.
+    const CachedPlatformPairing = struct {
+        artifact: CheckedArtifact.CheckedModuleArtifact,
+        reports: check.CheckedReports,
+    };
+
+    fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CachedPlatformPairing {
         const manager = self.cache_manager orelse return null;
         if (!manager.config.enabled) return null;
         const directory = self.cache_entry_dirs.platform_pairing orelse return null;
@@ -4763,6 +4886,13 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return null;
         };
+        const reports = loadCachedReports(arena.allocator(), bodies.reports_body) catch |err| switch (err) {
+            error.OutOfMemory => return null,
+            error.CorruptArtifact => {
+                manager.stats.recordInvalidation();
+                return null;
+            },
+        };
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
         const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.typeRootCount(platform)) catch return null;
         const body_analyses = CheckedArtifact.BodyAnalyses.create(
@@ -4775,12 +4905,28 @@ pub const Coordinator = struct {
             return null;
         };
         installed = true;
-        return header.install(platform, arena, synthesized_keys, body_analyses);
+        return .{ .artifact = header.install(platform, arena, synthesized_keys, body_analyses), .reports = reports };
+    }
+
+    /// Relocate a cache entry's reports body. A body in a mapped or owned
+    /// entry is relocated in place; `copy_into`, when given, receives a copy
+    /// to relocate instead, for an entry released after loading.
+    fn loadCachedReports(copy_into: ?Allocator, body: []const u8) (Allocator.Error || error{CorruptArtifact})!check.CheckedReports {
+        if (body.len == 0) return .{};
+        if (body.len < @sizeOf(check.CheckedReports.Serialized)) return error.CorruptArtifact;
+        const buffer = if (copy_into) |allocator| blk: {
+            const owned = try allocator.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, body.len);
+            @memcpy(owned, body);
+            break :blk owned;
+        } else writableCacheBody(body);
+        const serialized: *const check.CheckedReports.Serialized = @ptrCast(buffer.ptr);
+        try check.validateSerialized(check.CheckedReports.Serialized, serialized, buffer.len);
+        return serialized.deserialize(@intFromPtr(buffer.ptr));
     }
 
     /// Write `artifact`'s checked entry. This reads none of the module's
     /// mutable state, so it runs on any thread.
-    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) void {
+    fn storeCheckedModuleInCache(self: *Coordinator, mod: *const ModuleState, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, reports: *const check.CheckedReports) void {
         const manager = self.cache_manager orelse return;
         if (!manager.config.enabled) return;
 
@@ -4808,8 +4954,15 @@ pub const Coordinator = struct {
             return;
         };
 
+        var reports_writer = CompactWriter.init();
+        if (!reports.isEmpty()) serializeForCache(check.CheckedReports, reports, &reports_writer, arena_alloc) catch {
+            manager.recordStoreFailure();
+            return;
+        };
+
         const env_len = env_writer.total_bytes;
         const artifact_len = artifact_writer.total_bytes;
+        const reports_len = reports_writer.total_bytes;
 
         var header: [checked_module_cache_header_len]u8 = undefined;
         writeCheckedModuleCacheHeader(
@@ -4818,6 +4971,7 @@ pub const Coordinator = struct {
             artifact.key,
             env_len,
             artifact_len,
+            reports_len,
             canonicalized_cache_entry.pinValidationHash(mod.has_source_version_pin, self.source_pin_version),
         );
         const Entry = struct {
@@ -4825,6 +4979,8 @@ pub const Coordinator = struct {
             env: *const CompactWriter,
             env_padding: []const u8,
             artifact: *const CompactWriter,
+            artifact_padding: []const u8,
+            reports: *const CompactWriter,
 
             fn write(raw: *const anyopaque, destination: *std.Io.Writer) std.Io.Writer.Error!void {
                 const entry: *const @This() = @ptrCast(@alignCast(raw));
@@ -4832,14 +4988,24 @@ pub const Coordinator = struct {
                 try entry.env.writeTo(destination);
                 try destination.writeAll(entry.env_padding);
                 try entry.artifact.writeTo(destination);
+                try destination.writeAll(entry.artifact_padding);
+                try entry.reports.writeTo(destination);
             }
         };
-        const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheEnvPadding(env_len)];
-        const entry = Entry{ .header = &header, .env = &env_writer, .env_padding = env_padding, .artifact = &artifact_writer };
+        const env_padding = checked_module_cache_zero_padding[0..checkedModuleCacheBodyPadding(env_len)];
+        const artifact_padding = checked_module_cache_zero_padding[0..if (reports_len == 0) 0 else checkedModuleCacheBodyPadding(artifact_len)];
+        const entry = Entry{
+            .header = &header,
+            .env = &env_writer,
+            .env_padding = env_padding,
+            .artifact = &artifact_writer,
+            .artifact_padding = artifact_padding,
+            .reports = &reports_writer,
+        };
         manager.storeStream(
             artifact.key.bytes,
             .{ .context = &entry, .write = Entry.write },
-            header.len + env_len + env_padding.len + artifact_len,
+            header.len + env_len + env_padding.len + artifact_len + artifact_padding.len + reports_len,
             entries_dir,
             artifact.moduleEnvConst().module_name,
         );
@@ -4976,6 +5142,10 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return false;
         }
+        const cached_reports = loadCachedReports(null, bodies.reports_body) catch {
+            manager.stats.recordInvalidation();
+            return false;
+        };
 
         // Reserve everything publication needs, so nothing after the artifact
         // takes ownership of the entry and source can fail.
@@ -5064,6 +5234,7 @@ pub const Coordinator = struct {
         }
         semantic.module_env = cached_env;
         semantic.checked_artifact = artifact_ptr;
+        mod.cached_reports = cached_reports;
         self.registerReservedCheckedArtifact(pkg, mod);
 
         if (!old_had_artifact) {
@@ -5234,6 +5405,22 @@ pub const Coordinator = struct {
                 }
             }
         }
+    }
+
+    /// Report what a checked-cache hit's checking and evaluation reported, in
+    /// the order and form the compilation that stored the entry reported it:
+    /// the diagnostics import resolution recorded after canonicalization's
+    /// `canonicalize_diagnostics`, then the entry's stored problems.
+    fn replayCachedCheckedReports(
+        self: *Coordinator,
+        mod: *ModuleState,
+        canonicalize_diagnostics: u32,
+        imported_envs: []const *ModuleEnv,
+        platform_requirement_source: ?check.report.PlatformRequirementSource,
+    ) Allocator.Error!void {
+        const env = mod.moduleEnv().?;
+        try check.module_reports.appendCanonicalize(self.gpa, &mod.reports, env, canonicalize_diagnostics, mod.path);
+        try check.module_reports.appendStored(self.gpa, &mod.reports, env, &mod.cached_reports, mod.path, imported_envs, platform_requirement_source);
     }
 
     fn finishCachedModule(self: *Coordinator, pkg: *PackageState, mod: *ModuleState) Allocator.Error!void {
@@ -5872,10 +6059,11 @@ pub const Coordinator = struct {
         // The checked-cache key needs only the direct imports, so the probe
         // runs before the availability walk, which only checking consumes.
         // Earlier-stage diagnostics are a function of the same source the
-        // cache key names, so they never prevent reuse. A stored entry is one
-        // whose checking and evaluation reported nothing further.
-        mod.pre_check_report_count = mod.reports.items.len;
+        // cache key names and their own caches reproduce them. A hit reports
+        // what checking and evaluation reported, from the entry.
+        const canonicalize_diagnostics = mod.moduleEnv().?.diagnosticCount();
         if (self.tryLoadCachedCheckedModule(pkg, mod, imported_artifacts, platform_requirement_context, explicit_roots)) {
+            try self.replayCachedCheckedReports(mod, canonicalize_diagnostics, imported_envs, if (platform_surface) |surface| .{ .env = surface.env, .filename = surface.path } else null);
             task_payload_alloc.free(imported_envs);
             task_payload_alloc.free(imported_artifacts);
             task_payload_alloc.free(explicit_roots);
@@ -6058,6 +6246,7 @@ pub const Coordinator = struct {
         try self.registerCheckedArtifact(pkg, mod);
         if (self.moduleIsPlatformRoot(mod)) self.platform_root_publish_count += 1;
 
+        mod.cached_reports = .{};
         if (result.semantic.pending_evaluation) |state| {
             if (mod.pending_evaluation) |old| old.deinit();
             mod.pending_evaluation = state;
@@ -7469,6 +7658,20 @@ pub const Coordinator = struct {
         {
             const retained_envs = try result_alloc.dupe(*ModuleEnv, task.imported_envs);
             errdefer result_alloc.free(retained_envs);
+            // The module's checked entry renders checking's problems again
+            // with the snapshots and regions the checker is about to release.
+            var checking_arena: ?*base.SingleThreadArena = null;
+            errdefer if (checking_arena) |arena| {
+                arena.deinit();
+                result_alloc.destroy(arena);
+            };
+            var checking_outcome: check.CheckedReports.Outcome = .{};
+            if (self.cacheEnabled() and typecheck_output.checker.problems.problems.items.len != 0) {
+                const arena = try result_alloc.create(base.SingleThreadArena);
+                arena.* = base.SingleThreadArena.init(result_alloc);
+                checking_arena = arena;
+                checking_outcome = try check.CheckedReports.captureChecking(arena.allocator(), &typecheck_output.checker);
+            }
             const state = try result_alloc.create(messages.PendingEvaluationState);
             state.* = .{
                 .allocator = result_alloc,
@@ -7476,7 +7679,13 @@ pub const Coordinator = struct {
                 .import_mapping = typecheck_output.checker.import_mapping,
                 .imported_envs = retained_envs,
                 .reported_problem_count = typecheck_output.checker.problems.problems.items.len,
+                .checking = .{
+                    .checking_problem_count = typecheck_output.checker.problems.problems.items.len,
+                    .outcome = checking_outcome,
+                },
+                .checking_arena = checking_arena,
             };
+            checking_arena = null;
             typecheck_output.checker.problems = check.problem.Store.initEmpty(result_alloc);
             typecheck_output.checker.import_mapping = @import("types").import_mapping.ImportMapping.init(result_alloc);
             pending_evaluation = state;
@@ -7766,7 +7975,22 @@ fn compileAppFactsWithPinVersion(
     app_path: []const u8,
     source_pin_version: ?[]const u8,
 ) CheckedModuleCacheRunError!CompiledBuildFacts {
-    return compileAppFactsWithWorkers(allocator, cache_dir, app_path, source_pin_version, 1);
+    return compileAppFactsWithWorkers(allocator, cache_dir, app_path, source_pin_version, 1, .error_free);
+}
+
+/// Which builds finish their checked program. A build with user errors
+/// publishes no executable artifacts, but `BuildEnv` still finalizes every
+/// checked module's compile-time work, which is what writes checked entries.
+const FinishCheckedProgram = enum { error_free, always };
+
+/// `compileAppFacts` for a build that finishes its checked program even when
+/// it has user errors, as `BuildEnv` does.
+fn compileAppFactsFinishingWithErrors(
+    allocator: Allocator,
+    cache_dir: ?[]const u8,
+    app_path: []const u8,
+) CheckedModuleCacheRunError!CompiledBuildFacts {
+    return compileAppFactsWithWorkers(allocator, cache_dir, app_path, null, 1, .always);
 }
 
 fn compileAppFactsWithWorkers(
@@ -7775,6 +7999,7 @@ fn compileAppFactsWithWorkers(
     app_path: []const u8,
     source_pin_version: ?[]const u8,
     workers: u32,
+    finish: FinishCheckedProgram,
 ) CheckedModuleCacheRunError!CompiledBuildFacts {
     const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
     var cache_manager = CacheManager.init(allocator, .{
@@ -7809,7 +8034,10 @@ fn compileAppFactsWithWorkers(
     // A build with user errors publishes no executable artifacts; its reports
     // and whatever it did check are still exactly what must not depend on the
     // cache.
-    if (!coord.hasUserErrors()) try coord.finishCheckedProgram(.executable_artifacts);
+    switch (finish) {
+        .error_free => if (!coord.hasUserErrors()) try coord.finishCheckedProgram(.executable_artifacts),
+        .always => try coord.finishCheckedProgram(.executable_artifacts),
+    }
 
     var report_lines = std.ArrayList([]const u8).empty;
     defer report_lines.deinit(arena);
@@ -10584,7 +10812,7 @@ test "issue 12592: a dependency test edit preserves importer checking results" {
     try std.testing.expectEqualStrings("", cold.reports);
     try std.testing.expectEqual(@as(u32, 0), cold.build.cache_hits);
 
-    var concurrent = try compileAppFactsWithWorkers(allocator, null, app_path, null, 4);
+    var concurrent = try compileAppFactsWithWorkers(allocator, null, app_path, null, 4, .error_free);
     defer concurrent.deinit(allocator);
     try std.testing.expectEqualStrings(cold.reports, concurrent.reports);
     try std.testing.expectEqualSlices([32]u8, cold.artifact_digests, concurrent.artifact_digests);
@@ -11226,6 +11454,93 @@ test "canonicalized module cache reproduces parse-error reports on a hit" {
     // snippets and all, from the entry's recorded diagnostics.
     try std.testing.expectEqualStrings(cold.reports, warm.reports);
     try std.testing.expectEqualStrings(cold.reports, uncached.reports);
+}
+
+/// Compile `helper_source` as the `Helper` module an app imports, cold, warm
+/// and with no cache, and require the warm build to hit the checked cache for
+/// every module and to report exactly what the cold and uncached builds do.
+fn expectWarmCheckedHitReproducesReports(
+    sub_dir: []const u8,
+    helper_source: []const u8,
+    expected_title: []const u8,
+    has_errors: bool,
+) (CheckedModuleCacheRunError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError || std.Io.Writer.Error || error{TestExpectedEqual})!void {
+    const allocator = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "cache");
+    const cache_dir = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache_dir);
+    try writeImporterFixture(&tmp_dir, sub_dir, helper_source);
+    var path_buf: [256]u8 = undefined;
+    var path_writer = std.Io.Writer.fixed(&path_buf);
+    try path_writer.print("{s}/app/main.roc", .{sub_dir});
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, path_writer.buffered(), allocator);
+    defer allocator.free(app_path);
+
+    var cold = try compileAppFactsFinishingWithErrors(allocator, cache_dir, app_path);
+    defer cold.deinit(allocator);
+    try std.testing.expect(std.mem.find(u8, cold.reports, expected_title) != null);
+    try std.testing.expectEqual(has_errors, cold.has_errors);
+
+    var warm = try compileAppFactsFinishingWithErrors(allocator, cache_dir, app_path);
+    defer warm.deinit(allocator);
+    // Every module, the one that reported and the app that imports it, is
+    // loaded from its checked entry rather than checked again.
+    try std.testing.expectEqual(@as(u32, 0), warm.build.modules_compiled);
+    try std.testing.expectEqual(@as(u64, 0), warm.cache.misses);
+    try std.testing.expectEqual(@as(u64, 0), warm.cache.inference_hits);
+    for (warm.checking) |facts| {
+        try std.testing.expectEqual(@as(u32, 0), facts.inference_runs);
+        try std.testing.expectEqual(@as(u32, 0), facts.inference_hits);
+    }
+
+    var uncached = try compileAppFactsFinishingWithErrors(allocator, null, app_path);
+    defer uncached.deinit(allocator);
+
+    // Each module's reports, in order, byte for byte.
+    try std.testing.expectEqualStrings(cold.reports, warm.reports);
+    try std.testing.expectEqualStrings(cold.reports, uncached.reports);
+    try std.testing.expectEqual(cold.has_errors, warm.has_errors);
+    try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, warm.artifact_keys);
+}
+
+test "checked module cache hit reproduces a checking warning" {
+    try expectWarmCheckedHitReproducesReports("checking_warning",
+        \\Helper := {}.{
+        \\    func = |x, y| {
+        \\        add_x = |a| a.plus(x)
+        \\        add_y = |b| b.plus(y)
+        \\        add_x(5).plus(add_y(5))
+        \\    }
+        \\
+        \\    message : Str
+        \\    message = "from helper"
+        \\}
+    , "Literal Defaulted", false);
+}
+
+test "checked module cache hit reproduces a type error and its importer's reports" {
+    // The app prints `Helper.message`, the value checking rejected, so the
+    // importer's own checking and evaluation read code with a type error.
+    try expectWarmCheckedHitReproducesReports("type_error",
+        \\Helper := {}.{
+        \\    message : Str
+        \\    message = Str.concat("from ", 42)
+        \\}
+    , "Type Mismatch", true);
+}
+
+test "checked module cache hit reproduces a compile-time evaluation failure" {
+    try expectWarmCheckedHitReproducesReports("evaluation_crash",
+        \\Helper := {}.{
+        \\    message : Str
+        \\    message = {
+        \\        crash "the helper message is unavailable"
+        \\    }
+        \\}
+    , "the helper message is unavailable", true);
 }
 
 test "Coordinator basic initialization" {

@@ -384,11 +384,22 @@ pub const PendingEvaluationState = struct {
     import_mapping: @import("types").import_mapping.ImportMapping,
     imported_envs: []const *ModuleEnv,
     reported_problem_count: usize,
+    /// How many of `problems` checking reported, and the snapshots and regions
+    /// they render with, for the module's checked cache entry. Its problem
+    /// columns are unused: the entry takes them from `problems`.
+    checking: check.CheckedReports = .{},
+    /// Owns `checking`'s columns when this compilation captured them; a
+    /// reopened module borrows them from the entry it was loaded from.
+    checking_arena: ?*@import("base").SingleThreadArena = null,
 
     pub fn deinit(self: *PendingEvaluationState) void {
         self.problems.deinit();
         self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
+        if (self.checking_arena) |arena| {
+            arena.deinit();
+            self.allocator.destroy(arena);
+        }
         self.allocator.destroy(self);
     }
 };

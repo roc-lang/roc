@@ -76,7 +76,8 @@ fn appendText(allocator: Allocator, text: *std.ArrayList(u8), bytes: []const u8)
 
 /// Borrow checker storage until serialization; flatten pointer-bearing strings
 /// and multi-lists into arena-owned arrays with deterministic index order.
-pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+/// A capture without a dependency scope records no foreign source origins.
+pub fn capture(allocator: Allocator, checker: anytype, scope: ?*const dependencies.Scope) Allocator.Error!Self {
     const snapshots = &checker.snapshots;
     var text = std.ArrayList(u8).empty;
     var tags = std.ArrayList(Tag).empty;
@@ -94,10 +95,10 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
     var sources = std.ArrayList(Source).empty;
     // Platform diagnostics can retain a platform-side source region. Pin that
     // declared provenance to the current platform source before replay.
-    if (checker.problems.problems.items.len != 0) if (checker.platform_requirements) |requirements| {
+    if (scope) |dependency_scope| if (checker.problems.problems.items.len != 0) if (checker.platform_requirements) |requirements| {
         var hash: [32]u8 = undefined;
         base.Sha256.hash(requirements.env.common.source, &hash, .{});
-        try sources.append(allocator, .{ .owner = scope.ordinal(requirements.env.contentIdentityHash().?.*), .digest = hash });
+        try sources.append(allocator, .{ .owner = dependency_scope.ordinal(requirements.env.contentIdentityHash().?.*), .digest = hash });
     };
     return .{
         .status = if (checker.problems.problems.items.len != 0 or checker.cir.diagnosticCount() != 0) .with_diagnostics else .diagnostic_free,
@@ -149,14 +150,24 @@ fn validateText(self: Self, range: Text) error{CorruptArtifact}!void {
 /// Restore exactly the pre-publication problem store, including deferred
 /// exhaustiveness recipes. Ordinary publication and reporting decide failures.
 pub fn install(self: Self, checker: anytype) Allocator.Error!void {
-    const allocator = checker.gpa;
-    try checker.problems.problems.appendSlice(allocator, self.problems);
-    try checker.problems.pending_static_exhaustiveness.appendSlice(allocator, self.pending);
-    try checker.problems.extra_strings_backing.appendSlice(self.extra_strings);
-    try checker.problems.missing_patterns_backing.appendSlice(self.missing_patterns);
+    try self.installProblems(&checker.problems);
     checker.regions.items.clearRetainingCapacity();
-    _ = try checker.regions.appendSlice(allocator, self.regions);
-    const snapshots = &checker.snapshots;
+    try self.installRendering(checker.gpa, &checker.snapshots, &checker.regions);
+}
+
+/// Append the stored problems, deferred exhaustiveness recipes and the strings
+/// they name to `store`.
+pub fn installProblems(self: Self, store: *problem.Store) Allocator.Error!void {
+    try store.problems.appendSlice(store.gpa, self.problems);
+    try store.pending_static_exhaustiveness.appendSlice(store.gpa, self.pending);
+    try store.extra_strings_backing.appendSlice(self.extra_strings);
+    try store.missing_patterns_backing.appendSlice(self.missing_patterns);
+}
+
+/// Fill an empty snapshot store and region list with the snapshots and
+/// regions the stored problems render with.
+pub fn installRendering(self: Self, allocator: Allocator, snapshots: *snapshot.Store, regions: *base.Region.List) Allocator.Error!void {
+    _ = try regions.appendSlice(allocator, self.regions);
     _ = try snapshots.contents.appendSlice(allocator, self.contents);
     _ = try snapshots.content_indexes.appendSlice(allocator, self.content_indexes);
     _ = try snapshots.record_fields.appendSlice(allocator, self.record_fields);

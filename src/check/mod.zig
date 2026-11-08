@@ -40,6 +40,9 @@ pub const BodyAnalyses = @import("body_analyses.zig");
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
 pub const InferenceOutput = @import("inference_output.zig");
+/// The reports a checked module's checking and evaluation produced, stored
+/// with its checked cache entry.
+pub const CheckedReports = @import("checked_reports.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
@@ -59,6 +62,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("checking_dependencies.zig"));
     std.testing.refAllDecls(@import("checking_interface.zig"));
     std.testing.refAllDecls(@import("inference_output.zig"));
+    std.testing.refAllDecls(@import("checked_reports.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("exhaustiveness_context.zig"));
