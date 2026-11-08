@@ -172,6 +172,7 @@ pub const ExportInterfaces = struct {
         while (entries.next()) |entry| {
             var owned = entry.value_ptr.*;
             owned.rc_ret_conditions = try self.arena.allocator().dupe(u32, owned.rc_ret_conditions);
+            owned.table_needs = try self.arena.allocator().dupe(u8, owned.table_needs);
             try self.map.put(self.allocator, entry.key_ptr.*, owned);
         }
     }
@@ -234,11 +235,12 @@ test "export interface snapshot owns the complete calling contract" {
         .rc_ret_unique_fields = 4,
         .rc_ret_conditions = &.{ 7, 8, 9 },
         .may_leave_pending = true,
+        .table_needs = "producer needs",
     };
     try producer.put(identity, expected);
     try consumer.copyFrom(&producer);
     producer.clear();
-    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 } });
+    try producer.put(identity, .{ .rc_ret_conditions = &.{ 10, 11, 12 }, .table_needs = "replaced needs" });
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
     try consumer.copyFrom(&consumer);
     try std.testing.expectEqualDeep(expected, consumer.get(identity).?);
