@@ -92,6 +92,26 @@ const LowerBothPathsError = std.mem.Allocator.Error ||
     error{TestUnexpectedResult};
 
 fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) LowerBothPathsError!Lowered {
+    return lowerBothPathsFor(gpa, arena, tmp_dir, source, optimizedTarget(inline_mode));
+}
+
+/// The builds a test lowers for: `--opt=dev`, which claims no uniqueness
+/// but still chooses each read's form, and `--opt=speed`.
+const BuildMode = enum { dev, speed };
+
+fn targetFor(mode: BuildMode) lir.CheckedPipeline.TargetConfig {
+    return switch (mode) {
+        .dev => .{
+            .inline_expects = .omit,
+            .inline_mode = lir.CheckedPipeline.dev_inline_mode,
+            .spec_constr_clone_inlining = lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+            .zero_dict_seed = true,
+        },
+        .speed => optimizedTarget(.wrappers),
+    };
+}
+
+fn lowerBothPathsFor(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, target: lir.CheckedPipeline.TargetConfig) LowerBothPathsError!Lowered {
     const io = std.testing.io;
     try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
     for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
@@ -121,7 +141,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.coordinatorLoop();
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
 
-    coord.runtime_lowering = .{ .target = optimizedTarget(inline_mode) };
+    coord.runtime_lowering = .{ .target = target };
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
@@ -131,7 +151,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try std.testing.expect(session.completed != null);
     try std.testing.expect(session.runtime_stages == .respecialized);
     try std.testing.expect(session.runtime_prepared != null);
-    var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
+    var continued = try session.takeRuntime(gpa, session.runtime_roots, target);
     errdefer continued.deinit();
 
     const root = coord.executableRootCheckedArtifact();
@@ -150,7 +170,14 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .inline_mode = target.inline_mode,
+            .specialize_arc_modes = target.specialize_arc_modes,
+            .prove_uniqueness = target.prove_uniqueness,
+            .spec_constr_clone_inlining = target.spec_constr_clone_inlining,
+            .zero_dict_seed = target.zero_dict_seed,
+        },
     );
     errdefer restored.deinit();
     const image = static_data_exports.buildStaticData(
@@ -776,5 +803,119 @@ test "a reserved dictionary constant only read stays static data, with no fresh 
         // restored dictionary names its entries' capacity.
         try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_with_capacity));
         try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_concat));
+    }
+}
+
+test "a reserved dictionary constant an insert consumes is built fresh with its capacity" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    for ([_]BuildMode{ .dev, .speed }) |mode| {
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var lowered = try lowerBothPathsFor(gpa, arena.allocator(), tmp_dir, reserved_dict_source ++
+            \\    Echo.line!(Str.inspect(Dict.insert(room, List.len(args), "x")))
+            \\    Ok({})
+            \\}
+        , targetFor(mode));
+        defer lowered.deinit();
+        for ([_]*lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+            // `Dict.insert` hands the dictionary's data to
+            // `dict_find_for_insert`, takes it back out of the returned
+            // tag's payload, and a callee two calls further down appends to
+            // its entries: the insert's fresh demand names the entries
+            // field, so the read takes its fresh form, the entries rebuilt
+            // with the room the dictionary reserved and the buckets a unique
+            // copy of the datum's. The append keeps its runtime check, since
+            // births are claimed one level deep, and finds the entries
+            // unique.
+            try std.testing.expect(try countRuntimeLowLevel(result, .list_with_capacity) >= 2);
+        }
+    }
+}
+
+const reserved_set_source =
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    \\room : Set(U64)
+    \\room = Set.empty().reserve(8)
+    \\main! = |args| {
+    \\
+;
+
+test "a reserved set constant only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    for ([_]BuildMode{ .dev, .speed }) |mode| {
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var lowered = try lowerBothPathsFor(gpa, arena.allocator(), tmp_dir, reserved_set_source ++
+            \\    Echo.line!(Str.inspect(Set.contains(room, List.len(args))))
+            \\    Ok({})
+            \\}
+        , targetFor(mode));
+        defer lowered.deinit();
+        for ([_]*lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+            try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_with_capacity));
+            try std.testing.expectEqual(@as(usize, 0), try countRuntimeLowLevel(result, .list_concat));
+        }
+    }
+}
+
+test "a reserved set constant an insert consumes is built fresh with its capacity" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    for ([_]BuildMode{ .dev, .speed }) |mode| {
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var lowered = try lowerBothPathsFor(gpa, arena.allocator(), tmp_dir, reserved_set_source ++
+            \\    Echo.line!(Str.inspect(Set.insert(room, List.len(args))))
+            \\    Ok({})
+            \\}
+        , targetFor(mode));
+        defer lowered.deinit();
+        for ([_]*lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+            // `Set.insert` takes the dictionary out of the set and hands its
+            // data to the absent-key insert, whose callee appends to the
+            // entries, so the read takes its fresh form.
+            try std.testing.expect(try countRuntimeLowLevel(result, .list_with_capacity) >= 2);
+        }
+    }
+}
+
+test "a compile-time record whose list two struct levels deep a callee appends to is built fresh" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    for ([_]BuildMode{ .dev, .speed }) |mode| {
+        var arena = base.SingleThreadArena.init(gpa);
+        defer arena.deinit();
+        var tmp_dir = std.testing.tmpDir(.{});
+        defer tmp_dir.cleanup();
+        var lowered = try lowerBothPathsFor(gpa, arena.allocator(), tmp_dir,
+            \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+            \\import pf.Echo
+            \\state : { inner : { items : List(U64), n : U64 }, count : U64 }
+            \\state = { inner: { items: List.reserve([1, 2, 3], 40), n: 1 }, count: 3 }
+            \\fill : { inner : { items : List(U64), n : U64 }, count : U64 }, U64 -> List(U64)
+            \\fill = |record, n| List.append(record.inner.items, n + record.count + record.inner.n)
+            \\main! = |args| {
+            \\    Echo.line!(Str.inspect(fill(state, List.len(args))))
+            \\    Ok({})
+            \\}
+        , targetFor(mode));
+        defer lowered.deinit();
+        for ([_]*lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+            // The callee's fresh demand names `inner.items`, a field of a
+            // field of its parameter, so the read takes its fresh form: the
+            // list with the room it was evaluated with, three items plus
+            // the forty reserved.
+            try std.testing.expectEqual(@as(usize, 1), try countRuntimeLowLevel(result, .list_with_capacity));
+            try std.testing.expect(hasIntLiteral(result, 43));
+        }
     }
 }

@@ -20208,28 +20208,106 @@ the part of the result it names, so a table handed to a helper and re-bound
 from its returned record keeps its origin around the loop. Origins do not
 leave the procedure that read the value: a returned value or field that
 derives from a candidate is not a unique return, since a callee never learns
-of a candidate and the caller cannot see which form the read takes. A candidate is *needed*
-when a value derived from it, with no other holder, meets an argument position
-whose write in place its birth would serve: one an operation may check at
-runtime, one an operation writes in place unchecked (an operation that returns
-its consumed argument's allocation as a unique result without a runtime check,
-`RcEffect.uncheckedInPlaceArgs`, such as `list_append_unsafe`; its caller
-guarantees the argument is unique with the room it uses, which only the fresh
-form gives), or a callee position the callee's demand mask names. Along the
-path from a candidate the value is the read's, so a join's other incoming
-values do not affect the decision. A procedure's demand mask names the
-parameters carried into such a position in its body, including callee
-positions the callee's mask names, so demands compose through direct calls
-whether or not the callee is inlined; its seed mask is the subset a runtime
-check answers, which a variant would seed. A mask change is a signature change
-and re-analyzes callers. Needed candidates take the fresh form, every
-other candidate stays the static datum, and a local whose origins include a
+of a candidate and the caller cannot see which form the read takes. Origins
+follow births, which are one level deep (a value, or one field of an
+aggregate). Which candidates take their fresh form is decided by the place
+derivations below, at any depth: a candidate is *needed* when a value it may
+have become, with no other holder, meets a place whose write in place its
+birth would serve. Needed candidates take the fresh form, every other
+candidate stays the static datum, and a local whose origins include a
 candidate that stays static is not unique, whatever its born bit says
 (`unique_origins_ok`). Emission materializes a needed read as a call to the
 fresh procedure and any other as the static literal; no `fresh_alternative`
 survives ARC, which the certifier checks, and the fresh procedures no read
-chose leave with the reachability pass that follows ARC. Callee demand-mask
-changes re-analyze callers, since a caller's decisions read them.
+chose leave with the reachability pass that follows ARC.
+
+#### Place derivations
+
+A *place* is a local and a path from its value through its own bytes. Each
+step is a struct field, by its original index, or one tag union variant's
+payload; a variant whose payload is a struct continues with that struct's
+fields. A path never passes through a list's items, a box's payload, or any
+other heap contents. Committed layouts guard every recursive occurrence
+behind a box, so the paths of a layout form a finite tree.
+
+Each local carries a set of *derivations* `(at, base, from)`: the local's
+place at path `at` may hold the place at path `from` of `base`. A base is a
+candidate read, one of the procedure's tracked parameters (a *parameter
+base*), or *shared*, which stands for a second holder and has no `from`. The
+seeds are the candidate reads' targets, each wholly its candidate; every
+tracked parameter, wholly its own parameter base; and every local the
+occurrence scan gives another holder (`destroyed`, before the settlement
+propagates it), wholly shared. Derivations flow, one at a time, over:
+
+- pure aliases, views (aliases solved borrowed), and join edges: unchanged;
+- a field store `c = {..., f: s, ...}` and a tag construction `c = V(s)`
+  that is `s`'s last use: `s`'s derivations with `at` prefixed by the step (a
+  store `s` outlives keeps a second holder, and carries nothing);
+- a field read `t = c.f` or payload read (the variant's payload, then the
+  payload struct's field) that carries the container's stored unit, a view of
+  a variant's struct payload, or a struct or tag union read solved borrowed
+  (a view of the container's slots, whose own reads take the container's
+  units): `c`'s derivations whose `at` begins with the read's steps, with
+  those steps removed, and those whose `at` is a prefix of them, with `from`
+  extended by the rest of the steps. A shared derivation of a place above
+  the read does not pass: a read that carries the unit is one no copy of the
+  container reaches, so the field's stored unit is the one it holds. A read
+  carries the unit when it is a committed take, or when the container (for
+  a view, the container it views) is owned and neither a consuming use of the container nor another read of
+  the same field can execute after it, since emission then moves the unit
+  there (by a take, an ownership-complete field read, or the read's
+  consuming operand); any other read holds a second unit and carries
+  nothing. A parameter counts as owned here: the settlement runs before ARC
+  decides whether a borrowed parameter whose field is moved out is owned by
+  the base signature or by the variant a dying argument demands, and where
+  neither happens the read retains, so a read that took its fresh form is
+  copied once more at the write, which costs the allocation the fresh form
+  made and never correctness;
+- a direct call, through the callee's *carry rows*. A carry row states that
+  the result's place `at` may hold argument `j`'s place `from`, or may be
+  shared. An argument derivation whose `at` is a prefix of the row's `from`
+  lands at the row's `at`, its own `from` extended by the rest of the row's;
+  one whose `at` extends the row's `from` lands at the row's `at` extended by
+  the rest of its own. A call that is not the argument's last use carries
+  nothing from it, since the caller keeps holding the argument.
+
+A procedure's carry rows are the derivations of its returned locals whose
+base is one of its own parameters, or shared; candidate derivations never
+leave the procedure, as origins do not. Every edge maps a place to a place of
+the same committed layout, since LIR is typed by committed layouts, so a
+derivation's `at` is a path of its holder's layout and its `from` a path of
+its base's layout, and every local's derivations are drawn from a finite set.
+
+A *demand site* is a place whose write in place relies on a birth: an
+argument a low-level operation checks at runtime or writes in place
+unchecked (`RcEffect.uncheckedInPlaceArgs`, such as `list_append_unsafe`,
+whose caller guarantees the argument unique with the room it uses, which only
+the fresh form gives), at the empty path, or argument `j`'s place `p` at a
+direct call whose callee has the fresh demand `(j, p)`. A site that overlaps a
+shared derivation (one path a prefix of the other) has another holder, so no
+birth gives it count 1, and it demands nothing. Otherwise every derivation
+whose `at` is a prefix of the site's path, or extends it, demands its base's
+place there: `from`, extended by whatever of the site's path its `at` does not
+cover. A demanded candidate is needed; a demanded parameter base at path `p`
+of parameter `j` is the procedure's fresh demand `(j, p)`. Along the path
+from a candidate the value is the read's, so a join's other incoming values
+do not affect the decision. A record whose field a callee fills, or a
+dictionary whose entries a callee appends to after taking them back out of a
+returned tag's payload, therefore makes its read take the fresh form.
+
+Carry rows and fresh demands are computed once the settlement converges,
+from its final edges, in the ownership components that hold a candidate read
+and every component their direct calls reach; no other procedure's rows or
+demands can reach a candidate. Rows come first. A component's derivations
+are monotone in its callees' rows, so iterating from empty rows, and
+re-deriving the callers of every procedure whose rows grew, reaches the
+least fixpoint. Fresh demands then iterate the same way, from no demands,
+over the final derivations, since a site's demands are monotone in its
+callees' demands. Both are least fixpoints over finite lattices, so the
+result is exact, deterministic, and independent of iteration order, with no
+depth bound. Derivations decide forms and nothing else: they set no birth,
+condition, unique return, conditional-return row or seed, and the seed masks
+that let a variant elide its checks stay whole-parameter masks.
 
 ### Vocabulary
 
