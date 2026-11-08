@@ -107,9 +107,8 @@ pub fn compose(
     return try merge(allocator, sets, &reach, host_visible, &index);
 }
 
-/// Where every procedure and helper of the program is defined: a procedure in
-/// the one unit defining it, and a helper in the first unit defining it, which
-/// every reference to it lands on.
+/// Where every procedure and helper of the program is defined: each in the
+/// first unit defining it, which every reference to it lands on.
 const Index = struct {
     by_proc: std.AutoHashMapUnmanaged(ProcIdentity, Ref) = .empty,
     /// Procedures by the leading bytes their symbol names spell.
@@ -124,8 +123,12 @@ const Index = struct {
             const ref: Ref = .{ .unit = @intCast(unit_id), .index = @intCast(i) };
             switch (excerpt.kind) {
                 .proc => |identity| {
+                    // A procedure's identity names its content (a worker
+                    // several units lower, such as a structural method,
+                    // has the same identity in each), so a procedure two
+                    // units define is one procedure: its first definition.
                     const gop = try self.by_proc.getOrPut(allocator, identity);
-                    if (gop.found_existing) invariant("two units define the procedure {x}", .{identity.bytes});
+                    if (gop.found_existing) continue;
                     gop.value_ptr.* = ref;
                     const symbol = try self.by_symbol.getOrPut(allocator, identity.bytes[0..16].*);
                     if (!symbol.found_existing) symbol.value_ptr.* = ref;
@@ -546,7 +549,7 @@ fn merge(
     for (collector.items.items) |item| {
         // Each unit named its constants by content, so constants of
         // different units meet under one name and nothing is renamed here.
-        if (item.program_local_name and !item.is_mutable) invariant("a composed unit carries a constant it did not name by content: {s}", .{item.name});
+        if (item.program_local_name) invariant("a composed unit carries a constant it did not name by content: {s}", .{item.name});
         if ((try collected.getOrPut(item.name)).found_existing) continue;
         try all_items.append(allocator, item);
     }

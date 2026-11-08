@@ -38,7 +38,8 @@ expect never_equal(5.U64) == Bool.False
 expect never_equal("hi") == Bool.False
 
 # A closed type's method that names the body's type variable is a local
-# procedure too, so the closed type's descriptor is composed in the body.
+# procedure too, so the closed type's descriptor is a word of the body's type
+# table.
 closed_never_equal : a -> Bool
 closed_never_equal = |_x| {
 	Tag := [Tag(U64)].{

@@ -86,6 +86,8 @@ fn appendText(allocator: Allocator, text: *std.ArrayList(u8), bytes: []const u8)
 /// Borrow checker storage until serialization; flatten pointer-bearing strings
 /// and multi-lists into arena-owned arrays with deterministic index order.
 pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencies.Scope) Allocator.Error!Self {
+    // No diagnostic consumer means no snapshot/region publication input.
+    if (checker.problems.problems.items.len == 0 and checker.problems.pending_static_exhaustiveness.items.len == 0) return .{};
     const snapshots = &checker.snapshots;
     var text = std.ArrayList(u8).empty;
     var tags = std.ArrayList(Tag).empty;
@@ -108,7 +110,7 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
         base.Sha256.hash(requirements.env.common.source, &hash, .{});
         try sources.append(allocator, .{ .owner = scope.ordinal(requirements.env.contentIdentityHash().?.*), .digest = hash });
     };
-    return .{
+    const outcome: Self = .{
         .status = if (checker.problems.problems.items.len != 0 or checker.cir.diagnosticCount() != 0) .with_diagnostics else .diagnostic_free,
         .problems = checker.problems.problems.items,
         .pending = checker.problems.pending_static_exhaustiveness.items,
@@ -126,6 +128,9 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
         .text = text.items,
         .sources = sources.items,
     };
+    if (std.debug.runtime_safety) outcome.validate() catch
+        base.invariant("diagnostic capture produced invalid deferred rendering references", .{});
+    return outcome;
 }
 
 /// Validate source origins before the capsule is installed. A source shift that
@@ -141,7 +146,8 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
     return true;
 }
 
-/// Check diagnostic text ranges before restoring optional cache data.
+/// Validate producer-owned diagnostic references in Debug builds and tests.
+/// Cache admission trusts the checked entry's authenticated producer data.
 pub fn validate(self: Self) error{CorruptArtifact}!void {
     if (self.node_formats.len != self.contents.len) return error.CorruptArtifact;
     var end: u64 = 0;
