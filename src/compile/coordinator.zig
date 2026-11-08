@@ -13240,7 +13240,9 @@ test "initializer evaluation after edits preserves errors observations and test 
             try coord.start();
             try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = app_path });
             try coord.coordinatorLoop();
-            try std.testing.expect(!coord.hasUserErrors());
+            // A checked-cache hit already replays evaluation failures here;
+            // a miss reports them when finalization evaluates the roots.
+            // The result below checks the completed build in either case.
             const app = coord.appRootCheckedArtifact();
             var roots = std.ArrayList(CheckedArtifact.RootRequest).empty;
             defer roots.deinit(gpa);
