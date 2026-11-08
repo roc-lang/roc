@@ -6,7 +6,7 @@
 //!
 //! An interface has two halves. `Digests.interfaceOf` covers what a module's
 //! checked data tells an importer's lowering; it is known once the module's
-//! compile-time values are. `Digests.recordExports` covers the ownership
+//! compile-time values are. `Digests.recordExportsDigest` covers the ownership
 //! signatures the module's own object solved, known once that object exists.
 //! Each folds in the same half of the module's imports, because lowering
 //! reads through an import to the modules behind it.
@@ -15,7 +15,6 @@ const std = @import("std");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
-const object_cache = @import("boxy_object_cache.zig");
 
 const Allocator = std.mem.Allocator;
 const Sha256 = base.Sha256;

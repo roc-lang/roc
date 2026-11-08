@@ -2780,16 +2780,18 @@ test "body index allocation failures leave no partial index and can be retried" 
 }
 
 test "body analyses creation and undemanded destruction release every allocation" {
-    var env = try ModuleEnv.init(std.testing.allocator, "");
-    defer env.deinit();
+    var fixture = try @import("test/TestEnv.zig").init("Main", index_test_source);
+    defer fixture.deinit();
+    const env = fixture.module_env;
+    const def = env.store.getDef(env.store.sliceDefs(env.global_value_defs)[0]);
     const Scenario = struct {
-        fn run(allocator: Allocator, module: *const ModuleEnv) (Allocator.Error || error{TestUnexpectedResult})!void {
+        fn run(allocator: Allocator, module: *const ModuleEnv, pattern: PatternId) (Allocator.Error || error{TestUnexpectedResult})!void {
             // Creation owns this list but does not inspect its nodes.
-            const promoted = [_]struct { pattern: PatternId }{.{ .pattern = @fromBackingInt(0) }};
+            const promoted = [_]struct { pattern: PatternId }{.{ .pattern = pattern }};
             const analyses = try BodyAnalyses.create(allocator, std.testing.io, module, &promoted);
             defer analyses.destroy();
             try std.testing.expect(analyses.indexed.peek() == null);
         }
     };
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{&env});
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{ env, def.pattern });
 }

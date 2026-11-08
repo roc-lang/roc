@@ -94,7 +94,7 @@ fn calledNames(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec, out: *std.
 
 /// The `get` worker has no remaining open item or result type: no
 /// dynamic parameter, no dynamic result, and no descriptor-guided statement.
-fn expectStaticWorker(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec) !void {
+fn expectStaticWorker(store: *const lir.LirStore, proc: lir.LIR.LirProcSpec) (std.mem.Allocator.Error || error{TestUnexpectedResult})!void {
     const args = store.getLocalSpan(proc.args);
     for (0..collections.GuardedList.borrowLen(args)) |arg_index| {
         try std.testing.expect(store.localDyn(collections.GuardedList.at(args, arg_index)) == null);
