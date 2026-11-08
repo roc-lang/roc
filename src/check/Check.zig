@@ -2443,6 +2443,10 @@ const InstantiationEvidence = union(enum) {
     none,
     value_use: CIR.Expr.Idx,
     nested_function_use: CIR.Expr.Idx,
+    platform_requirement: struct {
+        expr: CIR.Expr.Idx,
+        record: *?u32,
+    },
     dispatch_target: struct {
         node_idx: u32,
         constraint_fn_var: Var,
@@ -2459,7 +2463,7 @@ const InstantiationEvidence = union(enum) {
     fn recordsSchemeUse(self: InstantiationEvidence) bool {
         return switch (self) {
             .none => false,
-            .value_use, .nested_function_use => true,
+            .value_use, .nested_function_use, .platform_requirement => true,
             .dispatch_target => |site| site.records_scheme_use,
         };
     }
@@ -8290,6 +8294,9 @@ fn validateSettledValueRows(self: *Self, env: *Env, walk: *SettledWalk) std.mem.
     }
     try output_type_roots.forEachRecordedTypeRoot(self.cir, &seeder);
     try output_type_roots.forEachSchemeUseTypeRoot(self.cir, &seeder);
+    for (self.platform_requirement_solutions.items) |solution| {
+        try output_type_roots.forEachPlatformRequirementTypeRoot(solution.solved_var, solution.identity_vars, &seeder);
+    }
     for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
         try output_type_roots.forEachForLoopDispatchTypeRoot(plan, &seeder);
     }
@@ -8862,7 +8869,7 @@ fn schemeUseInstantiatesDefinition(record: ModuleEnv.SchemeUseRecord) bool {
     const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
     return switch (slot) {
         .value_use, .nested_function_use, .dispatch_target => true,
-        .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => false,
+        .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use, .platform_requirement => false,
     };
 }
 
@@ -8880,7 +8887,7 @@ fn schemeUseExpr(self: *const Self, record_index: u32) CIR.Expr.Idx {
         const record = records[current];
         const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
         switch (slot) {
-            .value_use, .nested_function_use => return @fromBackingInt(record.node_idx),
+            .value_use, .nested_function_use, .platform_requirement => return @fromBackingInt(record.node_idx),
             .dispatch_target => {
                 const fn_var: Var = @fromBackingInt(record.slot_data);
                 if (self.dispatchSiteOfFn(fn_var)) |site| return site.expr;
@@ -11263,7 +11270,7 @@ fn instantiateVarHelpFromScheme(
 
     const target = switch (evidence) {
         .dispatch_target => |site| site,
-        .none, .value_use, .nested_function_use => null,
+        .none, .value_use, .nested_function_use, .platform_requirement => null,
     };
     const shape_validation = if (target) |site| site.shape_validation else false;
 
@@ -11347,7 +11354,7 @@ fn instantiateVarHelpFromScheme(
     // A value use of a constrained scheme instantiated outside every probe
     // is registered for whole-use replay with the relation callables it
     // copies.
-    const registers_use = evidence == .value_use and force_type_scheme_root and
+    const registers_use = (evidence == .value_use or evidence == .platform_requirement) and force_type_scheme_root and
         instantiator.share_vars.len == 0 and
         self.probe_depth == 0 and !self.commit_probe_active;
     self.scratch_use_owned.clearRetainingCapacity();
@@ -11404,10 +11411,12 @@ fn instantiateVarHelpFromScheme(
                 .none => unreachable, // recordsSchemeUse is false for .none
                 .value_use => |expr| .{ .value_use, @backingInt(expr), 0 },
                 .nested_function_use => |expr| .{ .nested_function_use, @backingInt(expr), @backingInt(instantiated_var) },
+                .platform_requirement => |site| .{ .platform_requirement, @backingInt(site.expr), @backingInt(instantiated_var) },
                 .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @backingInt(site.constraint_fn_var) },
             };
             const record: u32 = @intCast(self.cir.scheme_uses.items.items.len);
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_source, self.scratch_evidence_pairs.items);
+            if (evidence == .platform_requirement) evidence.platform_requirement.record.* = record;
             if (registers_use and self.scratch_use_owned.items.len != 0) {
                 try self.registerUseInstance(var_to_instantiate, instantiated_var, record);
                 if (self.scratch_deferred_callables.items.len != 0) {
@@ -13449,6 +13458,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
         }
     }
 
+    try self.instantiatePlatformRequirementUses(&env);
     try self.finalizeTypes(&env, .{ .module = .{ .skip_numeric_defaults = skip_numeric_defaults } });
 
     // Check generated-codec error demands against their owners' annotated
@@ -13482,7 +13492,21 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
+    // Shared value rows are still solver inputs until their permitted defaults
+    // commit. In particular, a stored function's monomorphic error row can own
+    // an equality requirement captured by another definition's scheme.
+    // Keep the late annotation audit above these commitments.
+    try self.closeWeakValueImplicitOpenExts(&env);
+    try self.closeTopLevelValueRows(&env);
     try self.closeValueRowTailsCarryingDerivations(&env);
+    if (try self.anyDeferredDispatchReceiverResolved(&env)) {
+        try self.checkStaticDispatchConstraints(&env, true);
+        try self.checkAllConstraints(&env);
+        // Defaults enqueue their attached relations. Drain the use/codec work
+        // those relations create, without rescanning every stored scheme.
+        try self.finalizeGeneratedCodecConstraintsToQuiescence(&env, .instantiated);
+    }
+    try self.freezeBoundaryCodecDerivations(&env);
     try self.reportPolymorphicTopLevelValues();
 
     try self.checkPlatformHostedSection();
@@ -13504,9 +13528,6 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.reportNonExhaustiveLambdaParams(&env);
     try self.reportNonExhaustiveForPatterns(&env);
-
-    try self.closeWeakValueImplicitOpenExts(&env);
-    try self.closeTopLevelValueRows(&env);
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -13563,6 +13584,7 @@ fn recordCheckingOutputs(self: *Self) Allocator.Error!void {
             .requires_idx = solution.requires_idx,
             .def = solution.def,
             .solved_var = solution.solved_var,
+            .scheme_use = solution.scheme_use,
             .is_function = solution.is_function,
             .outcome = switch (solution.outcome) {
                 .success => .success,
@@ -18875,6 +18897,49 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
             .identity_vars = instantiated.identity_vars,
         });
         identity_vars_owned = false;
+    }
+}
+
+/// A platform invocation is a use of the completed app binding's scheme,
+/// not a request to run the definition's uninstantiated requirements.
+/// The already checked interface and its identities follow this same copy.
+fn instantiatePlatformRequirementUses(self: *Self, env: *Env) Allocator.Error!void {
+    const previous_source = self.instantiation_source_expr;
+    defer self.instantiation_source_expr = previous_source;
+    for (self.platform_requirement_solutions.items) |*solution| {
+        if (!solution.is_function) continue;
+        const def = self.cir.store.getDef(solution.def);
+        if (self.erroneous_value_exprs.contains(def.expr) or self.erroneous_value_patterns.contains(def.pattern)) continue;
+        self.instantiation_source_expr = def.expr;
+        const binding = ModuleEnv.varFrom(solution.def);
+        const shared_binding = !self.isBindingSchemeVar(binding) and self.types.resolveVar(binding).desc.rank != .generalized;
+        const instance = try self.instantiateBindingVar(binding, env, .use_root_instantiated, .{
+            .platform_requirement = .{
+                .expr = def.expr,
+                .record = &solution.scheme_use,
+            },
+        });
+        // Instantiation already recorded its own evidence decision. Only the
+        // no-copy path needs an explicit shared invocation record here.
+        if (shared_binding and try self.schemeHasEvidenceParams(binding)) {
+            std.debug.assert(solution.scheme_use == null);
+            solution.scheme_use = @intCast(self.cir.scheme_uses.items.items.len);
+            try self.cir.recordSchemeUse(
+                @backingInt(def.expr),
+                .platform_requirement,
+                @backingInt(instance),
+                binding,
+                &.{},
+            );
+        }
+        const identities = try self.gpa.alloc(Var, solution.identity_vars.len);
+        for (solution.identity_vars, identities) |old, *fresh_identity| {
+            const root = self.types.resolveVar(old).var_;
+            fresh_identity.* = self.var_map.get(root) orelse root;
+        }
+        self.gpa.free(solution.identity_vars);
+        solution.identity_vars = identities;
+        solution.solved_var = instance;
     }
 }
 
@@ -33552,7 +33617,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             try self.problems.appendPendingStaticExhaustiveness(.match, self.pendingExhaustivenessMode(), .{ .match_expr = expr_idx }, match_region, .{
                 .non_exhaustive_match = .{
                     .match_expr = expr_idx,
-                    .condition_type = try self.problems.putExtraString(self.snapshots.getFormattedString(condition_snapshot) orelse unreachable), // snapshotVarForError formats its root content in finishFrame
+                    .condition_type = try self.problems.putExtraString(try self.snapshots.formatType(condition_snapshot)),
                     .missing_patterns = missing_patterns_range,
                 },
             });
@@ -34956,7 +35021,7 @@ fn checkPatternExhaustiveness(
         try self.problems.appendPendingStaticExhaustiveness(.destructure, self.pendingExhaustivenessMode(), .{ .destructure_pattern = pattern_idx }, empirical_region, .{
             .non_exhaustive_destructure = .{
                 .pattern = pattern_idx,
-                .value_type = try self.problems.putExtraString(self.snapshots.getFormattedString(value_snapshot) orelse unreachable), // snapshotVarForError formats its root content in finishFrame
+                .value_type = try self.problems.putExtraString(try self.snapshots.formatType(value_snapshot)),
                 .missing_patterns = missing_patterns_range,
             },
         });
@@ -39191,7 +39256,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
             // A shared use copies no vars (it shares the in-flight
             // definition's), so it has no fresh pairs to seed; the walk
             // reaches the shared body through the ordinary reference edge.
-            .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => {},
+            .shared_value_use, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .platform_requirement => {},
             // A where-method use carries a complete structural copy map, but
             // only to relate callable identities during checked-artifact construction.
             // It has no child dispatch requirements and is not an edge in the default walk.
@@ -40198,9 +40263,9 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
         },
     }
     try self.validateResolvedOpenNumeralLiterals(env);
-    try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+    try self.finalizeGeneratedCodecConstraintsToQuiescence(env, if (scope == .module) .all else .none);
     while (try self.propagateValueRowsToWidenedUses(env)) {
-        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, scope == .module);
+        try self.finalizeGeneratedCodecConstraintsToQuiescence(env, if (scope == .module) .all else .none);
     }
     try self.settleUnwidenedResults();
     try self.resolvePendingTupleAccesses(env, true);
@@ -40216,11 +40281,11 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
     // validations (whose commits can run rows together and pin kinds from
     // annotations), and `checkDefaultRestrictions`—must run on the exact
     // pre-commit states, so the sweep is a pure commitment of already-final
-    // facts and cannot alter any accept/reject outcome. Nothing after
-    // finalize unifies types, so a kind committed here is a fact every
-    // consumer reads.
+    // facts and cannot alter any accept/reject outcome. Module value-row
+    // defaults follow the late annotation audit; their dispatch work must
+    // settle before the module freezes its codec derivations.
     try self.defaultLiteralFieldKinds(env);
-    try self.freezeBoundaryCodecDerivations(env);
+    if (scope == .repl_expr) try self.freezeBoundaryCodecDerivations(env);
     if (std.debug.runtime_safety) {
         for (self.uses_with_deferred_callables.items) |use_idx| {
             const use = self.use_instances.items[use_idx];
@@ -48603,7 +48668,7 @@ fn freezeUseReplaySource(self: *Self, source_idx: u32, env: *Env) Allocator.Erro
             .recursive_dispatch_target => {
                 if (self.scratch_freeze_map.contains(self.types.resolveVar(@fromBackingInt(@intCast(written.slot_data))).var_)) return;
             },
-            .value_use, .nested_function_use, .shared_value_use, .recursive_reference, .recursive_value_reference, .where_method_use => {},
+            .value_use, .nested_function_use, .shared_value_use, .recursive_reference, .recursive_value_reference, .where_method_use, .platform_requirement => {},
         }
     }
     const frozen_root = try self.frozenUseRoot(use.instance_root);
@@ -49778,22 +49843,80 @@ fn finalCodecRelationInstance(
     var instantiator = self.baseInstantiator(env.rank(), .fresh_rigid);
     instantiator.polarity_var_behavior = .close;
     const copied_root = try instantiator.instantiateTypeScheme(relation_root);
+    const previous_scheme_root = self.active_scheme_root;
+    defer self.active_scheme_root = previous_scheme_root;
+    self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
     var copied_iter = instantiator.var_map.valueIterator();
     while (copied_iter.next()) |copied| {
         try self.fillInRegionsThrough(copied.*);
         self.setRegionAt(copied.*, region);
+        // This private validation copy owns its attached relations too, not
+        // just the outer codec callable. Shared callables keep their creator.
+        if (contentConstraintRange(self.types.resolveVar(copied.*).desc.content)) |constraints| {
+            for (self.types.sliceStaticDispatchConstraints(constraints)) |constraint| {
+                try self.recordDispatchRelationOwner(constraint.fn_var);
+            }
+        }
     }
     const copied_relation = self.types.resolveVar(copied_root).desc.content.unwrapFunc() orelse
         unreachable; // instantiating the function type relation_root yields a function type
     var relation = pending;
     relation.dispatcher_var = self.types.sliceVars(copied_relation.args)[0];
     relation.constraint.fn_var = copied_relation.ret;
-    const previous_scheme_root = self.active_scheme_root;
-    defer self.active_scheme_root = previous_scheme_root;
-    self.active_scheme_root = self.dispatchRelationOwner(pending.constraint.fn_var);
     try self.recordDispatchRelationOwner(relation.constraint.fn_var);
     try self.final_codec_instance_templates.put(self.gpa, relation.constraint.fn_var, pending.constraint.fn_var);
     return relation;
+}
+
+test "issue 12873: private codec copies register nested owners and preserve shared owners" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initOpen("Owners", "value = {}");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const checker = &test_env.checker;
+    var generic_env = try Env.init(std.testing.allocator, .generalized);
+    defer generic_env.deinit(std.testing.allocator);
+    var use_env = try Env.init(std.testing.allocator, .outermost);
+    defer use_env.deinit(std.testing.allocator);
+
+    const owner = try checker.fresh(&use_env, Region.zero());
+    const other_owner = try checker.fresh(&use_env, Region.zero());
+    const outer = try checker.fresh(&generic_env, Region.zero());
+    const nested = try checker.fresh(&generic_env, Region.zero());
+    const shared = try checker.fresh(&use_env, Region.zero());
+    const constraints = try checker.types.appendStaticDispatchConstraints(&.{
+        .{ .fn_name = checker.cir.idents.is_eq, .fn_var = nested, .origin = .{ .where_clause = .{} } },
+        .{ .fn_name = checker.cir.idents.to_hash, .fn_var = shared, .origin = .{ .where_clause = .{} } },
+    });
+    const receiver = try checker.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } }, &generic_env, Region.zero());
+    checker.active_scheme_root = other_owner;
+    try checker.recordDispatchRelationOwner(nested);
+    try checker.recordDispatchRelationOwner(shared);
+    checker.active_scheme_root = owner;
+    try checker.recordDispatchRelationOwner(outer);
+    checker.active_scheme_root = null;
+
+    const copy = try checker.finalCodecRelationInstance(.{
+        .dispatcher_var = receiver,
+        .constraint = .{ .fn_name = checker.cir.idents.encoder_for, .fn_var = outer, .origin = .{ .where_clause = .{} } },
+        .failure_expr = .none,
+        .owner = .current_group,
+    }, &use_env);
+    const copied = checker.types.sliceStaticDispatchConstraints(checker.types.resolveVar(copy.dispatcher_var).desc.content.flex.constraints);
+    try std.testing.expect(copied[0].fn_var != nested);
+    try std.testing.expectEqual(owner, checker.dispatchRelationOwner(copied[0].fn_var).?);
+    try std.testing.expectEqual(owner, checker.dispatchRelationOwner(copy.constraint.fn_var).?);
+    try std.testing.expectEqual(shared, copied[1].fn_var);
+    try std.testing.expectEqual(other_owner, checker.dispatchRelationOwner(shared).?);
+    try std.testing.expectEqual(other_owner, checker.dispatchRelationOwner(nested).?);
+    try std.testing.expectEqual(null, checker.active_scheme_root);
+
+    const speculative = try checker.fresh(&use_env, Region.zero());
+    var probe = try checker.beginProbe(&use_env);
+    try checker.recordDispatchRelationOwner(speculative);
+    probe.rollback();
+    try std.testing.expect(!checker.dispatch_relation_owners.contains(speculative));
+    try std.testing.expectEqual(owner, checker.dispatchRelationOwner(copy.constraint.fn_var).?);
 }
 
 fn checkFinalGeneratedCodecConstraints(self: *Self, env: *Env) Allocator.Error!void {
@@ -56043,11 +56166,13 @@ fn freezeBoundaryCodecDerivations(self: *Self, env: *Env) Allocator.Error!void {
 fn finalizeGeneratedCodecConstraintsToQuiescence(
     self: *Self,
     env: *Env,
-    check_scheme_requirements: bool,
+    requirement_work: enum { none, instantiated, all },
 ) Allocator.Error!void {
     while (true) {
-        if (check_scheme_requirements) {
+        if (requirement_work != .none) {
             try self.checkInstantiatedStaticDispatchConstraints(env, true, .ordinary);
+        }
+        if (requirement_work == .all) {
             try self.checkGroundedStoredTypeSchemeRequirementsAtFinalization(env, true);
         }
 

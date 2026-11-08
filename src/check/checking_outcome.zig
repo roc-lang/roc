@@ -18,7 +18,12 @@ pub const Text = extern struct { start: u32, len: u32 };
 /// A snapshot and its preserved display text.
 pub const Formatted = extern struct { snapshot: snapshot.SnapshotContentIdx, text: Text };
 /// Pointer-free snapshot tag with its preserved display text.
-pub const Tag = struct { name: base.Ident.Idx, args: @FieldType(snapshot.SnapshotTag, "args"), text: Text };
+pub const Tag = struct {
+    name: base.Ident.Idx,
+    args: @FieldType(snapshot.SnapshotTag, "args"),
+    render_root: ?snapshot.SnapshotContentIdx,
+    text: Text,
+};
 /// An explicit foreign source dependency for retained diagnostic regions.
 pub const Source = extern struct { owner: u32, digest: [32]u8 };
 
@@ -29,6 +34,8 @@ extra_strings: []const u8 = &.{},
 missing_patterns: []const problem.ExtraStringIdx = &.{},
 regions: []const base.Region = &.{},
 contents: []const snapshot.SnapshotContent = &.{},
+node_formats: []const snapshot.NodeFormat = &.{},
+captures: []const snapshot.Capture = &.{},
 content_indexes: []const snapshot.SnapshotContentIdx = &.{},
 record_fields: []const snapshot.SnapshotRecordField = &.{},
 tags: []const Tag = &.{},
@@ -46,6 +53,8 @@ pub const Serialized = extern struct {
     missing_patterns: serde.SerializedSlice(problem.ExtraStringIdx) = .{},
     regions: serde.SerializedSlice(base.Region) = .{},
     contents: serde.SerializedSlice(snapshot.SnapshotContent) = .{},
+    node_formats: serde.SerializedSlice(snapshot.NodeFormat) = .{},
+    captures: serde.SerializedSlice(snapshot.Capture) = .{},
     content_indexes: serde.SerializedSlice(snapshot.SnapshotContentIdx) = .{},
     record_fields: serde.SerializedSlice(snapshot.SnapshotRecordField) = .{},
     tags: serde.SerializedSlice(Tag) = .{},
@@ -82,12 +91,12 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
     var tags = std.ArrayList(Tag).empty;
     for (0..snapshots.tags.len()) |i| {
         const tag = snapshots.tags.get(@fromBackingInt(@as(u32, @intCast(i))));
-        try tags.append(allocator, .{ .name = tag.name, .args = tag.args, .text = try appendText(allocator, &text, tag.formatted) });
+        try tags.append(allocator, .{ .name = tag.name, .args = tag.args, .render_root = tag.render_root, .text = try appendText(allocator, &text, tag.formatted) });
     }
     var formatted = std.ArrayList(Formatted).empty;
     for (0..@as(usize, @intCast(snapshots.contents.len()))) |i| {
         const id: snapshot.SnapshotContentIdx = @fromBackingInt(@as(u32, @intCast(i)));
-        if (snapshots.getFormattedString(id)) |bytes| try formatted.append(allocator, .{ .snapshot = id, .text = try appendText(allocator, &text, bytes) });
+        if (snapshots.formatted_strings.get(id)) |bytes| try formatted.append(allocator, .{ .snapshot = id, .text = try appendText(allocator, &text, bytes) });
     }
     const fields = try allocator.alloc(snapshot.SnapshotRecordField, @intCast(snapshots.record_fields.len()));
     for (fields, 0..) |*field, i| field.* = snapshots.record_fields.get(@fromBackingInt(@as(u32, @intCast(i))));
@@ -107,6 +116,8 @@ pub fn capture(allocator: Allocator, checker: anytype, scope: *const dependencie
         .missing_patterns = checker.problems.missing_patterns_backing.items,
         .regions = checker.regions.items.items,
         .contents = snapshots.contents.items.items,
+        .node_formats = snapshots.node_formats.items,
+        .captures = snapshots.captures.items,
         .content_indexes = snapshots.content_indexes.items.items,
         .record_fields = fields,
         .tags = tags.items,
@@ -132,14 +143,133 @@ pub fn sourcesMatch(self: Self, scope: *const dependencies.Scope) bool {
 
 /// Check diagnostic text ranges before restoring optional cache data.
 pub fn validate(self: Self) error{CorruptArtifact}!void {
-    for (self.tags) |tag| try self.validateText(tag.text);
+    if (self.node_formats.len != self.contents.len) return error.CorruptArtifact;
+    var end: u64 = 0;
+    for (self.captures, 0..) |capture_, i| {
+        if (capture_.start != end or capture_.len == 0) return error.CorruptArtifact;
+        end += capture_.len;
+        if (end > self.contents.len) return error.CorruptArtifact;
+        for (self.node_formats[capture_.start..@intCast(end)]) |info| {
+            if (info.capture != i) return error.CorruptArtifact;
+        }
+    }
+    if (end != self.contents.len) return error.CorruptArtifact;
+    for (self.contents, self.node_formats) |content, info| {
+        switch (content) {
+            .err => {},
+            .recursive => if (info.source_var == null) return error.CorruptArtifact,
+            inline .flex, .rigid => |identity| {
+                try validateRange(identity.constraints, self.constraints.len);
+                if (identity.constraints.count != 0) {
+                    for (self.constraints[@backingInt(identity.constraints.start)..][0..identity.constraints.count]) |constraint| {
+                        try self.validateNode(constraint.fn_content, info.capture);
+                    }
+                }
+            },
+            .alias => |alias| {
+                try self.validateNode(alias.backing, info.capture);
+                try self.validateVars(alias.vars, info.capture);
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .box => return error.CorruptArtifact,
+                .tuple => |tuple| try self.validateVars(tuple.elems, info.capture),
+                .nominal_type => |nominal| {
+                    if (nominal.vars.count == 0) return error.CorruptArtifact;
+                    try self.validateVars(nominal.vars, info.capture);
+                },
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try self.validateVars(func.args, info.capture);
+                    try self.validateNode(func.ret, info.capture);
+                },
+                .record => |record| {
+                    try self.validateNode(record.ext, info.capture);
+                    try validateRange(record.fields, self.record_fields.len);
+                    if (record.fields.count != 0) {
+                        for (self.record_fields[@backingInt(record.fields.start)..][0..record.fields.count]) |field| {
+                            try self.validateNode(field.content, info.capture);
+                        }
+                    }
+                },
+                .tag_union => |union_| {
+                    try self.validateNode(union_.ext, info.capture);
+                    try validateRange(union_.tags, self.tags.len);
+                    if (union_.tags.count != 0) {
+                        for (self.tags[@backingInt(union_.tags.start)..][0..union_.tags.count]) |tag| {
+                            try self.validateVars(tag.args, info.capture);
+                            if (tag.render_root) |root| try self.validateNode(root, info.capture);
+                        }
+                    }
+                },
+            },
+        }
+    }
+    for (self.tags) |tag| {
+        try self.validateText(tag.text);
+        if (tag.render_root) |root| {
+            if (@backingInt(root) >= self.contents.len) return error.CorruptArtifact;
+        } else if (tag.text.len == 0) return error.CorruptArtifact;
+    }
+    var previous_formatted: ?u64 = null;
     for (self.formatted) |formatted| {
         if (@backingInt(formatted.snapshot) >= self.contents.len) return error.CorruptArtifact;
+        if (previous_formatted) |previous| {
+            if (@backingInt(formatted.snapshot) <= previous) return error.CorruptArtifact;
+        }
+        previous_formatted = @backingInt(formatted.snapshot);
         try self.validateText(formatted.text);
     }
     for (self.missing_patterns) |range| {
         if (range.start > self.extra_strings.len or range.count > self.extra_strings.len - range.start) return error.CorruptArtifact;
     }
+}
+
+test "checking outcomes reject invalid deferred diagnostic references" {
+    const contents = [_]snapshot.SnapshotContent{
+        .{ .structure = .empty_record },
+        .{ .structure = .{ .fn_pure = .{ .args = .empty(), .ret = @fromBackingInt(0) } } },
+    };
+    const infos = [_]snapshot.NodeFormat{
+        .{ .source_var = null, .capture = 0, .polarity = .pos },
+        .{ .source_var = null, .capture = 0, .polarity = .pos },
+    };
+    const captures = [_]snapshot.Capture{.{
+        .start = 0,
+        .len = 2,
+        .omit_literal_conversion_constraints = false,
+        .omitted_dispatcher = null,
+        .identifier_count = 0,
+    }};
+    var outcome = Self{ .contents = &contents, .node_formats = &infos, .captures = &captures };
+    try outcome.validate();
+
+    var invalid_contents = contents;
+    invalid_contents[1].structure.fn_pure.ret = @fromBackingInt(2);
+    outcome.contents = &invalid_contents;
+    try std.testing.expectError(error.CorruptArtifact, outcome.validate());
+    outcome.contents = &contents;
+
+    const duplicate = Formatted{ .snapshot = @fromBackingInt(0), .text = .{ .start = 0, .len = 2 } };
+    outcome.text = "{}";
+    outcome.formatted = &.{ duplicate, duplicate };
+    try std.testing.expectError(error.CorruptArtifact, outcome.validate());
+}
+
+fn validateRange(range: anytype, len: usize) error{CorruptArtifact}!void {
+    if (range.count == 0) return;
+    const start: u64 = @backingInt(range.start);
+    if (start > len or range.count > len - start) return error.CorruptArtifact;
+}
+
+fn validateNode(self: Self, node: snapshot.SnapshotContentIdx, capture_idx: u32) error{CorruptArtifact}!void {
+    if (@backingInt(node) >= self.contents.len) return error.CorruptArtifact;
+    if (self.node_formats[@backingInt(node)].capture != capture_idx) return error.CorruptArtifact;
+}
+
+fn validateVars(self: Self, range: anytype, capture_idx: u32) error{CorruptArtifact}!void {
+    try validateRange(range, self.content_indexes.len);
+    if (range.count == 0) return;
+    for (self.content_indexes[@backingInt(range.start)..][0..range.count]) |node| try self.validateNode(node, capture_idx);
 }
 
 fn validateText(self: Self, range: Text) error{CorruptArtifact}!void {
@@ -157,15 +287,24 @@ pub fn install(self: Self, checker: anytype) Allocator.Error!void {
     checker.regions.items.clearRetainingCapacity();
     _ = try checker.regions.appendSlice(allocator, self.regions);
     const snapshots = &checker.snapshots;
+    snapshots.setFormatContext(&checker.type_writer);
     _ = try snapshots.contents.appendSlice(allocator, self.contents);
+    try snapshots.node_formats.appendSlice(allocator, self.node_formats);
+    try snapshots.captures.appendSlice(allocator, self.captures);
+    try snapshots.render_graphs.appendNTimes(allocator, null, self.captures.len);
     _ = try snapshots.content_indexes.appendSlice(allocator, self.content_indexes);
     _ = try snapshots.record_fields.appendSlice(allocator, self.record_fields);
     _ = try snapshots.static_dispatch_constraints.appendSlice(allocator, self.constraints);
     for (self.tags) |tag| {
         const formatted = try allocator.dupe(u8, self.text[tag.text.start..][0..tag.text.len]);
         errdefer allocator.free(formatted);
-        _ = try snapshots.tags.append(allocator, .{ .name = tag.name, .args = tag.args, .formatted = formatted });
+        _ = try snapshots.tags.append(allocator, .{ .name = tag.name, .args = tag.args, .formatted = formatted, .render_root = tag.render_root });
     }
-    try snapshots.formatted_strings_backing.appendSlice(self.text);
-    for (self.formatted) |formatted| try snapshots.formatted_strings.put(allocator, formatted.snapshot, .{ .start = formatted.text.start, .count = formatted.text.len });
+    for (self.formatted) |formatted| {
+        const text = try allocator.dupe(u8, self.text[formatted.text.start..][0..formatted.text.len]);
+        errdefer allocator.free(text);
+        try snapshots.formatted_log.ensureUnusedCapacity(allocator, 1);
+        try snapshots.formatted_strings.put(allocator, formatted.snapshot, text);
+        snapshots.formatted_log.appendAssumeCapacity(formatted.snapshot);
+    }
 }

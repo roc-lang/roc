@@ -50,6 +50,7 @@ pub const SnapshotRigid = struct {
 /// A snapshotted type alias with its backing type and type variables.
 pub const SnapshotAlias = struct {
     ident: types.TypeIdent,
+    origin_module: base.ModuleIdentity.Idx,
     backing: SnapshotContentIdx,
     vars: SnapshotContentIdxSafeList.Range,
 };
@@ -136,20 +137,21 @@ pub const SnapshotTag = struct {
     args: SnapshotContentIdxSafeList.Range,
     /// Pre-formatted string representation of this tag (e.g., "TagName(a, b)")
     formatted: []const u8,
+    render_root: ?SnapshotContentIdx = null,
 };
 
 /// A snapshotted static dispatch constraint for method resolution.
 pub const SnapshotStaticDispatchConstraint = struct {
     fn_name: Ident.Idx,
     fn_content: SnapshotContentIdx,
-    /// The type variable that has this constraint (the dispatcher).
-    /// This is the type that the method is called on.
-    dispatcher: SnapshotContentIdx,
+    source_fn_var: Var,
+    origin: @FieldType(types.StaticDispatchConstraint, "origin"),
 };
 
 const Var = types.Var;
 
-/// Self-contained snapshot store with fully resolved content (ie no Vars)
+/// Self-contained snapshot store with frozen content. Source variables retained
+/// as identity keys are never read from the live type store during rendering.
 ///
 /// Whenever a type error occurs, we update the `Var` in the type store to
 /// have `.err` content. This is necessary to continue type-checking but
@@ -158,21 +160,42 @@ const Var = types.Var;
 ///
 /// Entry point is `snapshotVarForError`
 const TypeWriter = types.TypeWriter;
+const RenderGraph = @import("snapshot/render.zig");
 
-const ByteList = std.array_list.Managed(u8);
-const ByteListRange = struct { start: usize, count: usize };
+/// Frozen source identity and polarity for a snapshot node. A recursion marker
+/// retains the same identity as the node it refers back to.
+pub const NodeFormat = struct {
+    source_var: ?Var,
+    polarity: types.Polarity,
+    capture: u32,
+};
 
-/// Which var a snapshot frame records: `original_var` is the var the caller
-/// asked for—what the TypeWriter renders and what tag formatting uses as its
-/// root—while `resolved_var` is its union-find root, which is what the visit
-/// path and the flex identity record.
+/// One immutable capture, independent of every later solver mutation.
+pub const Capture = struct {
+    start: u32,
+    len: u32,
+    omit_literal_conversion_constraints: bool,
+    omitted_dispatcher: ?Var,
+    identifier_count: u32,
+};
+
+/// The rendering context contains no solver types. Names and default source
+/// expressions belong to the module, including when diagnostics are restored.
+pub const FormatContext = struct {
+    idents: *const Ident.Store,
+    /// Borrow the immutable table, not the address of its movable owner.
+    import_mapping: ?types.import_mapping.ImportMapping,
+    default_source: @FieldType(TypeWriter, "mb_default_source"),
+    default_source_ctx: *const anyopaque,
+};
+
+/// A node's identity and presentation context at capture time.
 const SnapshotFill = struct {
-    original_var: types.Var,
     resolved_var: types.Var,
     /// The polarity of the position this var was requested from: `.pos` at
     /// the snapshot root, flipped through function argument positions,
-    /// preserved everywhere else. The formatted string rendered at
-    /// `finishFrame` starts its polarity walk here, so error messages hide
+    /// preserved everywhere else. Deferred rendering starts its polarity
+    /// walk here, so error messages hide
     /// implicit output-position openness exactly where the full type's
     /// rendering would.
     polarity: types.Polarity,
@@ -216,6 +239,7 @@ const IdentityFrame = struct {
 const AliasFrame = struct {
     fill: SnapshotFill,
     ident: types.TypeIdent,
+    origin_module: base.ModuleIdentity.Idx,
     backing: types.Var,
     args: []const types.Var,
     idx: u32 = 0,
@@ -280,7 +304,8 @@ const TagUnionFrame = struct {
 
 /// Stores snapshots of types captured before unification errors overwrite them with `.err`.
 /// This allows error messages to display the original conflicting types rather than the
-/// error state. Also stores pre-formatted type strings for efficient error reporting.
+/// error state. Rendering is demand-driven; captured identities preserve sharing
+/// and cycles without retaining any live solver descriptors.
 pub const Store = struct {
     const Self = @This();
 
@@ -293,6 +318,9 @@ pub const Store = struct {
     /// marker instead of an unbounded descent. Entries are unique: a var
     /// already on the path is never added again.
     seen_vars: std.AutoHashMapUnmanaged(Var, void),
+    /// A completed node is shared throughout this capture. Back edges in its
+    /// structural view are recursion markers with preserved graph identity.
+    captured_nodes: std.AutoHashMapUnmanaged(CaptureKey, SnapshotContentIdx) = .empty,
 
     /// Suspended steps of the snapshot walk, innermost last. The walk descends
     /// on this heap stack rather than the native one, so snapshot depth is
@@ -314,8 +342,17 @@ pub const Store = struct {
     scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     /// Formatted type strings, indexed by SnapshotContentIdx
-    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
-    formatted_strings_backing: ByteList,
+    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
+    formatted_log: std.ArrayList(SnapshotContentIdx) = .empty,
+    node_formats: std.ArrayList(NodeFormat) = .empty,
+    captures: std.ArrayList(Capture) = .empty,
+    render_graphs: std.ArrayList(?*RenderGraph) = .empty,
+    active_capture: u32 = 0,
+    format_context: ?FormatContext = null,
+    test_capture_steps: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
+    test_format_work: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
+
+    const CaptureKey = struct { var_: Var, polarity: types.Polarity };
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -333,18 +370,23 @@ pub const Store = struct {
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
             .formatted_strings = blk: {
-                var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange){};
+                var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8){};
                 try map.ensureTotalCapacity(gpa, 32);
                 break :blk map;
             },
-            .formatted_strings_backing = try ByteList.initCapacity(gpa, 512),
         };
     }
 
     pub fn deinit(self: *Self) void {
         // Free all stored formatted strings
+        var strings = self.formatted_strings.valueIterator();
+        while (strings.next()) |text| self.gpa.free(text.*);
         self.formatted_strings.deinit(self.gpa);
-        self.formatted_strings_backing.deinit();
+        self.formatted_log.deinit(self.gpa);
+        self.node_formats.deinit(self.gpa);
+        for (self.render_graphs.items) |graph| if (graph) |owned| owned.deinit();
+        self.render_graphs.deinit(self.gpa);
+        self.captures.deinit(self.gpa);
 
         // Free all formatted tag strings
         const tags_len = self.tags.len();
@@ -358,6 +400,7 @@ pub const Store = struct {
 
         self.contents.deinit(self.gpa);
         self.seen_vars.deinit(self.gpa);
+        self.captured_nodes.deinit(self.gpa);
         self.frames.deinit(self.gpa);
         self.pending_values.deinit();
         self.content_indexes.deinit(self.gpa);
@@ -370,14 +413,56 @@ pub const Store = struct {
         self.scratch_static_dispatch_constraints.deinit();
     }
 
-    /// Get the pre-formatted string for a snapshot.
+    /// Best-effort convenience for diagnostic clients that allow a placeholder.
+    /// Clients which propagate allocation failure use `formatType`.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
-        const mb_range = self.formatted_strings.get(idx);
+        return @constCast(self).formatType(idx) catch null;
+    }
 
-        if (mb_range == null) return null;
-        const range = mb_range.?;
+    pub fn setFormatContext(self: *Self, writer: *const TypeWriter) void {
+        self.format_context = .{
+            .idents = writer.idents,
+            .import_mapping = if (writer.import_mapping) |mapping| mapping.* else null,
+            .default_source = writer.mb_default_source,
+            .default_source_ctx = writer.default_source_ctx,
+        };
+    }
 
-        return self.formatted_strings_backing.items[range.start..][0..range.count];
+    fn renderGraph(self: *Self, capture: u32) Allocator.Error!*RenderGraph {
+        const slot = &self.render_graphs.items[capture];
+        if (slot.* == null) {
+            slot.* = try RenderGraph.init(self, capture, self.format_context.?);
+            if (@import("builtin").is_test) self.test_format_work += self.captures.items[capture].len;
+        }
+        return slot.*.?;
+    }
+
+    /// Render only a requested node, from its immutable capture.
+    pub fn formatType(self: *Self, idx: SnapshotContentIdx) Allocator.Error![]const u8 {
+        if (self.formatted_strings.get(idx)) |text| return text;
+        const info = self.node_formats.items[@backingInt(idx)];
+        const graph = try self.renderGraph(info.capture);
+        const before = if (@import("builtin").is_test) graph.writer.test_work + graph.writer.test_constraint_comparisons else {};
+        graph.writer.writeIntoAtPolarity(&graph.writer.buf, graph.nodeVar(idx), .wrap, info.polarity) catch return error.OutOfMemory;
+        if (@import("builtin").is_test) self.test_format_work += graph.writer.test_work + graph.writer.test_constraint_comparisons - before;
+        const text = try self.gpa.dupe(u8, graph.writer.get());
+        errdefer self.gpa.free(text);
+        try self.formatted_log.ensureUnusedCapacity(self.gpa, 1);
+        try self.formatted_strings.put(self.gpa, idx, text);
+        self.formatted_log.appendAssumeCapacity(idx);
+        return text;
+    }
+
+    pub fn formatTag(self: *Self, idx: SnapshotTagSafeList.Idx) Allocator.Error![]const u8 {
+        var tag = self.tags.get(idx);
+        if (tag.formatted.len != 0) return tag.formatted;
+        const root = tag.render_root.?;
+        const graph = try self.renderGraph(self.node_formats.items[@backingInt(root)].capture);
+        const before = if (@import("builtin").is_test) graph.writer.test_work + graph.writer.test_constraint_comparisons else {};
+        tag.formatted = try graph.formatTag(self, tag, root);
+        if (@import("builtin").is_test) self.test_format_work += graph.writer.test_work + graph.writer.test_constraint_comparisons - before;
+        self.tags.set(idx, tag);
+        return tag.formatted;
     }
 
     /// Lengths of every persistent append-only sequence in this store,
@@ -390,7 +475,8 @@ pub const Store = struct {
         record_fields_len: usize,
         tags_len: usize,
         static_dispatch_constraints_len: usize,
-        formatted_strings_backing_len: usize,
+        formatted_log_len: usize,
+        captures_len: usize,
     };
 
     /// Capture the current lengths for a later `truncateToMark`.
@@ -401,18 +487,15 @@ pub const Store = struct {
             .record_fields_len = self.record_fields.len(),
             .tags_len = self.tags.len(),
             .static_dispatch_constraints_len = @intCast(self.static_dispatch_constraints.len()),
-            .formatted_strings_backing_len = self.formatted_strings_backing.items.len,
+            .formatted_log_len = self.formatted_log.items.len,
+            .captures_len = self.captures.items.len,
         };
     }
 
     /// Discard every snapshot recorded after `mark` was captured—the
     /// rollback of a speculative probe that recorded against this store.
-    /// Owned memory is released exactly as `deinit` would: the `formatted`
-    /// string of each truncated tag is freed, and the `formatted_strings`
-    /// entries keyed by truncated content indexes (every content appended
-    /// after the mark gets its formatted entry when it is created, so the
-    /// keys to drop are exactly the truncated index range) are removed before
-    /// their backing bytes are truncated.
+    /// Discard rendered entries created after the mark even when they describe
+    /// an older capture. Pure adapter graphs of retained captures remain valid.
     pub fn truncateToMark(self: *Self, m: Mark) void {
         const tags_len = self.tags.len();
         if (tags_len > m.tags_len) {
@@ -425,23 +508,25 @@ pub const Store = struct {
             }
         }
 
-        var content_idx = m.contents_len;
-        const contents_len: usize = @intCast(self.contents.len());
-        while (content_idx < contents_len) : (content_idx += 1) {
-            _ = self.formatted_strings.remove(@fromBackingInt(@intCast(content_idx)));
+        for (self.formatted_log.items[m.formatted_log_len..]) |idx| {
+            self.gpa.free(self.formatted_strings.fetchRemove(idx).?.value);
         }
+        self.formatted_log.shrinkRetainingCapacity(m.formatted_log_len);
+        for (self.render_graphs.items[m.captures_len..]) |graph| if (graph) |owned| owned.deinit();
+        self.render_graphs.shrinkRetainingCapacity(m.captures_len);
+        self.captures.shrinkRetainingCapacity(m.captures_len);
+        self.node_formats.shrinkRetainingCapacity(m.contents_len);
 
         self.contents.items.shrinkRetainingCapacity(m.contents_len);
         self.content_indexes.items.shrinkRetainingCapacity(m.content_indexes_len);
         self.record_fields.items.shrinkRetainingCapacity(m.record_fields_len);
         self.tags.items.shrinkRetainingCapacity(m.tags_len);
         self.static_dispatch_constraints.items.shrinkRetainingCapacity(m.static_dispatch_constraints_len);
-        self.formatted_strings_backing.shrinkRetainingCapacity(m.formatted_strings_backing_len);
     }
 
-    /// Deep copy a type variable for error reporting. This snapshots the type structure
-    /// AND formats each nested type using TypeWriter before the types get overwritten with .err.
-    /// ONLY use this in error paths - it allocates formatted strings for all nested types.
+    /// Freeze a type graph before poisoning. No nested type or tag is formatted
+    /// during capture; reports request their text from the immutable snapshot.
+    /// ONLY use this in error paths.
     ///
     /// The graph walk runs on an explicit heap worklist, so snapshot depth is
     /// bounded only by available memory, never by the native stack.
@@ -451,6 +536,23 @@ pub const Store = struct {
 
         const frames_base = self.frames.items.len;
         const values_base = self.pending_values.top();
+        self.captured_nodes.clearRetainingCapacity();
+        const capture_mark = self.mark();
+        errdefer self.truncateToMark(capture_mark);
+        self.setFormatContext(type_writer);
+        const previous_capture = self.active_capture;
+        defer self.active_capture = previous_capture;
+        self.active_capture = @intCast(self.captures.items.len);
+        try self.captures.ensureUnusedCapacity(self.gpa, 1);
+        try self.render_graphs.ensureUnusedCapacity(self.gpa, 1);
+        self.captures.appendAssumeCapacity(.{
+            .start = std.math.cast(u32, self.contents.len()) orelse return error.OutOfMemory,
+            .len = 0,
+            .omit_literal_conversion_constraints = type_writer.omit_literal_conversion_constraints,
+            .omitted_dispatcher = type_writer.omitted_dispatcher,
+            .identifier_count = type_writer.idents.interner.entry_count,
+        });
+        self.render_graphs.appendAssumeCapacity(null);
         // A completed walk drains the worklist and leaves `seen_vars` empty.
         // An allocation failure mid-walk can leave entries behind on buffers
         // this store keeps for the next snapshot, so unwind them here and
@@ -485,6 +587,7 @@ pub const Store = struct {
 
         std.debug.assert(self.seen_vars.count() == 0);
         std.debug.assert(self.pending_values.top() == values_base + 1);
+        self.captures.items[self.active_capture].len = std.math.cast(u32, self.contents.len() - self.captures.items[self.active_capture].start) orelse return error.OutOfMemory;
         return self.pending_values.pop().?;
     }
 
@@ -494,7 +597,12 @@ pub const Store = struct {
     /// that will record it. Returns true when the result index is already on
     /// the value stack; false when a frame was pushed.
     fn requestVar(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, polarity: types.Polarity) std.mem.Allocator.Error!bool {
+        if (@import("builtin").is_test) self.test_capture_steps += 1;
         const resolved = store.resolveVar(var_);
+        if (self.captured_nodes.get(.{ .var_ = resolved.var_, .polarity = polarity })) |idx| {
+            try self.pending_values.append(idx);
+            return true;
+        }
 
         // If we've already reached this variable on the current path, then
         // return it as a recursive type. Try to extract the name from the
@@ -514,7 +622,7 @@ pub const Store = struct {
                 },
                 .err => unreachable, // .err content is recorded and leaves seen_vars at once, so it is never on the path
             };
-            const idx = try self.contents.append(self.gpa, .{ .recursive = recursive_name });
+            const idx = try self.appendContent(.{ .recursive = recursive_name }, resolved.var_, polarity);
             try self.pending_values.append(idx);
             return true;
         }
@@ -522,7 +630,10 @@ pub const Store = struct {
         // If not, mark it as being visited
         try self.seen_vars.put(self.gpa, resolved.var_, {});
 
-        const fill = SnapshotFill{ .original_var = var_, .resolved_var = resolved.var_, .polarity = polarity };
+        const fill = SnapshotFill{
+            .resolved_var = resolved.var_,
+            .polarity = polarity,
+        };
         switch (resolved.desc.content) {
             .err => {
                 try self.finishFrame(type_writer, fill, SnapshotContent.err);
@@ -567,6 +678,7 @@ pub const Store = struct {
                 try self.frames.append(self.gpa, .{ .alias = .{
                     .fill = fill,
                     .ident = alias.ident,
+                    .origin_module = alias.origin_module,
                     .backing = store.getAliasBackingVar(alias),
                     .args = store.sliceAliasArgs(alias),
                 } });
@@ -617,7 +729,7 @@ pub const Store = struct {
                             return false;
                         }
                     }
-                    try self.scratch_content.append(try self.contents.append(self.gpa, .err));
+                    try self.scratch_content.append(try self.appendContent(.err, null, polarity));
                     try self.frames.append(self.gpa, .{ .nominal = frame });
                     return false;
                 },
@@ -663,31 +775,32 @@ pub const Store = struct {
         return false;
     }
 
-    /// Record one node's finished content, format it with the TypeWriter, and
-    /// take it off the visit path. The formatted string is keyed by the
-    /// content index this call assigns, exactly as the recursion did.
+    fn appendContent(self: *Self, content: SnapshotContent, source: ?Var, polarity: types.Polarity) Allocator.Error!SnapshotContentIdx {
+        try self.node_formats.ensureUnusedCapacity(self.gpa, 1);
+        const idx = try self.contents.append(self.gpa, content);
+        self.node_formats.appendAssumeCapacity(.{ .source_var = source, .polarity = polarity, .capture = self.active_capture });
+        return idx;
+    }
+
+    /// Freeze one node's content and take it off the visit path. No rendering
+    /// happens while traversing the solver graph.
     fn finishFrame(
         self: *Self,
         type_writer: *TypeWriter,
         fill: SnapshotFill,
         content: SnapshotContent,
     ) std.mem.Allocator.Error!void {
-        const snapshot_idx = try self.contents.append(self.gpa, content);
-
-        // Format this type and store the formatted string
-        // Here, we run the TypeWriter, writing directly into our backing
-        {
-            const formatted_strings_start = self.formatted_strings_backing.items.len;
-            type_writer.writeIntoAtPolarity(&self.formatted_strings_backing, fill.original_var, .wrap, fill.polarity) catch return error.OutOfMemory;
-            const formatted_strings_end = self.formatted_strings_backing.items.len;
-
-            const formatted_range = ByteListRange{
-                .start = formatted_strings_start,
-                .count = formatted_strings_end - formatted_strings_start,
-            };
-
-            try self.formatted_strings.put(self.gpa, snapshot_idx, formatted_range);
+        _ = type_writer;
+        const snapshot_idx = try self.appendContent(content, fill.resolved_var, fill.polarity);
+        if (content == .structure and content.structure == .tag_union) {
+            var tags = content.structure.tag_union.tags.iterIndices();
+            while (tags.next()) |idx| {
+                var tag = self.tags.get(idx);
+                tag.render_root = snapshot_idx;
+                self.tags.set(idx, tag);
+            }
         }
+        try self.captured_nodes.put(self.gpa, .{ .var_ = fill.resolved_var, .polarity = fill.polarity }, snapshot_idx);
 
         _ = self.seen_vars.remove(fill.resolved_var);
         try self.pending_values.append(snapshot_idx);
@@ -727,8 +840,8 @@ pub const Store = struct {
                     try self.scratch_static_dispatch_constraints.append(.{
                         .fn_name = frame.constraints[frame.idx].fn_name,
                         .fn_content = self.pending_values.pop().?,
-                        // Dispatcher is set when collecting constraints during write
-                        .dispatcher = undefined,
+                        .source_fn_var = frame.constraints[frame.idx].fn_var,
+                        .origin = frame.constraints[frame.idx].origin,
                     });
                     frame.idx += 1;
                     frame.stage = .head;
@@ -766,6 +879,7 @@ pub const Store = struct {
                     self.scratch_content.clearFrom(frame.scratch_top);
                     try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .alias = SnapshotAlias{
                         .ident = frame.ident,
+                        .origin_module = frame.origin_module,
                         .backing = frame.backing_content,
                         .vars = args_range,
                     } });
@@ -986,14 +1100,10 @@ pub const Store = struct {
                     );
                     self.scratch_content.clearFrom(frame.content_scratch_top);
 
-                    // Format the tag using TypeWriter (uses correct Roc syntax like "TagName(a, b)")
-                    const formatted_tag = type_writer.writeTagGet(tag, frame.fill.original_var) catch return error.OutOfMemory;
-                    const formatted_owned = try self.gpa.dupe(u8, formatted_tag);
-
                     try self.scratch_tags.append(.{
                         .name = tag.name,
                         .args = tag_args_range,
-                        .formatted = formatted_owned,
+                        .formatted = &.{},
                     });
                     frame.tag_idx += 1;
                     frame.stage = .tag_head;
@@ -1156,8 +1266,7 @@ pub const Store = struct {
         }
     }
 
-    /// Get the pre-formatted string representation of a tag (e.g., "TagName(a, b)").
-    /// The tag was formatted using TypeWriter during snapshotting.
+    /// Read a tag's display after the diff gatherer requested its formatting.
     pub fn getFormattedTagString(tag: SnapshotTag) []const u8 {
         return tag.formatted;
     }
@@ -1282,4 +1391,170 @@ test "snapshotting a spine deeper than any native-stack budget" {
 
     const idx = try snapshots.snapshotVarForError(&store, &type_writer, current);
     try std.testing.expect(snapshots.getFormattedString(idx) != null);
+}
+
+test "diagnostic snapshots preserve acyclic sharing without rendering unused nodes" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 64, 8);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer writer.deinit();
+    var snapshots = try Store.initCapacity(gpa, 32);
+    defer snapshots.deinit();
+
+    const depth = 24;
+    var root = try store.freshFromContent(.{ .structure = .empty_record });
+    for (0..depth) |_| {
+        root = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ root, root }),
+        } } });
+    }
+    const captured = try snapshots.snapshotVarForError(&store, &writer, root);
+    try std.testing.expectEqual(@as(usize, depth + 1), snapshots.contents.len());
+    try std.testing.expect(snapshots.test_capture_steps <= 2 * depth + 1);
+    try std.testing.expectEqual(@as(usize, 0), snapshots.formatted_strings.count());
+    try std.testing.expectEqual(null, snapshots.render_graphs.items[0]);
+    const children = snapshots.sliceVars(snapshots.getContent(captured).structure.tuple.elems);
+    try std.testing.expectEqual(children[0], children[1]);
+}
+
+test "diagnostic snapshots preserve sharing through recursive subgraphs" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 32, 8);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer writer.deinit();
+    var snapshots = try Store.initCapacity(gpa, 32);
+    defer snapshots.deinit();
+
+    const depth = 12;
+    const root = try store.fresh();
+    var current = root;
+    for (0..depth) |_| {
+        current = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ current, current }),
+        } } });
+    }
+    try store.setVarContent(root, store.resolveVar(current).desc.content);
+    _ = try snapshots.snapshotVarForError(&store, &writer, root);
+    try std.testing.expect(snapshots.contents.len() <= depth + 3);
+    try std.testing.expect(snapshots.test_capture_steps <= 2 * depth + 3);
+    try std.testing.expectEqual(null, snapshots.render_graphs.items[0]);
+}
+
+test "diagnostic snapshots render frozen identities after poisoning and naming scope changes" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 16, 8);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const method = try idents.insert(gpa, Ident.for_text("echo"));
+    const shared = try store.fresh();
+    const root = try store.freshFromContent(try store.mkFuncPure(&.{shared}, shared));
+    const constraints = try store.appendStaticDispatchConstraints(&.{
+        .{ .fn_name = method, .fn_var = root, .origin = .{ .where_clause = .{} } },
+    });
+    try store.setVarContent(shared, .{ .flex = .{ .name = null, .constraints = constraints } });
+    var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer writer.deinit();
+    const expected = try gpa.dupe(u8, try writer.writeGet(root, .wrap));
+    defer gpa.free(expected);
+    var snapshots = try Store.initCapacity(gpa, 16);
+    defer snapshots.deinit();
+    const captured = try snapshots.snapshotVarForError(&store, &writer, root);
+    try store.setVarContent(root, .err);
+    try store.setVarContent(shared, .err);
+    _ = try idents.insert(gpa, Ident.for_text("arg"));
+    _ = try idents.insert(gpa, Ident.for_text("a"));
+
+    const before_format = snapshots.mark();
+    try std.testing.expectEqualStrings(expected, try snapshots.formatType(captured));
+    snapshots.truncateToMark(before_format);
+    try std.testing.expectEqual(@as(usize, 0), snapshots.formatted_strings.count());
+    const first_text = try snapshots.formatType(captured);
+    try std.testing.expectEqualStrings(expected, first_text);
+
+    // Formatting a later, large capture cannot relocate an earlier string or
+    // change which version of the solver graph that string describes.
+    var long_name: [4096]u8 = undefined;
+    @memset(&long_name, 'L');
+    const alias_name = try idents.insert(gpa, Ident.for_text(&long_name));
+    const alias = try store.freshFromContent(try store.mkAlias(
+        .{ .ident_idx = alias_name },
+        root,
+        &.{},
+        base.ModuleIdentity.Idx.NONE,
+    ));
+    const later = try snapshots.snapshotVarForError(&store, &writer, alias);
+    try std.testing.expectEqualStrings(&long_name, try snapshots.formatType(later));
+    try std.testing.expectEqualStrings(expected, first_text);
+}
+
+test "diagnostic snapshot rendering options belong to each capture" {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 16, 8);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const method = try idents.insert(gpa, Ident.for_text("from_quote"));
+    const receiver = try store.fresh();
+    const callable = try store.freshFromContent(try store.mkFuncPure(&.{receiver}, receiver));
+    const constraints = try store.appendStaticDispatchConstraints(&.{
+        .{ .fn_name = method, .fn_var = callable, .origin = .{ .from_literal = .quote } },
+    });
+    try store.setVarContent(receiver, .{ .flex = .{ .name = null, .constraints = constraints } });
+    var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer writer.deinit();
+    var snapshots = try Store.initCapacity(gpa, 16);
+    defer snapshots.deinit();
+
+    writer.omit_literal_conversion_constraints = true;
+    const omitted = try snapshots.snapshotVarForError(&store, &writer, receiver);
+    writer.omit_literal_conversion_constraints = false;
+    const shown = try snapshots.snapshotVarForError(&store, &writer, receiver);
+    try std.testing.expect(std.mem.find(u8, try snapshots.formatType(omitted), "from_quote") == null);
+    try std.testing.expect(std.mem.find(u8, try snapshots.formatType(shown), "from_quote") != null);
+}
+
+fn diagnosticAllocationBytes(requirement_count: usize) !usize {
+    const gpa = std.testing.allocator;
+    var store = try TypesStore.initCapacity(gpa, 128, 8);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const method = try idents.insert(gpa, Ident.for_text("get"));
+    const receiver = try store.fresh();
+    const result = try store.freshFromContent(.{ .structure = .empty_record });
+    const constraints = try gpa.alloc(types.StaticDispatchConstraint, requirement_count);
+    defer gpa.free(constraints);
+    for (constraints) |*constraint| constraint.* = .{
+        .fn_name = method,
+        .fn_var = try store.freshFromContent(try store.mkFuncPure(&.{receiver}, result)),
+        .origin = .{ .where_clause = .{} },
+    };
+    try store.setVarContent(receiver, .{ .flex = .{
+        .name = null,
+        .constraints = try store.appendStaticDispatchConstraints(constraints),
+    } });
+    var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
+    defer writer.deinit();
+    var measured = std.testing.FailingAllocator.init(gpa, .{});
+    var snapshots = try Store.initCapacity(measured.allocator(), 16);
+    defer snapshots.deinit();
+    const before = measured.allocated_bytes;
+    const captured = try snapshots.snapshotVarForError(&store, &writer, receiver);
+    const text = try snapshots.formatType(captured);
+    try std.testing.expect(std.mem.find(u8, text, ".get") != null);
+    return measured.allocated_bytes - before;
+}
+
+test "diagnostic capture and requested rendering allocate in proportion to requirements" {
+    const small = try diagnosticAllocationBytes(32);
+    const large = try diagnosticAllocationBytes(64);
+    if (large > 3 * small) std.debug.print("diagnostic allocation bytes: 32 requirements {d}; 64 requirements {d}\n", .{ small, large });
+    try std.testing.expect(large <= 3 * small);
 }

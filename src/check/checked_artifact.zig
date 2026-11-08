@@ -1140,6 +1140,8 @@ pub const RootRequestTable = struct {
         hoisted_constants: *const HoistedConstTable,
         const_templates: *const ConstTemplateTable,
         template_root_evidence: []const ?artifact_serialize.Span,
+        platform_solutions: []const ModuleEnv.PlatformRequirementSolution,
+        platform_root_evidence: []const artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!RootRequestTable {
@@ -1231,6 +1233,22 @@ pub const RootRequestTable = struct {
             checkedArtifactInvariant("template root evidence and procedure template tables had different lengths", .{});
         }
         for (requests.items) |*request| {
+            if (request.root_evidence != null) continue;
+            // An app entry selected for discovery or execution is the same
+            // checked platform invocation, not a second use of its raw scheme.
+            for (platform_solutions, platform_root_evidence) |solution, evidence| {
+                if (!solution.is_function or solution.outcome != .success) continue;
+                const matches = switch (request.source) {
+                    .def => |def| def == solution.def,
+                    .expr => |expr| expr == module.def(solution.def).expr.idx,
+                    else => false,
+                };
+                if (!matches) continue;
+                request.checked_type = checked_types.rootForSourceVar(module, solution.solved_var) orelse
+                    checkedArtifactInvariant("platform invocation root type was not published", .{});
+                request.root_evidence = .{ .checked_module = artifact_key.digest(), .span = evidence };
+                break;
+            }
             if (request.root_evidence != null) continue;
             const template_ref = request.procedure_template orelse
                 aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
@@ -12960,7 +12978,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @fromBackingInt(@intCast(record.scheme_root)),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use, .platform_requirement => {},
             }
         }
 
@@ -13754,11 +13772,19 @@ const EvidencePass = struct {
             }
             if (!solution.is_function) continue;
 
+            if (solution.scheme_use) |record| {
+                self.current_chain = &.{};
+                const spans = (try self.evidenceRefsForRecord(record, .root_default)) orelse
+                    checkedArtifactInvariant("platform invocation evidence remained unresolved after checking", .{});
+                out.* = spans.refs;
+                continue;
+            }
             params.clearRetainingCapacity();
-            // The app definition owns the complete scheme, including captured
-            // codec requirements absent from the platform's copied type root.
+            // A use without a record has no substitution and no evidence.
             try self.enumerateParams(ModuleEnv.varFrom(solution.def), &params);
-            out.* = try self.rootEvidenceRefs(params.items);
+            if (params.items.len != 0) {
+                checkedArtifactInvariant("platform invocation omitted its scheme-use evidence record", .{});
+            }
         }
 
         // Explicit shared-var use sites no template chain fully bound resolve
@@ -14181,7 +14207,7 @@ const EvidencePass = struct {
                     const root_entry = try self.where_method_use_by_fn_root.getOrPut(root);
                     if (!root_entry.found_existing) root_entry.value_ptr.* = @intCast(i);
                 },
-                .nested_function_use, .recursive_reference, .recursive_value_reference => {},
+                .nested_function_use, .recursive_reference, .recursive_value_reference, .platform_requirement => {},
             }
         }
         // A relation checking folded into a retained same-name relation
@@ -14455,6 +14481,17 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| {
+            // An attached codec parameter has a variable receiver, not a
+            // checked concrete codec. A literal default alone cannot supply
+            // its derivation. Only a real use may instantiate this contract.
+            // Explicit composite requirements retain the checker's private
+            // validation-instance verdict instead.
+            if (param.source != .scheme_requirement and
+                (param.constraint.fn_name.eql(env.idents.encoder_for) or
+                    param.constraint.fn_name.eql(env.idents.parser_for)))
+            {
+                param.requires_instantiation = true;
+            }
             param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
@@ -15876,6 +15913,8 @@ const EvidencePass = struct {
         defer_resolution,
         /// Commit it by the unpinned-dispatch rule.
         commit,
+        /// A source-free platform invocation uses the root literal defaults.
+        root_default,
         /// The record places a function into a value as data. A containing
         /// record, tuple, list, tag, or nominal can cross a module boundary
         /// before that function is requested at a concrete type, so an
@@ -15917,6 +15956,7 @@ const EvidencePass = struct {
             const evidence = switch (unpinned) {
                 .defer_resolution => (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) orelse return null,
                 .commit => (try self.evidenceForRecordParam(pairs, param, .commit)).?,
+                .root_default => (try self.evidenceForRecordParam(pairs, param, .root_default)).?,
                 .from_callable => try self.storedFunctionEvidenceForRecordParam(pairs, param),
             };
             entries.appendAssumeCapacity(evidence);
@@ -16373,6 +16413,7 @@ const EvidencePass = struct {
             .shared_value_use => .defer_resolution,
             .nested_function_use => .from_callable,
             .value_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => .commit,
+            .platform_requirement => unreachable, // platform solutions publish their source-free root edge, never expression-site evidence
             .where_method_use => unreachable, // rejected above
         };
         const spans = (try self.evidenceRefsForRecord(record_idx, unpinned)) orelse {
@@ -34124,6 +34165,8 @@ pub fn publishFromTypedModule(
         &hoisted_constants,
         &const_templates,
         static_dispatch_plans.template_root_evidence,
+        requirement_solutions,
+        platform_requirement_root_evidence,
         inputs.explicit_roots,
         inputs.validation,
     );
