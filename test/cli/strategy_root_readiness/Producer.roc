@@ -1,15 +1,16 @@
-# Both closures capture a local nominal at its producer's instantiation.
-# Its custom descriptor must not be recreated in the importing consumer.
-make : a -> ({} -> Str)
+# The annotated record publishes both closures as compile-time values.
+# Their local nominal's custom descriptor must retain its producer scope.
+make : Str -> ({} -> Str)
 make = |value| {
-    Local(a) := [Local(a)].{
+    Local := [Local(Str)].{
         to_inspect = |_value| "producer scope"
     }
     captured = Local.Local(value)
     |_| Str.inspect([captured])
 }
 
-saved = { first: make(5.U64), second: make("captured text") }
+saved : { first : ({} -> Str), second : ({} -> Str) }
+saved = { first: make("first"), second: make("second") }
 
 Producer := [].{
     values = saved
