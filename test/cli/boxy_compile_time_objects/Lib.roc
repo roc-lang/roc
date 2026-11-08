@@ -24,7 +24,7 @@ Lib := [].{
 	narrow = |n| n + 200
 
 	forever : U64 -> U64
-	forever = |n| 1 + Lib.forever(n + 1)
+	forever = |n| 1 + Lib.forever(n)
 
 	checks : U64 -> U64
 	checks = |n| {
