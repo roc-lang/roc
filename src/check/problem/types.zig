@@ -92,6 +92,7 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    polymorphic_recursion: PolymorphicRecursion,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -187,6 +188,13 @@ pub const PlatformDefNotFound = struct {
     app_region: base.Region,
     platform_region: base.Region,
     ctx: enum { not_found, found_but_not_exported },
+};
+
+/// A use of a generic definition that is on a recursion cycle and gives the
+/// definition different types from the ones it was itself used at (design.md
+/// "Polymorphic Recursion").
+pub const PolymorphicRecursion = struct {
+    region: base.Region,
 };
 
 /// Hosted functions cannot accept or return unboxed functions.
@@ -427,7 +435,7 @@ pub const InvalidNominalDeclRecursion = struct {
     type_name: Ident.Idx,
     kind: Kind,
 
-    pub const Kind = enum { infinite, anonymous, growing_args };
+    pub const Kind = enum { infinite, anonymous, growing_args, reordered_args };
 };
 
 // generic errors //
@@ -840,6 +848,16 @@ pub const StaticDispatch = union(enum) {
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
     undetermined_type: UndeterminedType,
+    local_value_method: LocalValueMethod,
+};
+
+/// A dispatch selected an associated binding of a type declared in a function
+/// body that is a value of that body, not a local procedure: nothing
+/// dispatches to such a binding (design.md "Methods Never Capture").
+pub const LocalValueMethod = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
 };
 
 /// A requirement failed on a type that never resolved to a concrete type: a

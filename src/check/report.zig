@@ -55,6 +55,7 @@ const UndeterminedCodecType = problem_mod.UndeterminedCodecType;
 const UndeterminedType = problem_mod.UndeterminedType;
 const UnresolvedDispatcher = problem_mod.UnresolvedDispatcher;
 const RecursiveDispatch = problem_mod.RecursiveDispatch;
+const LocalValueMethod = problem_mod.LocalValueMethod;
 
 // Match/exhaustiveness errors
 const NonExhaustiveMatch = problem_mod.NonExhaustiveMatch;
@@ -84,6 +85,7 @@ const PlatformAliasNotFound = problem_mod.PlatformAliasNotFound;
 const PlatformDefNotFound = problem_mod.PlatformDefNotFound;
 const PlatformHostedSection = problem_mod.PlatformHostedSection;
 const HostedUnboxedFunction = problem_mod.HostedUnboxedFunction;
+const PolymorphicRecursion = problem_mod.PolymorphicRecursion;
 const HostedFunctionNotEffectful = problem_mod.HostedFunctionNotEffectful;
 const HostedTypeVariableNotBoxed = problem_mod.HostedTypeVariableNotBoxed;
 const HostBoundaryOpenRow = problem_mod.HostBoundaryOpenRow;
@@ -1036,6 +1038,7 @@ pub const ReportBuilder = struct {
                     .unresolved_dispatcher => |data| return self.buildStaticDispatchUnresolvedDispatcher(data),
                     .recursive_dispatch => |data| return self.buildStaticDispatchRecursiveDispatch(data),
                     .undetermined_type => |data| return self.buildUndeterminedType(data),
+                    .local_value_method => |data| return self.buildStaticDispatchLocalValueMethod(data),
                 }
             },
             .recursive_alias => |data| {
@@ -1112,6 +1115,9 @@ pub const ReportBuilder = struct {
             },
             .hosted_unboxed_function => |data| {
                 return self.buildHostedUnboxedFunctionReport(data);
+            },
+            .polymorphic_recursion => |data| {
+                return self.buildPolymorphicRecursionReport(data);
             },
             .hosted_function_not_effectful => |data| {
                 return self.buildHostedFunctionNotEffectfulReport(data);
@@ -3068,6 +3074,41 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for an unproductive static-dispatch cycle.
+    fn buildStaticDispatchLocalValueMethod(
+        self: *Self,
+        data: LocalValueMethod,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Method Is a Local Value", "", .runtime_error);
+        errdefer report.deinit();
+        try D.renderSliceInto(&.{
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("is a value of the function body around this type, so it can't be called as a method."),
+        }, self, &report, &report.headline);
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
+            try report.document.addLineBreak();
+        }
+
+        try D.renderSlice(&.{
+            D.bytes("The method is being selected for this type:"),
+        }, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(snapshot_str);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(&.{
+            D.bytes("A method of a type declared in a function body must be a function written in the type's declaration, like"),
+            D.bytes("|x| ...").withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("or a local function. Write"),
+            D.ident(data.method_name).withAnnotation(.inline_code),
+            D.bytes("as a function, or declare the type at the top level, where a method can be any function value."),
+        }, self, &report);
+        return report;
+    }
+
     fn buildStaticDispatchRecursiveDispatch(
         self: *Self,
         data: RecursiveDispatch,
@@ -5050,6 +5091,11 @@ pub const ReportBuilder = struct {
                 D.ident(type_name_ident).withAnnotation(.type_variable),
                 D.bytes("passes changing type arguments to its own recursion, so it would need infinitely many instantiations."),
             }, self, &report, &report.headline),
+            .reordered_args => try D.renderSliceInto(&.{
+                D.bytes("The nominal type"),
+                D.ident(type_name_ident).withAnnotation(.type_variable),
+                D.bytes("passes its type arguments to its own recursion in a different order."),
+            }, self, &report, &report.headline),
         }
 
         if (self.getRegionSafe(@fromBackingInt(@backingInt(data.decl_var)))) |region| {
@@ -5084,6 +5130,18 @@ pub const ReportBuilder = struct {
                 D.bytes("inside the declaration of"),
                 D.bytes("Nest(a)").withAnnotation(.inline_code),
                 D.bytes(", would create a different type at every level of the recursion.").withNoPrecedingSpace(),
+            }, self, &report),
+            .reordered_args => try D.renderSlice(&.{
+                D.bytes("Hint:").withAnnotation(.emphasized),
+                D.bytes("A recursive use of a nominal type must pass each of its type parameters through unchanged, like"),
+                D.bytes("Tree(a) := [Leaf(a), Node(Tree(a), Tree(a))]").withAnnotation(.inline_code),
+                D.bytes(", or apply it to a type with no type variables, like").withNoPrecedingSpace(),
+                D.bytes("Chain(a) := [End, Link(a, Chain(Str))]").withAnnotation(.inline_code),
+                D.bytes(". Arguments in a different order, like").withNoPrecedingSpace(),
+                D.bytes("Flip(b, a)").withAnnotation(.inline_code),
+                D.bytes("inside the declaration of"),
+                D.bytes("Flip(a, b)").withAnnotation(.inline_code),
+                D.bytes(", would make each level of the recursion a different type from the one around it.").withNoPrecedingSpace(),
             }, self, &report),
         }
 
@@ -5391,6 +5449,17 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreaks(2);
         try D.renderSlice(details, self, &report);
         return report;
+    }
+
+    fn buildPolymorphicRecursionReport(self: *Self, data: PolymorphicRecursion) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Polymorphic Recursion", "This use passes changing types to a recursion.", .runtime_error, data.region, &.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("A function that reaches itself again, directly or through other functions, must pass each of its type variables through unchanged, or use types with no type variables. An argument that wraps a type variable, like"),
+            D.bytes("f([x])").withAnnotation(.inline_code),
+            D.bytes("inside"),
+            D.bytes("f : a -> U64").withAnnotation(.inline_code),
+            D.bytes("would use the function at a different type at every level of the recursion."),
+        });
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {

@@ -25,6 +25,7 @@ const Var = types.Var;
 pub const NumericDefaultPhase = types.literal_defaulting.NumericDefaultPhase;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
+const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 const DispatchExprTag = enum {
     e_dispatch_call,
@@ -628,17 +629,33 @@ fn procedureRuntimeTargetForDef(
     def_idx: CIR.Def.Idx,
     method_owner: MethodOwner,
 ) ProcedureRuntimeTarget {
-    if (intrinsicForProcedureDef(module, def_idx)) |intrinsic| {
-        if (intrinsic.callsiteArity() != null) return .{ .intrinsic = intrinsic };
+    return procedureRuntimeTarget(
+        intrinsicForProcedureDef(module, def_idx),
+        iteratorProcedureForDef(module, def_idx),
+        module.moduleEnvConst().providedLowLevelForDef(def_idx),
+        method_owner,
+    );
+}
+
+/// The runtime category of a method of `method_owner` whose target is the
+/// procedure with these producer-recorded roles.
+pub fn procedureRuntimeTarget(
+    intrinsic: ?can.BuiltinLowLevel.IntrinsicId,
+    iterator_procedure: ?IteratorProcedureId,
+    provided_low_level: ?base.LowLevel,
+    method_owner: MethodOwner,
+) ProcedureRuntimeTarget {
+    if (intrinsic) |id| {
+        if (id.callsiteArity() != null) return .{ .intrinsic = id };
     }
-    if (iteratorProcedureForDef(module, def_idx)) |iterator| return if (iterator.participatesInRepresentationGraph())
+    if (iterator_procedure) |iterator| return if (iterator.participatesInRepresentationGraph())
         .{ .graph_participating = .{ .iterator_procedure = iterator } }
     else
         .{ .procedure = .{ .iterator_procedure = iterator } };
     if (std.meta.activeTag(method_owner) == .builtin and isIteratorOwner(method_owner.builtin)) {
         return .{ .graph_participating = .{} };
     }
-    if (module.moduleEnvConst().providedLowLevelForDef(def_idx)) |op| return .{ .low_level = op };
+    if (provided_low_level) |op| return .{ .low_level = op };
     return .{ .procedure = .{} };
 }
 
@@ -662,10 +679,24 @@ pub const LocalProcedureMethodTarget = struct {
     dispatch_scope: ?DispatchScopeId = null,
 };
 
+/// The callable-eval template of a method bound to a computed callable, in
+/// the module that declares the method: the registry's own.
+pub const CallableBindingTarget = struct {
+    module: canonical.CheckedModuleDigest,
+    template: CallableEvalTemplateId,
+};
+
 /// Public `MethodTargetKind` declaration.
 pub const MethodTargetKind = union(enum(u8)) {
     procedure: ProcedureMethodTarget,
     local_proc: LocalProcedureMethodTarget,
+    /// A top-level method binding whose callable no procedure stands behind
+    /// (`to_inspect = make()`): its compile-time root evaluates the function
+    /// value, and a dispatch calls that value, as a call of the binding by
+    /// name does. The binding is a value, so it is monomorphic: the target
+    /// carries no scheme, no evidence, and no alias (design.md "Procedure
+    /// Aliases").
+    callable_binding: CallableBindingTarget,
     structural: StructuralKind,
 };
 
@@ -684,13 +715,49 @@ pub const MethodTarget = struct {
 };
 
 /// The exact procedure alias a method is bound to.
-pub const MethodAlias = union(enum(u8)) {
+pub const MethodAlias = struct {
+    /// The checked module that declares the alias binding: the module whose
+    /// registry holds the method. The procedure the alias chain reaches may
+    /// be another module's (`method = Other.function`).
+    module: canonical.CheckedModuleDigest,
+    binding: MethodAliasBinding,
+};
+
+/// The binding of an exact procedure alias, in its declaring module.
+pub const MethodAliasBinding = union(enum(u8)) {
     /// A top-level alias, by its checked binding pattern, which names its
     /// callable-eval template.
     top_level: CIR.Pattern.Idx,
     /// A block-local alias: its checked lookup of the aliased procedure and
     /// the generalized-local evidence scope it owns.
     local: LocalMethodAlias,
+};
+
+/// What the value of a method bound by reference (`method = f`) reaches,
+/// following its exact procedure aliases. Publication resolves it from its
+/// resolved value references (`MethodRegistry.fromModule`'s
+/// `referenced_targets`).
+pub const ReferencedMethodTarget = union(enum) {
+    target: ReferencedTarget,
+    /// The chain reaches a binding checking rejected, so the method is a
+    /// rejected declaration: every dispatch to it is a checked error.
+    rejected,
+
+    pub const ReferencedTarget = struct {
+        kind: MethodTargetKind,
+        callable: ReferencedCallable,
+    };
+
+    /// The target's callable type. A procedure's is its template's checked
+    /// function root, in the store of the module that owns the template;
+    /// any other target's is a type of the registry's own module.
+    pub const ReferencedCallable = union(enum) {
+        template_root: CheckedTypeId,
+        source: Var,
+        /// The method binding's own type, for a structural declaration of
+        /// another module.
+        binding,
+    };
 };
 
 /// Public `LocalMethodAlias` declaration.
@@ -804,13 +871,20 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
+    /// `referenced_targets` resolves a method binding that is no procedure
+    /// of its own: `methodBindingTarget(binding, binding_expr, method_owner)`
+    /// returns the `ReferencedMethodTarget` its value reaches (through
+    /// references, or its own compile-time root for a computed callable), or
+    /// null for an associated value that is not a callable.
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
         names: *canonical.CanonicalNameStore,
+        owner_artifact: canonical.CheckedModuleDigest,
         local_templates: *const ProcedureTemplateLookup,
         checked_types: anytype,
         module_index: anytype,
+        referenced_targets: anytype,
     ) Allocator.Error!MethodRegistry {
         var entries = std.ArrayList(MethodRegistryEntry).empty;
         errdefer entries.deinit(allocator);
@@ -859,6 +933,7 @@ pub const MethodRegistry = struct {
                 continue;
             }
             var referenced_callable_var: ?Var = null;
+            var referenced_callable_ty: ?CheckedTypeId = null;
             var alias: ?MethodAlias = null;
             const target_kind: MethodTargetKind = if (generatedStructuralTargetForMethodBinding(module, entry.value)) |generated|
                 .{ .structural = generated }
@@ -887,25 +962,40 @@ pub const MethodRegistry = struct {
                 break :blk promoted.kind;
             } else if (localProcedureTargetForMethodBinding(module, module_index, entry.key.owner, entry.value)) |local|
                 .{ .local_proc = local }
-            else if (referencedProcedureTargetForMethodBinding(
-                module,
-                local_templates,
-                module_index,
-                entry.value,
-                method_owner,
-            )) |referenced| blk: {
-                referenced_callable_var = referenced.callable_var;
-                if (std.meta.activeTag(referenced.kind) == .procedure) {
-                    alias = methodAliasForBinding(module, module_index, entry.value);
-                }
-                break :blk referenced.kind;
+            else if (try referencedMethodTarget(module, referenced_targets, entry.value, method_owner)) |referenced| switch (referenced) {
+                // A method bound to a rejected binding is a rejected
+                // declaration, exactly like one whose own value checking
+                // rejected.
+                .rejected => {
+                    try entries.append(allocator, .{
+                        .key = method_key,
+                        .target = null,
+                        .inspect_override = null,
+                    });
+                    continue;
+                },
+                .target => |target| blk: {
+                    switch (target.callable) {
+                        .template_root => |root| referenced_callable_ty = root,
+                        .source => |source| referenced_callable_var = source,
+                        .binding => {},
+                    }
+                    if (std.meta.activeTag(target.kind) == .procedure) {
+                        alias = methodAliasForBinding(module, owner_artifact, module_index, entry.value);
+                    }
+                    break :blk target.kind;
+                },
             } else
                 // Associated values that resolve to neither a callable nor an
                 // explicitly structural declaration are checked field access,
                 // not static-dispatch resolutions.
                 continue;
-            const callable_var = referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind);
-            const callable_ty = try checked_types.publishMethodCallableType(allocator, module, names, callable_var);
+            const callable_ty = referenced_callable_ty orelse try checked_types.publishMethodCallableType(
+                allocator,
+                module,
+                names,
+                referenced_callable_var orelse methodTargetCallableVar(module, def_idx, entry.value, target_kind),
+            );
 
             try entries.append(allocator, .{
                 .key = method_key,
@@ -918,9 +1008,10 @@ pub const MethodRegistry = struct {
                 },
                 // Inspection calls an override from rendering workers and
                 // generic code that never hold a local procedure's declaration
-                // context, so only a procedure can be one.
+                // context, so only a procedure or a stored top-level value
+                // can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) == .procedure)
+                    (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
                     null,
@@ -954,7 +1045,7 @@ fn methodTargetCallableVar(
     target_kind: MethodTargetKind,
 ) Var {
     return switch (target_kind) {
-        .procedure => module.defType(def_idx),
+        .procedure, .callable_binding => module.defType(def_idx),
         .structural => ModuleEnv.varFrom(binding.type_node_idx),
         .local_proc => blk: {
             const raw_node = @backingInt(binding.type_node_idx);
@@ -1014,18 +1105,32 @@ fn methodBindingExpr(
 /// lookup chain reaching a procedure.
 fn methodAliasForBinding(
     module: TypedCIR.Module,
+    owner_artifact: canonical.CheckedModuleDigest,
     module_index: anytype,
     binding: ModuleEnv.MethodBinding,
 ) MethodAlias {
     if (module.nodeTag(binding.type_node_idx) == .def) {
         const pattern = module.moduleEnvConst().store.getDef(binding.def_idx).pattern;
         if (!module_index.reachesPattern(pattern)) base.invariant("checked static dispatch registry invariant violated: a method alias binding pattern was not checked", .{});
-        return .{ .top_level = pattern };
+        return .{ .module = owner_artifact, .binding = .{ .top_level = pattern } };
     }
     const expr = methodBindingExpr(module, binding) orelse
         base.invariant("checked static dispatch registry invariant violated: a local method alias binding had no value", .{});
     if (!module_index.reachesExpr(expr)) base.invariant("checked static dispatch registry invariant violated: a local method alias lookup was not checked", .{});
-    return .{ .local = .{ .lookup = expr } };
+    return .{ .module = owner_artifact, .binding = .{ .local = .{ .lookup = expr } } };
+}
+
+/// What a method binding that is no procedure of its own reaches: the
+/// procedure its references reach, its own computed callable, or null for an
+/// associated value that is not a callable.
+fn referencedMethodTarget(
+    module: TypedCIR.Module,
+    referenced_targets: anytype,
+    binding: ModuleEnv.MethodBinding,
+    method_owner: MethodOwner,
+) Allocator.Error!?ReferencedMethodTarget {
+    const expr_idx = methodBindingExpr(module, binding) orelse return null;
+    return try referenced_targets.methodBindingTarget(binding, expr_idx, method_owner);
 }
 
 fn unsupportedGeneratedMethodBinding(
@@ -1118,93 +1223,6 @@ fn promotedProcedureTarget(
         } },
         .callable_var = module.exprType(expr),
     };
-}
-
-/// Resolve a function-typed associated value bound by reference
-/// (`method = top_level_fn`) to the referenced procedure. The reference chain
-/// is followed through top-level defs and associated declarations until it
-/// reaches a procedure-backed binding; a chain that never reaches one is an
-/// associated value, not a call target, and resolves to null.
-fn referencedProcedureTargetForMethodBinding(
-    module: TypedCIR.Module,
-    local_templates: *const ProcedureTemplateLookup,
-    module_index: anytype,
-    binding: ModuleEnv.MethodBinding,
-    method_owner: MethodOwner,
-) ?ReferencedProcedureTarget {
-    const module_env = module.moduleEnvConst();
-    var expr_idx = methodBindingExpr(module, binding) orelse return null;
-    // Each hop follows one value binding, and a chain can visit each binding
-    // at most once before repeating, so the node count bounds the walk.
-    var remaining: usize = module.nodeCount();
-    while (remaining > 0) : (remaining -= 1) {
-        const expr_data = module.expr(expr_idx).data;
-        if (std.meta.activeTag(expr_data) != .e_lookup_local) return null;
-        const pattern_idx = expr_data.e_lookup_local.pattern_idx;
-        if (defForBoundPattern(module_env, pattern_idx)) |target_def_idx| {
-            if (local_templates.entryForDef(target_def_idx)) |template_entry| {
-                return .{
-                    .kind = switch (template_entry.kind) {
-                        .callable => .{ .procedure = .{
-                            .proc = .{ .artifact = template_entry.template.artifact, .proc_base = template_entry.template.proc_base },
-                            .template = template_entry.template,
-                            .runtime_target = procedureRuntimeTargetForDef(module, target_def_idx, method_owner),
-                        } },
-                        .structural => |kind| .{ .structural = kind },
-                    },
-                    .callable_var = module.defType(target_def_idx),
-                };
-            }
-            expr_idx = module_env.store.getDef(target_def_idx).expr;
-            continue;
-        }
-        if (statementDeclForBoundPattern(module, pattern_idx)) |decl| {
-            if (promotedProcedureTarget(module, local_templates, decl.pattern, decl.expr)) |promoted| return promoted;
-            if (localProcedureExpr(module, decl.expr)) {
-                if (!module_index.reachesExpr(decl.expr)) return null;
-                if (!module_index.reachesPattern(decl.pattern)) return null;
-                if (!module_index.reachesStatement(decl.statement)) return null;
-                return .{
-                    .kind = .{ .local_proc = .{
-                        .binder = decl.pattern,
-                        .expr = decl.expr,
-                        .context_anchor = decl.statement,
-                    } },
-                    .callable_var = module.exprType(decl.expr),
-                };
-            }
-            expr_idx = decl.expr;
-            continue;
-        }
-        return null;
-    }
-    return null;
-}
-
-fn defForBoundPattern(module_env: *const ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
-    for (module_env.store.sliceDefs(module_env.global_value_defs)) |def_idx| {
-        if (module_env.store.getDef(def_idx).pattern == pattern_idx) return def_idx;
-    }
-    return null;
-}
-
-const BoundDecl = struct {
-    statement: CIR.Statement.Idx,
-    pattern: CIR.Pattern.Idx,
-    expr: CIR.Expr.Idx,
-};
-
-fn statementDeclForBoundPattern(module: TypedCIR.Module, pattern_idx: CIR.Pattern.Idx) ?BoundDecl {
-    var raw_node: u32 = 0;
-    while (raw_node < module.nodeCount()) : (raw_node += 1) {
-        if (module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
-        const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
-        const statement_data = module.getStatement(statement);
-        if (std.meta.activeTag(statement_data) != .s_decl) continue;
-        const decl = statement_data.s_decl;
-        if (decl.pattern == pattern_idx) return .{ .statement = statement, .pattern = decl.pattern, .expr = decl.expr };
-    }
-    return null;
 }
 
 fn methodOwnerForRegistryEntry(
@@ -3235,7 +3253,7 @@ pub fn lookupCheckedMethodTarget(
             switch (found) {
                 .rejected => return found,
                 .target => |target| switch (target.kind) {
-                    .procedure, .structural => return found,
+                    .procedure, .structural, .callable_binding => return found,
                     .local_proc => continue,
                 },
             }

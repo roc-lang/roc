@@ -1633,6 +1633,9 @@ const CompileTimeRequestScheduler = struct {
             .literal => {},
             .node => |id| switch (self.static_dispatch_plans.evidenceNode(id).target.kind) {
                 .procedure => |procedure| try self.collectTemplateDependencies(procedure.template),
+                .callable_binding => |binding| if (binding.module.eql(self.artifact_key.digest())) {
+                    try self.addRootDependency(self.callable_eval_templates.get(binding.template).root);
+                },
                 .local_proc, .structural => {},
             },
             .use => |expr| {
@@ -10905,16 +10908,9 @@ fn procedureUseBody(
         .imported => |imported| {
             const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
                 checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
-            for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-                    return .{ .view = view.*, .body = switch (binding.body) {
-                        .direct_template => |direct| .{ .direct_template = direct },
-                        .callable_eval_template => |template| .{ .callable_eval_template = template },
-                        .checked_error => |expr| .{ .checked_error = expr },
-                    } };
-                }
-            }
-            checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
+            const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse
+                checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
+            return .{ .view = view.*, .body = binding.body };
         },
     };
     if (top_level.artifact.eql(local_module.digest())) {
@@ -10981,16 +10977,9 @@ fn importedProcedureKind(
 ) std.meta.Tag(ProcedureBindingBody) {
     const view = dependencyViewByKey(imported.artifact, imports, available_modules, relation_modules) orelse
         checkedArtifactInvariant("imported direct-call target referenced an unavailable checked module", .{});
-    for (view.exported_procedure_bindings.bindings) |binding| {
-        if (binding.binding.def == imported.def and binding.binding.pattern == imported.pattern) {
-            return switch (binding.body) {
-                .direct_template => .direct_template,
-                .callable_eval_template => .callable_eval_template,
-                .checked_error => .checked_error,
-            };
-        }
-    }
-    checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
+    const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse
+        checkedArtifactInvariant("imported direct-call target was not exported by its checked module", .{});
+    return std.meta.activeTag(binding.body);
 }
 
 /// The alias-chased builtin nominal of a literal's target type, treating a
@@ -11217,7 +11206,7 @@ pub const TopLevelProcedureBindingRef = enum(u32) { _ };
 /// Id for a top-level procedure binding.
 pub const TopLevelProcedureBindingId = TopLevelProcedureBindingRef;
 /// Public `CallableEvalTemplateId` declaration.
-pub const CallableEvalTemplateId = enum(u32) { _ };
+pub const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 /// Public `DirectProcedureBinding` declaration.
 pub const DirectProcedureBinding = struct {
@@ -12386,10 +12375,7 @@ fn uniqueImportedView(existing: ?ImportedModuleView, next: ImportedModuleView) I
 }
 
 fn importedProcedureBindingForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
-    for (view.exported_procedure_bindings.bindings) |binding| {
-        if (binding.binding.def == def) return binding;
-    }
-    return null;
+    return view.exported_procedure_bindings.lookupByDef(def);
 }
 
 fn importedConstTemplateForDef(view: ImportedModuleView, def: CIR.Def.Idx) ?ImportedConstTemplateView {
@@ -13275,7 +13261,7 @@ fn publishLocalMethodDispatchScopes(
 ) void {
     for (method_registry.entries) |*entry| {
         const target = if (entry.target) |*target| target else continue;
-        if (target.alias) |*alias| switch (alias.*) {
+        if (target.alias) |*alias| switch (alias.binding) {
             .local => |*local| local.dispatch_scope = scope_by_checked_expr.get(local.lookup),
             .top_level => {},
         };
@@ -14273,7 +14259,7 @@ const EvidencePass = struct {
                 };
                 const evidence_var: Var = @fromBackingInt(@intCast(source_call.evidence_var));
                 switch (target.kind) {
-                    .procedure, .local_proc => {
+                    .procedure, .local_proc, .callable_binding => {
                         const node_id = try self.evidenceNodeForTarget(
                             target,
                             call.dispatcher_ty,
@@ -14339,7 +14325,7 @@ const EvidencePass = struct {
                         }
                         const node = self.evidence_nodes.items[raw_node];
                         switch (node.target.kind) {
-                            .procedure, .local_proc => {},
+                            .procedure, .local_proc, .callable_binding => {},
                             .structural => checkedArtifactInvariant(
                                 "checked generated codec callable resolution named a structural target",
                                 .{},
@@ -15347,7 +15333,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
             },
-            .procedure, .local_proc => .{ .node = .{
+            .procedure, .local_proc, .callable_binding => .{ .node = .{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .constraint_fn_var = constraint_fn_var,
@@ -15366,7 +15352,7 @@ const EvidencePass = struct {
     fn procedureEvidenceView(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceView {
         const procedure = switch (target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
+            .local_proc, .structural, .callable_binding => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
         const target_key = procedure.template.artifact;
         const table: *const CheckedProcedureTemplateTable = imported: {
@@ -15621,7 +15607,7 @@ const EvidencePass = struct {
 
         const procedure_schema: ?ProcedureEvidenceSchema = switch (target.kind) {
             .procedure => self.procedureEvidenceSchema(target),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
         if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
@@ -16045,7 +16031,7 @@ const EvidencePass = struct {
                         !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_target, .requires_record => true,
                 },
-                .local_proc, .structural => true,
+                .local_proc, .structural, .callable_binding => true,
             },
             .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
         };
@@ -17473,7 +17459,7 @@ pub const NestedProcSiteTable = struct {
         // procedure), a default's root lambda is an ordinary nested function
         // value.
         for (default_exprs) |default| {
-            builder.current_scope = .root;
+            builder.beginScan();
             try builder.scanExpr(default, .{ .default_root = default }, false);
         }
 
@@ -17907,6 +17893,11 @@ pub const CheckedProcedureTemplateTable = struct {
     }
 
     pub fn lookupByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?canonical.ProcedureTemplateRef {
+        return (self.lookupEntryByDef(def_idx) orelse return null).template;
+    }
+
+    /// The template of a source definition and its semantic lowering kind.
+    pub fn lookupEntryByDef(self: *const CheckedProcedureTemplateTable, def_idx: CIR.Def.Idx) ?static_dispatch.ProcedureTemplateLookupEntry {
         var lo: usize = 0;
         var hi: usize = self.by_def.len;
         const target = @backingInt(def_idx);
@@ -17920,7 +17911,7 @@ pub const CheckedProcedureTemplateTable = struct {
             }
         }
         if (lo >= self.by_def.len or self.by_def[lo].def != def_idx) return null;
-        return self.by_def[lo].template;
+        return self.by_def[lo];
     }
 
     pub fn appendEntryWrappersForRoots(
@@ -18174,9 +18165,15 @@ const NestedProcSiteBuilder = struct {
     resolved_value_refs: ?*const ResolvedValueRefTable = null,
     /// Per site, by site index: the site lexically enclosing it, if any.
     site_parents: std.ArrayList(?u32) = .empty,
-    /// Per pattern binder, by binder node: the innermost site whose body
-    /// binds it, or null when the enclosing template body binds it.
-    binder_sites: std.ArrayList(?u32) = .empty,
+    /// Per site, by site index: the scan that recorded it. One body can be
+    /// scanned once per owner (a template and an entry wrapper reaching the
+    /// same expression), and each scan records its own copy of every site.
+    site_scans: std.ArrayList(u32) = .empty,
+    /// The scan in progress; every scan entry point starts a new one.
+    current_scan: u32 = 0,
+    /// Per scan and pattern binder: the innermost site of that scan whose
+    /// body binds it, or null when the scanned root's body binds it.
+    binder_sites: std.AutoHashMapUnmanaged(ScanBinder, ?u32) = .empty,
     /// The sites whose bodies the walk is inside, innermost last.
     open_sites: std.ArrayList(canonical.NestedProcSiteId) = .empty,
     /// Every local procedure a site's own body selects.
@@ -18185,6 +18182,16 @@ const NestedProcSiteBuilder = struct {
     const SelectedLocalProc = struct {
         site: u32,
         proc_expr: CIR.Expr.Idx,
+    };
+
+    const ScanBinder = struct {
+        scan: u32,
+        binder: CIR.Pattern.Idx,
+    };
+
+    const ScanExpr = struct {
+        scan: u32,
+        expr: CIR.Expr.Idx,
     };
 
     fn init(
@@ -18212,6 +18219,7 @@ const NestedProcSiteBuilder = struct {
 
     fn deinitScratch(self: *NestedProcSiteBuilder) void {
         self.site_parents.deinit(self.allocator);
+        self.site_scans.deinit(self.allocator);
         self.binder_sites.deinit(self.allocator);
         self.open_sites.deinit(self.allocator);
         self.selected_procs.deinit(self.allocator);
@@ -18223,13 +18231,20 @@ const NestedProcSiteBuilder = struct {
         self.template_refs.deinit(self.allocator);
     }
 
-    fn scanCheckedBody(self: *NestedProcSiteBuilder, root_expr: CIR.Expr.Idx, template: canonical.ProcedureTemplateRef) Allocator.Error!void {
+    /// Begin scanning a new root: its sites and binders are related only to
+    /// each other.
+    fn beginScan(self: *NestedProcSiteBuilder) void {
+        self.current_scan += 1;
         self.current_scope = .root;
+    }
+
+    fn scanCheckedBody(self: *NestedProcSiteBuilder, root_expr: CIR.Expr.Idx, template: canonical.ProcedureTemplateRef) Allocator.Error!void {
+        self.beginScan();
         try self.scanExpr(root_expr, .{ .template = template }, true);
     }
 
     fn scanEntryWrapper(self: *NestedProcSiteBuilder, wrapper: EntryWrapper, root: CompileTimeRoot) Allocator.Error!void {
-        self.current_scope = .root;
+        self.beginScan();
         const parts = root.bodyParts();
         if (parts.expr) |expr| try self.scanExpr(expr, .{ .template = wrapper.template }, false);
         if (parts.pattern) |pattern| try self.scanPattern(pattern, .{ .template = wrapper.template });
@@ -18264,6 +18279,7 @@ const NestedProcSiteBuilder = struct {
         };
 
         try self.site_parents.append(self.allocator, self.innermostOpenSite());
+        try self.site_scans.append(self.allocator, self.current_scan);
         try self.sites.append(self.allocator, .{
             .site = site,
             .owner = owner,
@@ -18656,11 +18672,7 @@ const NestedProcSiteBuilder = struct {
     }
 
     fn recordBinderSite(self: *NestedProcSiteBuilder, binder: CIR.Pattern.Idx) Allocator.Error!void {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            try self.binder_sites.appendNTimes(self.allocator, null, raw + 1 - self.binder_sites.items.len);
-        }
-        self.binder_sites.items[raw] = self.innermostOpenSite();
+        try self.binder_sites.put(self.allocator, .{ .scan = self.current_scan, .binder = binder }, self.innermostOpenSite());
     }
 
     /// Record that the innermost open site's own body selects the local
@@ -18697,12 +18709,9 @@ const NestedProcSiteBuilder = struct {
     }
 
     /// Whether the body of `site`, or of a site nested in it, binds `binder`.
+    /// A binder the site's scan never binds is bound outside the scanned root.
     fn binderBoundWithin(self: *const NestedProcSiteBuilder, site: u32, binder: CIR.Pattern.Idx) bool {
-        const raw = @backingInt(binder);
-        if (raw >= self.binder_sites.items.len) {
-            checkedArtifactInvariant("nested procedure runtime capture named a binder no scanned pattern binds", .{});
-        }
-        var current = self.binder_sites.items[raw];
+        var current = self.binder_sites.get(.{ .scan = self.site_scans.items[site], .binder = binder }) orelse return false;
         while (current) |candidate| {
             if (candidate == site) return true;
             current = self.site_parents.items[candidate];
@@ -18744,13 +18753,15 @@ const NestedProcSiteBuilder = struct {
     /// its own body does not bind.
     fn publishRuntimeCaptures(self: *NestedProcSiteBuilder, sites: []NestedProcSite) Allocator.Error![]CheckedCapture {
         const allocator = self.allocator;
-        var site_by_expr = collections.DenseMapUnmanaged(CIR.Expr.Idx, u32){};
+        // A selected procedure's site is the one its selector's scan
+        // recorded: another scan's copy relates to other sites and binders.
+        var site_by_expr = std.AutoHashMapUnmanaged(ScanExpr, u32){};
         defer site_by_expr.deinit(allocator);
-        for (sites, 0..) |site, index| {
+        for (sites, self.site_scans.items, 0..) |site, scan, index| {
             const expr_id = site.checked_expr orelse continue;
-            try site_by_expr.put(allocator, expr_id, @intCast(index));
+            try site_by_expr.put(allocator, .{ .scan = scan, .expr = expr_id }, @intCast(index));
             const data = self.bodies.exprData(expr_id);
-            if (data == .closure) try site_by_expr.put(allocator, data.closure.lambda, @intCast(index));
+            if (data == .closure) try site_by_expr.put(allocator, .{ .scan = scan, .expr = data.closure.lambda }, @intCast(index));
         }
 
         const needs = try allocator.alloc(std.ArrayList(CIR.Pattern.Idx), sites.len);
@@ -18765,7 +18776,7 @@ const NestedProcSiteBuilder = struct {
         while (changed) {
             changed = false;
             for (self.selected_procs.items) |selected| {
-                const proc_site = site_by_expr.get(selected.proc_expr) orelse continue;
+                const proc_site = site_by_expr.get(.{ .scan = self.site_scans.items[selected.site], .expr = selected.proc_expr }) orelse continue;
                 var index: usize = 0;
                 while (index < needs[proc_site].items.len) : (index += 1) {
                     const binder = needs[proc_site].items[index];
@@ -19769,12 +19780,7 @@ fn platformRequirementSolutionTableFromInputs(
         }
         if (builtin.mode == .debug) {
             const is_exported = switch (top_level.value) {
-                .procedure_binding => blk: {
-                    for (exported_procedure_bindings.bindings) |binding| {
-                        if (binding.binding.def == top_level.def and binding.binding.pattern == top_level.pattern) break :blk true;
-                    }
-                    break :blk false;
-                },
+                .procedure_binding => exported_procedure_bindings.view().lookup(top_level.def, top_level.pattern) != null,
                 .const_ref => blk: {
                     for (exported_const_templates.templates) |template| {
                         if (template.def == top_level.def and template.pattern == top_level.pattern) break :blk true;
@@ -20584,7 +20590,9 @@ fn directEvidenceEnter(
             states[raw_node] = .parametric;
             return .{ .decided = false };
         },
-        .procedure => {},
+        // A stored top-level value is the one value every specialization
+        // calls.
+        .procedure, .callable_binding => {},
         .structural => checkedArtifactInvariant("direct evidence closure contained a structural target", .{}),
     }
     switch (node.nested) {
@@ -20974,8 +20982,9 @@ fn publishLiteralArgumentRoots(
                     }),
                     // A method declared in a function body is called through
                     // its function value, whose scheme its construction or
-                    // use instantiates.
-                    .local_proc, .structural => {},
+                    // use instantiates; a computed callable is a monomorphic
+                    // value, which instantiates nothing.
+                    .local_proc, .structural, .callable_binding => {},
                 }
                 switch (node.nested) {
                     .resolved => try self.entries(self.plans.nestedEvidence(node)),
@@ -21017,16 +21026,14 @@ fn publishLiteralArgumentRoots(
         /// the owning module publishes.
         fn aliasChainSubstitution(self: *@This(), node: static_dispatch.EvidenceNode) Allocator.Error!?[]const CheckedTypeId {
             const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
-            // The alias binding is in the target's module, which this
-            // module is only where the target's template is its own: a
-            // module index tells modules of one compilation apart, not a
-            // module from the Builtin compiled beside it.
-            const procedure = switch (node.target.kind) {
-                .procedure => |procedure| procedure,
-                .local_proc, .structural => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
-            };
-            if (!procedure.template.artifact.eql(self.owner)) return null;
-            var step: AliasStep = switch (alias) {
+            switch (node.target.kind) {
+                .procedure => {},
+                .local_proc, .structural, .callable_binding => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
+            }
+            // The module that declares the alias binding composes the
+            // chain; the procedure it reaches may be another module's.
+            if (!alias.module.eql(self.owner)) return null;
+            var step: AliasStep = switch (alias.binding) {
                 .top_level => |pattern| try self.callableEvalAliasStep(null, pattern),
                 .local => |local| blk: {
                     const scope_id = local.dispatch_scope orelse break :blk AliasStep{ .module = null, .lookup = local.lookup, .vars = &.{} };
@@ -21088,7 +21095,20 @@ fn publishLiteralArgumentRoots(
                                     .direct_template, .checked_error => return try self.takeComposed(&owned, actuals),
                                 }
                             },
-                            .imported, .hosted, .platform_required => return try self.takeComposed(&owned, actuals),
+                            .imported => |imported| {
+                                const view = self.import_views.viewForKey(imported.artifact) orelse return null;
+                                const binding = view.exported_procedure_bindings.lookup(imported.def, imported.pattern) orelse
+                                    checkedArtifactInvariant("an alias chain's imported procedure was not exported by its checked module", .{});
+                                switch (binding.body) {
+                                    .callable_eval_template => |template_id| {
+                                        const template = view.callable_eval_templates.templates[@backingInt(template_id)];
+                                        if (template.forwarded_lookup == null) return try self.takeComposed(&owned, actuals);
+                                        step = try self.callableEvalAliasStep(view, template.pattern);
+                                    },
+                                    .direct_template, .checked_error => return try self.takeComposed(&owned, actuals),
+                                }
+                            },
+                            .hosted, .platform_required => return try self.takeComposed(&owned, actuals),
                         }
                     },
                     .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => checkedArtifactInvariant("a forwarded procedure alias lookup names no procedure", .{}),
@@ -21743,7 +21763,7 @@ fn checkedDispatchPlanNeedsRelation(
                 .graph_participating, .intrinsic => true,
                 .procedure, .low_level => false,
             },
-            .local_proc => false,
+            .local_proc, .callable_binding => false,
             .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
         },
         .direct_pending => checkedArtifactInvariant("unfinalized direct call reached template classification", .{}),
@@ -21849,6 +21869,7 @@ fn projectResolvedDispatchTargetCallable(
 ) Allocator.Error!CheckedTypeId {
     const target_key = switch (target.kind) {
         .local_proc => return target.callable_ty,
+        .callable_binding => |binding| binding.module,
         .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
         .procedure => |procedure| procedure.template.artifact,
     };
@@ -25359,7 +25380,7 @@ const TemplateDemandPass = struct {
         if (node.target.alias != null) return null;
         const procedure = switch (node.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         switch (procedure.runtime_target) {
             .procedure, .low_level => {},
@@ -28706,23 +28727,11 @@ const ImportedTemplateClosureBuilder = struct {
     ) ImportedProcedureBindingView {
         for (self.context.imports) |import| {
             if (!std.meta.eql(import.key.bytes, ref.artifact.bytes)) continue;
-            for (import.view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.def == ref.def and
-                    binding.binding.pattern == ref.pattern)
-                {
-                    return binding;
-                }
-            }
+            if (import.view.exported_procedure_bindings.lookup(ref.def, ref.pattern)) |binding| return binding;
         }
         for (self.context.available_artifacts) |view| {
             if (!std.meta.eql(view.key.bytes, ref.artifact.bytes)) continue;
-            for (view.exported_procedure_bindings.bindings) |binding| {
-                if (binding.binding.def == ref.def and
-                    binding.binding.pattern == ref.pattern)
-                {
-                    return binding;
-                }
-            }
+            if (view.exported_procedure_bindings.lookup(ref.def, ref.pattern)) |binding| return binding;
         }
         checkedArtifactInvariant("imported procedure dependency had no published imported closure", .{});
     }
@@ -28968,11 +28977,29 @@ pub const ImportedProcedureBindingView = struct {
 
 /// Public `ExportedProcedureBindingView` declaration.
 pub const ExportedProcedureBindingView = struct {
+    /// Ordered by `binding.def`, which is unique per row
+    /// (`ExportedProcedureBindingTable.fromModule`).
     bindings: []const ImportedProcedureBindingView = &.{},
     closure_pool: *const ClosurePool = &empty_closure_pool,
 
     const Common = ClosureRowView(@This(), ImportedProcedureBindingView);
     pub const rowClosure = Common.rowClosure;
+
+    /// The exported binding of `def` with binding pattern `pattern`.
+    pub fn lookup(self: ExportedProcedureBindingView, def: CIR.Def.Idx, pattern: CIR.Pattern.Idx) ?ImportedProcedureBindingView {
+        const row = self.lookupByDef(def) orelse return null;
+        return if (row.binding.pattern == pattern) row else null;
+    }
+
+    /// The exported binding of `def`.
+    pub fn lookupByDef(self: ExportedProcedureBindingView, def: CIR.Def.Idx) ?ImportedProcedureBindingView {
+        const found = artifact_serialize.binarySearchByKey(ImportedProcedureBindingView, CIR.Def.Idx, self.bindings, def, exportedBindingOrder) orelse return null;
+        return found.*;
+    }
+
+    fn exportedBindingOrder(row: ImportedProcedureBindingView, def: CIR.Def.Idx) std.math.Order {
+        return std.math.order(@backingInt(row.binding.def), @backingInt(def));
+    }
 };
 
 /// Public `ExportedProcedureBindingTable` declaration.
@@ -29048,10 +29075,25 @@ pub const ExportedProcedureBindingTable = struct {
             });
         }
 
+        // Rows are keyed by definition: a top-level destructure's row by its
+        // binder node and every other row by its definition node, so no two
+        // rows share one.
+        std.mem.sort(ImportedProcedureBindingView, bindings.items, {}, exportedBindingLessThan);
+        if (std.debug.runtime_safety) {
+            for (bindings.items[0..bindings.items.len -| 1], bindings.items[@min(1, bindings.items.len)..]) |previous, next| {
+                if (@backingInt(previous.binding.def) == @backingInt(next.binding.def)) {
+                    checkedArtifactInvariant("two exported procedure bindings share definition {d}", .{@backingInt(next.binding.def)});
+                }
+            }
+        }
         return .{
             .bindings = try bindings.toOwnedSlice(allocator),
             .closure_pool = closure_pool,
         };
+    }
+
+    fn exportedBindingLessThan(_: void, lhs: ImportedProcedureBindingView, rhs: ImportedProcedureBindingView) bool {
+        return @backingInt(lhs.binding.def) < @backingInt(rhs.binding.def);
     }
 
     const Common = ClosureRowTable(@This(), ExportedProcedureBindingView, ImportedProcedureBindingView, "bindings");
@@ -31306,14 +31348,12 @@ pub const CheckedModuleArtifact = struct {
             const entry_target = entry.target orelse continue;
             const procedure = switch (entry_target.kind) {
                 .procedure => |procedure| procedure,
-                .local_proc, .structural => continue,
+                .local_proc, .structural, .callable_binding => continue,
             };
-            if (!std.meta.eql(procedure.template.artifact.bytes, self.key.bytes)) {
-                base.invariant(
-                    "checked artifact invariant violated: method registry procedure {d} referenced a foreign checked template",
-                    .{entry_index},
-                );
-            }
+            // A method bound to another module's procedure
+            // (`method = Other.function`) names that module's template, which
+            // this artifact does not hold.
+            if (!std.meta.eql(procedure.template.artifact.bytes, self.key.bytes)) continue;
             const template_index = @backingInt(procedure.template.template);
             if (template_index >= self.checked_procedure_templates.templates.items.len) {
                 base.invariant(
@@ -33358,6 +33398,222 @@ fn publicationDefaultExprs(
     return defaults.toOwnedSlice(allocator);
 }
 
+/// Resolves a method binding that is no procedure of its own for
+/// `MethodRegistry.fromModule`, from the resolved value references and
+/// procedure bindings publication already holds. A binding by reference
+/// (`method = f`) is followed through exact procedure aliases, in this module
+/// and the modules they forward into, to the procedure it reaches: the chain
+/// Monotype and Boxy compose an alias-bound method's instantiation along. A
+/// top-level binding whose value no procedure stands behind (`method =
+/// make()`, or a reference to such a binding) is its own callable-eval
+/// template, whose compile-time root evaluates the method's function value
+/// (design.md "Procedure Aliases").
+const MethodBindingTargets = struct {
+    allocator: Allocator,
+    module: TypedCIR.Module,
+    artifact_key: CheckedModuleArtifactKey,
+    names: *const canonical.CanonicalNameStore,
+    module_index: *const ModuleIndex,
+    resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_values: *const TopLevelValueTable,
+    procedure_bindings: *const TopLevelProcedureBindingTable,
+    callable_eval_templates: *const CallableEvalTemplateTable,
+    templates: *const CheckedProcedureTemplateTable,
+    imports: []const PublishImportArtifact,
+    available_modules: []const ImportedModuleView,
+    relation_modules: []const ImportedModuleView,
+    /// The declaring statement of each local declaration's pattern, built
+    /// on the first method that reaches an unpromoted local procedure.
+    decl_statements: ?[]?CIR.Statement.Idx = null,
+
+    fn deinit(self: *MethodBindingTargets) void {
+        if (self.decl_statements) |statements| self.allocator.free(statements);
+        self.* = undefined;
+    }
+
+    pub fn methodBindingTarget(
+        self: *MethodBindingTargets,
+        binding: ModuleEnv.MethodBinding,
+        binding_expr: CIR.Expr.Idx,
+        method_owner: static_dispatch.MethodOwner,
+    ) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
+        // The module whose references the current lookup is in: null for
+        // this one.
+        var view: ?ImportedModuleView = null;
+        var expr = binding_expr;
+        while (true) {
+            const refs: *const ResolvedValueRefTable = if (view) |imported| imported.resolved_value_refs else self.resolved_value_refs;
+            const ref_id = refs.lookupIdByExpr(expr) orelse {
+                // The binding's value is not a reference.
+                if (view != null) checkedArtifactInvariant("a forwarded procedure alias lookup had no resolved reference", .{});
+                return self.computedCallableTarget(binding);
+            };
+            const use: ProcedureUseTemplate = switch (refs.records[@backingInt(ref_id)].ref) {
+                .local_proc => |local| {
+                    if (view != null) checkedArtifactInvariant("a top-level procedure alias forwarded to a local procedure", .{});
+                    if (local.is_alias) {
+                        expr = local.expr;
+                        continue;
+                    }
+                    return try self.localProcedureTarget(local);
+                },
+                .top_level_proc, .imported_proc, .promoted_top_level_proc, .hosted_proc => |use| use,
+                .platform_required_proc => |required| required.procedure,
+                // A value, not a procedure: an associated value.
+                .local_param,
+                .local_value,
+                .local_mutable_version,
+                .pattern_binder,
+                .selected_hoisted_const,
+                .top_level_const,
+                .imported_const,
+                .platform_required_declaration,
+                .platform_required_checked_error,
+                .platform_required_const,
+                => return null,
+            };
+            const body = procedureUseBody(use, self.artifact_key, self.procedure_bindings, self.imports, self.available_modules, self.relation_modules) orelse {
+                const hosted = switch (use.binding) {
+                    .hosted => |hosted| hosted,
+                    .top_level, .imported, .platform_required => checkedArtifactInvariant("a procedure use with no binding body was not hosted", .{}),
+                };
+                return self.procedureTarget(null, hosted.proc, hosted.template, use, method_owner);
+            };
+            switch (body.body) {
+                .direct_template => |direct| {
+                    const template = switch (direct.template) {
+                        .checked => |template| template,
+                        .lifted, .synthetic => checkedArtifactInvariant("a method's procedure alias reached a template checking did not publish", .{}),
+                    };
+                    return self.procedureTarget(body.view, direct.proc_value, template, use, method_owner);
+                },
+                // A reference to a computed callable is not a forward: the
+                // method calls that binding's evaluated value.
+                .callable_eval_template => |template_id| {
+                    const template = if (body.view) |imported|
+                        imported.callable_eval_templates.templates[@backingInt(template_id)]
+                    else
+                        self.callable_eval_templates.get(template_id);
+                    expr = template.forwarded_lookup orelse return .{ .target = .{
+                        .kind = .{ .callable_binding = .{
+                            .module = if (body.view) |imported| imported.key.digest() else self.artifact_key.digest(),
+                            .template = template_id,
+                        } },
+                        .callable = .{ .template_root = template.checked_fn_root },
+                    } };
+                    view = body.view;
+                },
+                .checked_error => return .rejected,
+            }
+        }
+    }
+
+    /// The method's own callable-eval template, for a top-level binding whose
+    /// value is not a reference and whose callable no procedure stands behind.
+    /// Checking forwards a top-level binding only to a directly callable
+    /// procedure, so a binding reached here has no forward. A binding that is
+    /// not function-typed, or one in a function body, is an associated value,
+    /// not a method target (design.md "Methods Never Capture").
+    fn computedCallableTarget(self: *const MethodBindingTargets, binding: ModuleEnv.MethodBinding) ?static_dispatch.ReferencedMethodTarget {
+        if (self.module.nodeTag(binding.type_node_idx) != .def) return null;
+        const top_level = self.top_level_values.lookupByDef(binding.def_idx) orelse return null;
+        const procedure_binding = switch (top_level.value) {
+            .procedure_binding => |procedure_binding| procedure_binding,
+            .const_ref => return null,
+        };
+        const template_id = switch (self.procedure_bindings.get(procedure_binding).body) {
+            .callable_eval_template => |template_id| template_id,
+            .direct_template => checkedArtifactInvariant("a method binding with its own procedure template reached computed-callable resolution", .{}),
+            .checked_error => return .rejected,
+        };
+        const template = self.callable_eval_templates.get(template_id);
+        if (template.forwarded_lookup != null) checkedArtifactInvariant("a forwarding procedure alias reached computed-callable resolution", .{});
+        return .{ .target = .{
+            .kind = .{ .callable_binding = .{ .module = self.artifact_key.digest(), .template = template_id } },
+            .callable = .{ .template_root = template.checked_fn_root },
+        } };
+    }
+
+    /// The target of the procedure `template`, owned by `view` (null for this
+    /// module), that `use` reaches.
+    fn procedureTarget(
+        self: *const MethodBindingTargets,
+        view: ?ImportedModuleView,
+        proc: canonical.ProcedureValueRef,
+        template_ref: canonical.ProcedureTemplateRef,
+        use: ProcedureUseTemplate,
+        method_owner: static_dispatch.MethodOwner,
+    ) static_dispatch.ReferencedMethodTarget {
+        const table: *const CheckedProcedureTemplateTable = if (view) |imported| imported.checked_procedure_templates else self.templates;
+        const names: *const canonical.CanonicalNameStore = if (view) |imported| imported.canonical_names else self.names;
+        const template = table.get(template_ref.template);
+        // A promoted local procedure has no source definition and is always
+        // callable.
+        if (names.procBase(template_ref.proc_base).source_def_idx) |raw_def| {
+            const def: CIR.Def.Idx = @fromBackingInt(@intCast(raw_def));
+            const entry = table.lookupEntryByDef(def) orelse
+                checkedArtifactInvariant("a method's procedure alias reached a source definition with no template", .{});
+            switch (entry.kind) {
+                .callable => {},
+                .structural => |kind| return .{ .target = .{
+                    .kind = .{ .structural = kind },
+                    .callable = if (view == null)
+                        .{ .source = self.module.defType(def) }
+                    else
+                        .binding,
+                } },
+            }
+        }
+        return .{ .target = .{
+            .kind = .{ .procedure = .{
+                .proc = proc,
+                .template = template_ref,
+                .runtime_target = static_dispatch.procedureRuntimeTarget(
+                    use.intrinsic,
+                    use.iterator_procedure,
+                    template.provided_low_level,
+                    method_owner,
+                ),
+            } },
+            .callable = .{ .template_root = template.checked_fn_root },
+        } };
+    }
+
+    /// The target of an unpromoted local procedure a method's chain of local
+    /// bindings reaches, declared at its own statement.
+    fn localProcedureTarget(self: *MethodBindingTargets, local: LocalProcedureBinding) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
+        const statement = (try self.declStatements())[@backingInt(local.binder)] orelse
+            checkedArtifactInvariant("a local procedure binding had no declaring statement", .{});
+        if (!self.module_index.reachesPattern(local.binder)) return null;
+        if (!self.module_index.reachesStatement(statement)) return null;
+        return .{ .target = .{
+            .kind = .{ .local_proc = .{
+                .binder = local.binder,
+                .expr = local.expr,
+                .context_anchor = statement,
+            } },
+            .callable = .{ .source = self.module.exprType(local.expr) },
+        } };
+    }
+
+    fn declStatements(self: *MethodBindingTargets) Allocator.Error![]?CIR.Statement.Idx {
+        if (self.decl_statements) |statements| return statements;
+        const node_count = self.module.nodeCount();
+        const statements = try self.allocator.alloc(?CIR.Statement.Idx, node_count);
+        @memset(statements, null);
+        var raw_node: u32 = 0;
+        while (raw_node < node_count) : (raw_node += 1) {
+            if (self.module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
+            const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
+            const statement_data = self.module.getStatement(statement);
+            if (std.meta.activeTag(statement_data) != .s_decl) continue;
+            statements[@backingInt(statement_data.s_decl.pattern)] = statement;
+        }
+        self.decl_statements = statements;
+        return statements;
+    }
+};
+
 /// Public `publishFromTypedModule` function.
 pub fn publishFromTypedModule(
     allocator: Allocator,
@@ -33516,17 +33772,6 @@ pub fn publishFromTypedModule(
     );
     const template_lookup = checked_procedure_templates.asLookup(module_idx);
 
-    var method_registry = try static_dispatch.MethodRegistry.fromModule(
-        allocator,
-        module,
-        &canonical_names,
-        &template_lookup,
-        &checked_type_publication,
-        module_index,
-    );
-    errdefer method_registry.deinit(allocator);
-    checked_type_publication.finishSourceTypes();
-
     var plan_build_data = static_dispatch.PlanTableBuildData{};
     errdefer plan_build_data.deinit(allocator);
     var static_dispatch_plans = try static_dispatch.StaticDispatchPlanTable.fromModule(
@@ -33683,6 +33928,36 @@ pub fn publishFromTypedModule(
         inputs.available_artifacts,
         inputs.relation_artifacts,
     );
+
+    var method_binding_targets = MethodBindingTargets{
+        .allocator = allocator,
+        .module = module,
+        .artifact_key = artifact_key,
+        .names = &canonical_names,
+        .module_index = module_index,
+        .resolved_value_refs = &resolved_value_refs,
+        .top_level_values = &top_level_values,
+        .procedure_bindings = &top_level_procedure_bindings,
+        .callable_eval_templates = &callable_eval_templates,
+        .templates = &checked_procedure_templates,
+        .imports = inputs.imports,
+        .available_modules = inputs.available_artifacts,
+        .relation_modules = inputs.relation_artifacts,
+    };
+    defer method_binding_targets.deinit();
+    var method_registry = try static_dispatch.MethodRegistry.fromModule(
+        allocator,
+        module,
+        &canonical_names,
+        owner_artifact,
+        &template_lookup,
+        &checked_type_publication,
+        module_index,
+        &method_binding_targets,
+    );
+    errdefer method_registry.deinit(allocator);
+    checked_type_publication.finishSourceTypes();
+
     resolved_tables.plans = &static_dispatch_plans;
     var ordinary_diagnostics = try body_analyses.diagnosticErrors(
         allocator,
@@ -35741,8 +36016,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x33, 0x18, 0xE4, 0x3E, 0x0D, 0x8C, 0xBB, 0xB4, 0x07, 0xC1, 0x8F, 0x83, 0x29, 0x4C, 0xD2, 0xF4,
-        0x0B, 0xF5, 0x70, 0x16, 0xDC, 0xD8, 0x01, 0x5A, 0xF1, 0xDA, 0xD4, 0x91, 0xD1, 0xC8, 0xBD, 0x46,
+        0x4D, 0x6B, 0x0F, 0xFA, 0x27, 0xF4, 0x69, 0x9F, 0x7A, 0x63, 0x5C, 0x5B, 0x8A, 0x81, 0x12, 0x85,
+        0x10, 0xAC, 0x5C, 0x26, 0x00, 0x27, 0xFC, 0xF2, 0x0D, 0x2A, 0x51, 0xC1, 0x6A, 0x16, 0x15, 0xF1,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -43,6 +43,7 @@ pub const UndeterminedCodecType = types.UndeterminedCodecType;
 pub const UndeterminedType = types.UndeterminedType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
+pub const LocalValueMethod = types.LocalValueMethod;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
@@ -92,6 +93,7 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const PolymorphicRecursion = types.PolymorphicRecursion;
 pub const HostedFunctionNotEffectful = types.HostedFunctionNotEffectful;
 pub const HostedTypeVariableNotBoxed = types.HostedTypeVariableNotBoxed;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;

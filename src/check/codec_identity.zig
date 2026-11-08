@@ -367,19 +367,26 @@ const ContentDigester = struct {
                 self.writeU8(@intFromBool(local.dispatch_scope != null));
                 if (local.dispatch_scope) |scope| self.writeU32(@backingInt(scope));
             },
+            .callable_binding => |binding| {
+                self.hasher.update(&binding.module.bytes);
+                self.writeU32(@backingInt(binding.template));
+            },
             .structural => |kind| self.writeU8(@backingInt(kind)),
         }
         self.writeU8(@intFromBool(target.alias != null));
-        if (target.alias) |alias| switch (alias) {
-            .top_level => |pattern| {
-                self.writeU8(0);
-                self.writeU32(@backingInt(pattern));
-            },
-            .local => |local| {
-                self.writeU8(1);
-                self.writeU32(@backingInt(local.lookup));
-            },
-        };
+        if (target.alias) |alias| {
+            self.hasher.update(&alias.module.bytes);
+            switch (alias.binding) {
+                .top_level => |pattern| {
+                    self.writeU8(0);
+                    self.writeU32(@backingInt(pattern));
+                },
+                .local => |local| {
+                    self.writeU8(1);
+                    self.writeU32(@backingInt(local.lookup));
+                },
+            }
+        }
     }
 
     fn writeRefs(self: *ContentDigester, span: Span) Allocator.Error!void {

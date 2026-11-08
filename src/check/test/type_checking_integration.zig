@@ -54,6 +54,14 @@ const MethodRegistryTestModuleIndex = struct {
     }
 };
 
+/// The source's only associated value is a record, which is not a
+/// reference, so publication resolves it to no method target.
+const MethodRegistryTestReferencedTargets = struct {
+    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
+        return null;
+    }
+};
+
 // primitives - nums //
 
 test "check type - num - float" {
@@ -3816,6 +3824,7 @@ test "checked artifact method registry skips nominal associated values" {
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
     const module_index = MethodRegistryTestModuleIndex{};
+    var referenced_targets = MethodRegistryTestReferencedTargets{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3824,9 +3833,11 @@ test "checked artifact method registry skips nominal associated values" {
         testing.allocator,
         module,
         &names,
+        .{},
         &template_lookup,
         &checked_types,
         &module_index,
+        &referenced_targets,
     );
     defer registry.deinit(testing.allocator);
 
@@ -8992,10 +9003,10 @@ test "check type - mutually recursive functions - all annotated polymorphic" {
     );
 }
 
-test "check type - annotated self recursive function - polymorphic recursion allowed" {
+test "check type - annotated self recursive function - polymorphic recursion is rejected" {
     // An annotated def's self-reference instantiates its pre-declared scheme,
-    // so a recursive use at a specialized type is legal (polymorphic
-    // recursion for annotated defs).
+    // but the recursive use must pass the def's own type variables along
+    // unchanged: each call here would need `depth` at a larger type.
     const source =
         \\depth : List(a) -> U64
         \\depth = |list| match list {
@@ -9003,14 +9014,80 @@ test "check type - annotated self recursive function - polymorphic recursion all
         \\    [first, ..] => 1 + depth([[first]])
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
-test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
-    // An annotated recursive edge may instantiate a at Poly(a). The literal
-    // therefore requires conversions at Poly(U8), Poly(Poly(U8)), and so on;
-    // the recursion depth is a runtime argument. A literal planner cannot
-    // assume that structural requirement deduplication makes this finite.
+test "check type - annotated self recursive function - swapped type variables are rejected" {
+    const source =
+        \\swap : U64, a, b -> U64
+        \\swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - unchanged type variables are accepted" {
+    const source =
+        \\countdown : U64, a -> a
+        \\countdown = |count, x| if count == 0 x else countdown(count - 1, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "countdown" } }, "U64, a -> a");
+}
+
+test "check type - annotated self recursive function - recursion at a closed type is accepted" {
+    // The recursive use mentions none of the def's own variables, so the
+    // recursion reaches one further instantiation and stops there.
+    const source =
+        \\restart : U64, a -> U64
+        \\restart = |count, _x| if count == 0 0 else 1 + restart(count - 1, 5.U64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "restart" } }, "U64, a -> U64");
+}
+
+test "check type - annotated mutual recursion - growth around the cycle is rejected" {
+    const source =
+        \\ping : U64, a -> U64
+        \\ping = |n, x| if n == 0 0 else pong(n - 1, x)
+        \\pong : U64, a -> U64
+        \\pong = |n, x| if n == 0 0 else ping(n - 1, [x])
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated mutual recursion - variables that line up are accepted" {
+    const source =
+        \\Tree(a) := [Leaf(a), Node(List(Tree(a)))]
+        \\count_tree : Tree(a) -> U64
+        \\count_tree = |tree| match tree {
+        \\    Tree.Leaf(_) => 1
+        \\    Tree.Node(children) => count_children(children)
+        \\}
+        \\count_children : List(Tree(a)) -> U64
+        \\count_children = |children| {
+        \\    var $total = 0
+        \\    for child in children {
+        \\        $total = $total + count_tree(child)
+        \\    }
+        \\    $total
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "count_tree", .expected = "Tree(a) -> U64" },
+        .{ .def = "count_children", .expected = "List(Tree(a)) -> U64" },
+    });
+}
+
+test "check type - a generic function using another at a larger type without recursion is accepted" {
+    const source =
+        \\wrap_len : a -> U64
+        \\wrap_len = |x| List.len([x])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "wrap_len" } }, "a -> U64");
+}
+
+test "check type - polymorphic recursion through a literal requirement is rejected" {
+    // The recursive use instantiates `a` at `Poly(a)`, so the literal would
+    // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
+    // a runtime argument says.
     const source =
         \\Poly(a) := [Val(a), Quoted(Str)].{
         \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
@@ -9038,7 +9115,7 @@ test "check type - issue 11740 custom literal requirements in polymorphic recurs
         \\}
         \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
@@ -13305,14 +13382,15 @@ test "check type - mutually recursive static dispatch - unannotated name-linked 
     });
 }
 
-test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member is rejected" {
     // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
-    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
-    // annotations license this—each method-syntax dispatch to an annotated
-    // target must instantiate the target's predeclared scheme, whether or not
-    // the target sits in the same name-linked group and has already been
-    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
-    // name-graph cycle that makes the two methods one binding group.)
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. Each
+    // method-syntax dispatch to an annotated target instantiates the target's
+    // predeclared scheme, whether or not the target sits in the same
+    // name-linked group and has already been checked, and the recursion
+    // through that dispatch grows the type on every trip. (The
+    // `Poly.size`/`Poly.deeper` type-qualified calls create the name-graph
+    // cycle that makes the two methods one binding group.)
     const source =
         \\Poly(a) := [Val(a)].{
         \\  size : Poly(a), U64 -> U64
@@ -13334,11 +13412,7 @@ test "check type - mutually recursive static dispatch - annotated polymorphic re
         \\}
         \\use = Poly.Val(1.U64).size(3)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "use", .expected = "U64" },
-    });
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {

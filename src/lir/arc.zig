@@ -2797,7 +2797,6 @@ const Inserter = struct {
                         assign.target,
                         assign.next,
                         true,
-                        borrowed_variant != null and !use_borrowed,
                     );
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.preserve_consumed_args = transfer.preserve_consumed_args;
@@ -4871,8 +4870,8 @@ const Inserter = struct {
 
     /// Low-level ops: `RcEffect` masks say which positions the op consumes
     /// or retains; this decides which of those transfers move existing units
-    /// and which pay retains. Borrowed-result variants may also retain a
-    /// borrowed input to supply the unit required by the selected owned op.
+    /// and which pay retains. An input with no owned unit, including a
+    /// dynamic view, must be retained for each consuming position.
     /// `want_unique` gates the uniqueness-claim scan, whose result only affects
     /// materialized statements.
     fn transferForLowLevel(
@@ -4884,7 +4883,6 @@ const Inserter = struct {
         target: LIR.LocalId,
         next: LIR.CFStmtId,
         want_unique: bool,
-        supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
         if ((rc_effect.result_aliases_consumed_args & ~rc_effect.consume_args) != 0) {
             arcInvariant("ARC low-level result-token metadata referenced a non-consumed argument");
@@ -4909,15 +4907,36 @@ const Inserter = struct {
             next,
             target,
         );
-        if (supply_missing_consumed_args) {
+        {
             const locals = self.store.getLocalSpan(args);
             for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
                 const bit = argMaskBit(position);
                 if (((rc_effect.consume_args & ~operand_take_mask) & bit) == 0) continue;
                 if (!self.ownsUnit(owned, GuardedList.at(locals, position))) {
-                    // The solved signature borrowed this argument. Retaining it
-                    // here supplies the unit consumed by the owned operation.
+                    // A borrowed binding has no unit to transfer. In
+                    // particular a dynamic view stays borrowed from its
+                    // backing storage even at its last consuming use.
+                    // Supply the operation's unit without taking the
+                    // container's own stored unit.
                     preserve_consumed_args |= bit;
+                }
+            }
+            // One unit moves into one consuming position. When the same
+            // unit reaches several consuming positions, the first moves it
+            // and each later one is retained before the operation.
+            const transferring = rc_effect.consume_args & ~operand_take_mask & ~preserve_consumed_args;
+            for (0..@min(GuardedList.borrowLen(locals), 64)) |position| {
+                const bit = argMaskBit(position);
+                if ((transferring & bit) == 0) continue;
+                const local = GuardedList.at(locals, position);
+                if (!self.localContainsRefcounted(local)) continue;
+                const unit = self.unitOf(local);
+                for (0..position) |earlier| {
+                    const earlier_bit = argMaskBit(earlier);
+                    if ((transferring & earlier_bit) == 0) continue;
+                    if (self.unitOf(GuardedList.at(locals, earlier)) != unit) continue;
+                    preserve_consumed_args |= bit;
+                    break;
                 }
             }
         }
@@ -7641,6 +7660,49 @@ test "RC list metadata through aliases does not preserve a consumed buffer" {
 
 test "RC list payload through aliases preserves a consumed buffer" {
     try testListObservationAfterReserve(.list_get_unsafe);
+}
+
+test "RC one unit consumed at two low-level positions is retained for the second" {
+    try expectRepeatedConsumedOperandRetained(false);
+    try expectRepeatedConsumedOperandRetained(true);
+}
+
+/// `List.concat(xs, xs)` lowered to `list_concat` directly, with `xs` at
+/// its last use in both consuming positions. With `through_field`, `xs` is an
+/// alias of a field read of a dying pair, as when a matched record's field
+/// is concatenated with itself.
+fn expectRepeatedConsumedOperandRetained(through_field: bool) (Allocator.Error || ResourceError || ArcTest.ExpectError)!void {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+    const elem = try f.local(.i64);
+    const first = try f.local(f.list_i64);
+    const second = try f.local(f.list_i64);
+    const pair = try f.local(f.pair_list);
+    const field = try f.local(f.list_i64);
+    const operand = try f.local(f.list_i64);
+    const result = try f.local(f.list_i64);
+    const ret = try f.ret(result);
+    const concat = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .args = try f.span(&.{ operand, operand }),
+        .next = ret,
+    } }, .test_fixture);
+    const body = if (through_field) blk: {
+        const alias = try f.assignRefLocal(operand, field, concat);
+        const read = try f.assignRefField(field, pair, 0, alias);
+        const build_pair = try f.assignStruct(pair, &.{ first, second }, read);
+        const build_second = try f.assignList(second, &.{elem}, build_pair);
+        const build_first = try f.assignList(first, &.{elem}, build_second);
+        break :blk try f.assignI64(elem, 3, build_first);
+    } else blk: {
+        const build = try f.assignList(operand, &.{elem}, concat);
+        break :blk try f.assignI64(elem, 3, build);
+    };
+    _ = try f.addProc(&.{}, body, f.list_i64);
+    try f.run();
+    try f.expectRc(operand, 1, 0, 0);
 }
 
 fn testListObservationAfterReserve(op: LIR.LowLevel) (Allocator.Error || error{TestExpectedEqual})!void {
@@ -18175,6 +18237,34 @@ test "ARC dyn field view returned through a copy is retained and its base releas
     try testing.expectEqual(@as(usize, 1), d.f.countRc(view, .incref) + d.f.countRc(result, .incref));
     try d.f.expectRc(param, 0, 1, 0);
     try testing.expectEqual(@as(usize, 0), d.f.countRc(view, .decref) + d.f.countRc(result, .decref));
+    try d.expectDynamicRcShape();
+}
+
+test "ARC dyn field views supply ownership to consuming low-level operations" {
+    var d = try DynFixture.init();
+    defer d.deinit();
+    const desc = try d.desc();
+    const field_desc = try d.desc();
+    const elem_desc = try d.desc();
+    const param = try d.value(desc, .param);
+    const view = try d.value(field_desc, .view);
+    const result = try d.value(field_desc, .result);
+    const ret = try d.f.ret(result);
+    // Both consuming positions read the same borrowed field. Each must get
+    // its own unit, while the container keeps its original field unit.
+    const concat = try d.f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = result,
+        .op = .list_concat,
+        .rc_effect = try d.f.store.addRcEffect(LIR.LowLevel.list_concat.rcEffect()),
+        .extra = try d.f.store.addStmtRow(LIR.LowLevelExtra, .{ .dyn_elem_desc = true }),
+        .args = try d.f.span(&.{ view, view, elem_desc }),
+        .next = ret,
+    } }, .test_fixture);
+    const read = try d.op(view, .{ .field_addr = .{ .base = param, .desc = desc, .field_index = 0 } }, concat);
+    const proc = try d.proc(&.{ desc, field_desc, elem_desc, param }, read, d.dynamic, result);
+    try d.run(&.{proc});
+    try d.f.expectRc(view, 2, 0, 0);
+    try d.f.expectRc(param, 0, 1, 0);
     try d.expectDynamicRcShape();
 }
 
