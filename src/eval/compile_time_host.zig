@@ -56,6 +56,14 @@ pub fn maxAllocationBytes(address_space: base.target.TargetUsize) usize {
     };
 }
 
+/// Whether an allocation request of `length` bytes is more than a 32-bit
+/// `roc_alloc` can be asked for. An evaluation that granted one holds a value
+/// only a 64-bit address space produces, which its module's evaluation output
+/// records (design.md "Compile-Time Constants").
+pub fn exceedsU32AddressSpace(length: usize) bool {
+    return length > maxAllocationBytes(.u32);
+}
+
 /// The crash message of a compile-time allocation that was refused.
 const out_of_memory_message = "ran out of memory";
 
@@ -168,6 +176,11 @@ active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
 /// The largest allocation request Roc code is granted (`maxAllocationBytes`).
 max_allocation_bytes: usize,
+/// Whether the current run asked for an allocation larger than a 32-bit
+/// `roc_alloc` can be asked for (`exceedsU32AddressSpace`), granted or not:
+/// a 64-bit program's evaluation grants it and a 32-bit one runs out of
+/// memory, so the run's outcome holds only for its own address space.
+asked_past_u32_address_space: bool = false,
 
 /// A host for evaluating the roots of a program whose pointers are
 /// `address_space` wide.
@@ -215,6 +228,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     _ = self.arena.reset(.free_all);
     self.termination = .returned;
     self.active_jmp_buf = null;
+    self.asked_past_u32_address_space = false;
 }
 
 /// setjmp/longjmp boundary for catching root-local crashes.
@@ -418,6 +432,7 @@ fn allocateRocBytes(self: *CompileTimeHost, length: usize, alignment: usize) [*]
     if (alignment > max_allocation_alignment or !std.math.isPowerOfTwo(alignment)) {
         base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"});
     }
+    if (exceedsU32AddressSpace(length)) self.asked_past_u32_address_space = true;
     if (length > self.max_allocation_bytes) self.rocOutOfMemory();
     const size = @max(length, 1);
     const header: *AllocationHeader = if (size <= max_small_payload)
@@ -729,6 +744,9 @@ test "a 64-bit program's evaluation asks the compiler for any allocation, and a 
         try std.testing.expectEqual(Termination.crashed, host.termination);
         try std.testing.expectEqualStrings(out_of_memory_message, host.crashMessage().?);
         try std.testing.expectEqual(address_space == .u64, backing.refused);
+        // Granted or refused, the request is one only this address space's
+        // evaluation answers this way.
+        try std.testing.expect(host.asked_past_u32_address_space);
     }
 }
 

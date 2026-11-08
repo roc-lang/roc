@@ -23554,6 +23554,31 @@ above. A host-width representation is never smaller than a 32-bit one, so a
 request the host refuses can stand for a smaller one on the target; that is
 a difference only in running out of memory.
 
+Running out of address space is decided where a value is computed, not where
+it is laid into a 32-bit image: by then the compiler would already have
+allocated, on the target's behalf, memory the target does not have. Because
+a checked module's cache entry holds its completed values, a 32-bit program
+must also never read one that only a 64-bit address space could produce.
+Every compilation shares one checked-module cache and one platform-pairing
+cache, whatever address space it evaluates in, and each checked module, and
+each platform pairing, records which address spaces its evaluation results
+serve (its `evaluated_address_space`).
+Once evaluating any of its roots asked for an allocation larger than a
+32-bit `roc_alloc` can be asked for, the outcome holds only for the address
+space it ran in: a 64-bit evaluation grants the request (`u64_only`) and a
+32-bit one runs out of memory there (`u32_only`); every other module's results are
+`any`. Both evaluators' hosts note such a request before deciding whether to
+grant it (`compile_time_host.exceedsU32AddressSpace`), so a refused request
+is noted as surely as a granted one; a literal root's request marks every
+module its finalization completes, since any of their roots can read the
+literal's value. A compilation treats an entry that does not serve its
+address space as a miss and compiles the module again, reaching its own
+program's outcome; every other entry serves both address spaces, because
+evaluation results differ between them only in running out of memory. A
+module whose evaluation reported a crash is not cached at all, but a guarded
+root's crash is not a diagnostic (its payload is `runtime`), so an entry can
+hold a 32-bit evaluation's out-of-memory crash there, and is `u32_only`.
+
 Diagnostic behavior must be identical between the dev-backend evaluator and the
 host-restricted LIR interpreter. A mismatch in crashes, expect failures,
 empirical exhaustiveness diagnostics, literal conversion diagnostics, or

@@ -4784,6 +4784,10 @@ pub const Coordinator = struct {
             manager.stats.recordInvalidation();
             return null;
         };
+        if (!header.evaluated_address_space.value.serves(self.compileTimeAddressSpace())) {
+            manager.stats.recordMiss();
+            return null;
+        }
         const platform_keys = platform.checked_types.sealed_keys orelse coordinatorInvariant("a platform was paired before its key slots were attached", .{});
         const synthesized_keys = CheckedArtifact.SynthesizedTypeKeys.create(platform_keys.allocator, platform_keys.io, header.typeRootCount(platform)) catch return null;
         const body_analyses = CheckedArtifact.BodyAnalyses.create(
@@ -4995,6 +4999,13 @@ pub const Coordinator = struct {
         };
         if (!std.mem.eql(u8, &artifact_serialized.key.bytes, &cache_key.bytes)) {
             manager.stats.recordInvalidation();
+            return false;
+        }
+        // Results only another address space's evaluation produces are no
+        // results of this compilation's evaluation, which evaluates the
+        // module again.
+        if (!artifact_serialized.evaluated_address_space.value.serves(self.compileTimeAddressSpace())) {
+            manager.stats.recordMiss();
             return false;
         }
 
@@ -8694,6 +8705,220 @@ fn writeReuseFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.Crea
     try tmp.dir.createDirPath(std.testing.io, "cache");
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "platform.roc", .data = reuse_platform });
     try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.roc", .data = app });
+}
+
+/// What one compilation of an app, evaluating in one address space, read
+/// from the checked cache and reported.
+const AddressSpaceRun = struct {
+    /// Every report the compilation produced, rendered.
+    reports: []u8,
+    has_errors: bool,
+    /// Whether the app module, `Seed.roc` and the platform were installed
+    /// from cache entries.
+    app_cached: bool,
+    seed_cached: bool,
+    platform_cached: bool,
+    /// Pairings the compilation evaluated rather than read from the cache.
+    platform_pairing_count: u32,
+
+    fn deinit(self: *AddressSpaceRun, allocator: Allocator) void {
+        allocator.free(self.reports);
+        self.* = undefined;
+    }
+};
+
+fn compileInAddressSpace(allocator: Allocator, cache_dir: []const u8, app_path: []const u8, address_space: base.target.TargetUsize) CheckedModuleCacheRunError!AddressSpaceRun {
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var cache_manager = CacheManager.init(allocator, .{ .enabled = true, .cache_dir = cache_dir }, roc_ctx);
+    defer cache_manager.deinit();
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        &cache_manager,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+    // The pointer width of the program this compilation is for, as
+    // `setRuntimeLowering` records it for a wasm32 or a native build.
+    coord.program_address_space = address_space;
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    if (!coord.hasUserErrors()) try coord.finishCheckedProgram(.executable_artifacts);
+
+    var reports = std.Io.Writer.Allocating.init(arena);
+    var report_it = coord.iterReports();
+    while (report_it.next()) |entry| {
+        reporting.renderReport(entry.report, &reports.writer, .markdown) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.OutOfMemory,
+        };
+    }
+    var app_cached = false;
+    var seed_cached = false;
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |pkg_entry| {
+        for (pkg_entry.value_ptr.*.modules.items) |*mod| {
+            const artifact = mod.checkedArtifact() orelse continue;
+            const cached = artifact.serialized_backing != null;
+            if (std.mem.eql(u8, mod.name, "Seed")) seed_cached = cached;
+            if (std.mem.eql(u8, mod.name, "app")) app_cached = cached;
+        }
+    }
+    return .{
+        .reports = try allocator.dupe(u8, reports.written()),
+        .has_errors = coord.hasUserErrors(),
+        .app_cached = app_cached,
+        .seed_cached = seed_cached,
+        .platform_cached = coord.platform_root_publish_count == 0,
+        .platform_pairing_count = coord.platform_pairing_count,
+    };
+}
+
+/// An app whose constant asks for more bytes than a 32-bit `roc_alloc` can
+/// be asked for: a 64-bit evaluation reserves them, a 32-bit one runs out of
+/// memory.
+const oversized_constant_app =
+    \\app [answer] { pf: platform "./platform.roc" }
+    \\import Seed
+    \\big : List(U8)
+    \\big = List.with_capacity(4294967296)
+    \\answer = Seed.seed + List.len(big).to_i64_wrap()
+    \\
+;
+
+const address_space_seed_module =
+    \\Seed := [].{
+    \\    seed : I64
+    \\    seed = 41
+    \\}
+    \\
+;
+
+fn writeAddressSpaceFixture(tmp: *std.testing.TmpDir, app: []const u8) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
+    try writeReuseFixture(tmp, app);
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Seed.roc", .data = address_space_seed_module });
+}
+
+test "a wasm32 build after a native build re-evaluates only the module whose evaluation only a 64-bit address space completes" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeAddressSpaceFixture(&tmp, oversized_constant_app);
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(!native.app_cached and !native.seed_cached and !native.platform_cached);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(wasm32.has_errors);
+    try std.testing.expect(std.mem.find(u8, wasm32.reports, "ran out of memory") != null);
+    try std.testing.expect(!wasm32.app_cached);
+    try std.testing.expect(wasm32.seed_cached and wasm32.platform_cached);
+
+    // The native entry still serves a native build.
+    var native_again = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native_again.deinit(allocator);
+    try std.testing.expect(!native_again.has_errors);
+    try std.testing.expect(native_again.app_cached and native_again.seed_cached and native_again.platform_cached);
+    try std.testing.expectEqual(@as(u32, 0), native_again.platform_pairing_count);
+}
+
+test "a native build after a wasm32 build reads every entry the wasm32 build stored" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeAddressSpaceFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Seed
+        \\small : List(U8)
+        \\small = List.with_capacity(16)
+        \\answer = Seed.seed + List.len(small).to_i64_wrap()
+        \\
+    );
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(!wasm32.has_errors);
+    try std.testing.expect(!wasm32.app_cached and !wasm32.seed_cached and !wasm32.platform_cached);
+    try std.testing.expectEqual(@as(u32, 1), wasm32.platform_pairing_count);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(native.app_cached and native.seed_cached and native.platform_cached);
+    try std.testing.expectEqual(@as(u32, 0), native.platform_pairing_count);
+}
+
+test "a native build after a wasm32 build evaluates again a module whose stored guarded root ran out of memory only in a 32-bit address space" {
+    if (@sizeOf(usize) < 8) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // `Seed.make`'s branch body is a guarded root: its crash is not a
+    // diagnostic but a `runtime` payload, so the out-of-memory crash of its
+    // 32-bit evaluation reports nothing and `Seed`'s entry is stored holding
+    // it. Only a 32-bit evaluation crashes there; a native build must not
+    // read that outcome as its own.
+    try writeReuseFixture(&tmp,
+        \\app [answer] { pf: platform "./platform.roc" }
+        \\import Seed
+        \\answer = Seed.seed
+        \\
+    );
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "Seed.roc", .data =
+        \\Seed := [].{
+        \\    seed : I64
+        \\    seed = 41
+        \\
+        \\    make : Bool -> List(U8)
+        \\    make = |flag| if flag {
+        \\        List.with_capacity(4294967296)
+        \\    } else {
+        \\        []
+        \\    }
+        \\}
+        \\
+    });
+    const cache = try tmp.dir.realPathFileAlloc(std.testing.io, "cache", allocator);
+    defer allocator.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(std.testing.io, "app.roc", allocator);
+    defer allocator.free(app);
+
+    var wasm32 = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32.deinit(allocator);
+    try std.testing.expect(!wasm32.has_errors);
+    try std.testing.expect(!wasm32.seed_cached);
+
+    var wasm32_again = try compileInAddressSpace(allocator, cache, app, .u32);
+    defer wasm32_again.deinit(allocator);
+    try std.testing.expect(!wasm32_again.has_errors);
+    try std.testing.expect(wasm32_again.seed_cached);
+
+    var native = try compileInAddressSpace(allocator, cache, app, .u64);
+    defer native.deinit(allocator);
+    try std.testing.expect(!native.has_errors);
+    try std.testing.expect(!native.seed_cached);
+    try std.testing.expect(native.platform_cached);
 }
 
 test "imported edits recompute nominal literal results and changed conversions" {

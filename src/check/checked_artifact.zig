@@ -22621,6 +22621,7 @@ pub const PlatformPairing = struct {
         exported_const_templates: ExportedConstTemplateTable.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        evaluated_address_space: EvaluatedAddressSpace.Serialized,
 
         /// Every artifact column is either persisted here, carrying the app
         /// substitution or the composition's evaluation results, or borrowed
@@ -22713,11 +22714,13 @@ pub const PlatformPairing = struct {
             try self.compile_time_debug.serialize(&artifact.compile_time_debug, gpa, writer);
             const compile_time_root_reads_empty: CompileTimeRootReadTable = .{};
             try self.compile_time_root_reads.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_root_reads else &compile_time_root_reads_empty, gpa, writer);
+            try self.evaluated_address_space.serialize(&artifact.evaluated_address_space, gpa, writer);
         }
 
         pub fn validate(self: *const Serialized, len: usize) error{CorruptArtifact}!void {
             if (len < @sizeOf(Serialized)) return error.CorruptArtifact;
             try artifact_serialize.validateSerialized(Serialized, self, len);
+            try EvaluatedAddressSpace.validateSerialized(&self.evaluated_address_space);
         }
 
         /// The number of type roots the pairing installed over `platform`
@@ -22768,6 +22771,7 @@ pub const PlatformPairing = struct {
             if (self.has_dependent_evaluation) result.exported_const_templates = self.exported_const_templates.deserialize(address);
             result.compile_time_debug = self.compile_time_debug.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_root_reads = self.compile_time_root_reads.deserialize(address);
+            result.evaluated_address_space = self.evaluated_address_space.deserialize(address);
             return result;
         }
     };
@@ -29659,6 +29663,70 @@ pub const CompileTimeDebugStore = struct {
 ///
 /// Rows are dense by root id. A root that was never evaluated has no row
 /// content; its payload says so.
+/// The address spaces whose compilations a module's evaluation results serve
+/// (design.md "Compile-Time Constants").
+pub const EvaluatedAddressSpace = enum(u8) {
+    /// Every allocation request the evaluation made fit a 32-bit
+    /// `roc_alloc`, so the results are what any address space's evaluation
+    /// produces.
+    any = 0,
+    /// A 64-bit evaluation asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for and was granted it; a 32-bit program's
+    /// evaluation runs out of memory there instead.
+    u64_only = 1,
+    /// A 32-bit evaluation asked for an allocation larger than a 32-bit
+    /// `roc_alloc` can be asked for and ran out of memory there; a 64-bit
+    /// program's evaluation is granted it instead.
+    u32_only = 2,
+
+    /// The kind of results an evaluation in `address_space` produces when it
+    /// asks for an allocation larger than a 32-bit `roc_alloc` can be asked
+    /// for: only that address space's evaluation answers it that way.
+    pub fn askedPastU32(address_space: base.target.TargetUsize) EvaluatedAddressSpace {
+        return switch (address_space) {
+            .u64 => .u64_only,
+            .u32 => .u32_only,
+        };
+    }
+
+    /// Whether a compilation whose compile-time evaluation runs in
+    /// `address_space` reads results of this kind as its own.
+    pub fn serves(self: EvaluatedAddressSpace, address_space: base.target.TargetUsize) bool {
+        return switch (self) {
+            .any => true,
+            .u64_only => switch (address_space) {
+                .u64 => true,
+                .u32 => false,
+            },
+            .u32_only => switch (address_space) {
+                .u64 => false,
+                .u32 => true,
+            },
+        };
+    }
+
+    /// The serialized form, whose byte is checked to name a kind before it
+    /// is read as one.
+    pub const Serialized = artifact_serialize.SerializedScalar(EvaluatedAddressSpace, .any);
+
+    fn validateSerialized(serialized: *const Serialized) error{CorruptArtifact}!void {
+        const byte: *const u8 = @ptrCast(&serialized.value);
+        _ = std.enums.fromInt(EvaluatedAddressSpace, byte.*) orelse return error.CorruptArtifact;
+    }
+};
+
+test "evaluation results serve the address spaces whose evaluation answers their requests the way it did" {
+    try std.testing.expect(EvaluatedAddressSpace.any.serves(.u32) and EvaluatedAddressSpace.any.serves(.u64));
+    inline for (.{ base.target.TargetUsize.u32, base.target.TargetUsize.u64 }) |ran_in| {
+        const output = EvaluatedAddressSpace.askedPastU32(ran_in);
+        try std.testing.expect(output.serves(ran_in));
+        try std.testing.expect(!output.serves(switch (ran_in) {
+            .u32 => .u64,
+            .u64 => .u32,
+        }));
+    }
+}
+
 pub const CompileTimeRootReadTable = struct {
     /// A read root, named by its module's identity bytes.
     pub const Ref = extern struct { module: [32]u8, root: ComptimeRootId };
@@ -29782,6 +29850,9 @@ pub const CheckedModuleArtifact = struct {
     const_store: ConstStore,
     compile_time_debug: CompileTimeDebugStore = .{},
     compile_time_root_reads: CompileTimeRootReadTable = .{},
+    /// Which address spaces' compilations the module's evaluation results
+    /// serve.
+    evaluated_address_space: EvaluatedAddressSpace = .any,
     /// Process-local publication state; cache entries always contain finalized output.
     evaluation_state: enum { prepared, finalized } = .finalized,
     /// Owns the evaluation columns of a finalized artifact that a compilation
@@ -29918,6 +29989,14 @@ pub const CheckedModuleArtifact = struct {
             return true;
         }
         return false;
+    }
+
+    /// Record that evaluating one of this module's roots in `address_space`
+    /// asked for an allocation larger than a 32-bit `roc_alloc` can be asked
+    /// for, which only that address space's evaluation answers the way it
+    /// did.
+    pub fn recordAskedPastU32(self: *CheckedModuleArtifact, address_space: base.target.TargetUsize) void {
+        self.evaluated_address_space = EvaluatedAddressSpace.askedPastU32(address_space);
     }
 
     /// Reopen a finalized artifact so this compilation can evaluate the roots
@@ -30099,6 +30178,7 @@ pub const CheckedModuleArtifact = struct {
         const_store: ConstStore.Serialized,
         compile_time_debug: CompileTimeDebugStore.Serialized,
         compile_time_root_reads: CompileTimeRootReadTable.Serialized,
+        evaluated_address_space: EvaluatedAddressSpace.Serialized,
 
         pub const root_contract: collections.serde_validation.RootContract = .{
             .Owner = CheckedModuleArtifact,
@@ -30182,6 +30262,7 @@ pub const CheckedModuleArtifact = struct {
             const roots = self.compile_time_roots.deserialize(base_addr);
             try observations.validate(roots.roots.len);
             try self.compile_time_root_reads.deserialize(base_addr).validate(roots.roots.len);
+            try EvaluatedAddressSpace.validateSerialized(&self.evaluated_address_space);
         }
 
         /// A deserialized artifact reads its source types once
@@ -30364,7 +30445,9 @@ pub const CheckedModuleArtifact = struct {
             index -= 1;
             const name = fields[index];
             const Store = @FieldType(CheckedModuleArtifact, name);
-            if (comptime @typeInfo(Store) == .pointer) {
+            if (comptime @typeInfo(Store) == .@"enum") {
+                // An inline scalar owns nothing.
+            } else if (comptime @typeInfo(Store) == .pointer) {
                 allocator.free(@field(self, name));
             } else if (comptime @typeInfo(@TypeOf(Store.deinit)).@"fn".param_types.len == 1) {
                 @field(self, name).deinit();
