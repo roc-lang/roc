@@ -525,7 +525,7 @@ test "a natural-epoch column empties on each identifier" {
     try testing.expectEqual(@as(?u32, null), column.get(0));
 }
 
-fn exerciseWideColumnAllocationFailures(gpa: Allocator) !void {
+fn exerciseWideColumnAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
     var column = try EpochColumn(u32, u64, .internal).init(gpa, 3);
     defer column.deinit(gpa);
     column.set(2, 91);

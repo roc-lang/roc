@@ -3207,6 +3207,18 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
 }
 
 test "sealing releases checker-only buffers without allocating" {
+    const Snapshot = struct {
+        fn bytes(store: *Store) Allocator.Error![]u8 {
+            const allocator = std.testing.allocator;
+            var writer = collections.CompactWriter.init();
+            defer writer.deinit(allocator);
+            const serialized = try writer.appendAlloc(allocator, Store.Serialized);
+            try serialized.serialize(store, allocator, &writer);
+            const buffer = try allocator.alloc(u8, writer.total_bytes);
+            _ = writer.writeToBuffer(buffer) catch unreachable; // Buffer has exactly the writer's required size.
+            return buffer;
+        }
+    };
     var counter = std.testing.FailingAllocator.init(std.testing.allocator, .{});
     const gpa = counter.allocator();
     {
@@ -3215,7 +3227,8 @@ test "sealing releases checker-only buffers without allocating" {
         const value = try store.fresh();
         const alias = try store.freshRedirect(value);
         const solved_bytes = counter.allocated_bytes - counter.freed_bytes;
-        const retained = store;
+        const before = try Snapshot.bytes(&store);
+        defer std.testing.allocator.free(before);
 
         // Reserve every checker buffer, including capacity in empty lists and
         // maps returned to the nested-instantiation pool. None of this storage
@@ -3252,13 +3265,10 @@ test "sealing releases checker-only buffers without allocating" {
         try std.testing.expectEqual(allocations_before_seal, counter.allocated_bytes);
         try std.testing.expectEqual(solved_bytes, counter.allocated_bytes - counter.freed_bytes);
         try std.testing.expectEqual(value, store.resolveVar(alias).var_);
-        // Every serialized column keeps its storage and length. The full
-        // CompactWriter roundtrip below also checks content across sealing.
-        inline for (@typeInfo(Store.Serialized).@"struct".field_names) |field_name| {
-            if (comptime !std.mem.eql(u8, field_name, "gpa")) {
-                try std.testing.expectEqualDeep(@field(retained, field_name), @field(store, field_name));
-            }
-        }
+        // Storage ownership changes at seal; persisted contents do not.
+        const after = try Snapshot.bytes(&store);
+        defer std.testing.allocator.free(after);
+        try std.testing.expectEqualSlices(u8, before, after);
     }
     try std.testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
 }
@@ -5039,7 +5049,7 @@ pub fn rebindSourceReferenceValue(value: anytype, mapper: anytype) @TypeOf(mappe
     }
 }
 
-fn exerciseStoreConstructionFailure(gpa: Allocator) !void {
+fn exerciseStoreConstructionFailure(gpa: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
     var store = try Store.initCapacity(gpa, 4, 4);
     defer store.deinit();
     const first = try store.fresh();

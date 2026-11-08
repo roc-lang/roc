@@ -388,7 +388,7 @@ test "csr rejects an unrepresentable key domain" {
     try testing.expectError(error.OutOfMemory, builder.build(testing.allocator));
 }
 
-fn exerciseGroupAllocationFailures(gpa: Allocator) !void {
+fn exerciseGroupAllocationFailures(gpa: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
     var builder = CsrGroups(u32).Builder.init(3);
     defer builder.deinit(gpa);
     try builder.add(gpa, 1, 7);

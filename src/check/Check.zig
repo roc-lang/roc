@@ -9554,7 +9554,6 @@ const FormalFlowEdge = struct {
 /// edges descend the formal-flow condensation, so every expansion draws its
 /// argument tuple from a finite universe of cells.
 fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
-    const nominal_slots_reserve_zero = true;
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -9565,13 +9564,10 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
     defer slots.deinit(self.gpa);
     const SlotId = enum(u32) { _ };
-    const SlotColumn = if (nominal_slots_reserve_zero)
-        collections.ZeroSentinelIndexColumn(SlotId)
-    else
-        collections.OptionalIndexColumn(SlotId);
-    const first_slot: usize = if (nominal_slots_reserve_zero) 1 else 0;
+    const SlotColumn = collections.ZeroSentinelIndexColumn(SlotId);
+    const first_slot: usize = 1;
     if (decl_count == 0) return;
-    if (nominal_slots_reserve_zero) try slots.append(self.gpa, @fromBackingInt(0));
+    try slots.append(self.gpa, @fromBackingInt(0));
     var slot_by_decl = try SlotColumn.initFilled(self.gpa, decl_count);
     defer slot_by_decl.deinit(self.gpa);
 
@@ -9691,7 +9687,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var formal_base = try self.gpa.alloc(u32, slot_count + 1);
     defer self.gpa.free(formal_base);
     formal_base[0] = 0;
-    if (nominal_slots_reserve_zero) formal_base[1] = 0;
+    formal_base[first_slot] = 0;
     for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
         const decl = self.types.getNominalDecl(decl_idx);
         formal_base[slot + 1] = formal_base[slot] + @as(u32, @intCast(self.types.sliceVars(decl.formals).len));

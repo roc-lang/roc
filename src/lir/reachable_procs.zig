@@ -353,7 +353,7 @@ const Pass = struct {
             try self.markStaticDataOwner(index);
             const value = self.result.static_data_values.items[index];
             if (value.representation_of) |source| try self.markStaticData(source.slot);
-            if (self.static_data_exports[index] == null) {
+            if (!self.static_data_exports.isPresent(index)) {
                 if (value.parts) |parts| for (parts.children) |child| try self.markStaticData(child);
             }
             if (value.compile_time_root) |root| {
@@ -558,7 +558,7 @@ const Pass = struct {
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
             if (value.representation_of) |*source| source.slot = self.remapStaticData(source.slot);
             if (value.parts) |*parts| {
-                if (self.static_data_exports[index] != null) {
+                if (self.static_data_exports.isPresent(index)) {
                     // Frozen bytes and relocations replace these edges.
                     // Discard them only during actual compaction, never
                     // during read-only code-demand collection.

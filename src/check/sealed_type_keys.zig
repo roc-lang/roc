@@ -232,10 +232,10 @@ pub const SealedTypeKeys = struct {
         defer self.writer_mutex.unlock(self.io);
         const storage_memory = if (self.table.peek()) |backing| backing.memory() else StorageMemory{};
         const memory: canonical_type_keys.TypeWriter.KeyMemory = if (self.writer) |*writer| writer.retainedKeyMemory() else .{};
-        const slots = if (self.table.peek() != null) self.identity.len else 0;
+        const slots = if (self.table.peek() != null) self.identity.items.len else 0;
         const slot_bytes = storage_memory.allocated_bytes;
         const directory_bytes = storage_memory.directory_bytes;
-        const identity_bytes = self.identity.len * @sizeOf(std.atomic.Value(u8));
+        const identity_bytes = self.identity.items.len * @sizeOf(std.atomic.Value(u8));
         const index_bytes = if (self.index.peek()) |index| @sizeOf(KeyIndex) + type_key_engine.hashRetainedBytes([32]u8, Var, index.*) else @as(usize, 0);
         const persistent = memory.engine.persistent();
         const scratch = memory.engine.scratch + memory.adapter_scratch;
@@ -255,12 +255,12 @@ pub const SealedTypeKeys = struct {
 
     fn allocateStorage(self: *SealedTypeKeys) Allocator.Error!KeyStorage {
         if (self.test_fail_storage.enabled()) return error.OutOfMemory;
-        return KeyStorage.init(self.allocator, self.identity.len);
+        return KeyStorage.init(self.allocator, self.identity.items.len);
     }
 
     fn slot(self: *SealedTypeKeys, var_: Var) Allocator.Error!*KeySlot {
         const raw: usize = @backingInt(var_);
-        std.debug.assert(raw < self.identity.len);
+        std.debug.assert(raw < self.identity.items.len);
         const storage_ = try self.storage();
         return storage_.slot(self.allocator, self.io, raw);
     }
