@@ -94,7 +94,10 @@ main! = |args| {
 	prepended = List.repeat(row8(f64), n * 1000 + 2).prepend(row8(f64 + 1))
 	dropped = List.repeat(row8(f64), n * 1000 + 2).drop_at(n)
 	zeroed = List.repeat(0.U8, n * 4096)
-	sizes_line = Str.join_with([moved.len().to_str(), shifted.len().to_str(), prepended.len().to_str(), dropped.len().to_str(), zeroed.len().to_str(), (pages.first() ?? page2(0)).b.h.h.h.to_str()], " ")
+	# A copy far larger than any stack, which `memcpy` must not recurse through.
+	huge = List.repeat(n.to_u8_wrap(), n * 33554432)
+	huge_copied = huge.concat(huge)
+	sizes_line = Str.join_with([moved.len().to_str(), shifted.len().to_str(), prepended.len().to_str(), dropped.len().to_str(), zeroed.len().to_str(), huge_copied.len().to_str(), (pages.first() ?? page2(0)).b.h.h.h.to_str()], " ")
 
 	echo!(Str.join_with([float_line, wide_line, narrow_line, dec_line, sizes_line], "\n"))
 	Ok({})

@@ -1667,7 +1667,7 @@ fn runCommand(
 /// Gives the cache entries `build-ci` just wrote the stat of the files they
 /// name, so that the run jobs reuse them.
 ///
-/// Zig 0.17.0 misses the cache for a declared input whose recorded stat does
+/// Zig 0.17 misses the cache for a declared input whose recorded stat does
 /// not match the file, whatever the file contains (see
 /// ci/restamp_zig_cache.zig), and `build-ci` leaves such records behind: an
 /// input recorded in the clock tick it was written in gets a zeroed stat. A
