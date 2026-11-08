@@ -14408,7 +14408,7 @@ for the cases listed:
   loads `discriminant_size` bytes at `discriminant_offset`, or yields 0 for
   size 0. It never calls the runtime.
 - `list_get_unsafe`, `list_map_extract_unsafe`, and `list_move_out_unsafe`
-  with an element descriptor write nothing for a zero-sized item or a list
+  with an item descriptor write nothing for a zero-sized item or a list
   without bytes. Otherwise they copy the item as `dyn_copy` does.
 
 Every other dynamic statement, everything that allocates, and every

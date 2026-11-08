@@ -24011,6 +24011,7 @@ pub const CompileTimeRoot = struct {
         return self.payload;
     }
 
+    /// Whether this strategy still needs the root's producer to run.
     pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
         if (strategy == .lss and self.kind == .literal_argument) return false;
         return switch (self.payloadFor(strategy)) {

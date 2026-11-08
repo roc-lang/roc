@@ -271,8 +271,10 @@ test "strategy root readiness preserves nested callable representations across a
         \\    { first: make(7), second: make(11) }
         \\}
         \\main! = |args| {
-        \\    Echo.line!(Str.inspect(stored.first(List.len(args))))
-        \\    Echo.line!(Str.inspect(stored.second(List.len(args))))
+        \\    first = stored.first
+        \\    second = stored.second
+        \\    Echo.line!(Str.inspect(first(List.len(args))))
+        \\    Echo.line!(Str.inspect(second(List.len(args))))
         \\    Ok({})
         \\}
     });
