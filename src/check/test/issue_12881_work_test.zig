@@ -13,7 +13,7 @@ const Work = struct {
     }
 };
 
-fn checkRepeatedMethodConflict(rows: usize) !Work {
+fn checkRepeatedMethodConflict(rows: usize) TestEnv.TestEnvError!Work {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     try source.writer.writeAll(

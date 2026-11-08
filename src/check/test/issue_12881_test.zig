@@ -3,7 +3,7 @@
 const std = @import("std");
 const TestEnv = @import("TestEnv.zig");
 
-fn diagnosticConstraintComparisons(rows: usize) !usize {
+fn diagnosticConstraintComparisons(rows: usize) TestEnv.TestEnvError!usize {
     var source = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer source.deinit();
     try source.writer.writeAll(

@@ -1520,7 +1520,7 @@ test "diagnostic snapshot rendering options belong to each capture" {
     try std.testing.expect(std.mem.find(u8, try snapshots.formatType(shown), "from_quote") != null);
 }
 
-fn diagnosticAllocationBytes(requirement_count: usize) !usize {
+fn diagnosticAllocationBytes(requirement_count: usize) (Allocator.Error || error{TestUnexpectedResult})!usize {
     const gpa = std.testing.allocator;
     var store = try TypesStore.initCapacity(gpa, 128, 8);
     defer store.deinit();

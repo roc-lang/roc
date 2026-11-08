@@ -1420,7 +1420,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const after_call = if (adapted) try store.addCFStmt(.{ .dyn = .{
             .target = result,
-            .data = try store.addStmtRow(LIR.DynOp, .{ .adapt = .{ .src = call_target, .from = other_desc, .to = desc } }),
+            .data = try store.addStmtRow(LIR.DynOp, .{ .adapt = .{ .src = call_target, .plan = other_desc } }),
             .next = ret,
         } }, .test_fixture) else ret;
         const call = try store.addCFStmt(.{ .assign_call = .{
