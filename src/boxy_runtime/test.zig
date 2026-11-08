@@ -1049,3 +1049,135 @@ test "the runtime reads names only to print them" {
     // A name has no equality to compare by.
     try testing.expect(!@hasDecl(Name, "eql"));
 }
+
+test "byte copies of every size match memmove, overlapping operands included" {
+    var reference: [96]u8 = undefined;
+    var actual: [96]u8 = undefined;
+    for (0..41) |size| {
+        for ([_]usize{ 0, 1, 7, 16 }) |src_at| {
+            for ([_]usize{ 0, 1, 3, 8, 16, 33 }) |dst_at| {
+                for (&reference, 0..) |*byte, index| byte.* = @truncate(index * 7 + 3);
+                actual = reference;
+                // The source as it was before the copy, written over the destination.
+                const source = actual;
+                @memcpy(reference[dst_at..][0..size], source[src_at..][0..size]);
+                walk.copyBytes(actual[dst_at..].ptr, actual[src_at..].ptr, size);
+                try testing.expectEqualSlices(u8, &reference, &actual);
+            }
+        }
+    }
+}
+
+/// A list of `count` items `elem` describes, item `i`'s byte `j` being
+/// `seed + i * 16 + j`.
+fn patternList(elem: *const TypeDesc, count: usize, seed: u8, ops: *RocOps) RocList {
+    const list = RocList.list_allocate(elem.alignment, count, elem.size, false, ops);
+    for (0..count * elem.size) |index| {
+        const item = index / elem.size;
+        list.bytes.?[index] = @truncate(@as(usize, seed) + item * 16 + index % elem.size);
+    }
+    return list;
+}
+
+test "list reads, writes, and sets through a descriptor copy each item size exactly" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const byte = desc_mod.scalarDesc(.u8);
+    const descriptors = [_]*const TypeDesc{
+        byte,
+        desc_mod.scalarDesc(.u16),
+        env.descs.tuple(&.{ byte, byte, byte }),
+        desc_mod.scalarDesc(.u32),
+        desc_mod.scalarDesc(.u64),
+        env.descs.tuple(&.{ desc_mod.scalarDesc(.u32), byte }),
+        desc_mod.scalarDesc(.u128),
+        env.descs.tuple(&.{ desc_mod.scalarDesc(.u64), desc_mod.scalarDesc(.u64), desc_mod.scalarDesc(.u64) }),
+    };
+    for (descriptors) |elem| {
+        const count = 4;
+        for (0..count) |index| {
+            const list = patternList(elem, count, 0x10, ops);
+            defer list.decref(elem.alignment, elem.size, false, null, &builtins.list.rcNone, ops);
+            var out: Slot = .{ .bytes = @splat(0xa5) };
+            var expected: Slot = .{ .bytes = @splat(0xa5) };
+            @memcpy(expected.bytes[0..elem.size], list.bytes.?[index * elem.size ..][0..elem.size]);
+            inline for (.{ compiled.ListOp.get_unsafe, compiled.ListOp.map_extract_unsafe }) |op| {
+                compiled.listOp(&.{ .op = op, .unique_args = 0, .elem = elem, .out = out.ptr(), .out_value = null, .ret_desc = null, .list = &list, .list2 = null, .element = null, .n = .{ index, 0, 0 } }, ops);
+                try testing.expectEqualSlices(u8, &expected.bytes, &out.bytes);
+            }
+        }
+        for (0..count) |index| {
+            inline for (.{ compiled.ListOp.map_write_unsafe, compiled.ListOp.set, compiled.ListOp.set_in_place_unsafe }) |op| {
+                const list = patternList(elem, count, 0x10, ops);
+                var element: Slot = .{ .bytes = @splat(0xc3) };
+                var expected = patternList(elem, count, 0x10, ops);
+                defer expected.decref(elem.alignment, elem.size, false, null, &builtins.list.rcNone, ops);
+                @memcpy(expected.bytes.?[index * elem.size ..][0..elem.size], element.bytes[0..elem.size]);
+                var out: RocList = undefined;
+                compiled.listOp(&.{ .op = op, .unique_args = 1, .elem = elem, .out = @ptrCast(&out), .out_value = null, .ret_desc = null, .list = &list, .list2 = null, .element = element.ptr(), .n = .{ index, 0, 0 } }, ops);
+                defer out.decref(elem.alignment, elem.size, false, null, &builtins.list.rcNone, ops);
+                try testing.expectEqual(list.bytes, out.bytes);
+                try testing.expectEqualSlices(u8, expected.bytes.?[0 .. count * elem.size], out.bytes.?[0 .. count * elem.size]);
+            }
+        }
+    }
+}
+
+test "an unsafe read of a zero-sized item or an empty list writes nothing" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const empty = RocList.empty();
+    const zst_list: RocList = .{ .bytes = null, .length = 3, .capacity_or_alloc_ptr = 0 };
+    for ([_]struct { elem: *const TypeDesc, list: *const RocList }{
+        .{ .elem = desc_mod.zstDesc(), .list = &zst_list },
+        .{ .elem = desc_mod.scalarDesc(.u64), .list = &empty },
+    }) |case| {
+        var out: Slot = .{ .bytes = @splat(0xa5) };
+        compiled.listOp(&.{ .op = .get_unsafe, .unique_args = 0, .elem = case.elem, .out = out.ptr(), .out_value = null, .ret_desc = null, .list = case.list, .list2 = null, .element = null, .n = .{ 0, 0, 0 } }, ops);
+        try testing.expectEqualSlices(u8, &@as([256]u8, @splat(0xa5)), &out.bytes);
+    }
+}
+
+test "setting a list item releases the displaced refcounted item exactly once" {
+    var env = Env.init();
+    defer env.deinit();
+    const ops = env.ops();
+    const saved = builtins.in_process_host.enter(ops, null);
+    defer builtins.in_process_host.leave(saved);
+    const str_desc = desc_mod.strDesc();
+    const items = [_]RocStr{
+        bigStr("the first item string, long enough for the heap", ops),
+        bigStr("the second item string, long enough for the heap", ops),
+    };
+    for ([_]u32{ 0, 1 }) |unique_args| {
+        const list = RocList.list_allocate(str_desc.alignment, items.len, str_desc.size, true, ops);
+        for (items, 0..) |item, index| {
+            item.incref(1, ops);
+            @as([*]RocStr, @ptrCast(@alignCast(list.bytes.?)))[index] = item;
+        }
+        // Shared, the list is copied before the set.
+        if (unique_args == 0) list.incref(1, true, ops);
+        var element = bigStr("the replacement item string, long enough for the heap", ops);
+        const before = env.allocations();
+        var out: RocList = undefined;
+        compiled.listOp(&.{ .op = .set, .unique_args = unique_args, .elem = str_desc, .out = @ptrCast(&out), .out_value = null, .ret_desc = null, .list = &list, .list2 = null, .element = @ptrCast(&element), .n = .{ 1, 0, 0 } }, ops);
+        const out_items: [*]RocStr = @ptrCast(@alignCast(out.bytes.?));
+        try testing.expectEqualStrings(element.asSlice(), out_items[1].asSlice());
+        try testing.expectEqualStrings(items[0].asSlice(), out_items[0].asSlice());
+        if (unique_args == 1) {
+            // In place: the displaced string had another owner, so nothing is freed.
+            try testing.expectEqual(list.bytes, out.bytes);
+            try testing.expectEqual(before, env.allocations());
+        } else {
+            // A copy: the original list keeps its items, and the copy's displaced item is released.
+            try testing.expect(list.bytes != out.bytes);
+            try testing.expectEqual(before + 1, env.allocations());
+            list.decref(str_desc.alignment, str_desc.size, true, @ptrCast(@constCast(str_desc)), &walk.elemDecref, ops);
+        }
+        out.decref(str_desc.alignment, str_desc.size, true, @ptrCast(@constCast(str_desc)), &walk.elemDecref, ops);
+    }
+    for (items) |item| try testing.expect(item.isUnique());
+    for (items) |item| item.decref(ops);
+}

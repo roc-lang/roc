@@ -17375,11 +17375,30 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         //
         // A dynamic local's slot holds the address of its bytes, which its
         // descriptor describes. Descriptor, name, and dictionary locals hold
-        // one pointer-sized word. Every operation the descriptor decides is a
-        // call to the Boxy runtime's `roc_desc_*` entry points.
+        // one pointer-sized word. Copies, list item and record field
+        // addresses, discriminant reads, and unsafe list reads read the
+        // descriptor inline (design.md "Dynamic Values In LIR"); every other
+        // operation the descriptor decides is a call to the Boxy runtime's
+        // `roc_desc_*` entry points.
 
         const desc_size_offset: i32 = @offsetOf(boxy_runtime.TypeDesc, "size");
         const desc_alignment_offset: i32 = @offsetOf(boxy_runtime.TypeDesc, "alignment");
+        /// The descriptor format at this backend's 64-bit targets.
+        const target_desc_layout = boxy_runtime.TypeDesc.layout(.u64);
+        const target_field_layout = boxy_runtime.Field.layout(.u64);
+        const desc_kind_offset: i32 = @intCast(target_desc_layout.of(.kind));
+        const desc_child_offset: i32 = @intCast(target_desc_layout.of(.child));
+        const desc_entries_offset: i32 = @intCast(target_desc_layout.of(.entries));
+        const desc_discriminant_offset_offset: i32 = @intCast(target_desc_layout.of(.discriminant_offset));
+        const desc_discriminant_size_offset: i32 = @intCast(target_desc_layout.of(.discriminant_size));
+        const field_offset_offset: i32 = @intCast(target_field_layout.of(.offset));
+        const field_slot_offset: i32 = @intCast(target_field_layout.of(.field_slot));
+        const field_desc_offset: i32 = @intCast(target_field_layout.of(.desc));
+        const field_entry_size: u32 = target_field_layout.size;
+        comptime {
+            std.debug.assert(field_entry_size == 24);
+            std.debug.assert(desc_size_offset == target_desc_layout.of(.size));
+        }
 
         fn localDyn(self: *Self, local: LocalId) ?LIR.DynLocal {
             return self.store.getLocal(local).dyn;
@@ -17521,12 +17540,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Bind a closed target to the `size`-byte result in the return
         /// register.
         fn bindReturnedScalar(self: *Self, dst_local: LocalId, size: u32) Allocator.Error!void {
+            return self.bindScalarIn(dst_local, size, ret_reg_0);
+        }
+
+        /// Bind a closed target to the `size`-byte result in `reg`.
+        fn bindScalarIn(self: *Self, dst_local: LocalId, size: u32, reg: GeneralReg) Allocator.Error!void {
             if (self.localDyn(dst_local) != null) base.invariant("LIR/codegen invariant violated: dynamic local {d} received a scalar result", .{@backingInt(dst_local)});
             const slot = self.codegen.allocStackSlot(8);
             switch (size) {
-                1 => try self.emitStoreW8(frame_ptr, slot, ret_reg_0),
-                4 => try self.emitStore(.w32, frame_ptr, slot, ret_reg_0),
-                8 => try self.emitStore(.w64, frame_ptr, slot, ret_reg_0),
+                1 => try self.emitStoreW8(frame_ptr, slot, reg),
+                4 => try self.emitStore(.w32, frame_ptr, slot, reg),
+                8 => try self.emitStore(.w64, frame_ptr, slot, reg),
                 else => unreachable, // callers pass the width of the runtime entry point's result
             }
             try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
@@ -17535,15 +17559,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// A component address in the return register: a `view` target takes
         /// it, a closed target loads the component's bytes.
         fn bindComponentAddress(self: *Self, dst_local: LocalId) Allocator.Error!void {
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            try self.emitMovRegReg(address, ret_reg_0);
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// A component address in `address`, a register the caller holds: a
+        /// `view` target takes it, a closed target loads the component's bytes.
+        fn bindComponentAddressIn(self: *Self, dst_local: LocalId, address: GeneralReg) Allocator.Error!void {
             if (self.localDyn(dst_local)) |dyn| {
                 if (dyn.storage == .view) {
-                    try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), ret_reg_0);
+                    try self.emitStore(.w64, frame_ptr, self.localSlot(dst_local), address);
                     return;
                 }
-                // Save the returned component address before setting up the
-                // descriptor copy's arguments, which can clobber return regs.
+                // Save the component address before setting up the
+                // descriptor copy's arguments, which can clobber registers.
                 const address_slot = self.codegen.allocStackSlot(8);
-                try self.emitStore(.w64, frame_ptr, address_slot, ret_reg_0);
+                try self.emitStore(.w64, frame_ptr, address_slot, address);
                 const dst = try self.dynTarget(dst_local);
                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                 defer builder.deinit();
@@ -17556,22 +17589,266 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const size = self.getLayoutSize(self.localLayout(dst_local));
             if (size == 0) return self.bindAssignedLocal(dst_local, .{ .immediate_i64 = 0 });
             const slot = self.codegen.allocStackSlot(@max(size, 8));
-            const address, const temp = try self.allocTempGenerals(2);
-            try self.emitMovRegReg(address, ret_reg_0);
+            const temp = try self.allocTempGeneral();
             try self.copyChunked(temp, address, 0, frame_ptr, slot, size);
-            self.freeGenerals(.{ temp, address });
+            self.codegen.freeGeneral(temp);
             try self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
         }
 
-        /// Copy a value's bytes from `src` into `dst` through `desc`. Reference
-        /// counts are untouched.
+        /// Patch every jump in `jumps` to the current offset.
+        fn patchJumpsHere(self: *Self, jumps: []const usize) Allocator.Error!void {
+            for (jumps) |jump| try self.codegen.patchJump(jump, self.codegen.currentOffset());
+        }
+
+        /// Replace the descriptor in `desc` by its backing while it is a
+        /// nominal, which shares its backing's layout (`compiled.backing`).
+        /// `kind` is scratch.
+        fn emitDescBacking(self: *Self, desc: GeneralReg, kind: GeneralReg) Allocator.Error!void {
+            const loop = self.codegen.currentOffset();
+            try self.emitLoadW8(kind, desc, desc_kind_offset);
+            try self.emitCmpImm(kind, @backingInt(boxy_runtime.Kind.nominal));
+            const exit = try self.codegen.emitCondJump(condCode(.not_equal));
+            try self.emitLoad(.w64, desc, desc, desc_child_offset);
+            try self.codegen.patchJump(try self.codegen.emitJump(), loop);
+            try self.codegen.patchJump(exit, self.codegen.currentOffset());
+        }
+
+        /// Copy `size` bytes from the address in `src` to the address in
+        /// `dst` with one load and one store when `size` is 1, 2, 4, 8, or 16,
+        /// and nothing when it is 0, loading every byte before storing any, as
+        /// the runtime's `walk.copyBytes` does. A copy of another size jumps
+        /// to a location appended to `other`, every finished copy to one
+        /// appended to `done`. `size` is clobbered; `scratch` is a further
+        /// register.
+        fn emitSizedCopy(self: *Self, size: GeneralReg, src: GeneralReg, dst: GeneralReg, scratch: GeneralReg, other: *std.ArrayList(usize), done: *std.ArrayList(usize)) Allocator.Error!void {
+            const value = size;
+            try self.emitCmpImm(size, 8);
+            const to_8 = try self.codegen.emitCondJump(condCode(.equal));
+            const to_16 = try self.codegen.emitCondJump(condCode(.above));
+            try self.emitCmpImm(size, 4);
+            const to_4 = try self.codegen.emitCondJump(condCode(.equal));
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
+            try self.emitCmpImm(size, 2);
+            const to_2 = try self.codegen.emitCondJump(condCode(.equal));
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.above)));
+            try self.emitCmpImm(size, 0);
+            try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+            try self.emitLoadW8(value, src, 0);
+            try self.emitStoreW8(dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_2, self.codegen.currentOffset());
+            try self.emitLoadW16(value, src, 0);
+            try self.emitStoreW16(dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_4, self.codegen.currentOffset());
+            try self.emitLoad(.w32, value, src, 0);
+            try self.emitStore(.w32, dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_8, self.codegen.currentOffset());
+            try self.emitLoad(.w64, value, src, 0);
+            try self.emitStore(.w64, dst, 0, value);
+            try done.append(self.allocator, try self.codegen.emitJump());
+            try self.codegen.patchJump(to_16, self.codegen.currentOffset());
+            try self.emitCmpImm(size, 16);
+            try other.append(self.allocator, try self.codegen.emitCondJump(condCode(.not_equal)));
+            try self.emitLoad(.w64, value, src, 0);
+            try self.emitLoad(.w64, scratch, src, 8);
+            try self.emitStore(.w64, dst, 0, value);
+            try self.emitStore(.w64, dst, 8, scratch);
+            try done.append(self.allocator, try self.codegen.emitJump());
+        }
+
+        /// Copy a value's bytes from `src` into `dst` through `desc`
+        /// (`walk.copy`). Reference counts are untouched. The sizes
+        /// `emitSizedCopy` handles copy inline; others call the runtime.
         fn emitDescCopy(self: *Self, desc: LocalId, dst: DynTarget, src: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            var other: std.ArrayList(usize) = .empty;
+            defer other.deinit(self.allocator);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const size, const from, const to, const scratch = try self.allocTempGenerals(4);
+                defer self.freeGenerals(.{ scratch, to, from, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitBytesAddress(src, from);
+                try self.emitTargetAddress(dst, to);
+                try self.emitSizedCopy(size, from, to, scratch, &other, &done);
+            }
+            try self.patchJumpsHere(other.items);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try self.addWordArg(&builder, desc);
             try addTargetArg(&builder, dst);
             try self.addBytesArg(&builder, src);
             try self.callBoxyRuntime(&builder, "roc_desc_copy");
+            try self.patchJumpsHere(done.items);
+        }
+
+        /// `dyn_list_item_addr` (`compiled.listElemAddr`): the list's bytes
+        /// plus `index` times the item size. A zero-sized item's address is
+        /// the runtime's.
+        fn emitDynListItemAddr(self: *Self, dst_local: LocalId, item: anytype) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            var zero_sized: usize = undefined;
+            {
+                const size, const index = try self.allocTempGenerals(2);
+                defer self.freeGenerals(.{ index, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(item.elem_desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitCmpImm(size, 0);
+                zero_sized = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitBytesAddress(item.list, address);
+                try self.emitLoad(.w64, address, address, list_bytes_offset);
+                try self.emitLoad(.w64, index, frame_ptr, self.localSlot(item.index));
+                try self.codegen.emitMul(.w64, index, index, size);
+                try self.codegen.emitAdd(.w64, address, address, index);
+            }
+            const done = try self.codegen.emitJump();
+            try self.codegen.patchJump(zero_sized, self.codegen.currentOffset());
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, item.elem_desc);
+                try self.addBytesArg(&builder, item.list);
+                try self.addWordArg(&builder, item.index);
+                try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
+                try self.emitMovRegReg(address, ret_reg_0);
+            }
+            try self.codegen.patchJump(done, self.codegen.currentOffset());
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// `list_get_unsafe` and `list_map_extract_unsafe` with an element
+        /// descriptor (`compiled.listOp`): copy the item at `index` to the
+        /// target. A zero-sized item, or a list without bytes, writes
+        /// nothing. The sizes `emitSizedCopy` handles copy inline; others
+        /// copy through the runtime's `roc_desc_copy`.
+        fn emitDynListGetUnsafe(self: *Self, dst_local: LocalId, elem_desc: LocalId, list: LocalId, index: LocalId) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const dst = try self.dynTarget(dst_local);
+            const item_slot = self.codegen.allocStackSlot(8);
+            var other: std.ArrayList(usize) = .empty;
+            defer other.deinit(self.allocator);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const size, const from, const to, const scratch = try self.allocTempGenerals(4);
+                defer self.freeGenerals(.{ scratch, to, from, size });
+                try self.emitLoad(.w64, size, frame_ptr, self.localSlot(elem_desc));
+                try self.emitLoad(.w32, size, size, desc_size_offset);
+                try self.emitCmpImm(size, 0);
+                try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                try self.emitBytesAddress(list, from);
+                try self.emitLoad(.w64, from, from, list_bytes_offset);
+                try self.emitCmpImm(from, 0);
+                try done.append(self.allocator, try self.codegen.emitCondJump(condCode(.equal)));
+                try self.emitBytesAddress(index, to);
+                try self.emitLoad(.w64, to, to, 0);
+                try self.codegen.emitMul(.w64, to, to, size);
+                try self.codegen.emitAdd(.w64, from, from, to);
+                try self.emitStore(.w64, frame_ptr, item_slot, from);
+                try self.emitTargetAddress(dst, to);
+                try self.emitSizedCopy(size, from, to, scratch, &other, &done);
+            }
+            try self.patchJumpsHere(other.items);
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, elem_desc);
+                try addTargetArg(&builder, dst);
+                try builder.addMemArg(frame_ptr, item_slot);
+                try self.callBoxyRuntime(&builder, "roc_desc_copy");
+            }
+            try self.patchJumpsHere(done.items);
+            try self.finishTarget(dst_local, dst);
+        }
+
+        /// `dyn_field_addr` (`compiled.fieldAddr`): the record's address plus
+        /// the field's offset, read from the descriptor's field table. A field
+        /// whose slot is a recursion box is addressed by the runtime.
+        fn emitDynFieldAddr(self: *Self, dst_local: LocalId, desc: LocalId, base_local: LocalId, field_index: u32) Allocator.Error!void {
+            try self.spillAllVectorLocals();
+            const address = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(address);
+            var boxed: usize = undefined;
+            {
+                const entry, const temp, const scale = try self.allocTempGenerals(3);
+                defer self.freeGenerals(.{ scale, temp, entry });
+                try self.emitLoad(.w64, entry, frame_ptr, self.localSlot(desc));
+                try self.emitDescBacking(entry, temp);
+                try self.emitLoad(.w64, entry, entry, desc_entries_offset);
+                // The semantic index's entry names the field's memory slot.
+                const index_entry: i32 = @intCast(@as(u64, field_index) * field_entry_size);
+                try self.emitLoad(.w32, temp, entry, index_entry + field_slot_offset);
+                // A field entry is 24 bytes: the slot times three, then times eight.
+                try self.emitMovRegReg(scale, temp);
+                try self.emitShiftImm(.shl, .w64, temp, temp, 1);
+                try self.codegen.emitAdd(.w64, temp, temp, scale);
+                try self.emitShiftImm(.shl, .w64, temp, temp, 3);
+                try self.codegen.emitAdd(.w64, entry, entry, temp);
+                try self.emitLoad(.w64, temp, entry, field_desc_offset);
+                try self.emitLoadW8(temp, temp, desc_kind_offset);
+                try self.emitCmpImm(temp, @backingInt(boxy_runtime.Kind.recursive_box));
+                boxed = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitLoad(.w32, temp, entry, field_offset_offset);
+                try self.emitBytesAddress(base_local, address);
+                try self.codegen.emitAdd(.w64, address, address, temp);
+            }
+            const done = try self.codegen.emitJump();
+            try self.codegen.patchJump(boxed, self.codegen.currentOffset());
+            {
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                try self.addWordArg(&builder, desc);
+                try self.addBytesArg(&builder, base_local);
+                try builder.addImmArg(field_index);
+                try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
+                try self.emitMovRegReg(address, ret_reg_0);
+            }
+            try self.codegen.patchJump(done, self.codegen.currentOffset());
+            try self.bindComponentAddressIn(dst_local, address);
+        }
+
+        /// `dyn_tag_discriminant` (`compiled.tagDiscriminant`): the
+        /// `discriminant_size` bytes at `discriminant_offset` of the union
+        /// behind any nominals. An 8-byte discriminant is below 2^32, so its
+        /// low four bytes are its value.
+        fn emitDynTagDiscriminant(self: *Self, dst_local: LocalId, tag: anytype) Allocator.Error!void {
+            const value = try self.allocTempGeneral();
+            defer self.codegen.freeGeneral(value);
+            var done: std.ArrayList(usize) = .empty;
+            defer done.deinit(self.allocator);
+            {
+                const desc, const at = try self.allocTempGenerals(2);
+                defer self.freeGenerals(.{ at, desc });
+                try self.emitLoad(.w64, desc, frame_ptr, self.localSlot(tag.desc));
+                try self.emitDescBacking(desc, at);
+                try self.emitBytesAddress(tag.base, at);
+                try self.emitLoad(.w32, value, desc, desc_discriminant_offset_offset);
+                try self.codegen.emitAdd(.w64, at, at, value);
+                try self.emitLoad(.w32, desc, desc, desc_discriminant_size_offset);
+                try self.emitCmpImm(desc, 2);
+                const wide = try self.codegen.emitCondJump(condCode(.above));
+                const two = try self.codegen.emitCondJump(condCode(.equal));
+                try self.emitCmpImm(desc, 1);
+                const one = try self.codegen.emitCondJump(condCode(.equal));
+                try self.codegen.emitLoadImm(value, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(one, self.codegen.currentOffset());
+                try self.emitLoadW8(value, at, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(two, self.codegen.currentOffset());
+                try self.emitLoadW16(value, at, 0);
+                try done.append(self.allocator, try self.codegen.emitJump());
+                try self.codegen.patchJump(wide, self.codegen.currentOffset());
+                try self.emitLoad(.w32, value, at, 0);
+            }
+            try self.patchJumpsHere(done.items);
+            try self.bindScalarIn(dst_local, 4, value);
         }
 
         /// `set_local`, or a join parameter's initialization, where either side
@@ -17725,38 +18002,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 .copy => |c| {
                     const dst = try self.dynTarget(dst_local);
-                    try self.addWordArg(&builder, c.desc);
-                    try addTargetArg(&builder, dst);
-                    try self.addBytesArg(&builder, c.src);
-                    try self.callBoxyRuntime(&builder, "roc_desc_copy");
+                    try self.emitDescCopy(c.desc, dst, c.src);
                     try self.finishTarget(dst_local, dst);
                 },
-                .field_addr => |f| {
-                    try self.addWordArg(&builder, f.desc);
-                    try self.addBytesArg(&builder, f.base);
-                    try self.addIndexArg(&builder, f.field_index);
-                    try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
-                    try self.bindComponentAddress(dst_local);
+                .field_addr => |f| switch (f.field_index) {
+                    .immediate => |index| try self.emitDynFieldAddr(dst_local, f.desc, f.base, index),
+                    .local => {
+                        try self.addWordArg(&builder, f.desc);
+                        try self.addBytesArg(&builder, f.base);
+                        try self.addIndexArg(&builder, f.field_index);
+                        try self.callBoxyRuntime(&builder, "roc_desc_field_addr");
+                        try self.bindComponentAddress(dst_local);
+                    },
                 },
-                .list_item_addr => |e| {
-                    try self.addWordArg(&builder, e.elem_desc);
-                    try self.addBytesArg(&builder, e.list);
-                    try self.addWordArg(&builder, e.index);
-                    try self.callBoxyRuntime(&builder, "roc_desc_list_item_addr");
-                    try self.bindComponentAddress(dst_local);
-                },
+                .list_item_addr => |e| try self.emitDynListItemAddr(dst_local, e),
                 .box_payload_addr => |b| {
                     try self.addWordArg(&builder, b.desc);
                     try self.addBytesArg(&builder, b.box);
                     try self.callBoxyRuntime(&builder, "roc_desc_box_payload_addr");
                     try self.bindComponentAddress(dst_local);
                 },
-                .tag_discriminant => |t| {
-                    try self.addWordArg(&builder, t.desc);
-                    try self.addBytesArg(&builder, t.base);
-                    try self.callBoxyRuntime(&builder, "roc_desc_tag_discriminant");
-                    try self.bindReturnedScalar(dst_local, 4);
-                },
+                .tag_discriminant => |t| try self.emitDynTagDiscriminant(dst_local, t),
                 .tag_payload_addr => |t| {
                     try self.addWordArg(&builder, t.desc);
                     try self.addBytesArg(&builder, t.base);
@@ -18061,6 +18327,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.emitStore(.w64, frame_ptr, slot, reg);
                 self.codegen.freeGeneral(reg);
                 return self.bindAssignedLocal(dst_local, self.stackLocationForLayout(self.localLayout(dst_local), slot));
+            }
+            if (list_op == .get_unsafe or list_op == .map_extract_unsafe) {
+                return self.emitDynListGetUnsafe(dst_local, elem_desc, GuardedList.at(all_args, 0), GuardedList.at(all_args, 1));
             }
 
             const Request = BoxyListOpRequest;

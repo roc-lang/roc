@@ -67,7 +67,7 @@ pub fn componentAddr(desc: *const TypeDesc, slot: [*]u8) [*]u8 {
 /// boxing it when the slot is a recursive type's box.
 fn writeComponent(desc: *const TypeDesc, slot: [*]u8, src: [*]const u8, ops: *RocOps) void {
     if (desc.kind == .recursive_box) return buildBox(desc.child.?, @ptrCast(@alignCast(slot)), src, ops);
-    @memcpy(slot[0..desc.size], src[0..desc.size]);
+    walk.copyBytes(slot, src, desc.size);
 }
 
 fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) void {
@@ -173,7 +173,7 @@ pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDe
         }
         if (entry >= base_fields.len) invariant(ops, "an update plan names a field past its base's fields");
         const source = &base_fields[entry];
-        @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
+        walk.copyBytes(dst + field.offset, base + source.offset, field.desc.size);
         walk.incref(field.desc, dst + field.offset, 1, ops);
     }
     if (end != record.size) @memset(dst[end..record.size], 0);
@@ -211,7 +211,7 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
     }
     const data = utils.allocateWithRefcount(elem.size * elems.len, elem.alignment, elem.flags.contains_refcounted, ops);
     for (elems, 0..) |src, index| {
-        @memcpy((data + index * elem.size)[0..elem.size], src[0..elem.size]);
+        walk.copyBytes(data + index * elem.size, src, elem.size);
     }
     dst.* = .{ .bytes = data, .length = elems.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elems.len) };
 }
@@ -229,7 +229,7 @@ pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *
         return;
     }
     const data = utils.allocateWithRefcount(desc.size, desc.alignment, desc.flags.contains_refcounted, ops);
-    @memcpy(data[0..desc.size], payload[0..desc.size]);
+    walk.copyBytes(data, payload, desc.size);
     dst.* = @intFromPtr(data);
 }
 
@@ -249,7 +249,7 @@ pub fn allocSlot(desc: *const TypeDesc, dst: *usize, ops: *RocOps) void {
 pub fn storeSlot(desc: *const TypeDesc, slot: *const usize, value: [*]const u8, dst: *usize) void {
     if (desc.size != 0) {
         const data: [*]u8 = @ptrFromInt(slot.*);
-        @memcpy(data[0..desc.size], value[0..desc.size]);
+        walk.copyBytes(data, value, desc.size);
     }
     dst.* = slot.*;
 }
@@ -276,7 +276,7 @@ pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps)
         switch (node.kind) {
             .copy => {
                 const t = node.to.?;
-                @memcpy(work.dst[0..t.size], work.src[0..t.size]);
+                walk.copyBytes(work.dst, work.src, t.size);
                 walk.incref(t, work.dst, 1, ops);
             },
             .wrap => {
@@ -458,12 +458,12 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .get_unsafe, .map_extract_unsafe => {
             if (e.width == 0 or a.bytes == null) return;
             const at = a.bytes.? + @as(usize, @intCast(req.n[0])) * e.width;
-            @memcpy(req.out[0..e.width], at[0..e.width]);
+            walk.copyBytes(req.out, at, e.width);
         },
         .append_unsafe => writeList(req.out, if (e.width == 0)
             zstList(a.len() + 1)
         else
-            list.listAppendUnsafe(a, req.element, e.width, &list.copy_fallback)),
+            list.listAppendUnsafe(a, req.element, e.width, &walk.elemCopy)),
         .concat => {
             const b = req.list2.?.*;
             writeList(req.out, if (e.width == 0)
@@ -506,18 +506,18 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .prepend => writeList(req.out, if (e.width == 0)
             zstList(a.len() + 1)
         else
-            list.listPrepend(a, e.alignment, req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listPrepend(a, e.alignment, req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .swap => writeList(req.out, if (e.width == 0)
             zstList(a.len())
         else
-            list.listSwap(a, e.alignment, e.width, req.n[0], req.n[1], e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listSwap(a, e.alignment, e.width, req.n[0], req.n[1], e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .map_can_reuse => req.out[0] = @intFromBool(list.listMapCanReuse(a, ops)),
         .item_size_at_most => req.out[0] = @intFromBool(e.width <= req.n[0]),
         .map_cast_unsafe => writeList(req.out, a),
         .map_write_unsafe => {
             if (e.width != 0) {
                 const at = a.bytes.? + @as(usize, @intCast(req.n[0])) * e.width;
-                @memcpy(at[0..e.width], req.element.?[0..e.width]);
+                walk.copyBytes(at, req.element.?, e.width);
             }
             writeList(req.out, a);
         },
@@ -567,25 +567,18 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
                 value_out = req.out_value.?;
             }
             writeList(list_out, if (m0 == .InPlace)
-                list.listReplaceInPlace(a, req.n[0], req.element, e.width, value_out, &list.copy_fallback)
+                list.listReplaceInPlace(a, req.n[0], req.element, e.width, value_out, &walk.elemCopy)
             else
-                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, value_out, &list.copy_fallback, ops));
+                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, value_out, &walk.elemCopy, ops));
         },
         .set, .set_in_place_unsafe => {
             if (e.width == 0) {
                 writeList(req.out, zstList(a.len()));
                 return;
             }
-            // The displaced element is released here: `set` does not return it.
-            var old_buffer: walk.ArgsBuffer = .{};
-            defer old_buffer.deinit(ops);
-            const old = old_buffer.get(e.width, ops);
-            const result = if (req.op == .set_in_place_unsafe or m0 == .InPlace)
-                list.listReplaceInPlace(a, req.n[0], req.element, e.width, old, &list.copy_fallback)
-            else
-                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, old, &list.copy_fallback, ops);
-            if (e.rc) walk.decref(req.elem, old, ops);
-            writeList(req.out, result);
+            // `set` does not return the displaced element; `listSet` releases it.
+            const set_mode: UpdateMode = if (req.op == .set_in_place_unsafe) .InPlace else m0;
+            writeList(req.out, list.listSet(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, set_mode, &walk.elemCopy, ops));
         },
         .with_capacity => writeList(req.out, if (e.width == 0)
             zstList(0)
@@ -606,6 +599,6 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .reverse => writeList(req.out, if (e.width == 0)
             zstList(a.len())
         else
-            list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
     }
 }
