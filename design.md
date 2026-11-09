@@ -454,6 +454,9 @@ frozen address relocation when embedding a constant root. Private allocations
 retain hidden visibility and do not become host exports. A combined code/data
 object keeps local binding for private allocations because those references
 remain inside that object.
+Zero-sized definitions still belong to a defined section, even when it has no
+payload bytes; omitting that section must not turn a definition into an external
+declaration.
 
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
