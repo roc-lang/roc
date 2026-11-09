@@ -25,6 +25,9 @@ pub const RelationOwner = types.RelationOwner;
 pub const TypeMismatch = types.TypeMismatch;
 pub const TypeMismatchEvidence = types.TypeMismatchEvidence;
 pub const TypePair = types.TypePair;
+pub const InterpolationTie = types.InterpolationTie;
+pub const MethodConflict = types.MethodConflict;
+pub const StrConversion = types.StrConversion;
 pub const IncompatiblePlatformRequirement = types.IncompatiblePlatformRequirement;
 pub const CrossModuleImport = types.CrossModuleImport;
 
@@ -32,12 +35,15 @@ pub const CrossModuleImport = types.CrossModuleImport;
 pub const StaticDispatch = types.StaticDispatch;
 pub const DispatcherNotNominal = types.DispatcherNotNominal;
 pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
+pub const CopiedRequirement = types.CopiedRequirement;
+pub const SharedMethodUses = types.SharedMethodUses;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const TypeDoesNotSupportMap = types.TypeDoesNotSupportMap;
 pub const UndeterminedCodecType = types.UndeterminedCodecType;
 pub const UndeterminedType = types.UndeterminedType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
+pub const LocalValueMethod = types.LocalValueMethod;
 
 // Number errors
 pub const NumberDoesNotFit = types.NumberDoesNotFit;
@@ -62,9 +68,9 @@ pub const NonExhaustiveMatch = types.NonExhaustiveMatch;
 pub const NonExhaustiveDestructure = types.NonExhaustiveDestructure;
 pub const RedundantPattern = types.RedundantPattern;
 pub const UnmatchablePattern = types.UnmatchablePattern;
+pub const MatchBranchPart = types.MatchBranchPart;
 pub const MatchAltBinderMissing = types.MatchAltBinderMissing;
-pub const UnreachableCode = types.UnreachableCode;
-pub const ComptimeUnusedBranch = types.ComptimeUnusedBranch;
+pub const DiscardedVarUpdate = types.DiscardedVarUpdate;
 pub const ComptimeCondition = types.ComptimeCondition;
 
 // Type declaration errors
@@ -74,6 +80,7 @@ pub const NotAWhereAlias = types.NotAWhereAlias;
 pub const WhereAliasInTypePosition = types.WhereAliasInTypePosition;
 pub const RecursiveWhereAlias = types.RecursiveWhereAlias;
 pub const WhereClauseReceiverNotIntroduced = types.WhereClauseReceiverNotIntroduced;
+pub const WhereRequirementNotFunction = types.WhereRequirementNotFunction;
 pub const RedundantOpenTagUnion = types.RedundantOpenTagUnion;
 
 // Nominal type errors
@@ -86,6 +93,7 @@ pub const PlatformAliasNotFound = types.PlatformAliasNotFound;
 pub const PlatformDefNotFound = types.PlatformDefNotFound;
 pub const PlatformHostedSection = types.PlatformHostedSection;
 pub const HostedUnboxedFunction = types.HostedUnboxedFunction;
+pub const PolymorphicRecursion = types.PolymorphicRecursion;
 pub const HostedFunctionNotEffectful = types.HostedFunctionNotEffectful;
 pub const HostedTypeVariableNotBoxed = types.HostedTypeVariableNotBoxed;
 pub const HostBoundaryOpenRow = types.HostBoundaryOpenRow;
@@ -93,6 +101,7 @@ pub const HostBoundaryOptionalField = types.HostBoundaryOptionalField;
 pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 /// Public `AnnotationOnlyValueUse` re-export.
 pub const AnnotationOnlyValueUse = types.AnnotationOnlyValueUse;
+pub const HostedWhereRequirement = types.HostedWhereRequirement;
 pub const DerivedMethodValueUse = types.DerivedMethodValueUse;
 pub const CapturingMethod = types.CapturingMethod;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;

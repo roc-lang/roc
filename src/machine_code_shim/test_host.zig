@@ -14,11 +14,19 @@ const empty_hosted_names = [_]?[*:0]const u8{};
 const hosted_count: usize = 0;
 const hosted_fns: [*]const builtins.host_abi.HostedFn = &empty_hosted_fns;
 const hosted_names: [*]const ?[*:0]const u8 = &empty_hosted_names;
+const empty_package_fns = [_]*const anyopaque{};
+const empty_package_names = [_][*:0]const u8{};
+const package_count: usize = 0;
+const package_fns: [*]const *const anyopaque = &empty_package_fns;
+const package_names: [*]const [*:0]const u8 = &empty_package_names;
 
 comptime {
     @export(&hosted_count, .{ .name = shim_symbols.roc_shim_hosted_count });
     @export(&hosted_fns, .{ .name = shim_symbols.roc_shim_hosted_fns });
     @export(&hosted_names, .{ .name = shim_symbols.roc_shim_hosted_names });
+    @export(&package_fns, .{ .name = shim_symbols.roc_shim_package_fns });
+    @export(&package_names, .{ .name = shim_symbols.roc_shim_package_names });
+    @export(&package_count, .{ .name = shim_symbols.roc_shim_package_count });
     @export(&rocAlloc, .{ .name = shim_symbols.roc_alloc });
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
     @export(&rocRealloc, .{ .name = shim_symbols.roc_realloc });

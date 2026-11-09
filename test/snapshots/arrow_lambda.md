@@ -77,18 +77,18 @@ test1 = 10 |> (|x| x + 1)
 test2 = "hello" |> (|_| "world")
 
 # Lambda with if expression
-test3 = "" |> (|s| if s.is_empty() "empty" else "not empty")
+test3 = "" |> (|s| if (s.is_empty()) "empty" else "not empty")
 ~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "test1"))
-		(e-call (constraint-fn-var 254)
+		(e-call (constraint-fn-var 259)
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 245)
+				(e-dispatch-call (method "plus") (constraint-fn-var 250)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
@@ -97,7 +97,7 @@ test3 = "" |> (|s| if s.is_empty() "empty" else "not empty")
 			(e-num (value "10"))))
 	(d-let
 		(p-assign (ident "test2"))
-		(e-call (constraint-fn-var 271)
+		(e-call (constraint-fn-var 276)
 			(e-lambda
 				(args
 					(p-underscore))
@@ -107,14 +107,14 @@ test3 = "" |> (|s| if s.is_empty() "empty" else "not empty")
 				(e-literal (string "hello")))))
 	(d-let
 		(p-assign (ident "test3"))
-		(e-call (constraint-fn-var 299)
+		(e-call (constraint-fn-var 304)
 			(e-lambda
 				(args
 					(p-assign (ident "s")))
 				(e-if
 					(if-branches
 						(if-branch
-							(e-dispatch-call (method "is_empty") (constraint-fn-var 272)
+							(e-dispatch-call (method "is_empty") (constraint-fn-var 277)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "s"))))

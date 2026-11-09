@@ -132,27 +132,29 @@ NO CHANGE
 							(builtin)
 							(e-tag (name "False")))))
 				(e-block
-					(e-if
-						(if-branches
-							(if-branch
-								(e-method-eq (negated "false")
-									(lhs
-										(e-lookup-local
-											(p-assign (ident "b"))))
-									(rhs
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "False")))))
+					(s-expr
+						(e-if
+							(if-branches
+								(if-branch
+									(e-method-eq (negated "false")
+										(lhs
+											(e-lookup-local
+												(p-assign (ident "b"))))
+										(rhs
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "False")))))
+									(e-block
+										(s-reassign
+											(p-var-assign (ident "allTrue_"))
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "False"))))
+										(e-empty_record))))
+							(if-else
 								(e-block
-									(s-reassign
-										(p-var-assign (ident "allTrue_"))
-										(e-nominal-external
-											(builtin)
-											(e-tag (name "False"))))
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
+									(e-empty_record)))))
+					(e-empty_record)))
 			(e-lookup-local
 				(p-var-assign (ident "allTrue_"))))
 		(annotation

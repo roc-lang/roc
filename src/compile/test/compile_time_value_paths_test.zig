@@ -1,7 +1,7 @@
 //! A compile-time value must reach the runtime program the same way on every
-//! path that produces one: the program a build continues from compile-time
-//! evaluation (its runtime consumer reads the completed frozen image) and the
-//! program lowered from checked modules whose values the constant store
+//! path that produces one: the program a build continues once compile-time
+//! evaluation has completed (specialized again from the stored values) and
+//! the program lowered from checked modules whose values the constant store
 //! restores. Each test drives the first path through `ProgramSession`, as
 //! `roc build` does, and the second through `lowerCheckedModulesToLir`, so a
 //! divergence between them fails here instead of in a binary's size.
@@ -11,12 +11,14 @@ const base = @import("base");
 const build_options = @import("build_options");
 const check = @import("check");
 const eval = @import("eval");
-const layout = @import("layout");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
 const CoreCtx = @import("ctx").CoreCtx;
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const is_freestanding = @import("../threading.zig").is_freestanding;
+const static_data_exports = @import("static_data");
+const collections = @import("collections");
+const GuardedList = collections.GuardedList;
 
 const platform_files = [_]struct { path: []const u8, source: []const u8 }{
     .{ .path = ".roc_echo_platform/main.roc", .source =
@@ -50,19 +52,31 @@ const platform_files = [_]struct { path: []const u8, source: []const u8 }{
 /// builtin wrappers inlined, so a list operation's runtime uniqueness check
 /// sits in the procedure that calls the builtin.
 fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
-    return .{ .inline_expects = .omit, .inline_mode = inline_mode };
+    // An optimized build specializes ARC modes, as `--opt=size` and
+    // `--opt=speed` do.
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true };
 }
 
-/// Both runtime programs of one app.
+/// Both runtime programs of one app. The coordinator and the builtin
+/// modules it reads live on the heap: a coordinator records its own address
+/// on the thread that runs it, so it never moves.
 const Lowered = struct {
-    coord: Coordinator,
+    builtin_modules: *eval.BuiltinModules,
+    coord: *Coordinator,
     continued: lir.CheckedPipeline.LoweredProgram,
     restored: lir.CheckedPipeline.LoweredProgram,
+    /// The continued program's materialized static data: the image a build
+    /// links.
+    image: []static_data_exports.StaticDataExport,
 
     fn deinit(self: *Lowered) void {
+        static_data_exports.deinitStaticData(std.testing.allocator, self.image);
         self.restored.deinit();
         self.continued.deinit();
         self.coord.deinit();
+        std.testing.allocator.destroy(self.coord);
+        self.builtin_modules.deinit();
+        std.testing.allocator.destroy(self.builtin_modules);
     }
 };
 
@@ -84,14 +98,18 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = source });
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", arena);
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
-    defer builtin_modules.deinit();
-    var coord = try Coordinator.init(
+    const builtin_modules = try gpa.create(eval.BuiltinModules);
+    errdefer gpa.destroy(builtin_modules);
+    builtin_modules.* = try eval.BuiltinModules.init(gpa, std.testing.io);
+    errdefer builtin_modules.deinit();
+    const coord = try gpa.create(Coordinator);
+    errdefer gpa.destroy(coord);
+    coord.* = try Coordinator.init(
         gpa,
         .single_threaded,
         1,
         roc_target.RocTarget.detectNative(),
-        &builtin_modules,
+        builtin_modules,
         build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(gpa, gpa, io),
@@ -107,9 +125,11 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     try coord.finishCheckedProgram(.executable_artifacts);
     if (coord.hasUserErrors()) return error.TestUnexpectedResult;
     const session = &coord.program_session.?;
-    // The build continues the evaluation's specialization in a separate
-    // runtime consumer, which is the path that reads the frozen image.
-    try std.testing.expect(session.host != null);
+    // The build evaluated the app's compile-time roots, so its runtime
+    // consumer continues the program specialized again from their stored
+    // values.
+    try std.testing.expect(session.completed != null);
+    try std.testing.expect(session.runtime_stages == .respecialized);
     try std.testing.expect(session.runtime_prepared != null);
     var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
     errdefer continued.deinit();
@@ -119,7 +139,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
     const relations = try coord.collectRelationArtifactViews(arena, root);
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
-    const restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+    var restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
         gpa,
         .{
             .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
@@ -130,9 +150,23 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
             .include_provided_data_exports = true,
             .include_internal_static_data = true,
         },
-        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode, .specialize_arc_modes = true, .prove_uniqueness = true },
     );
-    return .{ .coord = coord, .continued = continued, .restored = restored };
+    errdefer restored.deinit();
+    const image = static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &continued,
+        roc_target.RocTarget.detectNative(),
+        .{ .include_provided_exports = true },
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.TestUnexpectedResult,
+    };
+    return .{ .builtin_modules = builtin_modules, .coord = coord, .continued = continued, .restored = restored, .image = image };
 }
 
 fn countListSlots(result: *const lir.Program.Result) usize {
@@ -149,18 +183,6 @@ fn countLowLevel(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usize 
         if (stmt == .assign_low_level and stmt.assign_low_level.op == op) count += 1;
     }
     return count;
-}
-
-fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt != .assign_literal) continue;
-        switch (stmt.assign_literal.value) {
-            .i64_literal => |literal| if (literal.value == value) return true,
-            .i128_literal => |literal| if (literal.value == value) return true,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
-        }
-    }
-    return false;
 }
 
 test "two equal compile-time tables freeze to one backing in the continued runtime program" {
@@ -186,13 +208,12 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     defer lowered.deinit();
 
     const continued = &lowered.continued;
-    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
     // Each table is its own root with its own descriptor, and the two
     // descriptors name one 4000-byte backing.
     var backings: usize = 0;
     var descriptor_targets: [2]?u32 = .{ null, null };
     var descriptors: usize = 0;
-    for (frozen.exports) |item| {
+    for (lowered.image) |item| {
         if (item.value_id) |slot| {
             const layout_idx = continued.lir_result.static_data_values.items[@backingInt(slot)].layout_idx;
             if (continued.lir_result.layouts.getLayout(layout_idx).tag != .list) continue;
@@ -212,7 +233,7 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
 }
 
-test "an empty compile-time list read at another layout index still lowers as its capacity request" {
+test "an empty compile-time list stays immutable even when a consumer appends" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -220,9 +241,7 @@ test "an empty compile-time list read at another layout index still lowers as it
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     // The roots only the expects read make the evaluation's program intern
-    // three list layouts before the buffer's, while the runtime program, which
-    // lowers only what `main!` reaches, interns the buffer's list layout first:
-    // the two consumers name the same list layout by different indices.
+    // three list layouts before the buffer's.
     var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -246,32 +265,11 @@ test "an empty compile-time list read at another layout index still lowers as it
     , .wrappers);
     defer lowered.deinit();
 
-    // The evaluation's program names the buffer's list layout by a different
-    // index than the runtime program does, so a construction matched by
-    // layout index would miss here.
-    const host = &lowered.coord.program_session.?.host.?.lir_result;
-    var host_buffer_layout: ?layout.Idx = null;
-    for (host.static_data_values.items) |slot| {
-        if (slot.compile_time_root == null) continue;
-        const slot_layout = host.layouts.getLayout(slot.layout_idx);
-        if (slot_layout.tag == .list and slot_layout.getIdx() == .u64) host_buffer_layout = slot.layout_idx;
-    }
-    var runtime_buffer_layout: ?layout.Idx = null;
-    for (lowered.continued.lir_result.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_with_capacity) {
-            runtime_buffer_layout = lowered.continued.lir_result.store.getLocal(stmt.assign_low_level.target).layout_idx;
-        }
-    }
-    try std.testing.expect(host_buffer_layout != null and runtime_buffer_layout != null);
-    try std.testing.expect(host_buffer_layout.? != runtime_buffer_layout.?);
-
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The buffer is the `with_capacity` it was evaluated with, and no
-        // list reaches static data: the buffer is a construction and the
-        // other lists are read only by the expects the runtime omits.
-        try std.testing.expect(countLowLevel(result, .list_with_capacity) >= 1);
-        try std.testing.expect(hasIntLiteral(result, 64));
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        // The completed empty value remains a slot. Only the program's
+        // append may allocate; no capacity request reconstructs the read.
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+        try std.testing.expect(countListSlots(result) > 0);
     }
 }
 
@@ -281,12 +279,12 @@ fn checkedListOpUniqueMasks(result: *const lir.Program.Result, out: *std.ArrayLi
     for (result.store.getCFStmts()) |stmt| {
         if (stmt != .assign_low_level) continue;
         const assign = stmt.assign_low_level;
-        if (!std.mem.startsWith(u8, @tagName(assign.op), "list_") or assign.rc_effect.may_runtime_uniqueness_check_args == 0) continue;
-        try out.append(allocator, assign.unique_args);
+        if (!std.mem.startsWith(u8, @tagName(assign.op), "list_") or result.store.stmtRow(assign.rc_effect).may_runtime_uniqueness_check_args == 0) continue;
+        try out.append(allocator, result.store.stmtRowOrDefault(assign.extra).unique_args);
     }
 }
 
-test "a compile-time table only read stays static data, with no fresh build" {
+test "a compile-time table only read stays immutable data" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -306,15 +304,14 @@ test "a compile-time table only read stays static data, with no fresh build" {
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // Both reads only borrow the table: it rides in static data and no
-        // fresh build survives ARC's choice.
+        // Both reads borrow the same immutable table.
         try std.testing.expect(countListSlots(result) > 0);
         try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_unsafe));
         try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
     }
 }
 
-test "a compile-time table consumed by an in-place write is built fresh and mutated without a copy" {
+test "a compile-time table consumed by a write stays immutable and requires copy-on-write" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -334,26 +331,23 @@ test "a compile-time table consumed by an in-place write is built fresh and muta
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The read's value is the argument `List.append` may extend in
-        // place, so the read takes its fresh form: the table's slot is gone,
-        // the fresh build seeds one item and fills the rest as a range copy
-        // rather than looping (the program's own append is the other
-        // unchecked append), and the append is proven unique.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        // An update cannot turn the read into a constructor or make the
+        // immutable table uniquely owned.
+        try std.testing.expect(countListSlots(result) > 0);
         try std.testing.expect(countLowLevel(result, .list_append_unsafe) >= 1);
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_with_capacity));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
         var masks: std.ArrayList(u64) = .empty;
         defer masks.deinit(gpa);
         try checkedListOpUniqueMasks(result, &masks, gpa);
         // The append's reserve is the one checked list operation, and its
-        // list argument is proven unique.
+        // immutable input must not be proven unique.
         try std.testing.expectEqual(@as(usize, 1), masks.items.len);
-        try std.testing.expectEqual(@as(u64, 1), masks.items[0] & 1);
+        try std.testing.expectEqual(@as(u64, 0), masks.items[0] & 1);
     }
 }
 
-test "a compile-time table consumed through an uninlined builtin wrapper is still built fresh" {
+test "a compile-time table consumed through an uninlined builtin wrapper stays immutable" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -373,17 +367,14 @@ test "a compile-time table consumed through an uninlined builtin wrapper is stil
     , .none);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The reserve that checks the list sits in `List.append`'s own
-        // procedure, whose seed mask names its list parameter; the seed
-        // composes to the read's procedure, so the read is still needed
-        // and takes its fresh form, and the reserve's runtime check finds
-        // the fresh list unique.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        // Calling through a wrapper does not authorize reconstruction.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
     }
 }
 
-test "a compile-time table re-bound from a helper's returned record field each iteration is built fresh" {
+test "a compile-time table re-bound through a helper starts from immutable data" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -411,12 +402,178 @@ test "a compile-time table re-bound from a helper's returned record field each i
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The loop variable is the read's value on entry and the helper's
-        // returned field on every later iteration; the origin follows the
-        // value through the call, the record and the take, so the value
-        // the helper's append checks is born of the read, and the read
-        // takes its fresh form.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        // The loop starts from the immutable table. Later iterations may
+        // reuse a copy made by the update, but never reconstruct the constant.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+    }
+}
+
+/// The constant-aggregate shapes whose lowering must not grow with their
+/// element count.
+const AggregateShape = enum {
+    /// `List.repeat` of a list: one row shared by every element.
+    nested_rows,
+    /// `List.repeat` of a heap string.
+    heap_strings,
+    /// `List.repeat` of a record holding a heap string.
+    string_records,
+    /// A literal list of distinct scalars.
+    literal_scalars,
+    /// A literal count of copies of a value known only at runtime.
+    runtime_repeat,
+};
+
+const row_len = 260;
+
+fn aggregateSource(arena: std.mem.Allocator, shape: AggregateShape, count: usize) std.mem.Allocator.Error![]const u8 {
+    const header =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\
+    ;
+    const read =
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(m, List.len(args))))
+        \\    Ok({})
+        \\}
+        \\
+    ;
+    return switch (shape) {
+        .nested_rows => try std.fmt.allocPrint(arena, "{s}m = List.repeat(List.repeat(1.U64, {d}), {d})\n{s}", .{ header, row_len, count, read }),
+        .heap_strings => try std.fmt.allocPrint(arena, "{s}m = List.repeat(\"a string too long to be stored inline\", {d})\n{s}", .{ header, count, read }),
+        .string_records => try std.fmt.allocPrint(arena, "{s}m = List.repeat({{ name: \"a record name too long to be inline\", n: 7.U32 }}, {d})\n{s}", .{ header, count, read }),
+        .literal_scalars => blk: {
+            var items: std.ArrayList(u8) = .empty;
+            for (0..count) |index| try items.print(arena, "{d}, ", .{index * 7 + 1});
+            break :blk try std.fmt.allocPrint(arena, "{s}m : List(U64)\nm = [{s}]\n{s}", .{ header, items.items, read });
+        },
+        // The label gives the build a compile-time root, so it continues
+        // from an evaluation as every build with constants does.
+        .runtime_repeat => try std.fmt.allocPrint(arena,
+            \\{s}label = "copies"
+            \\main! = |args| {{
+            \\    Echo.line!(label)
+            \\    m = List.repeat(List.len(args), {d})
+            \\    Echo.line!(Str.inspect(List.get(m, List.len(args))))
+            \\    Ok({{}})
+            \\}}
+            \\
+        , .{ header, count }),
+    };
+}
+
+/// What a constant aggregate's lowering costs the program that runs it.
+const ProgramSize = struct {
+    statements: usize = 0,
+    widest_frame: usize = 0,
+    widest_list: usize = 0,
+};
+
+fn programSize(result: *lir.Program.Result) std.mem.Allocator.Error!ProgramSize {
+    var size: ProgramSize = .{};
+    for (result.store.getProcSpecs()) |proc| {
+        size.widest_frame = @max(size.widest_frame, proc.frame_locals.len);
+        // Initializer procedures count too: moving per-element code out of
+        // the entrypoint still makes every later pass process it.
+        const body = proc.body orelse continue;
+        var statements = try lir.BodyClone.ReachableStmts.init(&result.store, body);
+        defer statements.deinit();
+        while (try statements.next()) |_| size.statements += 1;
+    }
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_list) size.widest_list = @max(size.widest_list, stmt.assign_list.elems.len);
+    }
+    return size;
+}
+
+/// Calls that pass a local holding the integer literal `value`.
+fn callsPassingIntLiteral(gpa: std.mem.Allocator, result: *const lir.Program.Result, value: i128) std.mem.Allocator.Error!usize {
+    var holders: collections.DenseMapUnmanaged(lir.LIR.LocalId, void) = .empty;
+    defer holders.deinit(gpa);
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        const literal: i128 = switch (stmt.assign_literal.value) {
+            .i64_literal => |int| int.value,
+            .i128_literal => |id| result.store.stmtRow(id).value,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => continue,
+        };
+        if (literal == value) try holders.put(gpa, stmt.assign_literal.target, {});
+    }
+    var count: usize = 0;
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_call) continue;
+        const args = result.store.getLocalSpan(stmt.assign_call.args);
+        for (0..GuardedList.borrowLen(args)) |index| {
+            if (holders.contains(GuardedList.at(args, index))) {
+                count += 1;
+                break;
+            }
+        }
+    }
+    return count;
+}
+
+const small_count = 100;
+const large_count = 5000;
+
+test "a constant aggregate's image does not grow with its copies, and every constant aggregate costs the runtime program the same at any item count" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    inline for (@typeInfo(AggregateShape).@"enum".field_names) |field_name| {
+        const shape = @field(AggregateShape, field_name);
+        var sizes: [2]ProgramSize = undefined;
+        var restored_sizes: [2]ProgramSize = undefined;
+        for ([_]usize{ small_count, large_count }, 0..) |count, index| {
+            var arena = base.SingleThreadArena.init(gpa);
+            defer arena.deinit();
+            var tmp_dir = std.testing.tmpDir(.{});
+            defer tmp_dir.cleanup();
+            var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir, try aggregateSource(arena.allocator(), shape, count), .none);
+            defer lowered.deinit();
+            sizes[index] = try programSize(&lowered.continued.lir_result);
+            restored_sizes[index] = try programSize(&lowered.restored.lir_result);
+            const continued = &lowered.continued;
+            switch (shape) {
+                .runtime_repeat => {
+                    // The copies are made by one call that takes the count,
+                    // the builtin's, not by per-element stores.
+                    try std.testing.expectEqual(@as(usize, 1), try callsPassingIntLiteral(gpa, &continued.lir_result, count));
+                },
+                .literal_scalars => {
+                    // The packed buffer is emitted once.
+                    var buffers: usize = 0;
+                    for (lowered.image) |item| {
+                        if (item.bytes.len >= count * @sizeOf(u64)) buffers += 1;
+                    }
+                    try std.testing.expectEqual(@as(usize, 1), buffers);
+                },
+                .nested_rows => {
+                    // Every element names the one row in the image.
+                    var rows: usize = 0;
+                    var outer: ?static_data_exports.StaticDataExport = null;
+                    for (lowered.image) |item| {
+                        // A row is its elements behind a refcount header,
+                        // with no pointers of its own.
+                        if (item.relocations.len == 0 and item.bytes.len >= row_len * @sizeOf(u64) and item.bytes.len <= (row_len + 2) * @sizeOf(u64)) rows += 1;
+                        if (item.relocations.len == count) outer = item;
+                    }
+                    try std.testing.expectEqual(@as(usize, 1), rows);
+                    const elements = (outer orelse return error.TestUnexpectedResult).relocations;
+                    for (elements) |relocation| try std.testing.expectEqual(elements[0].target_symbol_name, relocation.target_symbol_name);
+                },
+                .heap_strings, .string_records => {},
+            }
+        }
+        // The runtime program restores a completed value from the constant
+        // store, as one restored from the store without an evaluation does.
+        // A packed list is a literal, a runtime repeat is one call, and every
+        // other constant list is frozen straight from its stored node, so no
+        // item becomes a local or a statement.
+        try std.testing.expectEqual(sizes[0], sizes[1]);
+        try std.testing.expectEqual(restored_sizes[0], restored_sizes[1]);
+        try std.testing.expect(sizes[1].widest_frame < small_count);
+        try std.testing.expect(sizes[1].widest_list < small_count);
     }
 }

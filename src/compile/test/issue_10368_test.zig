@@ -17,7 +17,7 @@ fn retainReachesPrepare(
     var retained_alias = retained;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_low_level => |assign| {
                 if (assign.op == .list_map_prepare_reuse) {
                     const args = store.getLocalSpan(assign.args);
@@ -39,8 +39,8 @@ fn retainReachesPrepare(
                 current = release.next;
             },
             .assign_ref => |assign| {
-                if (assign.op == .local) {
-                    const source = assign.op.local;
+                if (assign.op.kind == .local) {
+                    const source = assign.op.source;
                     if (source == retained_alias) {
                         retained_alias = assign.target;
                     } else if (assign.target == retained_alias) {
@@ -67,36 +67,23 @@ fn retainReachesPrepare(
                 if (assign.target == retained_alias) return false;
                 current = assign.next;
             },
+            .dyn => |assign| {
+                if (assign.target == retained_alias) return false;
+                current = assign.next;
+            },
             inline .store_struct,
             .store_tag,
             .debug,
             .expect,
-            .comptime_branch_taken,
             .incref,
             => |stmt| current = stmt.next,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -115,8 +102,8 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
         if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_map_prepare_reuse) {
             const assign = stmt.assign_low_level;
             prepare_count += 1;
-            try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.consume_args);
-            try std.testing.expectEqual(@as(u64, 1), assign.rc_effect.result_aliases_consumed_args);
+            try std.testing.expectEqual(@as(u64, 1), store.stmtRow(assign.rc_effect).consume_args);
+            try std.testing.expectEqual(@as(u64, 1), store.stmtRow(assign.rc_effect).result_aliases_consumed_args);
         } else if (stmt == .incref and retainReachesPrepare(store, stmt.incref.next, stmt.incref.value)) {
             retained_prepare_count += 1;
         }

@@ -5,10 +5,10 @@
 //! for surgical linking.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const shim_symbols = @import("builtins").shim_symbols;
 const Allocator = std.mem.Allocator;
 const roc_base = @import("base");
+const collections = @import("collections");
 const WasmLinking = @import("WasmLinking.zig");
 const StaticDataExport = @import("../dev/StaticDataExport.zig").StaticDataExport;
 const StaticDataRelocation = @import("../dev/StaticDataExport.zig").StaticDataRelocation;
@@ -263,6 +263,14 @@ pub const Op = struct {
     pub const i32_extend8_s: u8 = 0xC0;
     pub const i32_extend16_s: u8 = 0xC1;
 
+    // Prefix of the bulk-memory and saturating-conversion instructions, and
+    // the bulk-memory sub-opcodes the backend emits. Sub-opcodes are varuint32
+    // values; each bulk-memory instruction then names its memory with one
+    // byte per memory operand.
+    pub const misc_prefix: u8 = 0xFC;
+    pub const memory_copy: u32 = 0x0A;
+    pub const memory_fill: u32 = 0x0B;
+
     // SIMD prefix and 128-bit integer SIMD sub-opcodes. Sub-opcodes are
     // varuint32 values from the WebAssembly SIMD specification.
     pub const simd_prefix: u8 = 0xFD;
@@ -413,9 +421,10 @@ pub const Export = struct {
     idx: u32,
 };
 
-/// A function body (code)
+/// A function body (code): a run of `func_body_bytes`.
 const FuncBody = struct {
-    body: []const u8,
+    start: u32,
+    len: u32,
 };
 
 /// A defined global variable (beyond the built-in __stack_pointer).
@@ -489,6 +498,8 @@ func_types: std.ArrayList(FuncType),
 func_type_results: std.ArrayList(?ValType), // parallel to func_types
 func_type_indices: std.ArrayList(u32), // func_idx -> type_idx
 func_bodies: std.ArrayList(FuncBody),
+/// The bytes of every function body in `func_bodies`.
+func_body_bytes: std.ArrayList(u8) = .empty,
 exports: std.ArrayList(Export),
 /// Function imports (indices 0..import_fn_count-1 in the function index space).
 imports: std.ArrayList(Import),
@@ -500,6 +511,12 @@ data_segments: std.ArrayList(DataSegment),
 /// Segment names this module allocated, such as the `.bss.` names that mark a
 /// static export's segment as zero-fill; borrowed names stay with their owner.
 owned_segment_names: std.ArrayList([]u8),
+/// Symbol names this module allocated (`mergeLinkedObject`).
+owned_symbol_names: std.ArrayList([]u8),
+/// The undefined function symbol, by name, of each function a static data
+/// export's function pointer names before code defines it
+/// (`defineForwardFunction`).
+forward_functions: std.StringHashMapUnmanaged(u32) = .empty,
 omit_zero_fill_data_segments: bool,
 /// Next available offset for data placement in linear memory (grows up from 0).
 data_offset: u32,
@@ -514,6 +531,8 @@ stack_pointer_init: u32,
 /// Surgical merging therefore rejects them, while sealed-boundary inspection
 /// may accept them because it never re-encodes the object.
 preloaded_defined_global_count: u32,
+/// The defined globals of an object preloaded for an image, in index order.
+preloaded_globals: std.ArrayList(PreloadedGlobal) = .empty,
 /// Whether the module has a funcref table (for call_indirect).
 has_table: bool,
 /// Function indices to place in the table (element section).
@@ -563,6 +582,7 @@ pub fn init(allocator: Allocator) Self {
         .table_imports = .empty,
         .data_segments = .empty,
         .owned_segment_names = .empty,
+        .owned_symbol_names = .empty,
         .omit_zero_fill_data_segments = false,
         .data_offset = 1024, // reserve first 1KB for future use
         .has_memory = false,
@@ -594,12 +614,8 @@ pub fn deinit(self: *Self) void {
     self.func_types.deinit(self.allocator);
     self.func_type_results.deinit(self.allocator);
     self.func_type_indices.deinit(self.allocator);
-    for (self.func_bodies.items) |fb| {
-        if (fb.body.len > 0) {
-            self.allocator.free(fb.body);
-        }
-    }
     self.func_bodies.deinit(self.allocator);
+    self.func_body_bytes.deinit(self.allocator);
     self.exports.deinit(self.allocator);
     self.imports.deinit(self.allocator);
     self.global_imports.deinit(self.allocator);
@@ -610,8 +626,12 @@ pub fn deinit(self: *Self) void {
     self.data_segments.deinit(self.allocator);
     for (self.owned_segment_names.items) |name| self.allocator.free(name);
     self.owned_segment_names.deinit(self.allocator);
+    self.forward_functions.deinit(self.allocator);
+    for (self.owned_symbol_names.items) |name| self.allocator.free(name);
+    self.owned_symbol_names.deinit(self.allocator);
     self.table_func_indices.deinit(self.allocator);
     self.extra_globals.deinit(self.allocator);
+    self.preloaded_globals.deinit(self.allocator);
     self.code_bytes.deinit(self.allocator);
     self.function_offsets.deinit(self.allocator);
     self.linking.symbol_table.deinit(self.allocator);
@@ -895,7 +915,6 @@ fn resolveUndefinedFunctionSymbols(
         if (!self.isUndefinedFunctionNamed(sym, name)) continue;
         if (sym.index >= self.imports.items.len) return error.InvalidSection;
         if (self.imports.items[sym.index].type_idx != defined_type) {
-            if (builtin.mode == .debug) std.debug.print("WASM merge: import '{s}' has type {d}, but its definition has type {d}\n", .{ name, self.imports.items[sym.index].type_idx, defined_type });
             return error.FunctionTypeMismatch;
         }
         if (first_match == null) first_match = @intCast(i);
@@ -1002,16 +1021,30 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
 pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
-    const body_copy = try self.allocator.dupe(u8, body);
     // Ensure we have enough slots
     while (self.func_bodies.items.len <= local_idx) {
-        try self.func_bodies.append(self.allocator, .{ .body = &.{} });
+        try self.func_bodies.append(self.allocator, .{ .start = 0, .len = 0 });
     }
-    // Free any old body
-    if (self.func_bodies.items[local_idx].body.len > 0) {
-        self.allocator.free(self.func_bodies.items[local_idx].body);
-    }
-    self.func_bodies.items[local_idx] = .{ .body = body_copy };
+    self.func_bodies.items[local_idx] = try self.storeFuncBodyBytes(body);
+}
+
+/// Append a function body after the existing ones.
+fn appendFuncBody(self: *Self, body: []const u8) Allocator.Error!void {
+    try self.func_bodies.ensureUnusedCapacity(self.allocator, 1);
+    self.func_bodies.appendAssumeCapacity(try self.storeFuncBodyBytes(body));
+}
+
+fn storeFuncBodyBytes(self: *Self, body: []const u8) Allocator.Error!FuncBody {
+    const start = self.func_body_bytes.items.len;
+    if (body.len > std.math.maxInt(u32) - start) return error.OutOfMemory;
+    try self.func_body_bytes.appendSlice(self.allocator, body);
+    return .{ .start = @intCast(start), .len = @intCast(body.len) };
+}
+
+/// The bytes of the function body at `index` in `func_bodies`.
+pub fn funcBody(self: *const Self, index: usize) []const u8 {
+    const fb = self.func_bodies.items[index];
+    return self.func_body_bytes.items[fb.start..][0..fb.len];
 }
 
 /// Add an export.
@@ -1238,7 +1271,12 @@ pub fn addStaticDataExports(self: *Self, exports: []const StaticDataExport) Stat
             0,
         );
 
-        const symbol_flags: u32 = if (data_export.is_exported)
+        std.debug.assert(!data_export.content_named or !data_export.is_exported);
+        const symbol_flags: u32 = if (data_export.content_named)
+            // A weak definition every unit carrying the constant repeats
+            // under the same name; a link keeps one of them.
+            WasmLinking.SymFlag.BINDING_WEAK
+        else if (data_export.is_exported)
             0
         else if (data_export.is_global)
             WasmLinking.SymFlag.VISIBILITY_HIDDEN
@@ -1287,10 +1325,9 @@ fn staticDataRelocationSymbol(
         .address => .data,
         .function_pointer => .function,
     };
-    const kind_index = switch (kind) {
-        .data => data_index,
-        .function => function_index,
-        .global, .section, .event, .table => unreachable,
+    const kind_index = switch (relocation.kind) {
+        .address => data_index,
+        .function_pointer => function_index,
     };
     if (kind_index.first(relocation.target_symbol_name)) |symbol_index| {
         return SymbolIndex.fromRaw(symbol_index);
@@ -1306,7 +1343,18 @@ fn staticDataRelocationSymbol(
         .index = 0,
     });
     try function_index.record(relocation.target_symbol_name, raw_symbol);
+    try self.forward_functions.put(self.allocator, relocation.target_symbol_name, raw_symbol);
     return SymbolIndex.fromRaw(raw_symbol);
+}
+
+/// Define the function a static data export's function pointer named
+/// before code defined it: the export's relocations then resolve to
+/// `function`.
+pub fn defineForwardFunction(self: *Self, name: []const u8, function: u32, flags: u32) void {
+    const entry = self.forward_functions.fetchRemove(name) orelse return;
+    const sym = &self.linking.symbol_table.items[entry.value];
+    sym.flags = flags;
+    sym.index = function;
 }
 
 /// Enable the __stack_pointer global (global index 0).
@@ -1521,7 +1569,6 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             const local_idx = fn_idx - old_import_count;
             if (local_idx >= self.func_type_indices.items.len) return error.InvalidSection;
             if (!self.funcTypesEqual(self.func_type_indices.items[local_idx], remapped_type)) {
-                if (builtin.mode == .debug) std.debug.print("WASM merge: '{s}' is defined with type {d}, but the merged module imports it with type {d}\n", .{ src_imp.field_name, self.func_type_indices.items[local_idx], remapped_type });
                 return error.FunctionTypeMismatch;
             }
             func_remap[src_idx] = fn_idx;
@@ -1534,7 +1581,6 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
         for (self.imports.items, 0..) |self_imp, self_idx| {
             if (std.mem.eql(u8, self_imp.field_name, src_imp.field_name)) {
                 if (!self.funcTypesEqual(self_imp.type_idx, remapped_type)) {
-                    if (builtin.mode == .debug) std.debug.print("WASM merge: both modules import '{s}', with types {d} and {d}\n", .{ src_imp.field_name, self_imp.type_idx, remapped_type });
                     return error.FunctionTypeMismatch;
                 }
                 matched = @intCast(self_idx);
@@ -1622,8 +1668,17 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
             source.linking.segment_info.items[i].flags
         else
             src_ds.flags;
+        // The source may own its segment names (`owned_segment_names`) and
+        // free them before this module is encoded, so the merged segment
+        // owns a copy.
+        const merged_name: ?[]const u8 = if (segment_name) |name| blk: {
+            const owned = try self.allocator.dupe(u8, name);
+            errdefer self.allocator.free(owned);
+            try self.owned_segment_names.append(self.allocator, owned);
+            break :blk owned;
+        } else null;
         data_segment_remap[i] = @intCast(self.data_segments.items.len);
-        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, segment_name, segment_flags);
+        _ = try self.addDataSegmentWithInfo(src_ds.data, alignment, merged_name, segment_flags);
     }
 
     // --- 5b. Merge element section (remap function indices) ---
@@ -1945,6 +2000,42 @@ pub fn mergeModuleMode(self: *Self, source: *const Self, mode: MergeMode) MergeE
     };
 }
 
+/// Merge a linked object-cache object (an object pack's object) into this
+/// relocatable object. Such an object defines everything its code needs and
+/// exports one weak C-ABI entry per procedure it offers, named in
+/// `entry_names`. Every other definition of it, and every entry this module
+/// already defines, becomes local under a name in a namespace of its own,
+/// `roc__pack{ordinal}.`, so that no name lookup in this module finds it in
+/// place of a definition of this module or of another merged object, and the
+/// module keeps exactly one definition of each entry. The source's symbol
+/// names are rewritten in place.
+pub fn mergeLinkedObject(self: *Self, source: *Self, ordinal: u32, entry_names: []const []const u8) MergeError!void {
+    for (source.linking.symbol_table.items) |*sym| {
+        if (sym.isUndefined()) continue;
+        switch (sym.kind) {
+            .function, .data => {},
+            .global, .table, .section, .event => continue,
+        }
+        const name = sym.resolveName(source.imports.items, source.global_imports.items, source.table_imports.items) orelse continue;
+        if (sym.kind == .function and !sym.isLocal() and stringInSlice(name, entry_names)) {
+            if (self.findSymbolByNameAndKind(name, .function)) |existing| {
+                if (self.linking.symbol_table.items[existing].isUndefined()) continue;
+            } else continue;
+        }
+        const local_name = try std.fmt.allocPrint(self.allocator, "roc__pack{d}.{s}", .{ ordinal, name });
+        errdefer self.allocator.free(local_name);
+        try self.owned_symbol_names.append(self.allocator, local_name);
+        sym.name = local_name;
+        sym.flags &= ~(WasmLinking.SymFlag.BINDING_WEAK |
+            WasmLinking.SymFlag.EXPORTED |
+            WasmLinking.SymFlag.NO_STRIP);
+        sym.flags |= WasmLinking.SymFlag.BINDING_LOCAL |
+            WasmLinking.SymFlag.VISIBILITY_HIDDEN;
+    }
+    var result = try self.mergeModuleForObject(source);
+    result.deinit();
+}
+
 /// Find the table index (position in table_func_indices) for a given function index.
 /// Returns null if the function is not in the table.
 fn findTableIndex(self: *const Self, func_idx: u32) ?u32 {
@@ -2263,6 +2354,10 @@ pub fn resolveDataRelocations(self: *Self) RelocationError!void {
 
 /// Resolve both code and data relocations in place.
 pub fn resolveRelocations(self: *Self) RelocationError!void {
+    if (self.forward_functions.count() != 0) {
+        var names = self.forward_functions.keyIterator();
+        return logInvalidRelocation("static data names function {s}, which no code defines", .{names.next().?.*});
+    }
     try self.resolveCodeRelocations();
     try self.resolveDataRelocations();
 }
@@ -2278,30 +2373,31 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
     const defined_count = self.func_type_indices.items.len;
 
     // Clear existing func_bodies.
-    for (self.func_bodies.items) |fb| {
-        if (fb.body.len > 0) gpa.free(fb.body);
-    }
     self.func_bodies.clearRetainingCapacity();
+    self.func_body_bytes.clearRetainingCapacity();
+
+    // The bodies are the code bytes less their length prefixes, plus a fixed
+    // body per dummy.
+    const real_count = defined_count - self.dead_import_dummy_count;
+    try self.func_bodies.ensureTotalCapacity(gpa, defined_count);
+    try self.func_body_bytes.ensureTotalCapacity(gpa, self.code_bytes.items.len + self.dead_import_dummy_count * DUMMY_FUNCTION.len);
 
     // First dead_import_dummy_count entries in func_type_indices are dummies.
     for (0..self.dead_import_dummy_count) |_| {
-        const body_copy = try gpa.dupe(u8, &DUMMY_FUNCTION);
-        try self.func_bodies.append(gpa, .{ .body = body_copy });
+        try self.appendFuncBody(&DUMMY_FUNCTION);
     }
 
     // The real functions follow the dummies.
-    const real_count = defined_count - self.dead_import_dummy_count;
     for (0..real_count) |i| {
         const fn_offset = self.function_offsets.items[i];
 
         // Parse the body length from the code_bytes (LEB128 encoded at fn_offset).
         var cursor: usize = @intCast(fn_offset);
-        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+        const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // every function_offsets entry starts a body-size LEB128 that parseCodeSection read or the dead-function rebuild wrote
         const body_start: usize = cursor;
         const body_end: usize = body_start + body_len;
 
-        const body_copy = try gpa.dupe(u8, self.code_bytes.items[body_start..body_end]);
-        try self.func_bodies.append(gpa, .{ .body = body_copy });
+        try self.appendFuncBody(self.code_bytes.items[body_start..body_end]);
     }
 }
 
@@ -2313,24 +2409,6 @@ pub fn materializeFuncBodies(self: *Self) Allocator.Error!void {
 pub fn verifyNoBuiltinImports(self: *const Self) error{UnresolvedBuiltinImport}!void {
     for (self.imports.items) |imp| {
         if (!isAllowedBuiltinImport(imp.field_name) and std.mem.startsWith(u8, imp.field_name, "roc_")) {
-            return error.UnresolvedBuiltinImport;
-        }
-    }
-}
-
-/// Verify that a relocatable object's undefined function symbols contain no
-/// references in an explicitly owned ABI namespace. Resolved symbols can leave
-/// dead import entries until the final linker compacts function indices, so
-/// symbol state—not the raw import list—is the correctness boundary for an
-/// object.
-pub fn verifyNoUndefinedFunctionSymbolsInNamespace(
-    self: *const Self,
-    namespace: []const u8,
-) error{UnresolvedBuiltinImport}!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.startsWith(u8, name, namespace)) {
             return error.UnresolvedBuiltinImport;
         }
     }
@@ -2444,7 +2522,11 @@ pub fn sealRocObject(
                         return error.UnexpectedUndefinedSymbol;
                     }
                 },
-                .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+                .data => {
+                    const data_name = name orelse return error.UnexpectedUndefinedSymbol;
+                    if (!isAllowedObjectAbiData(data_name)) return error.UnexpectedUndefinedSymbol;
+                },
+                .section, .event => return error.UnexpectedUndefinedSymbol,
             }
         }
     }
@@ -2558,9 +2640,16 @@ pub fn verifyNoLinkObjectContract(self: *const Self) NoLinkObjectContractError!v
             .function => {},
             .global => if (!isAllowedObjectAbiGlobal(name)) return error.UnexpectedUndefinedSymbol,
             .table => if (!std.mem.eql(u8, name, "__indirect_function_table")) return error.UnexpectedUndefinedSymbol,
-            .data, .section, .event => return error.UnexpectedUndefinedSymbol,
+            .data => if (!isAllowedObjectAbiData(name)) return error.UnexpectedUndefinedSymbol,
+            .section, .event => return error.UnexpectedUndefinedSymbol,
         }
     }
+}
+
+/// The only data a sealed object may leave undefined: the linker-defined
+/// bottom of the stack, which stack-bound checks compare against.
+fn isAllowedObjectAbiData(name: []const u8) bool {
+    return std.mem.eql(u8, name, "__stack_low");
 }
 
 fn isAllowedObjectAbiGlobal(name: []const u8) bool {
@@ -2691,7 +2780,7 @@ pub fn eliminateDeadCode(self: *Self, called_fns: []const bool) Allocator.Error!
         if (live_flags[global_fn_idx]) {
             // Parse body length to advance offset.
             var cursor: usize = offset;
-            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable;
+            const body_len = readU32(self.code_bytes.items, &cursor) catch unreachable; // live bodies were copied verbatim from offsets whose body-size LEB128 parseCodeSection already read
             offset = @intCast(cursor + body_len);
         } else {
             // Dummy: 1 byte LEB128 size + 3 bytes body = 4 bytes.
@@ -2777,6 +2866,18 @@ fn markRelocationDataTarget(self: *const Self, live_segments: []bool, entry: Was
     return !was_live;
 }
 
+const LiveFunctionTracer = struct {
+    live_flags: []bool,
+    /// Functions marked live whose callees are not yet traced.
+    pending: std.ArrayList(u32) = .empty,
+
+    fn mark(self: *LiveFunctionTracer, gpa: Allocator, fi: u32) Allocator.Error!void {
+        if (fi >= self.live_flags.len or self.live_flags[fi]) return;
+        self.live_flags[fi] = true;
+        try self.pending.append(gpa, fi);
+    }
+};
+
 /// Trace the call graph starting from called functions, exports, init funcs,
 /// and element section entries. Returns a bool slice where `result[fn_index]`
 /// is true if the function is reachable.
@@ -2788,10 +2889,6 @@ fn traceLiveFunctions(
 ) Allocator.Error![]bool {
     const gpa = self.allocator;
 
-    // --- Categorize relocation entries ---
-    // We iterate the relocation entries directly in the inner loop rather
-    // than copying them, to avoid needing temporary ArrayLists of anonymous structs.
-
     // Build symbol_index → function_index lookup.
     const sym_fn_indices = try gpa.alloc(u32, self.linking.symbol_table.items.len);
     defer gpa.free(sym_fn_indices);
@@ -2799,112 +2896,107 @@ fn traceLiveFunctions(
         sym_fn_indices[i] = if (sym.isFunction()) sym.index else std.math.maxInt(u32);
     }
 
-    // --- Iterative live-function tracing ---
+    // Each direct call and indirect call site, by its offset in the code
+    // bytes, so a function's sites are the run inside its body.
+    const CallSite = struct {
+        offset: u32,
+        kind: enum { direct, indirect },
+        /// The callee's symbol index, or the call's type index.
+        target: u32,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.offset < b.offset;
+        }
+    };
+    var call_sites: std.ArrayList(CallSite) = .empty;
+    defer call_sites.deinit(gpa);
+    for (self.reloc_code.entries.items) |entry| {
+        switch (entry) {
+            .index => |idx| switch (idx.type_id) {
+                .function_index_leb => try call_sites.append(gpa, .{ .offset = idx.offset, .kind = .direct, .target = idx.symbol_index }),
+                .type_index_leb => try call_sites.append(gpa, .{ .offset = idx.offset, .kind = .indirect, .target = idx.symbol_index }),
+                .table_index_sleb,
+                .table_index_i32,
+                .global_index_leb,
+                .event_index_leb,
+                .table_index_rel_sleb,
+                .global_index_i32,
+                .table_number_leb,
+                => {},
+            },
+            .offset => {},
+        }
+    }
+    std.mem.sort(CallSite, call_sites.items, {}, CallSite.lessThan);
+
+    // --- Live-function tracing: each function's callees are traced once,
+    // when it is first marked live ---
     const live_flags = try gpa.alloc(bool, fn_count);
+    errdefer gpa.free(live_flags);
     @memset(live_flags, false);
-
-    const current_pass = try gpa.alloc(bool, fn_count);
-    defer gpa.free(current_pass);
-    @memset(current_pass, false);
-
-    const next_pass = try gpa.alloc(bool, fn_count);
-    defer gpa.free(next_pass);
-    @memset(next_pass, false);
+    var tracer: LiveFunctionTracer = .{ .live_flags = live_flags };
+    defer tracer.pending.deinit(gpa);
 
     // Seed with called_fns.
     for (called_fns, 0..) |is_called, i| {
-        if (is_called and i < fn_count) current_pass[i] = true;
+        if (is_called and i < fn_count) try tracer.mark(gpa, @intCast(i));
     }
 
     // Seed with exported functions.
     for (self.exports.items) |exp| {
-        if (exp.kind == .func and exp.idx < fn_count) {
-            current_pass[exp.idx] = true;
-        }
+        if (exp.kind == .func) try tracer.mark(gpa, exp.idx);
     }
 
     // Seed with init functions.
     for (self.linking.init_funcs.items) |init_fn| {
         const sym = self.linking.symbol_table.items[init_fn.symbol_index];
-        if (sym.isFunction() and sym.index < fn_count) {
-            current_pass[sym.index] = true;
-        }
+        if (sym.isFunction()) try tracer.mark(gpa, sym.index);
     }
 
     // Seed with element section entries (indirect call targets).
     for (self.table_func_indices.items) |fi| {
-        if (fi < fn_count) current_pass[fi] = true;
+        try tracer.mark(gpa, fi);
     }
 
-    // Iterate until no new functions are discovered.
-    while (true) {
-        const any_new = std.mem.findScalar(bool, current_pass, true) != null;
-        if (!any_new) break;
+    // An indirect call conservatively makes every element-section function
+    // of its type live; each type needs that only once.
+    var traced_indirect_types = collections.DenseMap(u32, void).init(gpa);
+    defer traced_indirect_types.deinit();
 
-        // Mark current pass as live.
-        for (current_pass, 0..) |is_current, i| {
-            if (is_current) live_flags[i] = true;
-        }
+    while (tracer.pending.pop()) |fi| {
+        if (fi < fn_index_min) continue;
 
-        // For each live function in this pass, find its callees.
-        for (current_pass, 0..) |is_current, fi| {
-            if (!is_current) continue;
-            if (fi < fn_index_min or fi >= fn_count) continue;
+        // Find function body byte range.
+        const offset_index = fi - fn_index_min;
+        const code_start = self.function_offsets.items[offset_index];
+        const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
+            self.function_offsets.items[offset_index + 1]
+        else
+            @intCast(self.code_bytes.items.len);
 
-            // Find function body byte range.
-            const offset_index = fi - fn_index_min;
-            const code_start = self.function_offsets.items[offset_index];
-            const code_end: u32 = if (offset_index + 1 < self.function_offsets.items.len)
-                self.function_offsets.items[offset_index + 1]
-            else
-                @intCast(self.code_bytes.items.len);
-
-            // Scan relocation entries within this function body.
-            for (self.reloc_code.entries.items) |entry| {
-                switch (entry) {
-                    .index => |idx| {
-                        if (idx.offset > code_start and idx.offset < code_end) {
-                            switch (idx.type_id) {
-                                .function_index_leb => {
-                                    // Direct call: mark the callee as live.
-                                    const callee = sym_fn_indices[idx.symbol_index];
-                                    if (callee < fn_count and !live_flags[callee]) {
-                                        next_pass[callee] = true;
-                                    }
-                                },
-                                .type_index_leb => {
-                                    // Indirect call: conservatively mark all element-section
-                                    // functions with matching type signature as live.
-                                    const type_idx = idx.symbol_index;
-                                    for (self.table_func_indices.items) |tfi| {
-                                        if (tfi >= fn_index_min and tfi < fn_count) {
-                                            const local = tfi - fn_index_min;
-                                            const tfi_type = self.func_type_indices.items[self.dead_import_dummy_count + local];
-                                            if (tfi_type == type_idx and !live_flags[tfi]) {
-                                                next_pass[tfi] = true;
-                                            }
-                                        }
-                                    }
-                                },
-                                .table_index_sleb,
-                                .table_index_i32,
-                                .global_index_leb,
-                                .event_index_leb,
-                                .table_index_rel_sleb,
-                                .global_index_i32,
-                                .table_number_leb,
-                                => {},
-                            }
+        // The call sites strictly inside this function body.
+        var site_index = std.sort.upperBound(CallSite, call_sites.items, code_start, struct {
+            fn order(start: u32, site: CallSite) std.math.Order {
+                return std.math.order(start, site.offset);
+            }
+        }.order);
+        while (site_index < call_sites.items.len and call_sites.items[site_index].offset < code_end) : (site_index += 1) {
+            const site = call_sites.items[site_index];
+            switch (site.kind) {
+                .direct => try tracer.mark(gpa, sym_fn_indices[site.target]),
+                .indirect => {
+                    const type_idx = site.target;
+                    if ((try traced_indirect_types.getOrPut(type_idx)).found_existing) continue;
+                    for (self.table_func_indices.items) |tfi| {
+                        if (tfi >= fn_index_min and tfi < fn_count) {
+                            const local = tfi - fn_index_min;
+                            const tfi_type = self.func_type_indices.items[self.dead_import_dummy_count + local];
+                            if (tfi_type == type_idx) try tracer.mark(gpa, tfi);
                         }
-                    },
-                    .offset => {},
-                }
+                    }
+                },
             }
         }
-
-        // Swap passes.
-        @memcpy(current_pass, next_pass);
-        @memset(next_pass, false);
     }
 
     return live_flags;
@@ -2997,6 +3089,20 @@ pub const PreloadMode = enum {
     /// original bytes, and are not externally visible unless exported or
     /// represented by a non-local linking symbol.
     relocatable_for_sealing,
+    /// Parse an object that is converted to an image (`ObjectImage`): its
+    /// defined globals are read with their initial values into
+    /// `preloaded_globals`, since an image represents them.
+    relocatable_for_image,
+};
+
+/// A global a preloaded object defines (`PreloadMode.relocatable_for_image`).
+pub const PreloadedGlobal = struct {
+    val_type: u8,
+    mutable: bool,
+    /// The initial value's bits when the initializer is a constant: an
+    /// `i32` sign-extended, an `i64`, or a float's bits. Null for any other
+    /// initializer.
+    init: ?u64,
 };
 
 /// Parse a WASM binary into a WasmModule according to its precise consumer.
@@ -3017,7 +3123,7 @@ pub fn preload(allocator: Allocator, bytes: []const u8, mode: PreloadMode) Parse
     try module.parseFunctionSection(bytes, &cursor);
     try module.parseTableSection_(bytes, &cursor);
     try module.parseMemorySection_(bytes, &cursor);
-    try module.parseGlobalSection_(bytes, &cursor);
+    try module.parseGlobalSection_(bytes, &cursor, mode);
     try module.parseExportSection(bytes, &cursor);
     try module.parseStartSection(bytes, &cursor);
     try module.parseElementSection_(bytes, &cursor);
@@ -3248,10 +3354,48 @@ fn parseMemorySection_(self: *Self, bytes: []const u8, cursor: *usize) ParseErro
     cursor.* = section_end;
 }
 
-fn parseGlobalSection_(self: *Self, bytes: []const u8, cursor: *usize) ParseError!void {
+fn parseGlobalSection_(self: *Self, bytes: []const u8, cursor: *usize, mode: PreloadMode) ParseError!void {
     const section_size = try beginSection(bytes, cursor, .global_section) orelse return;
     const section_end = cursor.* + section_size;
+    if (section_end > bytes.len) return error.UnexpectedEnd;
     self.preloaded_defined_global_count = try readU32(bytes[0..section_end], cursor);
+    if (mode == .relocatable_for_image) {
+        const section = bytes[0..section_end];
+        try self.preloaded_globals.ensureTotalCapacity(self.allocator, self.preloaded_defined_global_count);
+        for (0..self.preloaded_defined_global_count) |_| {
+            if (cursor.* + 2 > section.len) return error.UnexpectedEnd;
+            const val_type = section[cursor.*];
+            const mutable = section[cursor.* + 1];
+            cursor.* += 2;
+            if (mutable > 1) return error.InvalidSection;
+            if (cursor.* >= section.len) return error.UnexpectedEnd;
+            const opcode = section[cursor.*];
+            cursor.* += 1;
+            // `i32.const`, `i64.const`, `f32.const`, `f64.const`, `global.get`.
+            const initial: ?u64 = switch (opcode) {
+                0x41 => @bitCast(@as(i64, try readI32(section, cursor))),
+                0x42 => @bitCast(try readI64Leb(section, cursor)),
+                0x43 => blk: {
+                    if (cursor.* + 4 > section.len) return error.UnexpectedEnd;
+                    defer cursor.* += 4;
+                    break :blk std.mem.readInt(u32, section[cursor.*..][0..4], .little);
+                },
+                0x44 => blk: {
+                    if (cursor.* + 8 > section.len) return error.UnexpectedEnd;
+                    defer cursor.* += 8;
+                    break :blk std.mem.readInt(u64, section[cursor.*..][0..8], .little);
+                },
+                0x23 => blk: {
+                    _ = try readU32(section, cursor);
+                    break :blk null;
+                },
+                else => return error.InvalidSection,
+            };
+            if (cursor.* >= section.len or section[cursor.*] != Op.end) return error.InvalidSection;
+            cursor.* += 1;
+            self.preloaded_globals.appendAssumeCapacity(.{ .val_type = val_type, .mutable = mutable == 1, .init = initial });
+        }
+    }
     cursor.* = section_end;
 }
 
@@ -3573,11 +3717,13 @@ pub fn encodeRelocatable(self: *Self, allocator: Allocator) RelocatableEncodeErr
     try self.encodeLinkingSection(allocator, &output, symbol_encode_map);
     section_index += 1;
     if (self.reloc_code.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_section_index orelse unreachable, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
+        const code_index = code_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.CODE has {d} entries but the module encodes no code section", .{self.reloc_code.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.CODE", code_index, self.reloc_code.entries.items, code_fn_count_leb_size, symbol_encode_map);
         section_index += 1;
     }
     if (self.reloc_data.entries.items.len > 0) {
-        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_section_index orelse unreachable, self.reloc_data.entries.items, 0, symbol_encode_map);
+        const data_index = data_section_index orelse roc_base.invariant("WASM module invariant violated: reloc.DATA has {d} entries but the module encodes no data section", .{self.reloc_data.entries.items.len});
+        try self.encodeRelocationSection(allocator, &output, "reloc.DATA", data_index, self.reloc_data.entries.items, 0, symbol_encode_map);
         section_index += 1;
     }
 
@@ -4033,9 +4179,10 @@ fn encodeCodeSection(self: *Self, gpa: Allocator, output: *std.ArrayList(u8)) Al
     defer section_data.deinit(gpa);
 
     try leb128WriteU32(gpa, &section_data, @intCast(self.func_bodies.items.len));
-    for (self.func_bodies.items) |fb| {
-        try leb128WriteU32(gpa, &section_data, @intCast(fb.body.len));
-        try section_data.appendSlice(gpa, fb.body);
+    for (0..self.func_bodies.items.len) |i| {
+        const body = self.funcBody(i);
+        try leb128WriteU32(gpa, &section_data, @intCast(body.len));
+        try section_data.appendSlice(gpa, body);
     }
 
     try output.append(gpa, @backingInt(SectionId.code_section));
@@ -4188,6 +4335,24 @@ pub fn readI32(bytes: []const u8, cursor: *usize) ParseError!i32 {
         }
     }
     return error.Overflow;
+}
+
+/// Read a signed LEB128 `i64` from `bytes[cursor.*]`, advancing cursor.
+pub fn readI64Leb(bytes: []const u8, cursor: *usize) ParseError!i64 {
+    var result: i64 = 0;
+    var shift: u7 = 0;
+    while (true) {
+        if (cursor.* >= bytes.len) return error.UnexpectedEnd;
+        const byte = bytes[cursor.*];
+        cursor.* += 1;
+        if (shift >= 64) return error.InvalidSection;
+        result |= @as(i64, byte & 0x7f) << @intCast(shift);
+        shift += 7;
+        if (byte & 0x80 == 0) {
+            if (shift < 64 and byte & 0x40 != 0) result |= @as(i64, -1) << @intCast(shift);
+            return result;
+        }
+    }
 }
 
 /// Read a length-prefixed string from `bytes[cursor.*]`, advancing cursor.
@@ -4746,7 +4911,7 @@ test "preload—parses reloc.CODE section entries" {
             try std.testing.expectEqual(@as(u32, 1), idx.offset);
             try std.testing.expectEqual(@as(u32, 0), idx.symbol_index);
         },
-        .offset => unreachable,
+        .offset => return error.TestUnexpectedResult,
     }
 }
 
@@ -5621,6 +5786,63 @@ test "mergeModule—undefined symbol in builtins resolved to host's roc_alloc im
     try std.testing.expectEqual(@as(usize, 2), host.imports.items.len);
 }
 
+test "mergeLinkedObject keeps one definition per entry and hides every other definition" {
+    const allocator = std.testing.allocator;
+
+    var app = Self.init(allocator);
+    defer app.deinit();
+    _ = try app.addFuncType(&.{}, &.{});
+    try app.func_type_indices.append(allocator, 0);
+    try app.code_bytes.appendSlice(allocator, &.{ 0x02, 0x00, Op.end });
+    try app.function_offsets.append(allocator, 0);
+    try app.linking.symbol_table.append(allocator, .{
+        .kind = .function,
+        .flags = WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN,
+        .name = "roc__p0",
+        .index = 0,
+    });
+
+    const Object = struct {
+        fn init(gpa: Allocator) Allocator.Error!Self {
+            var object = Self.init(gpa);
+            errdefer object.deinit();
+            _ = try object.addFuncType(&.{}, &.{});
+            for (0..2) |i| {
+                try object.func_type_indices.append(gpa, 0);
+                try object.function_offsets.append(gpa, @intCast(i * 3));
+                try object.code_bytes.appendSlice(gpa, &.{ 0x02, 0x00, Op.end });
+            }
+            try object.linking.symbol_table.appendSlice(gpa, &.{
+                // The object's own copy of a procedure the app also compiles.
+                .{ .kind = .function, .flags = WasmLinking.SymFlag.BINDING_LOCAL | WasmLinking.SymFlag.VISIBILITY_HIDDEN, .name = "roc__p0", .index = 0 },
+                .{ .kind = .function, .flags = WasmLinking.SymFlag.BINDING_WEAK, .name = "roc__c1", .index = 1 },
+            });
+            return object;
+        }
+    };
+    const entries = [_][]const u8{"roc__c1"};
+    for (0..2) |ordinal| {
+        var object = try Object.init(allocator);
+        defer object.deinit();
+        try app.mergeLinkedObject(&object, @intCast(ordinal), &entries);
+    }
+
+    // Names resolve to the app's own procedure and to one entry.
+    const own = try app.findDefinedFunctionSymbolExact("roc__p0");
+    try std.testing.expectEqual(@as(u32, 0), own.raw());
+    const entry = app.linking.symbol_table.items[(try app.findDefinedFunctionSymbolExact("roc__c1")).raw()];
+    try std.testing.expect(!entry.isLocal());
+    try std.testing.expectEqual(@as(u32, 2), entry.index);
+    // The second object's entry and every object's internal procedure are
+    // local, in their object's own namespace.
+    const hidden = [_][]const u8{ "roc__pack0.roc__p0", "roc__pack1.roc__p0", "roc__pack1.roc__c1" };
+    for (hidden) |name| {
+        const sym = app.linking.symbol_table.items[(try app.findDefinedFunctionSymbolExact(name)).raw()];
+        try std.testing.expect(sym.isLocal());
+        try std.testing.expect((sym.flags & WasmLinking.SymFlag.BINDING_WEAK) == 0);
+    }
+}
+
 test "mergeModule—later weak definition resolves earlier undefined function import" {
     const allocator = std.testing.allocator;
 
@@ -5996,8 +6218,8 @@ test "parseElementSection_—parses function indices into table_func_indices" {
     try source.func_type_indices.append(allocator, 0); // fn 2
 
     // Minimal function bodies
-    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
-    try source.func_bodies.append(allocator, .{ .body = try allocator.dupe(u8, &.{ 0x00, Op.end }) });
+    try source.appendFuncBody(&.{ 0x00, Op.end });
+    try source.appendFuncBody(&.{ 0x00, Op.end });
 
     _ = try source.addTableElement(1); // table idx 0 → fn 1
     _ = try source.addTableElement(2); // table idx 1 → fn 2
@@ -6057,7 +6279,7 @@ test "BuiltinSymbols—all symbols found after merge" {
 
     // Spot check a few builtins (populate returns function index = enum index + 1,
     // since index 0 is the import and symbols are added in `BuiltinKind` order).
-    try std.testing.expectEqual(@as(u32, 1), syms.get(.dec_mul)); // first defined fn after import
+    try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.dec_mul)) + 1, syms.get(.dec_mul));
     try std.testing.expectEqual(@as(u32, @backingInt(BuiltinKind.str_trim)) + 1, syms.get(.str_trim));
 }
 
@@ -6266,7 +6488,7 @@ test "materializeFuncBodies—produces correct function bodies from code_bytes" 
     try std.testing.expectEqual(@as(usize, 1), module.func_bodies.items.len);
 
     // The body should be 8 bytes: [0x00 (locals), Op.call, 5 bytes LEB128, Op.end]
-    try std.testing.expectEqual(@as(usize, 8), module.func_bodies.items[0].body.len);
+    try std.testing.expectEqual(@as(usize, 8), module.funcBody(0).len);
 }
 
 test "materializeFuncBodies—includes dummy functions for dead imports" {
@@ -6284,7 +6506,7 @@ test "materializeFuncBodies—includes dummy functions for dead imports" {
     try std.testing.expectEqual(@as(usize, 3), module.func_bodies.items.len);
 
     // First should be the dummy (unreachable + end)
-    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.func_bodies.items[0].body);
+    try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, module.funcBody(0));
 }
 
 test "verifyNoBuiltinImports—passes when only RocOps imports remain" {
@@ -6337,23 +6559,6 @@ test "verifyNoBuiltinImports—allows roc_panic platform import" {
     _ = try module.addImport("env", "roc_panic", 0);
 
     try module.verifyNoBuiltinImports();
-}
-
-test "verifyNoUndefinedFunctionSymbolsInNamespace—uses relocatable symbol resolution state" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{}, &.{});
-    const imported = try module.addFunctionImportWithSymbol("env", "roc_boxy_register_proc", type_idx);
-    try std.testing.expectError(
-        error.UnresolvedBuiltinImport,
-        module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_"),
-    );
-
-    const symbol = &module.linking.symbol_table.items[imported.symbol.raw()];
-    symbol.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-    try module.verifyNoUndefinedFunctionSymbolsInNamespace("roc_boxy_");
 }
 
 test "sealRocObject keeps only provides global and localizes compiler support" {
@@ -6719,6 +6924,27 @@ test "all-zero static exports without relocations become zero-fill segments" {
     try std.testing.expect(module.data_segments.items[1].offset >= module.data_segments.items[0].offset + 64);
 }
 
+test "a merged zero-fill segment keeps its name after its source module is gone" {
+    const allocator = std.testing.allocator;
+    var module = Self.init(allocator);
+    defer module.deinit();
+    const exports = [_]StaticDataExport{.{ .symbol_name = "table", .bytes = &(@as([16]u8, @splat(0))), .alignment = 8, .is_exported = false }};
+    {
+        var static_module = try Self.staticDataModule(allocator, &exports);
+        defer static_module.deinit();
+        var merged = try module.mergeModuleForObject(&static_module);
+        merged.deinit();
+    }
+    // The source module freed the names it owned, so the merged segment's
+    // name is one this module owns.
+    const name = module.data_segments.items[module.data_segments.items.len - 1].name.?;
+    try std.testing.expectEqualStrings(".bss.table", name);
+    const owned = for (module.owned_segment_names.items) |candidate| {
+        if (candidate.ptr == name.ptr) break true;
+    } else false;
+    try std.testing.expect(owned);
+}
+
 test "addStaticDataExports defines forward data symbols used by code relocations" {
     const allocator = std.testing.allocator;
     var module = Self.init(allocator);
@@ -7007,8 +7233,8 @@ test "eliminateDeadCode—exported function and its callees are preserved" {
     // Check that main_fn and helper_fn bodies are NOT dummy.
     const dummy_count = module.dead_import_dummy_count;
     // main_fn is at func_type_indices[dummy_count + 0], helper_fn at [dummy_count + 1]
-    const main_body = module.func_bodies.items[dummy_count + 0].body;
-    const helper_body = module.func_bodies.items[dummy_count + 1].body;
+    const main_body = module.funcBody(dummy_count + 0);
+    const helper_body = module.funcBody(dummy_count + 1);
 
     // Live bodies should be longer than the 3-byte dummy.
     try std.testing.expect(main_body.len > DUMMY_FUNCTION.len);
@@ -7028,7 +7254,7 @@ test "eliminateDeadCode—unreachable function body replaced with unreachable st
     // dead_fn (5) is not exported and not called by any live function.
     // Its body should be the dummy stub.
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, dead_body);
 }
 
@@ -7094,7 +7320,7 @@ test "eliminateDeadCode—indirect call targets (element section) preserved" {
 
     // dead_fn should now be live (its body is NOT the dummy).
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
@@ -7152,12 +7378,12 @@ test "eliminateDeadCode—init functions preserved" {
 
     // dead_fn (index 5, third defined function) should be live.
     const dummy_count = module.dead_import_dummy_count;
-    const init_body = module.func_bodies.items[dummy_count + 2].body;
+    const init_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(init_body.len > DUMMY_FUNCTION.len);
 
     // main_fn and helper_fn should now be dead (no export, no callers).
-    const main_body = module.func_bodies.items[dummy_count + 0].body;
-    const helper_body = module.func_bodies.items[dummy_count + 1].body;
+    const main_body = module.funcBody(dummy_count + 0);
+    const helper_body = module.funcBody(dummy_count + 1);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, main_body);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, helper_body);
 }
@@ -7198,7 +7424,7 @@ test "eliminateDeadCode—call_indirect conservatively keeps matching-signature 
     // dead_fn (type 1) is in element section AND there's a call_indirect
     // with matching type 1 in a live function → should be live.
     const dummy_count = module.dead_import_dummy_count;
-    const dead_body = module.func_bodies.items[dummy_count + 2].body;
+    const dead_body = module.funcBody(dummy_count + 2);
     try std.testing.expect(dead_body.len > DUMMY_FUNCTION.len);
 }
 
@@ -7329,7 +7555,7 @@ test "encode—output is valid WASM (magic, version, section ordering)" {
 
         // Read section size (LEB128)
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         pos = cursor + section_size;
     }
 
@@ -7353,7 +7579,7 @@ test "encode—code section function count includes dummies" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             code_section_start = cursor;
             break;
@@ -7365,7 +7591,7 @@ test "encode—code section function count includes dummies" {
 
     // Read function count from the code section
     var cursor = code_section_start.?;
-    const func_count = readU32(output, &cursor) catch unreachable;
+    const func_count = try readU32(output, &cursor);
 
     // Should be dummies (1) + real functions (2) = 3
     try std.testing.expectEqual(@as(u32, 3), func_count);
@@ -7387,10 +7613,10 @@ test "encode—dummy functions prepended before real functions in code section" 
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         if (section_id == @backingInt(SectionId.code_section)) {
             // Skip the function count
-            _ = readU32(output, &cursor) catch unreachable;
+            _ = try readU32(output, &cursor);
             code_body_start = cursor;
             break;
         }
@@ -7401,13 +7627,13 @@ test "encode—dummy functions prepended before real functions in code section" 
     var cursor = code_body_start.?;
 
     // First function should be the dummy: body size = 3, body = DUMMY_FUNCTION
-    const dummy_size = readU32(output, &cursor) catch unreachable;
+    const dummy_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, DUMMY_FUNCTION.len), dummy_size);
     try std.testing.expectEqualSlices(u8, &DUMMY_FUNCTION, output[cursor .. cursor + dummy_size]);
     cursor += dummy_size;
 
     // Second function (main): body size = 3, body = [0x00, nop, end]
-    const main_size = readU32(output, &cursor) catch unreachable;
+    const main_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 3), main_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7415,7 +7641,7 @@ test "encode—dummy functions prepended before real functions in code section" 
     cursor += main_size;
 
     // Third function (helper): body size = 4, body = [0x00, nop, nop, end]
-    const helper_size = readU32(output, &cursor) catch unreachable;
+    const helper_size = try readU32(output, &cursor);
     try std.testing.expectEqual(@as(u32, 4), helper_size);
     try std.testing.expectEqual(@as(u8, 0x00), output[cursor]); // no locals
     try std.testing.expectEqual(Op.nop, output[cursor + 1]);
@@ -7441,12 +7667,12 @@ test "encode—linking section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "linking"));
         }
@@ -7473,12 +7699,12 @@ test "encode—reloc.CODE section NOT present in output" {
         const section_id = output[pos];
         pos += 1;
         var cursor: usize = pos;
-        const section_size = readU32(output, &cursor) catch unreachable;
+        const section_size = try readU32(output, &cursor);
         const section_end = cursor + section_size;
 
         if (section_id == @backingInt(SectionId.custom_section)) {
             // Read custom section name
-            const name_len = readU32(output, &cursor) catch unreachable;
+            const name_len = try readU32(output, &cursor);
             const name = output[cursor .. cursor + name_len];
             try std.testing.expect(!std.mem.eql(u8, name, "reloc.CODE"));
         }
@@ -7496,12 +7722,7 @@ test "builtins payload defines exactly the registry's linkable members" {
     defer builtins_module.deinit();
 
     inline for (comptime std.enums.values(registry.BuiltinFn)) |f| {
-        const found = builtins_module.findDefinedFunctionSymbolExact(f.symbolName());
-        if (comptime f.payload() == .jit_only) {
-            try std.testing.expectError(error.MissingSymbol, found);
-        } else {
-            _ = try found;
-        }
+        _ = try builtins_module.findDefinedFunctionSymbolExact(f.symbolName());
     }
 }
 

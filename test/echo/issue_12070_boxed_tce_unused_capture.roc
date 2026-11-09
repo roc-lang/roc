@@ -19,7 +19,7 @@ step! = |stream|
 	}
 
 main! = |_| {
-	stream = Stream.custom(0, Known(2), |n| if n > 1 { Err(NoMore) } else { Ok((if n == 0 { [] } else { "abc".to_utf8() }, n + 1)) })
+	stream = Stream.custom(0, Ok(2), |n| if n > 1 { Err(NoMore) } else { Ok((if n == 0 { [] } else { "abc".to_utf8() }, n + 1)) })
 	Producer.Producer(boxed) = from_stream(stream)
 	run! = Box.unbox(boxed)
 	length = match run!({}) {

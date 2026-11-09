@@ -28,16 +28,20 @@ use_it = {
 }
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+MISSING METHOD - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 19 17) (end 19 25))
 		(headline
-			(reflow "Nothing in this program determines a type this needs:"))
+			(reflow "A type this needs never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "decode")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
 			(line-break)
@@ -50,16 +54,7 @@ TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:1
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "decode")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -209,18 +204,18 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 307)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 312)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 315)
+									(e-call (constraint-fn-var 320)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
 											(p-assign (ident "value")))))
-								(e-dispatch-call (method "encode") (constraint-fn-var 316)
+								(e-dispatch-call (method "encode") (constraint-fn-var 321)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "output"))))
@@ -251,18 +246,18 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 337)
+				(e-call (constraint-fn-var 342)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 335)
+						(e-dispatch-call (method "plus") (constraint-fn-var 340)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 338)
+			(e-call (constraint-fn-var 343)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

@@ -152,7 +152,7 @@ fn expectReports(app_path: []const u8, expectation: ReportExpectation) TestError
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         gpa,
@@ -241,10 +241,16 @@ fn runRoot(lowered: *const lir.CheckedPipeline.LoweredProgram) HostRunError!void
     const ops = host.get_ops();
     ops.hosted_fns = .{ .count = @intCast(host_functions.len), .fns = &hosted_fns };
     const program = &lowered.lir_result;
+    var static_data = try harness.interpreterStaticData(lowered);
+    defer if (static_data) |*data| data.deinit();
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(std.testing.allocator, &program.store, &program.layouts, eval.LirInterpreter.BoxyTables.fromResult(program), static_strings.view(), ops);
+    var interpreter = try eval.LirInterpreter.init(std.testing.allocator, &program.store, &program.layouts, static_strings.view(), ops);
     defer interpreter.deinit();
+    if (static_data) |*data| {
+        data.install(&interpreter);
+        data.ownByInterpreter(&interpreter);
+    }
     try std.testing.expectEqual(@as(usize, 1), program.root_procs.items.len);
     const root_id = program.root_procs.items[0];
     const root = program.store.getProcSpec(root_id);

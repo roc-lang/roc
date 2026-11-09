@@ -338,7 +338,6 @@ all_str_list = str_list +
 
 all_float_list = float_list +
 
-
 # Function returning empty list
 get_empty = |_| []
 
@@ -409,13 +408,13 @@ main = |_| {
 			(e-empty_list)))
 	(d-let
 		(p-assign (ident "empty_int_list"))
-		(e-call (constraint-fn-var 357)
+		(e-call (constraint-fn-var 362)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "empty_str_list"))
-		(e-call (constraint-fn-var 370)
+		(e-call (constraint-fn-var 375)
 			(e-lookup-local
 				(p-assign (ident "get_empty")))
 			(e-string

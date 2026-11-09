@@ -21,7 +21,7 @@ test "issue 11209: discarded for-loop body destructuring a fold_until tuple lowe
         \\                if n <= p (if f == 1 Break((0, 1)) else Continue((p, 1))) else Continue((n, f))
         \\            },
         \\        )
-        \\        if res == 0 0 else 0
+        \\        _ = if res == 0 0 else 0
         \\    }
         \\    Ok({})
         \\}

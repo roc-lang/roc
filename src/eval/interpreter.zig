@@ -9,26 +9,25 @@
 //! - all ordinary eval paths are forbidden from deciding ownership policy
 
 const std = @import("std");
-const collections = @import("collections");
 const builtin = @import("builtin");
 const base = @import("base");
+const collections = @import("collections");
 const layout_mod = @import("layout");
 const lir = @import("lir");
 const LIR = lir.LIR;
 const LirStore = lir.LirStore;
-const LirProgram = lir.Program;
 const GuardedList = LirStore.GuardedList;
 const CheckedArithmetic = lir.CheckedArithmetic;
 const lir_value = @import("value.zig");
+const ValueStack = @import("value_stack.zig");
 const rc_conformance = @import("rc_conformance.zig");
 const backend = @import("backend");
 const host_trampoline = @import("host_trampoline.zig");
 const builtins = @import("builtins");
+const boxy = @import("boxy_runtime");
 const numeric_conversion = base.numeric_conversion;
 const sljmp = @import("sljmp");
 const build_options = @import("build_options");
-const boxy_runtime = @import("boxy_runtime.zig");
-const BoxyRuntime = boxy_runtime.BoxyRuntime;
 const RocTarget = @import("roc_target").RocTarget;
 const is_freestanding = builtin.target.os.tag == .freestanding;
 
@@ -84,7 +83,9 @@ const dev_wrappers = builtins.dev_wrappers;
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 const RocOps = builtins.host_abi.RocOps;
+const TypeDesc = boxy.TypeDesc;
 const UpdateMode = builtins.utils.UpdateMode;
+const crash_boundary_mod = @import("crash_boundary.zig");
 const JmpBuf = sljmp.JmpBuf;
 const setjmp = sljmp.setjmp;
 const longjmp = sljmp.longjmp;
@@ -177,8 +178,11 @@ const InterpreterRocEnv = struct {
     /// running out of memory.
     fn recordCrash(self: *InterpreterRocEnv, msg: []const u8) void {
         self.crashed = true;
+        // A crash an erased callable re-delivers carries the recorded
+        // message itself, so the copy is made before the old one is freed.
+        const copy = self.allocator.dupe(u8, msg) catch null;
         if (self.crash_message) |old| self.allocator.free(old);
-        self.crash_message = self.allocator.dupe(u8, msg) catch null;
+        self.crash_message = copy;
     }
 
     fn clearExpectFailures(self: *InterpreterRocEnv) void {
@@ -261,7 +265,12 @@ const InterpreterRocEnv = struct {
 
     fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
         const self: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
-        self.recordCrash(bytes[0..len]);
+        self.deliverCrash(bytes[0..len]);
+    }
+
+    /// Record a Roc crash and unwind to the active jump buffer.
+    fn deliverCrash(self: *InterpreterRocEnv, msg: []const u8) noreturn {
+        self.recordCrash(msg);
         const active_jmp_buf = self.active_jmp_buf orelse {
             debugPrint(
                 "LIR/interpreter invariant violated: roc_crashed fired without an active jump buffer\n",
@@ -306,8 +315,7 @@ pub const Interpreter = struct {
     /// interpreter's context attached instead of a native fault. See
     /// design.md ("Compile-Time Evaluation And Static Storage").
     const max_call_depth: usize = 1024;
-    const stack_overflow_message =
-        "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+    const stack_overflow_message = crash_boundary_mod.STACK_OVERFLOW_MESSAGE;
     /// Debug value-shape validation stops descending past this many nested
     /// values; deeper structures are legal (TRMC builds arbitrarily long
     /// lists) but walking them would overflow the native stack.
@@ -326,17 +334,16 @@ pub const Interpreter = struct {
     const ErasedCallableCaptureDrop = enum(u8) {
         none,
         rc_helper,
-        boxy_capture,
+        /// A dynamic capture record whose first word is its own descriptor.
+        desc,
     };
 
     pub const ErasedCallableInterpreterContext = extern struct {
         owner: ?*Retained,
         interpreter: *LirInterpreter,
-        result_desc: ?*const LirProgram.BoxyTypeDesc,
         proc_id: u32,
         drop_layout_plus_one: u32,
         capture_value_offset: u32,
-        drop_desc_field_offset: u32,
         drop_kind: u8,
         padding: [3]u8,
     };
@@ -348,12 +355,26 @@ pub const Interpreter = struct {
     store: *const LirStore,
     layout_store: *const layout_mod.Store,
     helper: LayoutHelper,
-    dict_seed_mode: builtins.utils.DictSeedMode = .runtime,
-    /// Arena for runtime-created descriptors whose identities can escape in a
-    /// retained callable or host result and must survive later evaluations.
-    descriptor_arena: base.SingleThreadArena,
-    /// Arena for interpreter-allocated memory (temporaries, copies).
-    arena: base.SingleThreadArena,
+    /// Values a statement computes before it stores its result in a frame
+    /// local. Each statement releases what earlier statements of its frame
+    /// left here, so scratch use is bounded by the deepest chain of
+    /// statements still running, not by how many statements have run.
+    scratch: ValueStack,
+    /// Frame storage: each procedure activation's locals and `ptr_alloca`
+    /// cells, released when the activation ends.
+    frame_stack: ValueStack,
+    /// Owned copy of the values `pending_erased` reads, which outlive the
+    /// statement and frame that deferred the call.
+    pending_erased_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
+    /// The arguments of a frame-replacing call, between the frame that makes
+    /// it ending and the callee's frame beginning.
+    tail_call_storage: std.ArrayListAlignedUnmanaged(u8, .@"16") = .empty,
+    /// Scratch of hosted calls: argument offsets and the C-ABI lowering. A
+    /// host may call back into Roc and make further hosted calls, so the
+    /// arena is reset, keeping its capacity, only when the outermost hosted
+    /// call returns.
+    hosted_call_arena: base.SingleThreadArena,
+    hosted_call_depth: u32 = 0,
     /// RocOps environment for builtin dispatch.
     roc_env: *InterpreterRocEnv,
     roc_ops: RocOps,
@@ -365,26 +386,12 @@ pub const Interpreter = struct {
     static_strings: backend.StaticStringData.View,
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
-    /// Explicit compile-time slot readiness callback; ordinary runtime images
-    /// are already complete and leave this unset.
-    static_data_demand: ?StaticDataDemand = null,
-    /// Reusable frame slot arrays, indexed by slot count. Every frame with
-    /// the same number of locals can reuse the same array, whichever proc it
-    /// belongs to, so this grows only with the frames this interpreter runs.
-    free_frame_slots: std.ArrayListUnmanaged(std.ArrayListUnmanaged([]LocalSlot)) = .empty,
-    boxy_tables: BoxyTables,
-    runtime_boxy_type_descs: std.ArrayList(*const LirProgram.BoxyTypeDesc) = .empty,
-    runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
-    desc_materializations: boxy_runtime.DescMaterializationCache = .empty,
-    adapter_desc_specializations: std.AutoHashMapUnmanaged(boxy_runtime.AdapterDescMergeKey, *const LirProgram.BoxyTypeDesc) = .empty,
-    runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
-    runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
-    runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
-    runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
-    runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
-    /// Descriptor-guided boxy value machinery, bound to this interpreter's live
-    /// descriptor tables by `bindBoxyRuntime` before each evaluation.
-    boxy_runtime: BoxyRuntime,
+    /// Direct slot lookup per entered procedure: a frame local's slot is
+    /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
+    /// An index is built the first time a procedure is entered and is checked
+    /// against the frame-local span it was built from, so a procedure whose
+    /// frame locals are rewritten gets a fresh index.
+    frame_slot_indexes: collections.DenseMap(LirProcSpecId, FrameSlotIndex),
     /// Debug-only validation state for `box_alloc_zeroed` cells while their
     /// payload is intentionally zero-filled during recursive value construction.
     inflight_zeroed_box_payloads: std.AutoHashMapUnmanaged(usize, void) = .{},
@@ -394,6 +401,10 @@ pub const Interpreter = struct {
     /// An erased call a deferred tail call left for whoever awaits its
     /// procedure's result. It owns one reference to its closure.
     pending_erased: ?PendingErasedCall = null,
+    /// A dynamic erased call a deferred tail call left pending, as the
+    /// native runtime records one: its closure, one reference to which it
+    /// owns, and an owned copy of its argument record.
+    pending_dyn: ?PendingDynCall = null,
     /// Set while an erased call is entering its callee, so that callee can
     /// tell this caller, which makes pending calls, from any other.
     erased_caller_drives: bool = false,
@@ -401,17 +412,11 @@ pub const Interpreter = struct {
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
     failed_call_stack: std.ArrayList(LirProcSpecId),
-    /// Source location of the LIR statement currently being interpreted.
-    active_stmt_loc: base.SourceLoc = base.SourceLoc.none,
-    /// Checked source region of the LIR statement currently being interpreted.
-    active_stmt_region: base.Region = base.Region.zero(),
     active_proc_id: ?LirProcSpecId = null,
+    /// The LIR statement currently being interpreted. Its source location,
+    /// region, and inline scope are read from the store when needed.
     active_stmt_id: ?CFStmtId = null,
-    /// Exact virtual source frame of the LIR statement currently being
-    /// interpreted. This is independent of the physical proc call stack.
-    active_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// Source location captured when the current evaluation first failed.
-    failure_origins: []const ?LIR.ComptimeFailureOrigin = &.{},
     failed_stmt_loc: base.SourceLoc = base.SourceLoc.none,
     /// Checked source region captured when the current evaluation first failed.
     failed_stmt_region: base.Region = base.Region.zero(),
@@ -419,18 +424,14 @@ pub const Interpreter = struct {
     failed_stmt_inline_scope: InlineScopeId = InlineScopeId.none,
     /// The crash statement that ended the current evaluation, if one did.
     failed_crash_stmt: ?LIR.CFStmtId = null,
-    comptime_branch_hits: std.ArrayList(ComptimeBranchHit),
-    comptime_failed_site: ?LIR.ComptimeSiteId = null,
     /// Heap-pinned owner used by host-facing integrations whose erased
     /// callables can outlive the evaluation that created them.
     retained_owner: ?*Retained = null,
+    /// The result storage a call passes to a callee whose result is dynamic,
+    /// between the call and the callee's activation binding it.
+    pending_dyn_result: ?[*]u8 = null,
 
-    pub const Error = boxy_runtime.Error;
-
-    pub const StaticDataDemand = struct {
-        context: *anyopaque,
-        ensure: *const fn (*anyopaque, LIR.StaticDataId) Error!void,
-    };
+    pub const Error = @import("layout_runtime.zig").Error;
 
     /// Explicit hosted-call data produced by LIR and the interpreter's ABI
     /// packing. Integrations consume this without reconstructing hosted
@@ -452,11 +453,6 @@ pub const Interpreter = struct {
     pub const HostedCallHandler = struct {
         context: *anyopaque,
         dispatch: *const fn (*anyopaque, HostedCall) Error!void,
-    };
-
-    pub const ComptimeBranchHit = struct {
-        site: LIR.ComptimeSiteId,
-        branch_index: u32,
     };
 
     /// Runs the static erased callables of one interpreter static-data image.
@@ -500,7 +496,6 @@ pub const Interpreter = struct {
             allocator: Allocator,
             store: *const LirStore,
             layout_store: *const layout_mod.Store,
-            boxy_tables: BoxyTables,
             static_strings: backend.StaticStringData.View,
             static_addresses: []const usize,
             synchronization_io: std.Io,
@@ -512,11 +507,10 @@ pub const Interpreter = struct {
 
         fn call(raw: ?*anyopaque, callable: InterpretedCallable, ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) void {
             const parts = &@as(*const StaticCallableProgram, @ptrCast(@alignCast(raw.?))).parts;
-            const retained = Retained.createWithBoxyTables(
+            const retained = Retained.create(
                 parts.allocator,
                 parts.store,
                 parts.layout_store,
-                parts.boxy_tables,
                 parts.static_strings,
                 ops,
                 parts.synchronization_io,
@@ -549,40 +543,53 @@ pub const Interpreter = struct {
         return @ptrFromInt(payload - static_callable_payload_offset - @sizeOf(StaticCallableHeader));
     }
 
-    const CrashBoundary = struct {
-        env: *InterpreterRocEnv,
-        prev_jmp_buf: ?*JmpBuf,
-
-        fn init(env: *InterpreterRocEnv) CrashBoundary {
-            env.resetCrash();
-            return .{
-                .env = env,
-                .prev_jmp_buf = if (sljmp.supported) env.installJumpBuf(&env.jmp_buf) else null,
-            };
-        }
-
-        fn deinit(self: *CrashBoundary) void {
-            if (sljmp.supported) {
-                self.env.restoreJumpBuf(self.prev_jmp_buf);
-            }
-        }
-
-        inline fn set(self: *CrashBoundary) c_int {
-            if (sljmp.supported) {
-                return setjmp(&self.env.jmp_buf);
-            }
-            return 0;
-        }
-    };
+    /// Native stack overflow is not caught here: see `max_call_depth`.
+    const CrashBoundary = crash_boundary_mod.CrashBoundary(InterpreterRocEnv, false);
 
     fn enterCrashBoundary(self: *LirInterpreter) CrashBoundary {
+        self.roc_env.resetCrash();
         return CrashBoundary.init(self.roc_env);
     }
 
     const LocalSlot = struct {
-        assigned: bool = false,
-        val: Value,
-        desc: ?*const LirProgram.BoxyTypeDesc = null,
+        /// `unassigned_value` until the local is assigned.
+        val: Value = unassigned_value,
+
+        /// No allocation and no zero-sized sentinel offset is ever at this
+        /// address, so it marks a slot whose local has no value yet.
+        const unassigned_value: Value = .{ .ptr = @ptrFromInt(1) };
+
+        fn assigned(self: LocalSlot) bool {
+            return self.val.ptr != unassigned_value.ptr;
+        }
+    };
+
+    /// See `frame_slot_indexes`.
+    const FrameSlotIndex = struct {
+        span: LIR.LocalSpan,
+        base: u32,
+        slot_of: []u32,
+        /// The slots of the frame's zero-sized locals.
+        zst_slots: []u32 = &.{},
+        /// Per slot: where the local's bytes live in the frame's storage, and
+        /// how many there are.
+        storage_offsets: []u32 = &.{},
+        storage_sizes: []u32 = &.{},
+        storage_size: usize = 0,
+        storage_alignment: layout_mod.RocAlignment = .@"1",
+        /// The slots of the frame's `frame`-storage dynamic locals, whose
+        /// bytes the procedure's `frame_alloc` places.
+        dyn_frame_slots: []u32 = &.{},
+
+        const none = std.math.maxInt(u32);
+
+        fn deinit(self: FrameSlotIndex, allocator: Allocator) void {
+            allocator.free(self.slot_of);
+            allocator.free(self.zst_slots);
+            allocator.free(self.dyn_frame_slots);
+            allocator.free(self.storage_offsets);
+            allocator.free(self.storage_sizes);
+        }
     };
 
     const Frame = struct {
@@ -593,25 +600,33 @@ pub const Interpreter = struct {
         caller_drives: bool = false,
         /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+        /// The proc's slot index (see `frame_slot_indexes`).
+        slot_base: u32,
+        slot_of: []const u32,
         /// The proc's join points, sorted by id.
         join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
         slots: []LocalSlot,
+        /// Each local owns its bytes here, at the offset its slot names.
+        /// Assigning a local copies the value in, so a local's value never
+        /// depends on storage some other statement owns.
+        storage: [*]u8,
+        storage_offsets: []const u32,
+        storage_sizes: []const u32,
+        /// See `FrameSlotIndex.dyn_frame_slots`.
+        dyn_frame_slots: []const u32,
+        /// The result storage the caller passed, for a procedure whose result
+        /// is dynamic (`LirProcSpec.dyn_result`).
+        dyn_result: ?[*]u8 = null,
+        /// The top of `frame_stack` before this frame was pushed.
+        stack_mark: ValueStack.Mark,
 
         fn findSlotIndex(self: *const Frame, local_id: LocalId) ?usize {
-            var low: usize = 0;
-            var high: usize = self.locals.len;
-            const target = @backingInt(local_id);
-            while (low < high) {
-                const mid = low + (high - low) / 2;
-                const current = @backingInt(GuardedList.at(self.locals, mid));
-                if (current == target) return mid;
-                if (current < target) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-            return null;
+            const id = @backingInt(local_id);
+            if (id < self.slot_base) return null;
+            const offset = id - self.slot_base;
+            if (offset >= self.slot_of.len) return null;
+            const slot = self.slot_of[offset];
+            return if (slot == FrameSlotIndex.none) null else slot;
         }
 
         fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
@@ -634,51 +649,37 @@ pub const Interpreter = struct {
 
         fn slotIndex(self: *const Frame, local_id: LocalId) usize {
             if (self.findSlotIndex(local_id)) |index| return index;
-            if (builtin.mode == .debug) {
-                debugPrint(
-                    "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}\n",
-                    .{ @backingInt(self.proc_id), @backingInt(local_id) },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}",
+                .{ @backingInt(self.proc_id), @backingInt(local_id) },
+            );
         }
 
         fn isAssigned(self: *const Frame, local_id: LocalId) bool {
-            return self.slots[self.slotIndex(local_id)].assigned;
+            return self.slots[self.slotIndex(local_id)].assigned();
         }
 
         fn setLocal(self: *Frame, local_id: LocalId, value: Value) void {
-            const slot = &self.slots[self.slotIndex(local_id)];
-            slot.* = .{
-                .assigned = true,
-                .val = value,
-                .desc = null,
+            const index = self.slotIndex(local_id);
+            std.debug.assert(value.ptr != LocalSlot.unassigned_value.ptr);
+            const size = self.storage_sizes[index];
+            const stored = if (size == 0) value else stored: {
+                const dest = Value{ .ptr = self.storage + self.storage_offsets[index] };
+                // A zero-sized value stored at a layout with bytes reads as
+                // zeroed bytes, as `materializeLocalValue` defines it.
+                if (value.isZst()) {
+                    @memset(dest.ptr[0..size], 0);
+                } else if (value.ptr != dest.ptr) {
+                    dest.copyFrom(value, size);
+                }
+                break :stored dest;
             };
-        }
-
-        fn setLocalDesc(self: *Frame, local_id: LocalId, desc: ?*const LirProgram.BoxyTypeDesc) void {
-            const slot = &self.slots[self.slotIndex(local_id)];
-            if (builtin.mode == .debug and !slot.assigned) {
-                debugPrint(
-                    "LIR/interpreter invariant violated: proc {d} tried to attach descriptor to unassigned local {d}\n",
-                    .{ @backingInt(self.proc_id), @backingInt(local_id) },
-                );
-            }
-            slot.desc = desc;
-        }
-
-        fn localDesc(self: *const Frame, local_id: LocalId) ?*const LirProgram.BoxyTypeDesc {
-            const slot = self.slots[self.slotIndex(local_id)];
-            return if (slot.assigned) slot.desc else null;
+            self.slots[index] = .{ .val = stored };
         }
     };
 
     const ExecOutcome = union(enum) {
         returned: LocalId,
-        /// The procedure returned without a value because a call is pending.
-        returned_pending,
-        loop_continue,
-        loop_break,
         /// A frame-replacing call: the procedure's result is whatever this
         /// call returns, so its own frame ends before the callee's begins.
         tail_call: TailCall,
@@ -688,6 +689,18 @@ pub const Interpreter = struct {
         proc: LirProcSpecId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
+        /// The ending activation's own result storage, which the callee's
+        /// dynamic result is written to.
+        dyn_result: ?[*]u8 = null,
+        /// Arguments passed to dynamic parameters as addresses of bytes the
+        /// ending frame owns. The bytes move with the call.
+        relocations: []const TailCallRelocation = &.{},
+    };
+
+    const TailCallRelocation = struct {
+        arg: u32,
+        size: u32,
+        alignment: u32,
     };
 
     /// One procedure activation ends with its result, or with the call that
@@ -699,18 +712,8 @@ pub const Interpreter = struct {
 
     const EvalProcResult = struct {
         value: Value,
-        desc: ?*const LirProgram.BoxyTypeDesc = null,
-        /// The layout `value` and `desc` actually describe. This is the
-        /// returned local's layout whenever the declared return layout is only
-        /// a bitwise relabel of it (e.g. a concrete box local returned through
-        /// a dynamic-box return layout); descriptor conventions such as
-        /// box-self detection are keyed on this layout, not the declared one.
+        /// The layout `value` has: the returned local's layout.
         layout: layout_mod.Idx,
-    };
-
-    const EvalDescriptorBinding = struct {
-        local: LocalId,
-        desc: *const LirProgram.BoxyTypeDesc,
     };
 
     pub const EvalResult = union(enum) {
@@ -725,7 +728,6 @@ pub const Interpreter = struct {
         ret_ptr: ?*anyopaque = null,
     };
 
-    pub const BoxyTables = boxy_runtime.BoxyTables;
     /// Literal backing table a caller owns and lends to interpreters.
     pub const StaticStrings = backend.StaticStringData;
 
@@ -743,11 +745,10 @@ pub const Interpreter = struct {
         execution_depth: usize = 0,
         interpreter: LirInterpreter,
 
-        pub fn createWithBoxyTables(
+        pub fn create(
             allocator: Allocator,
             store: *const LirStore,
             layout_store: *const layout_mod.Store,
-            boxy_tables: BoxyTables,
             static_strings: backend.StaticStringData.View,
             caller_roc_ops: *RocOps,
             synchronization_io: std.Io,
@@ -759,11 +760,10 @@ pub const Interpreter = struct {
                 .allocator = allocator,
                 .references = .init(1),
                 .synchronization_io = synchronization_io,
-                .interpreter = try LirInterpreter.initWithBoxyTables(
+                .interpreter = try LirInterpreter.init(
                     allocator,
                     store,
                     layout_store,
-                    boxy_tables,
                     static_strings,
                     caller_roc_ops,
                 ),
@@ -857,43 +857,21 @@ pub const Interpreter = struct {
         static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
     ) Allocator.Error!LirInterpreter {
-        return initWithBoxyTablesAndHostedCallHandler(
+        return initWithHostedCallHandler(
             allocator,
             store,
             layout_store,
-            .{},
             static_strings,
             caller_roc_ops,
             null,
         );
     }
 
-    pub fn initWithBoxyTables(
+    /// Construct an interpreter with an optional hosted-call dependency.
+    pub fn initWithHostedCallHandler(
         allocator: Allocator,
         store: *const LirStore,
         layout_store: *const layout_mod.Store,
-        boxy_tables: BoxyTables,
-        static_strings: backend.StaticStringData.View,
-        caller_roc_ops: *RocOps,
-    ) Allocator.Error!LirInterpreter {
-        return initWithBoxyTablesAndHostedCallHandler(
-            allocator,
-            store,
-            layout_store,
-            boxy_tables,
-            static_strings,
-            caller_roc_ops,
-            null,
-        );
-    }
-
-    /// Construct an interpreter from the checked LIR image's explicit Boxy
-    /// tables and optional hosted-call dependency.
-    pub fn initWithBoxyTablesAndHostedCallHandler(
-        allocator: Allocator,
-        store: *const LirStore,
-        layout_store: *const layout_mod.Store,
-        boxy_tables: BoxyTables,
         static_strings: backend.StaticStringData.View,
         caller_roc_ops: *RocOps,
         hosted_call_handler: ?HostedCallHandler,
@@ -910,8 +888,10 @@ pub const Interpreter = struct {
             .store = store,
             .layout_store = layout_store,
             .helper = LayoutHelper.init(layout_store),
-            .descriptor_arena = base.SingleThreadArena.init(allocator),
-            .arena = base.SingleThreadArena.init(allocator),
+            .scratch = ValueStack.init(allocator),
+            .frame_stack = ValueStack.init(allocator),
+            .hosted_call_arena = base.SingleThreadArena.init(allocator),
+            .frame_slot_indexes = collections.DenseMap(LirProcSpecId, FrameSlotIndex).init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
                 .env = @ptrCast(roc_env),
@@ -927,64 +907,30 @@ pub const Interpreter = struct {
             .expect_observer = null,
             .static_strings = static_strings,
             .static_data = &.{},
-            .boxy_tables = boxy_tables,
-            .runtime_boxy_type_descs = .empty,
-            .runtime_boxy_desc_ids = .empty,
-            .desc_materializations = .empty,
-            .adapter_desc_specializations = .empty,
-            .runtime_boxy_desc_refs = .empty,
-            .runtime_boxy_tag_variants = .empty,
-            .runtime_boxy_tag_payload_descs = .empty,
-            .runtime_boxy_payload_steps = .empty,
-            .runtime_boxy_dicts = .{},
-            .boxy_runtime = .{
-                .store = store,
-                .layout_store = layout_store,
-                .helper = LayoutHelper.init(layout_store),
-                .boxy_tables = boxy_tables,
-                .runtime_boxy_type_descs = undefined,
-                .runtime_boxy_desc_ids = undefined,
-                .desc_materializations = undefined,
-                .adapter_desc_specializations = undefined,
-                .runtime_boxy_desc_refs = undefined,
-                .runtime_boxy_tag_variants = undefined,
-                .runtime_boxy_tag_payload_descs = undefined,
-                .runtime_boxy_payload_steps = undefined,
-                .runtime_boxy_dicts = undefined,
-                .roc_ops = undefined,
-                .scratch = allocator,
-                .descriptor_arena = undefined,
-                .eval_arena = undefined,
-            },
             .call_stack = .empty,
             .failed_call_stack = .empty,
-            .comptime_branch_hits = .empty,
         };
     }
 
     pub fn deinit(self: *LirInterpreter) void {
-        self.comptime_branch_hits.deinit(self.evalAllocator());
-        self.failed_call_stack.deinit(self.evalAllocator());
-        self.call_stack.deinit(self.evalAllocator());
-        self.runtime_boxy_payload_steps.deinit(self.allocator);
-        self.runtime_boxy_dicts.deinit(self.allocator);
-        self.runtime_boxy_tag_payload_descs.deinit(self.allocator);
-        self.runtime_boxy_tag_variants.deinit(self.allocator);
-        self.runtime_boxy_desc_refs.deinit(self.allocator);
-        self.runtime_boxy_type_descs.deinit(self.allocator);
-        self.runtime_boxy_desc_ids.deinit(self.allocator);
-        self.desc_materializations.deinit(self.allocator);
-        self.adapter_desc_specializations.deinit(self.allocator);
+        self.failed_call_stack.deinit(self.allocator);
+        self.call_stack.deinit(self.allocator);
+        self.pending_erased_storage.deinit(self.allocator);
+        if (self.pending_dyn) |pending| {
+            if (pending.args) |args| self.allocator.free(args);
+        }
+        self.tail_call_storage.deinit(self.allocator);
         self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
-        self.descriptor_arena.deinit();
-        self.arena.deinit();
+        self.scratch.deinit();
+        self.frame_stack.deinit();
+        self.hosted_call_arena.deinit();
         self.inflight_zeroed_box_payloads.deinit(self.allocator);
-        for (self.free_frame_slots.items) |*pool| {
-            for (pool.items) |slots| self.allocator.free(slots);
-            pool.deinit(self.allocator);
+        var slot_indexes = self.frame_slot_indexes.valueIterator();
+        while (slot_indexes.next()) |index| {
+            index.deinit(self.allocator);
         }
-        self.free_frame_slots.deinit(self.allocator);
+        self.frame_slot_indexes.deinit();
     }
 
     /// Install the explicit immutable data image that backs LIR static-data
@@ -1016,7 +962,7 @@ pub const Interpreter = struct {
     fn staticErasedCallableOnDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {}
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
-        return self.arena.allocator();
+        return self.scratch.allocator();
     }
 
     /// The unwind a caller host uses when it cannot satisfy an allocation
@@ -1093,26 +1039,34 @@ pub const Interpreter = struct {
         return null;
     }
 
-    pub fn getComptimeFailedSite(self: *const LirInterpreter) ?LIR.ComptimeSiteId {
-        return self.comptime_failed_site;
-    }
-
-    pub fn getComptimeBranchHits(self: *const LirInterpreter) []const ComptimeBranchHit {
-        return self.comptime_branch_hits.items;
-    }
-
     fn recordFailedCallStackIfUnset(self: *LirInterpreter) Allocator.Error!void {
         if (self.failed_call_stack.items.len != 0) return;
-        try self.failed_call_stack.appendSlice(self.evalAllocator(), self.call_stack.items);
+        try self.failed_call_stack.appendSlice(self.allocator, self.call_stack.items);
     }
 
     fn recordActiveFailureLocIfUnset(self: *LirInterpreter) void {
         if (self.failed_stmt_loc.hasLocation()) return;
-        if (self.active_stmt_loc.hasLocation()) {
-            self.failed_stmt_loc = self.active_stmt_loc;
-            self.failed_stmt_region = self.active_stmt_region;
-            self.failed_stmt_inline_scope = self.active_stmt_inline_scope;
+        if (self.activeStmtLoc().hasLocation()) {
+            self.failed_stmt_loc = self.activeStmtLoc();
+            self.failed_stmt_region = self.activeStmtRegion();
+            self.failed_stmt_inline_scope = self.activeStmtInlineScope();
         }
+    }
+
+    /// Source location of the LIR statement currently being interpreted.
+    fn activeStmtLoc(self: *const LirInterpreter) base.SourceLoc {
+        return self.store.stmtLoc(self.active_stmt_id orelse return base.SourceLoc.none);
+    }
+
+    /// Checked source region of the LIR statement currently being interpreted.
+    fn activeStmtRegion(self: *const LirInterpreter) base.Region {
+        return self.store.stmtRegion(self.active_stmt_id orelse return base.Region.zero());
+    }
+
+    /// Exact virtual source frame of the LIR statement currently being
+    /// interpreted, independent of the physical proc call stack.
+    fn activeStmtInlineScope(self: *const LirInterpreter) InlineScopeId {
+        return self.store.stmtInlineScope(self.active_stmt_id orelse return InlineScopeId.none);
     }
 
     fn recordCallerFailureLocForSourcelessCallee(
@@ -1142,7 +1096,6 @@ pub const Interpreter = struct {
             error.RuntimeError,
             => self.recordCallerFailureLocForSourcelessCallee(call_loc, call_region, call_inline_scope),
             error.OutOfMemory,
-            error.ComptimeExhaustiveness,
             error.ExpectErr,
             error.UnsupportedHostedFunction,
             error.InvalidHostedFunctionSignature,
@@ -1154,7 +1107,6 @@ pub const Interpreter = struct {
     /// Decrements reference counts for any heap-allocated data (strings, lists, boxes)
     /// according to the value's layout. No-op for non-refcounted types (ints, bools, etc).
     pub fn dropValue(self: *LirInterpreter, val: Value, layout_idx: layout_mod.Idx) void {
-        self.bindBoxyRuntime();
         self.performInterpreterApiRc(.decref, val, layout_idx, 0);
     }
 
@@ -1162,11 +1114,6 @@ pub const Interpreter = struct {
         self.recordActiveFailureLocIfUnset();
         self.roc_env.runtime_error_message = message;
         return error.RuntimeError;
-    }
-
-    fn comptimeExhaustivenessFailed(self: *LirInterpreter, site: LIR.ComptimeSiteId) Error {
-        self.comptime_failed_site = site;
-        return error.ComptimeExhaustiveness;
     }
 
     fn triggerCrash(self: *LirInterpreter, message: []const u8) Error {
@@ -1183,56 +1130,41 @@ pub const Interpreter = struct {
     }
 
     fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .debug) {
-            debugPrint(fmt, args);
-            debugPrint("\n", .{});
-            std.debug.assert(false);
-        }
-        unreachable;
+        base.invariant(fmt, args);
     }
 
     fn invariantFailedError(self: *const LirInterpreter, comptime fmt: []const u8, args: anytype) Error {
         self.invariantFailed(fmt, args);
     }
 
-    /// Point the boxy runtime at this interpreter's live descriptor tables,
-    /// `RocOps`, and evaluation arena. Their addresses are fixed once the
-    /// interpreter is pinned, so a single binding at each evaluation entry keeps
-    /// the runtime valid for every boxy operation reached from it.
-    fn bindBoxyRuntime(self: *LirInterpreter) void {
-        self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
-        self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
-        self.boxy_runtime.desc_materializations = &self.desc_materializations;
-        self.boxy_runtime.adapter_desc_specializations = &self.adapter_desc_specializations;
-        self.boxy_runtime.runtime_boxy_desc_refs = &self.runtime_boxy_desc_refs;
-        self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
-        self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
-        self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
-        self.boxy_runtime.runtime_boxy_dicts = &self.runtime_boxy_dicts;
-        self.boxy_runtime.roc_ops = &self.roc_ops;
-        self.boxy_runtime.descriptor_arena = self.descriptor_arena.allocator();
-        self.boxy_runtime.eval_arena = self.evalAllocator();
+    fn layoutRuntime(self: *const LirInterpreter) @import("layout_runtime.zig").LayoutRuntime {
+        return .{ .layout_store = self.layout_store, .helper = self.helper, .roc_ops = @constCast(&self.roc_ops), .scratch = self.allocator };
     }
 
     /// Discard operation-local allocations between independent host entries.
-    /// Descriptor identities live in `descriptor_arena` and remain stable for
-    /// every callable retained from this interpreter.
     fn resetRetainedExecution(self: *LirInterpreter) void {
-        self.call_stack = .empty;
-        self.failed_call_stack = .empty;
-        self.comptime_branch_hits = .empty;
-        _ = self.arena.reset(.retain_capacity);
+        self.call_stack.clearRetainingCapacity();
+        self.failed_call_stack.clearRetainingCapacity();
+        self.scratch.reset();
+        self.frame_stack.reset();
+        self.pending_dyn_result = null;
 
         self.roc_env.resetForEval();
-        self.active_stmt_loc = base.SourceLoc.none;
-        self.active_stmt_region = base.Region.zero();
-        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.active_stmt_id = null;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+    }
+
+    /// Prepare for an evaluation unrelated to every earlier one: no value,
+    /// frame, or activation an earlier evaluation left is live afterwards.
+    /// Per-procedure caches are kept.
+    pub fn resetBetweenEvaluations(self: *LirInterpreter) void {
+        self.resetRetainedExecution();
+        self.call_depth = 0;
+        self.erased_caller_drives = false;
     }
 
     fn bindCallerRocOps(self: *LirInterpreter, caller_roc_ops: *RocOps) void {
@@ -1243,161 +1175,42 @@ pub const Interpreter = struct {
         self.roc_env.caller_roc_ops = caller_roc_ops;
     }
 
-    /// Frame-aware services the boxy runtime calls back into: descriptor and
-    /// dictionary reference resolution against the current frame's locals,
-    /// scratch value allocation, refcounted heap allocation, cached RC plan
-    /// queries, and debug diagnostics for the active proc.
-    const BoxyFrameHooks = struct {
+    /// The interpreter services `LayoutRuntime` calls back into: scratch value
+    /// allocation, refcounted heap allocation, and cached RC plan queries.
+    const ValueHooks = struct {
         interp: *LirInterpreter,
-        /// Null for operations that never resolve frame-local descriptor
-        /// references or trace against the active proc (e.g. boxing an
-        /// already-materialized payload).
-        frame: ?*const Frame,
 
-        pub fn resolveDescRef(self: BoxyFrameHooks, desc_ref: LIR.BoxyDescRef) Error!*const LirProgram.BoxyTypeDesc {
-            switch (desc_ref) {
-                .static => |desc_id| return self.interp.requireBoxyTypeDesc(desc_id),
-                .runtime => |runtime_id| {
-                    if (runtime_id >= self.interp.runtime_boxy_type_descs.items.len) {
-                        return self.interp.invariantFailedError(
-                            "LIR/interpreter invariant violated: runtime boxy descriptor id {d} exceeded descriptor table length {d}",
-                            .{ runtime_id, self.interp.runtime_boxy_type_descs.items.len },
-                        );
-                    }
-                    return self.interp.runtime_boxy_type_descs.items[runtime_id];
-                },
-                .local, .dict_method_arg, .dict_method_hidden => {},
-            }
-            const frame = self.frame orelse return self.interp.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy operation resolved a descriptor reference without a frame",
-                .{},
-            );
-            return self.interp.resolveBoxyDescRef(frame, desc_ref);
-        }
-
-        /// The ids and descriptors of the captured locals `captures` names.
-        pub fn captureDescs(
-            self: BoxyFrameHooks,
-            captures: LIR.LocalSpan,
-            ids: []u32,
-            descs: []?*const LirProgram.BoxyTypeDesc,
-        ) Error!void {
-            const frame = self.frame orelse return self.interp.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy descriptor captures were read without a frame",
-                .{},
-            );
-            const locals = self.interp.store.getLocalSpan(captures);
-            for (ids, descs, 0..) |*id, *desc, index| {
-                const local = GuardedList.at(locals, index);
-                id.* = @backingInt(local);
-                desc.* = try self.interp.resolveBoxyDescRef(frame, .{ .local = local });
-            }
-        }
-
-        pub fn resolveDictRef(self: BoxyFrameHooks, dict_ref: LIR.BoxyDictRef) Error!*const LirProgram.BoxyDict {
-            const frame = self.frame orelse return self.interp.invariantFailedError(
-                "LIR/interpreter invariant violated: boxy operation resolved a dictionary reference without a frame",
-                .{},
-            );
-            return self.interp.resolveBoxyDictRef(frame, dict_ref);
-        }
-
-        fn activeFrame(self: BoxyFrameHooks, kind: boxy_runtime.DescriptorMethodKind) Error!*const Frame {
-            return self.frame orelse self.interp.invariantFailedError(
-                "LIR/interpreter invariant violated: {s} worker called without an active frame",
-                .{@tagName(kind)},
-            );
-        }
-
-        /// Crash at code checking rejected and already reported.
-        pub fn crashCheckedError(self: BoxyFrameHooks, message: []const u8) Error {
-            return self.interp.triggerCrash(message);
-        }
-
-        /// Call the `kind` method slot the first argument's descriptor
-        /// carries with the borrowed `args`.
-        pub fn callDescriptorMethod(
-            self: BoxyFrameHooks,
-            kind: boxy_runtime.DescriptorMethodKind,
-            method: LirProgram.BoxyMethodSlotId,
-            args: []const boxy_runtime.DictCallArg,
-        ) Error!boxy_runtime.DescriptorMethodCallResult {
-            const prepared = try self.interp.boxy_runtime.prepareDescriptorMethodCall(
-                self,
-                self.interp.arena.allocator(),
-                kind,
-                method,
-                args,
-            );
-            const proc = self.interp.store.getProcSpec(prepared.proc);
-            if (prepared.arg_values.len < args.len) {
-                return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: {s} worker call had {d} explicit arguments for {d} values",
-                    .{ @tagName(kind), prepared.arg_values.len, args.len },
-                );
-            }
-            for (0..args.len) |index| {
-                const bit = @as(u64, 1) << @intCast(index);
-                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
-                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
-                if (argument_is_borrowed and !worker_borrows_argument) {
-                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .incref, 1, .atomic);
-                }
-            }
-            const result = try self.interp.evalProcById(prepared.proc, prepared.arg_values, prepared.arg_layouts);
-            for (0..args.len) |index| {
-                const bit = @as(u64, 1) << @intCast(index);
-                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
-                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
-                if (!argument_is_borrowed and worker_borrows_argument) {
-                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .decref, 1, .atomic);
-                }
-            }
-            return .{
-                .value = result.value,
-                .layout = result.layout,
-                .desc = result.desc,
-                .borrowed = proc.rc_ret_borrowed,
-            };
-        }
-
-        pub fn layoutContainsRc(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) bool {
+        pub fn layoutContainsRc(self: ValueHooks, layout_idx: layout_mod.Idx) bool {
             return self.interp.layout_store.layoutContainsRefcounted(self.interp.layout_store.getLayout(layout_idx));
         }
 
-        pub fn allocValue(self: BoxyFrameHooks, layout_idx: layout_mod.Idx) Error!Value {
+        pub fn allocValue(self: ValueHooks, layout_idx: layout_mod.Idx) Error!Value {
             return self.interp.alloc(layout_idx);
         }
 
-        pub fn allocRocDataWithRc(self: BoxyFrameHooks, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
+        pub fn allocValueUninit(self: ValueHooks, layout_idx: layout_mod.Idx) Error!Value {
+            return self.interp.allocUninit(layout_idx);
+        }
+
+        pub fn allocRocDataWithRc(self: ValueHooks, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
             return self.interp.allocRocDataWithRc(data_bytes, element_alignment, elements_refcounted);
         }
 
-        pub fn rcPlanFor(self: BoxyFrameHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
+        pub fn rcPlanFor(self: ValueHooks, helper: layout_mod.RcHelperKey) layout_mod.RcHelperPlan {
             return self.interp.layout_store.rcHelperPlan(helper);
         }
 
-        pub fn rcStructFieldPlan(self: BoxyFrameHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
+        pub fn rcStructFieldPlan(self: ValueHooks, struct_plan: layout_mod.RcStructPlan, field_index: u32) ?layout_mod.RcFieldPlan {
             return self.interp.layout_store.rcHelperStructFieldPlan(struct_plan, field_index);
         }
 
-        pub fn rcTagVariantPlan(self: BoxyFrameHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
+        pub fn rcTagVariantPlan(self: ValueHooks, tag_plan: layout_mod.RcTagUnionPlan, variant_index: u32) ?layout_mod.RcHelperKey {
             return self.interp.layout_store.rcHelperTagUnionVariantPlan(tag_plan, variant_index);
-        }
-
-        pub fn traceProcId(self: BoxyFrameHooks) u32 {
-            const frame = self.frame orelse return std.math.maxInt(u32);
-            return @backingInt(frame.proc_id);
-        }
-
-        pub fn debugDumpProc(self: BoxyFrameHooks) void {
-            const frame = self.frame orelse return;
-            self.interp.debugDumpProc(frame.proc_id);
         }
     };
 
-    fn boxyFrameHooks(self: *LirInterpreter, frame: ?*const Frame) BoxyFrameHooks {
-        return .{ .interp = self, .frame = frame };
+    fn valueHooks(self: *LirInterpreter) ValueHooks {
+        return .{ .interp = self };
     }
 
     fn currentRocOps(self: *LirInterpreter) *RocOps {
@@ -1417,17 +1230,29 @@ pub const Interpreter = struct {
         return Value.fromSlice(try self.allocAlignedByteSlice(size, alignment));
     }
 
+    /// Storage for a value of `layout_idx` whose every byte the caller writes
+    /// before reading, so it is not zeroed first.
+    fn allocUninit(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
+        const sa = self.helper.sizeAlignOf(layout_idx);
+        if (sa.size == 0) return Value.zst;
+        return Value.fromSlice(try self.allocAlignedByteSliceUninit(sa.size, sa.alignment));
+    }
+
     fn allocAlignedByteSlice(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error![]u8 {
-        const slice = switch (alignment) {
-            .@"1" => self.arena.allocator().alignedAlloc(u8, .@"1", size),
-            .@"2" => self.arena.allocator().alignedAlloc(u8, .@"2", size),
-            .@"4" => self.arena.allocator().alignedAlloc(u8, .@"4", size),
-            .@"8" => self.arena.allocator().alignedAlloc(u8, .@"8", size),
-            .@"16" => self.arena.allocator().alignedAlloc(u8, .@"16", size),
-            _ => unreachable,
-        } catch return error.OutOfMemory;
+        const slice = try self.allocAlignedByteSliceUninit(size, alignment);
         @memset(slice, 0);
         return slice;
+    }
+
+    fn allocAlignedByteSliceUninit(self: *LirInterpreter, size: usize, alignment: layout_mod.RocAlignment) Error![]u8 {
+        return switch (alignment) {
+            .@"1" => self.evalAllocator().alignedAlloc(u8, .@"1", size),
+            .@"2" => self.evalAllocator().alignedAlloc(u8, .@"2", size),
+            .@"4" => self.evalAllocator().alignedAlloc(u8, .@"4", size),
+            .@"8" => self.evalAllocator().alignedAlloc(u8, .@"8", size),
+            .@"16" => self.evalAllocator().alignedAlloc(u8, .@"16", size),
+            _ => self.invariantFailed("LIR/interpreter invariant violated: layout alignment {d} exceeds 16 bytes", .{alignment.toByteUnits()}),
+        } catch return error.OutOfMemory;
     }
 
     fn poisonUninitializedValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
@@ -1448,8 +1273,7 @@ pub const Interpreter = struct {
     fn allocRocDataWithRc(self: *LirInterpreter, data_bytes: usize, element_alignment: u32, elements_refcounted: bool) Error![*]u8 {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
         return builtins.utils.allocateWithRefcount(data_bytes, element_alignment, elements_refcounted, &self.roc_ops);
     }
 
@@ -1457,7 +1281,7 @@ pub const Interpreter = struct {
         const arg_count = arg_layouts.len;
         if (arg_count == 0) return &.{};
 
-        const args_buf = try self.arena.allocator().alloc(Value, arg_count);
+        const args_buf = try self.evalAllocator().alloc(Value, arg_count);
         if (arg_ptr == null) {
             for (args_buf, arg_layouts) |*slot, arg_layout| {
                 slot.* = if (self.helper.sizeOf(arg_layout) == 0)
@@ -1469,30 +1293,14 @@ pub const Interpreter = struct {
         }
 
         const arg_bytes = @as([*]u8, @ptrCast(arg_ptr.?));
-        var sorted_indices = try self.arena.allocator().alloc(usize, arg_count);
-        for (0..arg_count) |i| sorted_indices[i] = i;
-
-        for (0..arg_count) |i| {
-            for (i + 1..arg_count) |j| {
-                const i_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[i]]).alignment.toByteUnits();
-                const j_align = self.helper.sizeAlignOf(arg_layouts[sorted_indices[j]]).alignment.toByteUnits();
-                if (j_align > i_align or (j_align == i_align and sorted_indices[j] < sorted_indices[i])) {
-                    const tmp = sorted_indices[i];
-                    sorted_indices[i] = sorted_indices[j];
-                    sorted_indices[j] = tmp;
-                }
-            }
-        }
-
-        var arg_offsets = try self.arena.allocator().alloc(usize, arg_count);
-        var byte_offset: usize = 0;
-        for (sorted_indices) |orig_idx| {
-            const sa = self.helper.sizeAlignOf(arg_layouts[orig_idx]);
-            const byte_align = sa.alignment.toByteUnits();
-            byte_offset = std.mem.alignForward(usize, byte_offset, byte_align);
-            arg_offsets[orig_idx] = byte_offset;
-            byte_offset += sa.size;
-        }
+        var stack_first_buffer: [512]u8 align(@alignOf(usize)) = undefined;
+        var stack_first = std.heap.BufferFirstAllocator.init(&stack_first_buffer, self.allocator);
+        const offsets_allocator = stack_first.allocator();
+        // The buffer is laid out by the code that wrote it (the LLVM backend's
+        // entrypoint wrapper), so read it at that same layout.
+        const arg_offsets = try offsets_allocator.alloc(u32, arg_count);
+        defer offsets_allocator.free(arg_offsets);
+        layout_mod.entrypoint_args.computeOffsets(self.helper.store, arg_layouts, arg_offsets);
 
         for (0..arg_count) |i| {
             const sa = self.helper.sizeAlignOf(arg_layouts[i]);
@@ -1531,8 +1339,11 @@ pub const Interpreter = struct {
 
         const proc = view.store.getProcSpec(selected.root_proc);
         const arg_ids = view.store.getLocalSpan(proc.args);
-        const arg_layouts = try self.allocator.alloc(layout_mod.Idx, arg_ids.len);
-        defer self.allocator.free(arg_layouts);
+        var arg_layouts_buffer: [16 * @sizeOf(layout_mod.Idx)]u8 align(@alignOf(layout_mod.Idx)) = undefined;
+        var arg_layouts_storage = std.heap.BufferFirstAllocator.init(&arg_layouts_buffer, self.allocator);
+        const arg_layouts_allocator = arg_layouts_storage.allocator();
+        const arg_layouts = try arg_layouts_allocator.alloc(layout_mod.Idx, arg_ids.len);
+        defer arg_layouts_allocator.free(arg_layouts);
         for (0..arg_ids.len) |i| {
             const local_id = GuardedList.at(arg_ids, i);
             arg_layouts[i] = view.store.getLocal(local_id).layout_idx;
@@ -1557,20 +1368,28 @@ pub const Interpreter = struct {
         defer if (comptime tracks_compiler_signals) {
             base.stack_overflow.interpreting_roc_program = outer_interpreting;
         };
-        self.bindBoxyRuntime();
+        // Crash reports are the compiler's; a platform build touches no
+        // thread-local storage.
+        const records_ice_context = comptime builtins.host_abi.host_role == .in_process;
+        const ice = if (comptime records_ice_context)
+            base.ice_context.enter(.{ .phase = .interpret, .proc = self.store.iceContextProc(request.proc_id) })
+        else {};
+        defer if (comptime records_ice_context) ice.leave();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
         self.failed_call_stack.clearRetainingCapacity();
-        self.active_stmt_loc = base.SourceLoc.none;
-        self.active_stmt_region = base.Region.zero();
-        self.active_stmt_inline_scope = InlineScopeId.none;
+        self.pending_dyn_result = null;
+        self.active_stmt_id = null;
         self.failed_stmt_loc = base.SourceLoc.none;
         self.failed_stmt_region = base.Region.zero();
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
-        self.comptime_branch_hits.clearRetainingCapacity();
-        self.comptime_failed_site = null;
         if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+        // The result is copied to scratch before the root's frame ends, so
+        // every frame this evaluation pushes is released when it returns,
+        // including frames a crash unwinds past.
+        const frame_mark = self.frame_stack.mark();
+        defer self.frame_stack.restore(frame_mark);
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1585,7 +1404,7 @@ pub const Interpreter = struct {
         }
 
         const args = try self.marshalAbiArgs(request.arg_ptr, request.arg_layouts);
-        const proc_ret_layout = self.store.getProcSpec(request.proc_id).ret_layout;
+        const proc_ret_layout = self.store.getProcSpecImmediate(request.proc_id).ret_layout;
         const result = try self.evalProcById(request.proc_id, args, request.arg_layouts);
         const ret_layout = request.ret_layout orelse proc_ret_layout;
         const normalized_result = try self.coerceExplicitRefValueToLayout(result.value, proc_ret_layout, ret_layout);
@@ -1607,18 +1426,7 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
     ) Error!EvalProcResult {
         const proc_spec = self.store.getProcSpec(proc_id);
-        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts, &.{});
-    }
-
-    fn evalProcByIdWithDescriptors(
-        self: *LirInterpreter,
-        proc_id: LirProcSpecId,
-        args: []const Value,
-        arg_layouts: []const layout_mod.Idx,
-        descriptor_bindings: []const EvalDescriptorBinding,
-    ) Error!EvalProcResult {
-        const proc_spec = self.store.getProcSpec(proc_id);
-        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
+        return self.evalProcSpec(proc_id, proc_spec, args, arg_layouts);
     }
 
     const DebugVisitedValue = struct {
@@ -1676,7 +1484,7 @@ pub const Interpreter = struct {
         residual_shell_absent_fields: LIR.U32Span,
         root_list_validation: DebugListValidation,
     ) Error!void {
-        const layout_idx = self.store.getLocal(local_id).layout_idx;
+        frame.setLocal(local_id, value);
 
         if (builtin.mode == .debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
@@ -1685,21 +1493,19 @@ pub const Interpreter = struct {
                 frame.proc_id,
                 stmt_id,
                 local_id,
-                value,
-                layout_idx,
+                frame.slots[frame.slotIndex(local_id)].val,
+                self.store.getLocal(local_id).layout_idx,
                 &visited,
                 allow_zeroed_box_payload_holes,
                 residual_shell_absent_fields,
                 root_list_validation,
             );
         }
-
-        frame.setLocal(local_id, value);
     }
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
         const slot = frame.slots[frame.slotIndex(local_id)];
-        if (!slot.assigned) {
+        if (!slot.assigned()) {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
                 debugPrint(
@@ -1735,7 +1541,6 @@ pub const Interpreter = struct {
                 }
                 debugPrint("\n", .{});
                 self.debugDumpProc(frame.proc_id);
-                if (proc.body) |body| self.debugPrintStmtChain(body, 320);
             }
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
@@ -1813,16 +1618,16 @@ pub const Interpreter = struct {
                     }
                 }
             },
-            .zst, .box_of_zst, .erased_box => return,
+            .zst, .hole, .box_of_zst => return,
             // Compiler-internal pointers (TRMC holes) are opaque here: the slot they
             // point at may be a not-yet-filled hole, so there is nothing to validate.
-            .ptr => return,
+            .ptr, .dynamic => return,
             .box => {
                 const data_ptr = self.readBoxedDataPointer(value) orelse {
                     // Inside a TRMC-transformed proc a null box pointer is a
                     // legal in-flight hole (zero-filled cells await their child
                     // value); everywhere else it is a real bug.
-                    if (self.store.getProcSpec(proc_id).tail_transform == .trmc) return;
+                    if (self.store.getProcSpecImmediate(proc_id).tail_transform == .trmc) return;
                     if (allow_zeroed_box_payload_holes and path_len > 0) return;
                     self.debugValueShapePanicAt(
                         proc_id,
@@ -1955,20 +1760,42 @@ pub const Interpreter = struct {
             .struct_ => {
                 const struct_info = self.layout_store.getStructInfo(layout_val);
                 const absent_fields = self.store.getU32Span(residual_shell_absent_fields);
+                // Residual-shell metadata names ownership slots of the local's
+                // own layout, so it applies only while the path from the local
+                // to this struct runs through struct fields.
+                const shell_base: ?u32 = if (absent_fields.len == 0) null else blk: {
+                    var slot_base: u32 = 0;
+                    var current = self.store.getLocal(local_id).layout_idx;
+                    for (path_buf[0..path_len]) |step| {
+                        switch (step) {
+                            .struct_field => |field| {
+                                slot_base += self.layout_store.ownershipSlotBase(current, field.semantic_index);
+                                current = field.field_layout;
+                            },
+                            .box_payload, .list_elem, .tag_payload => break :blk null,
+                        }
+                    }
+                    break :blk slot_base;
+                };
                 for (0..struct_info.fields.len) |i| {
                     const field = struct_info.fields.get(@intCast(i));
                     // Padding spacers hold uninitialized bytes; there is no value
                     // to validate against their (size-only) layout.
                     if (field.is_padding) continue;
-                    if (path_len == 0) {
-                        var is_absent = false;
-                        for (0..absent_fields.len) |absent_index| {
-                            if (GuardedList.at(absent_fields, absent_index) == field.index) {
-                                is_absent = true;
-                                break;
+                    if (shell_base) |slot_base| {
+                        const field_layout = self.layout_store.getLayout(field.layout);
+                        const expands = field_layout.tag == .struct_ and self.layout_store.layoutContainsRefcounted(field_layout);
+                        if (!expands) {
+                            const slot = slot_base + self.layout_store.ownershipSlotBase(layout_idx, field.index);
+                            var is_absent = false;
+                            for (0..absent_fields.len) |absent_index| {
+                                if (GuardedList.at(absent_fields, absent_index) == slot) {
+                                    is_absent = true;
+                                    break;
+                                }
                             }
+                            if (is_absent) continue;
                         }
-                        if (is_absent) continue;
                     }
                     const field_offset = self.layout_store.getStructFieldOffset(layout_val.getStruct().idx, @intCast(i));
                     var next_len = path_len;
@@ -2097,222 +1924,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn debugPrintStmtChain(self: *LirInterpreter, start_stmt: CFStmtId, limit: usize) void {
-        if (comptime builtin.target.os.tag == .freestanding) return;
-        debugPrint(
-            "LIR/interpreter stmt chain from {d}:\n",
-            .{@backingInt(start_stmt)},
-        );
-        var current = start_stmt;
-        var remaining = limit;
-        while (remaining > 0) : (remaining -= 1) {
-            const stmt = self.store.getCFStmt(current);
-            switch (stmt) {
-                .assign_ref => |assign| debugPrint(
-                    "  stmt {d}: assign_ref target={d} op={any} next={d} layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        @backingInt(assign.target),
-                        assign.op,
-                        @backingInt(assign.next),
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_literal => |assign| {
-                    const layout_idx = self.store.getLocal(assign.target).layout_idx;
-                    const layout_val = self.layout_store.getLayout(layout_idx);
-                    debugPrint(
-                        "  stmt {d}: {any} target_layout={d} tag={s} size={d}\n",
-                        .{
-                            @backingInt(current),
-                            stmt,
-                            @backingInt(layout_idx),
-                            @tagName(layout_val.tag),
-                            self.helper.sizeOf(layout_idx),
-                        },
-                    );
-                },
-                .assign_call => |assign| debugPrint(
-                    "  stmt {d}: assign_call proc={d} target={d} args={d}+{d} next={d} layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        @backingInt(assign.proc),
-                        @backingInt(assign.target),
-                        assign.args.start,
-                        assign.args.len,
-                        @backingInt(assign.next),
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_call_erased => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_packed_erased_fn => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_low_level => |assign| {
-                    debugPrint(
-                        "  stmt {d}: {any} target_layout={d} args=",
-                        .{
-                            @backingInt(current),
-                            stmt,
-                            @backingInt(self.store.getLocal(assign.target).layout_idx),
-                        },
-                    );
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    for (0..arg_locals.len) |i| {
-                        const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d}:layout={d} ", .{
-                            @backingInt(arg_local),
-                            @backingInt(self.store.getLocal(arg_local).layout_idx),
-                        });
-                    }
-                    debugPrint("\n", .{});
-                },
-                .assign_list => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_struct => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .assign_tag => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .store_struct => |assign| debugPrint(
-                    "  stmt {d}: {any} store_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(assign.struct_layout),
-                    },
-                ),
-                .store_tag => |assign| debugPrint(
-                    "  stmt {d}: {any} store_layout={d}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(assign.tag_layout),
-                    },
-                ),
-                .set_local => |assign| debugPrint(
-                    "  stmt {d}: {any} target_layout={d} target_layout_data={any}\n",
-                    .{
-                        @backingInt(current),
-                        stmt,
-                        @backingInt(self.store.getLocal(assign.target).layout_idx),
-                        self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx),
-                    },
-                ),
-                .init_uninitialized,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
-                .incref,
-                .decref,
-                .decref_if_initialized,
-                .free,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .loop_continue,
-                .loop_break,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => debugPrint("  stmt {d}: {any}\n", .{ @backingInt(current), stmt }),
-            }
-            current = switch (stmt) {
-                .assign_ref => |assign| assign.next,
-                .assign_literal => |assign| assign.next,
-                .init_uninitialized => |uninit| uninit.next,
-                .assign_call => |assign| assign.next,
-                .assign_call_erased => |assign| assign.next,
-                .assign_packed_erased_fn => |assign| assign.next,
-                .assign_boxy_desc_ref => |assign| assign.next,
-                .assign_boxy_dict_ref => |assign| assign.next,
-                .assign_boxy_box => |assign| assign.next,
-                .assign_boxy_record_update => |assign| assign.next,
-                .assign_boxy_reuse_box => |assign| assign.next,
-                .assign_boxy_unbox => |assign| assign.next,
-                .assign_boxy_adapt => |assign| assign.next,
-                .assign_boxy_inspect => |assign| assign.next,
-                .assign_boxy_eq => |assign| assign.next,
-                .assign_boxy_hash => |assign| assign.next,
-                .assign_boxy_tag => |assign| assign.next,
-                .assign_boxy_tag_payload => |assign| assign.next,
-                .assign_call_dict => |assign| assign.next,
-                .assign_low_level => |assign| assign.next,
-                .assign_list => |assign| assign.next,
-                .assign_struct => |assign| assign.next,
-                .assign_tag => |assign| assign.next,
-                .store_struct => |assign| assign.next,
-                .store_tag => |assign| assign.next,
-                .set_local => |assign| assign.next,
-                inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt_next| stmt_next.next,
-                .comptime_branch_taken => |marker| marker.next,
-                .join => |join_stmt| join_stmt.body,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .boxy_tag_match,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .jump,
-                .ret,
-                .crash,
-                .expect_err,
-                .loop_continue,
-                .loop_break,
-                => break,
-            };
-        }
-    }
-
     /// Run a procedure to its result. A frame-replacing call ends the
     /// activation that made it before the callee's begins, so a chain of them
     /// runs in this one native frame.
@@ -2322,13 +1933,87 @@ pub const Interpreter = struct {
         proc_spec: LirProcSpec,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!EvalProcResult {
-        var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
+        const entry_mark = self.scratch.mark();
+        var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts);
         while (true) switch (step) {
             .result => |result| return result,
-            .tail_call => |call| step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts, &.{}),
+            .tail_call => |saved| {
+                // Nothing the ended activation left in scratch is live, so a
+                // chain of frame-replacing calls runs in bounded scratch.
+                self.scratch.restore(entry_mark);
+                const call = try self.copyTailCallToScratch(saved);
+                self.pending_dyn_result = call.dyn_result;
+                step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts);
+            },
         };
+    }
+
+    /// Copy a frame-replacing call's arguments out of the frame that makes
+    /// it, which ends before the callee's frame begins.
+    fn saveTailCall(self: *LirInterpreter, call: TailCall) Error!TailCall {
+        const storage = &self.tail_call_storage;
+        storage.clearRetainingCapacity();
+        const values_offset: usize = 0;
+        const layouts_offset = std.mem.alignForward(usize, values_offset + call.args.len * @sizeOf(Value), @alignOf(layout_mod.Idx));
+        const relocations_offset = std.mem.alignForward(usize, layouts_offset + call.arg_layouts.len * @sizeOf(layout_mod.Idx), @alignOf(TailCallRelocation));
+        var bytes_end = relocations_offset + call.relocations.len * @sizeOf(TailCallRelocation);
+        const arg_offsets = try self.evalAllocator().alloc(usize, call.args.len);
+        for (call.args, call.arg_layouts, arg_offsets) |arg, arg_layout, *arg_offset| {
+            const sa = self.helper.sizeAlignOf(arg_layout);
+            bytes_end = std.mem.alignForward(usize, bytes_end, sa.alignment.toByteUnits());
+            arg_offset.* = bytes_end;
+            if (!arg.isZst()) bytes_end += sa.size;
+        }
+        const moved_offsets = try self.evalAllocator().alloc(usize, call.relocations.len);
+        for (call.relocations, moved_offsets) |relocation, *moved_offset| {
+            bytes_end = std.mem.alignForward(usize, bytes_end, relocation.alignment);
+            moved_offset.* = bytes_end;
+            bytes_end += relocation.size;
+        }
+        try storage.resize(self.allocator, bytes_end);
+        const base_ptr = storage.items.ptr;
+        const values: [*]Value = @ptrCast(@alignCast(base_ptr + values_offset));
+        const layouts: [*]layout_mod.Idx = @ptrCast(@alignCast(base_ptr + layouts_offset));
+        const relocations: [*]TailCallRelocation = @ptrCast(@alignCast(base_ptr + relocations_offset));
+        @memcpy(layouts[0..call.arg_layouts.len], call.arg_layouts);
+        @memcpy(relocations[0..call.relocations.len], call.relocations);
+        for (call.args, call.arg_layouts, arg_offsets, 0..) |arg, arg_layout, arg_offset, index| {
+            values[index] = if (arg.isZst()) arg else copied: {
+                const copy = Value{ .ptr = base_ptr + arg_offset };
+                copy.copyFrom(arg, self.helper.sizeOf(arg_layout));
+                break :copied copy;
+            };
+        }
+        for (call.relocations, moved_offsets) |relocation, moved_offset| {
+            const moved = base_ptr + moved_offset;
+            const address_cell = values[relocation.arg];
+            @memcpy(moved[0..relocation.size], readAddress(address_cell)[0..relocation.size]);
+            address_cell.write(usize, @intFromPtr(moved));
+        }
+        return .{
+            .proc = call.proc,
+            .args = values[0..call.args.len],
+            .arg_layouts = layouts[0..call.arg_layouts.len],
+            .dyn_result = call.dyn_result,
+            .relocations = relocations[0..call.relocations.len],
+        };
+    }
+
+    /// Move a saved frame-replacing call into scratch, where it stays until
+    /// the activation it starts ends.
+    fn copyTailCallToScratch(self: *LirInterpreter, saved: TailCall) Error!TailCall {
+        const args = try self.evalAllocator().alloc(Value, saved.args.len);
+        const arg_layouts = try self.evalAllocator().dupe(layout_mod.Idx, saved.arg_layouts);
+        for (saved.args, saved.arg_layouts, args) |arg, arg_layout, *copy| {
+            copy.* = if (arg.isZst()) arg else try self.materializeLocalValue(arg, arg_layout);
+        }
+        for (saved.relocations) |relocation| {
+            const moved = try self.allocAlignedByteSliceUninit(relocation.size, .fromByteUnits(@intCast(relocation.alignment)));
+            @memcpy(moved, readAddress(args[relocation.arg])[0..relocation.size]);
+            args[relocation.arg].write(usize, @intFromPtr(moved.ptr));
+        }
+        return .{ .proc = saved.proc, .args = args, .arg_layouts = arg_layouts, .dyn_result = saved.dyn_result };
     }
 
     fn evalProcActivation(
@@ -2337,9 +2022,16 @@ pub const Interpreter = struct {
         proc_spec: LirProcSpec,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!ProcStep {
-        try self.call_stack.append(self.evalAllocator(), proc_id);
+        const dyn_result = self.pending_dyn_result;
+        self.pending_dyn_result = null;
+        if ((proc_spec.dyn_result != null) != (dyn_result != null)) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: proc {d} dynamic result storage presence differed from its caller's",
+                .{@backingInt(proc_id)},
+            );
+        }
+        try self.call_stack.append(self.allocator, proc_id);
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
 
@@ -2356,14 +2048,14 @@ pub const Interpreter = struct {
         }
 
         if (proc_spec.hosted) |hosted| {
-            const param_layouts = try self.localLayoutsFromSpan(proc_spec.args);
+            const param_layouts = try self.localLayouts(self.store.getLocalSpan(proc_spec.args));
             if (args.len != param_layouts.len) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: hosted proc {d} received {d} args but has {d} param layouts",
                     .{ proc_spec.name.raw(), args.len, param_layouts.len },
                 );
             }
-            const normalized_args = try self.arena.allocator().alloc(Value, args.len);
+            const normalized_args = try self.evalAllocator().alloc(Value, args.len);
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
@@ -2374,23 +2066,26 @@ pub const Interpreter = struct {
         }
 
         trace.log(
-            "enter proc={d} name={d} depth={d} args={d} ret_layout={d} ret_desc={any}",
+            "enter proc={d} name={d} depth={d} args={d} ret_layout={d}",
             .{
                 @backingInt(proc_id),
                 proc_spec.name.raw(),
                 self.call_depth,
                 args.len,
                 @backingInt(proc_spec.ret_layout),
-                proc_spec.ret_desc,
             },
         );
         self.call_depth += 1;
         defer self.call_depth -= 1;
 
         var frame = try self.initFrame(proc_id, proc_spec);
-        defer self.releaseFrameSlots(frame.slots);
+        defer self.frame_stack.restore(frame.stack_mark);
         frame.caller_drives = self.erased_caller_drives;
         self.erased_caller_drives = false;
+        if (proc_spec.dyn_result) |result_local| {
+            frame.dyn_result = dyn_result;
+            bindDynAddress(&frame, result_local, dyn_result.?);
+        }
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
@@ -2438,7 +2133,7 @@ pub const Interpreter = struct {
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
                     actual_layout_val.tag == .tag_union or expected_layout_val.tag == .tag_union or
-                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst or expected_layout_val.tag == .erased_box)))
+                    (actual_layout_val.tag == .scalar and (expected_layout_val.tag == .box or expected_layout_val.tag == .box_of_zst)))
                 {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
@@ -2469,8 +2164,7 @@ pub const Interpreter = struct {
                 arg_layout,
                 param_layout,
             );
-            const materialized = try self.materializeLocalValue(coerced, param_layout);
-            if (is_erased_reuse_arg and self.readBoxedDataPointer(materialized) == null) {
+            if (is_erased_reuse_arg and (coerced.isZst() or self.readBoxedDataPointer(coerced) == null)) {
                 // Null is valid only for this explicitly marked ABI ownership
                 // input: it means the caller declined destination reuse.
                 if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
@@ -2479,46 +2173,39 @@ pub const Interpreter = struct {
                         .{@backingInt(proc_id)},
                     );
                 }
-                frame.setLocal(param, materialized);
+                frame.setLocal(param, coerced);
             } else {
-                try self.setLocalChecked(&frame, null, param, materialized, false);
+                try self.setLocalChecked(&frame, null, param, coerced, false);
             }
         }
-        for (descriptor_bindings) |binding| {
-            try self.setLocalChecked(
-                &frame,
-                null,
-                binding.local,
-                try self.allocPointerIntValue(@intFromPtr(binding.desc)),
-                false,
-            );
-        }
         const body = self.requireProcBody(proc_id, proc_spec);
-        if (trace.enabled) self.debugPrintStmtChain(body, 32);
+        if (trace.enabled) self.debugDumpProc(proc_id);
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
-            .tail_call => |call| .{ .tail_call = call },
-            .returned_pending => .{ .result = .{
-                .value = try self.poisonUninitializedValue(proc_spec.ret_layout),
-                .layout = proc_spec.ret_layout,
-            } },
+            .tail_call => |call| .{ .tail_call = try self.saveTailCall(call) },
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
                     .{ @backingInt(proc_id), proc_spec.name.raw(), self.call_depth },
                 );
+                if (frame.dyn_result) |result_storage| {
+                    // The result is the caller's storage, which receives the
+                    // returned bytes unless the procedure built them there.
+                    // A procedure that left a call pending returns no value.
+                    const returned = try self.localBytes(&frame, ret_local);
+                    if (returned != result_storage and !self.hasPendingCall()) {
+                        boxy.walk.copy(try self.localDesc(&frame, proc_spec.dyn_result.?), result_storage, returned);
+                    }
+                    break :blk .{ .result = .{ .value = Value.zst, .layout = proc_spec.ret_layout } };
+                }
                 const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
                 // A procedure that left a call pending returns no value; the
                 // pending call produces the result.
-                if (self.pending_erased != null) break :blk .{ .result = .{ .value = raw_result, .layout = raw_layout } };
-                const result_desc = if (proc_spec.runtime_ret_desc) |runtime_ret_desc|
-                    try self.resolveBoxyDescRef(&frame, .{ .local = runtime_ret_desc })
-                else
-                    frame.localDesc(ret_local) orelse if (self.store.getLocal(ret_local).boxy_desc) |desc_ref|
-                        try self.resolveBoxyDescRef(&frame, desc_ref)
-                    else
-                        null;
+                if (self.hasPendingCall()) break :blk .{ .result = .{
+                    .value = try self.poisonUninitializedValue(raw_layout),
+                    .layout = raw_layout,
+                } };
                 if (builtin.mode == .debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
@@ -2541,74 +2228,130 @@ pub const Interpreter = struct {
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false, .empty(), .items);
                 }
                 // When the declared return layout merely relabels the returned
-                // local's bytes, keep the local's own layout so the descriptor
-                // stays interpretable (box-self detection compares against it).
-                // When the coercion truly unwrapped a box, the descriptor must
-                // follow it down to the payload.
-                if (coercion_unwraps) {
-                    break :blk .{ .result = .{
-                        .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
-                        .desc = if (result_desc) |desc| try self.boxyBoxAllocationPayloadDesc(&frame, raw_layout, desc) else null,
-                        .layout = proc_spec.ret_layout,
-                    } };
-                }
+                // local's bytes, the result keeps the local's own layout.
+                const result_layout = if (coercion_unwraps) proc_spec.ret_layout else raw_layout;
                 break :blk .{ .result = .{
-                    .value = try self.materializeLocalValue(coerced_result, raw_layout),
-                    .desc = result_desc,
-                    .layout = raw_layout,
+                    .value = try self.materializeLocalValue(coerced_result, result_layout),
+                    .layout = result_layout,
                 } };
             },
-            .loop_continue => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
-                .{proc_spec.name.raw()},
-            ),
-            .loop_break => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: proc {d} terminated via loop_break",
-                .{proc_spec.name.raw()},
-            ),
         };
     }
 
     fn initFrame(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) Error!Frame {
         const locals = self.store.getLocalSpan(proc_spec.frame_locals);
-        const slots = try self.acquireFrameSlots(locals.len);
-        @memset(slots, .{ .assigned = false, .val = Value.zst, .desc = null });
-        for (0..locals.len) |i| {
-            const slot = &slots[i];
-            const local_id = GuardedList.at(locals, i);
-            const layout_idx = self.store.getLocal(local_id).layout_idx;
-            if (self.layout_store.getLayout(layout_idx).tag == .zst) {
-                slot.assigned = true;
-            }
-        }
+        const slot_index = try self.frameSlotIndex(proc_id, proc_spec.frame_locals, locals);
+        const stack_mark = self.frame_stack.mark();
+        errdefer self.frame_stack.restore(stack_mark);
+        const slots_ptr: [*]LocalSlot = @ptrCast(@alignCast(try self.frame_stack.alloc(
+            locals.len * @sizeOf(LocalSlot),
+            .of(LocalSlot),
+        )));
+        const slots = slots_ptr[0..locals.len];
+        @memset(slots, .{});
+        // A zero-sized local holds its only value from the start.
+        for (slot_index.zst_slots) |slot| slots[slot].val = Value.zst;
+        const storage = try self.frame_stack.alloc(
+            slot_index.storage_size,
+            .fromByteUnits(slot_index.storage_alignment.toByteUnits()),
+        );
 
         return .{
             .proc_id = proc_id,
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
+            .slot_base = slot_index.base,
+            .slot_of = slot_index.slot_of,
             .join_points = self.store.getJoinPointSpan(proc_spec.join_points),
             .slots = slots,
+            .storage = storage,
+            .storage_offsets = slot_index.storage_offsets,
+            .storage_sizes = slot_index.storage_sizes,
+            .dyn_frame_slots = slot_index.dyn_frame_slots,
+            .stack_mark = stack_mark,
         };
     }
 
-    fn acquireFrameSlots(self: *LirInterpreter, len: usize) Allocator.Error![]LocalSlot {
-        if (len < self.free_frame_slots.items.len) {
-            if (self.free_frame_slots.items[len].pop()) |slots| return slots;
+    /// The slot index of `proc_id`, built from its sorted frame locals on
+    /// first entry and rebuilt when the frame-local span changes.
+    fn frameSlotIndex(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        span: LIR.LocalSpan,
+        locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+    ) Allocator.Error!FrameSlotIndex {
+        const entry = try self.frame_slot_indexes.getOrPut(proc_id);
+        if (entry.found_existing) {
+            if (entry.value_ptr.span.start == span.start and entry.value_ptr.span.len == span.len) return entry.value_ptr.*;
+            entry.value_ptr.deinit(self.allocator);
         }
-        return try self.allocator.alloc(LocalSlot, len);
-    }
-
-    fn releaseFrameSlots(self: *LirInterpreter, slots: []LocalSlot) void {
-        const pools = &self.free_frame_slots;
-        if (slots.len >= pools.items.len) {
-            pools.appendNTimes(self.allocator, .empty, slots.len + 1 - pools.items.len) catch {
-                self.allocator.free(slots);
-                return;
-            };
+        // Until the index is built, the entry names a span no procedure has,
+        // so a failed build is rebuilt on the next entry.
+        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = &.{} };
+        if (locals.len == 0) {
+            entry.value_ptr.span = span;
+            return entry.value_ptr.*;
         }
-        pools.items[slots.len].append(self.allocator, slots) catch {
-            self.allocator.free(slots);
+        const base_id = @backingInt(GuardedList.at(locals, 0));
+        const last_id = @backingInt(GuardedList.at(locals, locals.len - 1));
+        const slot_of = try self.allocator.alloc(u32, @as(usize, last_id - base_id) + 1);
+        errdefer self.allocator.free(slot_of);
+        @memset(slot_of, FrameSlotIndex.none);
+        var zst_count: usize = 0;
+        var dyn_frame_count: usize = 0;
+        for (0..locals.len) |slot| {
+            const local_id = GuardedList.at(locals, slot);
+            slot_of[@backingInt(local_id) - base_id] = @intCast(slot);
+            const local = self.store.getLocal(local_id);
+            if (self.layout_store.getLayout(local.layout_idx).tag == .zst) zst_count += 1;
+            if (local.dyn) |dyn| {
+                if (dyn.storage == .frame) dyn_frame_count += 1;
+            }
+        }
+        const zst_slots = try self.allocator.alloc(u32, zst_count);
+        errdefer self.allocator.free(zst_slots);
+        const dyn_frame_slots = try self.allocator.alloc(u32, dyn_frame_count);
+        errdefer self.allocator.free(dyn_frame_slots);
+        var next_dyn_frame: usize = 0;
+        const storage_offsets = try self.allocator.alloc(u32, locals.len);
+        errdefer self.allocator.free(storage_offsets);
+        const storage_sizes = try self.allocator.alloc(u32, locals.len);
+        errdefer self.allocator.free(storage_sizes);
+        var next_zst: usize = 0;
+        var storage_size: usize = 0;
+        var storage_alignment: layout_mod.RocAlignment = .@"1";
+        for (0..locals.len) |slot| {
+            const local_id = GuardedList.at(locals, slot);
+            const layout_idx = self.store.getLocal(local_id).layout_idx;
+            if (self.layout_store.getLayout(layout_idx).tag == .zst) {
+                zst_slots[next_zst] = @intCast(slot);
+                next_zst += 1;
+            }
+            if (self.store.getLocal(local_id).dyn) |dyn| {
+                if (dyn.storage == .frame) {
+                    dyn_frame_slots[next_dyn_frame] = @intCast(slot);
+                    next_dyn_frame += 1;
+                }
+            }
+            const sa = self.helper.sizeAlignOf(layout_idx);
+            storage_size = std.mem.alignForward(usize, storage_size, sa.alignment.toByteUnits());
+            storage_offsets[slot] = std.math.cast(u32, storage_size) orelse return error.OutOfMemory;
+            storage_sizes[slot] = std.math.cast(u32, sa.size) orelse return error.OutOfMemory;
+            storage_size += sa.size;
+            storage_alignment = maxRocAlignment(storage_alignment, sa.alignment);
+        }
+        entry.value_ptr.* = .{
+            .span = span,
+            .base = base_id,
+            .slot_of = slot_of,
+            .zst_slots = zst_slots,
+            .storage_offsets = storage_offsets,
+            .storage_sizes = storage_sizes,
+            .storage_size = storage_size,
+            .storage_alignment = storage_alignment,
+            .dyn_frame_slots = dyn_frame_slots,
         };
+        return entry.value_ptr.*;
     }
 
     fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
@@ -2624,15 +2367,25 @@ pub const Interpreter = struct {
         start_stmt: CFStmtId,
     ) Error!ExecOutcome {
         var current = start_stmt;
+        // Every statement stores what it computes in frame locals, so what
+        // earlier statements left in scratch is dead once the next begins.
+        const chain_mark = self.scratch.mark();
         while (true) {
-            const stmt = self.store.getCFStmt(current);
-            self.active_stmt_loc = self.store.stmtLoc(current);
-            self.active_stmt_region = self.store.stmtRegion(current);
+            self.scratch.restore(chain_mark);
             self.active_proc_id = frame.proc_id;
             self.active_stmt_id = current;
-            self.active_stmt_inline_scope = self.store.stmtInlineScope(current);
-            switch (stmt) {
+            switch (self.store.getCFStmtImmediate(current).*) {
                 .assign_ref => |assign| {
+                    if (assign.op.kind == .field and self.store.getLocal(assign.op.source).dyn != null) {
+                        try self.execDyn(frame, current, assign.target, .{ .field_addr = .{ .base = assign.op.source, .desc = self.store.getLocal(assign.op.source).dyn.?.desc, .field_index = .{ .immediate = assign.op.index } } });
+                        current = assign.next;
+                        continue;
+                    }
+                    if (assign.op.kind == .local and self.store.getLocal(assign.target).dyn != null) {
+                        try self.execDyn(frame, current, assign.target, .{ .copy = .{ .src = assign.op.source, .desc = self.store.getLocal(assign.target).dyn.?.desc } });
+                        current = assign.next;
+                        continue;
+                    }
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
                     const value = try self.evalAssignRef(frame, assign.op, target_layout);
                     try self.setLocalCheckedWithResidualShell(
@@ -2641,59 +2394,25 @@ pub const Interpreter = struct {
                         assign.target,
                         value,
                         false,
-                        assign.residual_shell_absent_fields,
-                        switch (assign.op) {
+                        self.store.stmtRowOrDefault(assign.extra).residual_shell_absent_fields,
+                        switch (assign.op.kind) {
                             .local, .list_reinterpret, .nominal => .descriptor,
                             .field, .tag_payload, .tag_payload_struct, .discriminant => .items,
                         },
                     );
-                    if (assign.op == .local) {
-                        const source = assign.op.local;
-                        const source_desc = frame.localDesc(source) orelse if (self.store.getLocal(source).boxy_desc) |desc_ref|
-                            try self.resolveBoxyDescRef(frame, desc_ref)
-                        else
-                            null;
-                        frame.setLocalDesc(assign.target, source_desc);
-                    }
                     current = assign.next;
                 },
                 .assign_literal => |assign| {
-                    if (assign.value == .boxy_dynamic_num_literal) {
-                        const lit = assign.value.boxy_dynamic_num_literal;
-                        var desc = try self.resolveBoxyDescRef(frame, lit.desc);
-                        const target_layout = self.store.getLocal(assign.target).layout_idx;
-                        desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
-                        const boxed = try self.evalBoxyDynamicNumLiteral(lit.value, desc, target_layout);
-                        try self.setLocalChecked(frame, current, assign.target, boxed, false);
-                        frame.setLocalDesc(assign.target, desc);
-                        if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
-                            if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                            }
-                        }
-                        current = assign.next;
-                        continue;
-                    }
-                    if (assign.value == .boxy_dynamic_frac_literal) {
-                        const lit = assign.value.boxy_dynamic_frac_literal;
-                        var desc = try self.resolveBoxyDescRef(frame, lit.desc);
-                        const target_layout = self.store.getLocal(assign.target).layout_idx;
-                        desc = try self.effectiveBoxyScalarLiteralDesc(desc, lit.default_layout);
-                        const boxed = try self.evalBoxyDynamicFracLiteral(lit.dec_bits, desc, target_layout);
-                        try self.setLocalChecked(frame, current, assign.target, boxed, false);
-                        frame.setLocalDesc(assign.target, desc);
-                        if (self.store.getLocal(assign.target).boxy_desc) |target_desc| {
-                            if (target_desc.localOrNull()) |desc_local| {
-                                try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                            }
-                        }
-                        current = assign.next;
-                        continue;
-                    }
                     try self.setLocalChecked(frame, current, assign.target, try self.evalLiteral(assign.value, self.store.getLocal(assign.target).layout_idx), false);
                     current = assign.next;
                 },
                 .init_uninitialized => |uninit| {
+                    // A dynamic local's storage exists once its address is
+                    // set; its bytes are undefined until written.
+                    if (self.store.getLocal(uninit.target).dyn != null) {
+                        current = uninit.next;
+                        continue;
+                    }
                     frame.setLocal(
                         uninit.target,
                         try self.poisonUninitializedValue(self.store.getLocal(uninit.target).layout_idx),
@@ -2701,179 +2420,107 @@ pub const Interpreter = struct {
                     current = uninit.next;
                 },
                 .assign_call => |assign| {
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const arg_layouts = try self.localLayouts(arg_locals);
-                    if (assign.replaces_frame) {
-                        return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
+                    const extra = self.store.stmtRowOrDefault(assign.extra);
+                    const callee = self.store.getProcSpecImmediate(assign.proc);
+                    const call_args = try self.prepareCallArgs(frame, callee, self.store.getLocalSpan(assign.args), extra.replaces_frame);
+                    const arg_values = call_args.values;
+                    const arg_layouts = call_args.layouts;
+                    if (extra.replaces_frame) {
+                        return .{ .tail_call = .{
+                            .proc = assign.proc,
+                            .args = arg_values,
+                            .arg_layouts = arg_layouts,
+                            .dyn_result = if (callee.dyn_result == null) null else frame.dyn_result orelse return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: proc {d} replaces its frame with a dynamic-result call but has no result storage",
+                                .{@backingInt(frame.proc_id)},
+                            ),
+                            .relocations = call_args.relocations,
+                        } };
                     }
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
-                    var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                    const result_storage: ?[*]u8 = if (callee.dyn_result == null) null else try self.callResultStorage(frame, assign.target);
+                    const call_loc = self.activeStmtLoc();
+                    const call_region = self.activeStmtRegion();
+                    const call_inline_scope = self.activeStmtInlineScope();
+                    self.pending_dyn_result = result_storage;
+                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
-                    if (self.pending_erased != null) {
-                        if (!drivesHere(frame, assign.drive)) {
-                            // The conversions that follow would read a value
-                            // that is not there yet, so the procedure returns
-                            // now to whoever makes the pending call.
-                            if (assign.returns_pending) |pending_return| {
-                                self.pending_erased.?.conversion = .{
-                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
-                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
-                                    .keeps_own_desc = pending_return.keeps_own_desc,
-                                };
-                                return .returned_pending;
-                            }
+                    if (self.hasPendingCall()) {
+                        if (!drivesHere(frame, extra.drive)) {
                             // The pending call produces this statement's
                             // value; this procedure returns to whoever makes
                             // it without reading the value.
-                            frame.setLocal(assign.target, result.value);
-                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            if (self.store.getLocal(assign.target).dyn == null) frame.setLocal(assign.target, result.value);
                             current = assign.next;
                             continue;
                         }
-                        const driven = (try self.drivePendingErasedCalls(frame)).?;
-                        result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
-                        stored_as = driven.stored_as;
+                        const storage = try self.targetStorage(frame, assign.target);
+                        try self.drivePendingInto(storage, try self.targetSize(frame, assign.target));
+                        try self.finishResultStorage(frame, current, assign.target, storage);
+                        current = assign.next;
+                        continue;
                     }
-                    const materialized_result = self.materializeDrivenCallResult(
-                        frame,
-                        result.value,
-                        result.layout,
-                        result.desc,
-                        assign.result_desc,
-                        stored_as,
-                        self.store.getLocal(assign.target).layout_idx,
-                    ) catch |err| {
-                        if (comptime builtin.target.os.tag != .freestanding) {
-                            debugPrint(
-                                "LIR/interpreter call-result materialization failed in proc {d} stmt {d}: callee={d} target={d} actual_layout={d} target_layout={d}\n",
-                                .{
-                                    @backingInt(frame.proc_id),
-                                    @backingInt(current),
-                                    @backingInt(assign.proc),
-                                    @backingInt(assign.target),
-                                    @backingInt(result.layout),
-                                    @backingInt(self.store.getLocal(assign.target).layout_idx),
-                                },
-                            );
-                        }
-                        return err;
-                    };
+                    if (result_storage) |storage| {
+                        try self.finishResultStorage(frame, current, assign.target, storage);
+                        current = assign.next;
+                        continue;
+                    }
+                    if (self.store.getLocal(assign.target).dyn != null) {
+                        try self.writeDynLocal(frame, assign.target, result.value.ptr);
+                        current = assign.next;
+                        continue;
+                    }
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    try self.checkCallResultLayout(result.layout, target_layout);
                     try self.setLocalChecked(
                         frame,
                         current,
                         assign.target,
-                        materialized_result.value,
+                        result.value,
                         false,
                     );
-                    frame.setLocalDesc(assign.target, materialized_result.desc);
-                    if (assign.out_desc) |out_desc| {
-                        const desc = materialized_result.desc orelse {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: direct call declared a descriptor output but produced no descriptor",
-                                .{},
-                            );
-                        };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                    }
                     current = assign.next;
                 },
-                .assign_call_erased => |assign| {
+                .assign_call_erased => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const arg_layouts_end = @as(usize, assign.arg_layouts.start) + assign.arg_layouts.len;
-                    if (arg_layouts_end > self.boxy_runtime.boxy_tables.erased_arg_layouts.len or
-                        assign.arg_layouts.len != arg_locals.len)
-                    {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased-call argument layout span {d}+{d} exceeded table length {d} or disagreed with {d} argument locals",
-                            .{
-                                assign.arg_layouts.start,
-                                assign.arg_layouts.len,
-                                self.boxy_runtime.boxy_tables.erased_arg_layouts.len,
-                                arg_locals.len,
-                            },
-                        );
-                    }
-                    const arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[assign.arg_layouts.start..arg_layouts_end];
-                    for (arg_layouts, 0..) |arg_layout, index| {
-                        const local_layout = self.store.getLocal(GuardedList.at(arg_locals, index)).layout_idx;
-                        if (arg_layout != self.layout_store.runtimeRepresentationLayoutIdx(local_layout)) {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: erased-call argument {d} layout metadata disagreed with its local",
-                                .{index},
-                            );
-                        }
-                    }
-                    const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
-                    const arg_desc_keys = self.boxy_runtime.boxy_tables.erased_arg_desc_keys[assign.arg_desc_keys.start..][0..assign.arg_desc_keys.len];
-                    if (arg_desc_keys.len != arg_desc_locals.len) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased-call argument descriptor locals and keys disagreed",
-                            .{},
-                        );
-                    }
-                    const arg_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, arg_desc_locals.len);
-                    for (0..arg_desc_locals.len) |index| {
-                        const local = GuardedList.at(arg_desc_locals, index);
-                        const raw_ptr = self.readPointerInt(try self.getLocalChecked(frame, local));
-                        arg_descs[index] = @ptrFromInt(raw_ptr);
-                    }
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
-                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, arg_locals.len);
+                    for (arg_layouts, 0..) |*item, i| item.* = self.layout_store.runtimeRepresentationLayoutIdx(self.store.getLocal(GuardedList.at(arg_locals, i)).layout_idx);
+                    const call_loc = self.activeStmtLoc();
+                    const call_region = self.activeStmtRegion();
+                    const call_inline_scope = self.activeStmtInlineScope();
+                    const target_layout = self.store.getLocal(assign_stmt.target).layout_idx;
                     const result = if (assign.deferred) deferred: {
-                        if (self.pending_erased != null) {
+                        if (self.hasPendingCall()) {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: deferred an erased call while another was pending",
                                 .{},
                             );
                         }
-                        self.pending_erased = .{
+                        self.pending_erased = try self.ownPendingErasedCall(.{
                             .closure = try self.getLocalChecked(frame, assign.closure),
+                            .closure_layout = self.store.getLocal(assign.closure).layout_idx,
                             .args = arg_values,
                             .arg_layouts = arg_layouts,
-                            .arg_descs = arg_descs,
-                            .arg_desc_keys = arg_desc_keys,
                             .arg_plan = assign.arg_plan,
                             .site_layout = target_layout,
-                            .result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc),
-                            .conversion = null,
-                        };
+                        });
                         if (!drivesHere(frame, assign.drive)) {
-                            // The conversions that follow would read a value
-                            // that is not there yet, so the procedure returns
-                            // now to whoever makes the pending call.
-                            if (assign.returns_pending) |pending_return| {
-                                self.pending_erased.?.conversion = .{
-                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
-                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
-                                    .keeps_own_desc = pending_return.keeps_own_desc,
-                                };
-                                return .returned_pending;
-                            }
-                            frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
-                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
-                            current = assign.next;
+                            frame.setLocal(assign_stmt.target, try self.poisonUninitializedValue(target_layout));
+                            current = assign_stmt.next;
                             continue;
                         }
-                        break :deferred (self.drivePendingErasedCalls(frame) catch |err| {
+                        break :deferred self.drivePendingValue(target_layout) catch |err| {
                             self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                             return err;
-                        }).?;
+                        };
                     } else self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
                         arg_layouts,
-                        arg_descs,
-                        arg_desc_keys,
                         assign.arg_plan,
                         target_layout,
                         assign.reuse_closure,
@@ -2881,407 +2528,77 @@ pub const Interpreter = struct {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = try self.materializeDrivenCallResult(
+                    try self.checkCallResultLayout(result.layout, target_layout);
+                    try self.setLocalChecked(
                         frame,
+                        current,
+                        assign_stmt.target,
                         result.value,
-                        result.layout,
-                        result.desc,
-                        assign.result_desc,
-                        result.stored_as,
-                        self.store.getLocal(assign.target).layout_idx,
+                        false,
                     );
+                    current = assign_stmt.next;
+                },
+                .assign_packed_erased_fn => |assign_stmt| {
+                    const assign = self.store.stmtRow(assign_stmt.data);
                     try self.setLocalChecked(
                         frame,
                         current,
-                        assign.target,
-                        materialized_result.value,
+                        assign_stmt.target,
+                        try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign_stmt.target).layout_idx),
                         false,
                     );
-                    frame.setLocalDesc(assign.target, materialized_result.desc);
-                    if (assign.out_desc) |out_desc| {
-                        const desc = materialized_result.desc orelse {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: erased call declared a descriptor output but produced no descriptor",
-                                .{},
-                            );
-                        };
-                        try self.setLocalChecked(frame, current, out_desc, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                    }
-                    current = assign.next;
-                },
-                .assign_packed_erased_fn => |assign| {
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        try self.evalPackedErasedFn(frame, assign, self.store.getLocal(assign.target).layout_idx),
-                        false,
-                    );
-                    current = assign.next;
-                },
-                .assign_call_dict => |assign| {
-                    const dict = try self.resolveBoxyDictRef(frame, assign.dict);
-                    const required_method = @backingInt(assign.method);
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
-                    const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
-                    if (arg_desc_locals.len != arg_locals.len) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: dictionary call had {d} argument descriptor locals for {d} arguments",
-                            .{ arg_desc_locals.len, arg_locals.len },
-                        );
-                    }
-                    const call_args = try self.arena.allocator().alloc(boxy_runtime.DictCallArg, arg_locals.len);
-                    for (0..arg_locals.len) |arg_index| {
-                        const local = GuardedList.at(arg_locals, arg_index);
-                        const desc_local = GuardedList.at(arg_desc_locals, arg_index);
-                        const raw_desc_ptr = self.readPointerInt(try self.getLocalChecked(frame, desc_local));
-                        if (raw_desc_ptr == 0) {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: dictionary call argument descriptor local {d} was null",
-                                .{@backingInt(desc_local)},
-                            );
-                        }
-                        call_args[arg_index] = .{
-                            .value = try self.getLocalChecked(frame, local),
-                            .layout = self.store.getLocal(local).layout_idx,
-                            .source_desc = @ptrFromInt(raw_desc_ptr),
-                        };
-                    }
-                    const hidden_values = try self.arena.allocator().alloc(Value, hidden_arg_locals.len);
-                    for (0..hidden_arg_locals.len) |hidden_index| {
-                        const local = GuardedList.at(hidden_arg_locals, hidden_index);
-                        hidden_values[hidden_index] = try self.getLocalChecked(frame, local);
-                    }
-                    const call = try self.boxy_runtime.prepareDictCall(
-                        self.boxyFrameHooks(frame),
-                        self.arena.allocator(),
-                        dict,
-                        assign.method_slot,
-                        required_method,
-                        call_args,
-                        hidden_values,
-                        .move,
-                    );
-                    const call_loc = self.active_stmt_loc;
-                    const call_region = self.active_stmt_region;
-                    const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalProcById(call.proc, call.arg_values, call.arg_layouts) catch |err| {
-                        self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
-                        return err;
-                    };
-                    const proc = self.store.getProcSpec(call.proc);
-                    if (proc.rc_ret_borrowed) {
-                        try self.performBoxyLayoutDrop(frame, result.value, result.layout, result.desc, .incref, 1, .atomic);
-                    }
-                    for (call.arg_values, call.arg_layouts, call.arg_descs, 0..) |arg_value, arg_layout, arg_desc, arg_index| {
-                        if (arg_index >= 64 or ((proc.rc_borrowed_params >> @as(u6, @intCast(arg_index))) & 1) == 0) continue;
-                        try self.performBoxyLayoutDrop(frame, arg_value, arg_layout, arg_desc, .decref, 1, .atomic);
-                    }
-                    const materialized_result = try self.materializeCallResultToLayout(
-                        frame,
-                        result.value,
-                        result.layout,
-                        result.desc,
-                        assign.result_desc,
-                        self.store.getLocal(assign.target).layout_idx,
-                    );
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        materialized_result.value,
-                        false,
-                    );
-                    frame.setLocalDesc(assign.target, materialized_result.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
-                        if (desc_ref.localOrNull()) |desc_local| {
-                            const desc = materialized_result.desc orelse {
-                                return self.invariantFailedError(
-                                    "LIR/interpreter invariant violated: dictionary call declared a descriptor output but produced no descriptor",
-                                    .{},
-                                );
-                            };
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                        }
-                    }
-                    current = assign.next;
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    const desc_value = try self.evalBoxyDescRefValueAtProjection(
-                        frame,
-                        assign.desc,
-                        assign.nested_index,
-                        assign.box_payload_layout,
-                        assign.tag_payload,
-                        assign.tag_ext,
-                        assign.tag_residual_for,
-                        assign.captures,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, desc_value, false);
-                    current = assign.next;
-                },
-                .assign_boxy_dict_ref => |assign| {
-                    try self.setLocalChecked(frame, current, assign.target, try self.evalBoxyDictRefValue(frame, assign.dict, assign.captures), false);
-                    current = assign.next;
-                },
-                .assign_boxy_box => |assign| {
-                    const payload_value = try self.getLocalChecked(frame, assign.payload);
-                    const payload_desc = if (assign.payload_desc) |desc_ref| try self.resolveBoxyDescRef(frame, desc_ref) else {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: assign_boxy_box reached interpreter without a payload descriptor at stmt {d}",
-                            .{@backingInt(current)},
-                        );
-                    };
-                    const source_desc = if (assign.source_desc) |desc_ref|
-                        try self.resolveBoxyDescRef(frame, desc_ref)
-                    else
-                        payload_desc;
-                    const boxed = try self.boxy_runtime.boxyBoxValue(
-                        self.boxyFrameHooks(frame),
-                        payload_value,
-                        assign.payload_layout,
-                        source_desc,
-                        payload_desc,
-                        assign.payload_mode,
-                        self.store.getLocal(assign.target).layout_idx,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, boxed.value, false);
-                    frame.setLocalDesc(assign.target, boxed.desc);
-                    current = assign.next;
-                },
-                .assign_boxy_record_update => |assign| {
-                    const updated = try self.boxy_runtime.boxyRecordUpdate(
-                        self.boxyFrameHooks(frame),
-                        try self.getLocalChecked(frame, assign.base),
-                        self.store.getLocal(assign.base).layout_idx,
-                        try self.resolveBoxyDescRef(frame, assign.base_desc),
-                        try self.getLocalChecked(frame, assign.fields),
-                        assign.fields_layout,
-                        try self.resolveBoxyDescRef(frame, assign.fields_desc),
-                        self.store.getLocal(assign.target).layout_idx,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, updated.value, false);
-                    frame.setLocalDesc(assign.target, updated.desc);
-                    current = assign.next;
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    _ = try self.resolveBoxyDescRef(frame, assign.desc);
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        try self.materializeLocalValue(source_value, self.store.getLocal(assign.target).layout_idx),
-                        false,
-                    );
-                    current = assign.next;
-                },
-                .assign_boxy_unbox => |assign| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
-                    const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    const unboxed = try self.boxy_runtime.boxyUnboxValue(
-                        self.boxyFrameHooks(frame),
-                        source_value,
-                        self.store.getLocal(assign.source).layout_idx,
-                        source_desc,
-                        target_desc,
-                        assign.target_layout,
-                        assign.source_mode,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, unboxed.value, false);
-                    frame.setLocalDesc(assign.target, unboxed.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
-                        if (desc_ref.localOrNull()) |desc_local| {
-                            const desc = unboxed.desc orelse return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: boxy unbox produced no descriptor for descriptor-bearing target",
-                                .{},
-                            );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                        }
-                    }
-                    current = assign.next;
-                },
-                .assign_boxy_tag => |assign| {
-                    const target_desc = try self.resolveBoxyDescRef(frame, assign.target_desc);
-                    const payload_desc = if (assign.payload_desc) |desc_ref|
-                        try self.resolveBoxyDescRef(frame, desc_ref)
-                    else
-                        null;
-                    const constructed = try self.constructBoxyTagValue(
-                        frame,
-                        target_desc,
-                        assign.tag_name,
-                        if (assign.payload) |payload_local| try self.getLocalChecked(frame, payload_local) else null,
-                        assign.payload_layout,
-                        payload_desc,
-                        assign.payload_mode,
-                        self.store.getLocal(assign.target).layout_idx,
-                    );
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        constructed,
-                        false,
-                    );
-                    frame.setLocalDesc(assign.target, target_desc);
-                    current = assign.next;
-                },
-                .assign_boxy_tag_payload => |assign| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    const target_layout = self.store.getLocal(assign.target).layout_idx;
-                    const payload_read = try self.readBoxyTagPayloadByName(
-                        frame,
-                        source_value,
-                        self.store.getLocal(assign.source).layout_idx,
-                        source_desc,
-                        assign.tag_name,
-                        assign.payload_index,
-                        target_layout,
-                        assign.source_mode,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, payload_read.value, false);
-                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, payload_read.desc));
-                    if (assign.target_desc) |target_desc| {
-                        const payload_desc = payload_read.desc orelse {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: boxy tag payload {d} for tag {s} had no descriptor to bind",
-                                .{ assign.payload_index, self.store.getBoxyName(assign.tag_name) },
-                            );
-                        };
-                        try self.setLocalChecked(frame, current, target_desc, try self.evalBoxyDescRefValue(frame, payload_desc), false);
-                    }
-                    current = assign.next;
-                },
-                .assign_boxy_inspect => |assign| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        try self.inspectBoxyValue(frame, source_value, self.store.getLocal(assign.source).layout_idx, source_desc),
-                        false,
-                    );
-                    current = assign.next;
-                },
-                .assign_boxy_eq => |assign| {
-                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
-                    const value_layout = self.store.getLocal(assign.lhs).layout_idx;
-                    if (self.store.getLocal(assign.rhs).layout_idx != value_layout) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: boxy equality operands had layouts {d} and {d}",
-                            .{ @backingInt(value_layout), @backingInt(self.store.getLocal(assign.rhs).layout_idx) },
-                        );
-                    }
-                    const equal = try self.boxy_runtime.boxyEq(
-                        self.boxyFrameHooks(frame),
-                        try self.getLocalChecked(frame, assign.lhs),
-                        try self.getLocalChecked(frame, assign.rhs),
-                        value_layout,
-                        desc,
-                    );
-                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
-                    result.write(u8, if (equal) 1 else 0);
-                    try self.setLocalChecked(frame, current, assign.target, result, false);
-                    current = assign.next;
-                },
-                .assign_boxy_hash => |assign| {
-                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
-                    const state = try self.boxy_runtime.boxyHash(
-                        self.boxyFrameHooks(frame),
-                        try self.getLocalChecked(frame, assign.value),
-                        self.store.getLocal(assign.value).layout_idx,
-                        desc,
-                        (try self.getLocalChecked(frame, assign.hasher)).read(u64),
-                    );
-                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
-                    result.write(u64, state);
-                    try self.setLocalChecked(frame, current, assign.target, result, false);
-                    current = assign.next;
-                },
-                .assign_boxy_adapt => |assign| {
-                    const source_desc = if (assign.source_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
-                    const target_desc = if (assign.target_desc) |desc| try self.resolveBoxyDescRef(frame, desc) else null;
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    const adapted = try self.boxy_runtime.boxyAdaptValue(
-                        self.boxyFrameHooks(frame),
-                        source_value,
-                        source_desc,
-                        target_desc,
-                        assign.adapter,
-                        assign.source_mode,
-                    );
-                    try self.setLocalChecked(frame, current, assign.target, adapted.value, false);
-                    frame.setLocalDesc(assign.target, adapted.desc);
-                    if (self.store.getLocal(assign.target).boxy_desc) |desc_ref| {
-                        if (desc_ref.localOrNull()) |desc_local| {
-                            const desc = adapted.desc orelse return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: boxy adapter produced no descriptor for descriptor-bearing target",
-                                .{},
-                            );
-                            try self.setLocalChecked(frame, current, desc_local, try self.allocPointerIntValue(@intFromPtr(desc)), false);
-                        }
-                    }
-                    current = assign.next;
-                },
-                .boxy_tag_match => |tag_match| {
-                    const source_desc = try self.resolveBoxyDescRef(frame, tag_match.source_desc);
-                    const source_value = try self.getLocalChecked(frame, tag_match.source);
-                    const matched = try self.boxyTagMatches(
-                        frame,
-                        source_value,
-                        self.store.getLocal(tag_match.source).layout_idx,
-                        source_desc,
-                        tag_match.tag_name,
-                    );
-                    current = if (matched) tag_match.on_match else tag_match.on_miss;
+                    current = assign_stmt.next;
                 },
                 .assign_low_level => |assign| {
+                    if (self.store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
+                        try self.execDynElemLowLevel(frame, current, assign);
+                        current = assign.next;
+                        continue;
+                    }
                     const arg_locals = self.store.getLocalSpan(assign.args);
-                    const arg_values = try self.collectLocalValues(frame, arg_locals);
-                    const arg_layouts = try self.localLayouts(arg_locals);
-                    const arg_descs = try self.localBoxyDescs(frame, arg_locals);
+                    // Low-level operations read their arguments only for the
+                    // duration of `evalLowLevel`, so short argument lists live
+                    // in stack buffers rather than in the evaluation arena,
+                    // which is not released until the evaluation ends.
+                    var value_buffer: [low_level_inline_args]Value = undefined;
+                    var layout_buffer: [low_level_inline_args]layout_mod.Idx = undefined;
+                    const inline_args = arg_locals.len <= low_level_inline_args;
+                    const arg_values = if (inline_args)
+                        try self.collectLocalValuesInto(frame, arg_locals, value_buffer[0..arg_locals.len])
+                    else
+                        try self.collectLocalValues(frame, arg_locals);
+                    const arg_layouts = if (inline_args)
+                        self.localLayoutsInto(arg_locals, layout_buffer[0..arg_locals.len])
+                    else
+                        try self.localLayouts(arg_locals);
                     const ret_layout = self.store.getLocal(assign.target).layout_idx;
-                    const ret_desc = try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc);
                     const observation = rc_conformance.beginStatement(assign.op, arg_values.len);
                     if (observation) |obs| self.conformanceSnapshotArgs(obs, arg_values, arg_layouts);
                     const value = try self.evalLowLevel(.{
                         .op = assign.op,
                         .args = arg_values,
                         .arg_layouts = arg_layouts,
-                        .arg_descs = arg_descs,
                         .ret_layout = ret_layout,
-                        .ret_desc = ret_desc,
-                        .frame = frame,
                         .callable_proc = null,
-                        .unique_args = assign.unique_args,
-                        .interchangeable = assign.interchangeable,
+                        .unique_args = self.store.stmtRowOrDefault(assign.extra).unique_args,
+                        .interchangeable = self.store.stmtRowOrDefault(assign.extra).interchangeable,
                     });
                     if (observation) |obs| {
                         self.conformanceSnapshotResult(obs, value, ret_layout);
                         rc_conformance.endStatement(obs);
                     }
                     try self.setLocalChecked(frame, current, assign.target, value, assign.op == .box_alloc_zeroed);
-                    frame.setLocalDesc(assign.target, ret_desc);
                     current = assign.next;
                 },
                 .assign_list => |assign| {
                     try self.setLocalChecked(frame, current, assign.target, try self.evalListLiteral(frame, assign.elems, self.store.getLocal(assign.target).layout_idx), false);
-                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(assign.target).boxy_desc));
                     current = assign.next;
                 },
                 .assign_struct => |assign| {
                     try self.setLocalChecked(frame, current, assign.target, try self.evalStructLiteral(frame, assign.fields, self.store.getLocal(assign.target).layout_idx), false);
-                    const target_desc = assign.contents_desc orelse self.store.getLocal(assign.target).boxy_desc;
-                    frame.setLocalDesc(assign.target, try self.resolveOptionalBoxyDescRef(frame, target_desc));
                     current = assign.next;
                 },
                 .assign_tag => |assign| {
-                    const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
                     const tag_value = try self.evalTagLiteral(
                         frame,
                         assign.variant_index,
@@ -3290,7 +2607,6 @@ pub const Interpreter = struct {
                         self.store.getLocal(assign.target).layout_idx,
                     );
                     try self.setLocalChecked(frame, current, assign.target, tag_value, false);
-                    frame.setLocalDesc(assign.target, target_desc);
                     current = assign.next;
                 },
                 .store_struct => |assign| {
@@ -3312,11 +2628,12 @@ pub const Interpreter = struct {
                     current = assign.next;
                 },
                 .set_local => |assign| {
+                    if (self.store.getLocal(assign.target).dyn != null or self.store.getLocal(assign.value).dyn != null) {
+                        try self.copyLocalBytes(frame, current, assign.target, assign.value);
+                        current = assign.next;
+                        continue;
+                    }
                     const target_layout = self.store.getLocal(assign.target).layout_idx;
-                    const source_desc = frame.localDesc(assign.value) orelse if (self.store.getLocal(assign.value).boxy_desc) |desc_ref|
-                        try self.resolveBoxyDescRef(frame, desc_ref)
-                    else
-                        null;
                     const normalized = try self.coerceExplicitRefValueToLayout(
                         try self.getLocalChecked(frame, assign.value),
                         self.store.getLocal(assign.value).layout_idx,
@@ -3326,11 +2643,14 @@ pub const Interpreter = struct {
                         frame,
                         current,
                         assign.target,
-                        try self.materializeLocalValue(normalized, target_layout),
+                        normalized,
                         false,
                     );
-                    frame.setLocalDesc(assign.target, source_desc);
                     current = assign.next;
+                },
+                .dyn => |dyn_stmt| {
+                    try self.execDyn(frame, current, dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                    current = dyn_stmt.next;
                 },
                 .debug => |debug_stmt| {
                     self.roc_ops.dbg(self.readRocStr(try self.getLocalChecked(frame, debug_stmt.message)));
@@ -3338,7 +2658,7 @@ pub const Interpreter = struct {
                 },
                 .expect => |expect_stmt| {
                     const cond_local = expect_stmt.condition;
-                    const cond_value = try self.readSwitchValue(
+                    const cond_value = try self.layoutRuntime().readSwitchValue(
                         try self.getLocalChecked(frame, cond_local),
                         self.store.getLocal(cond_local).layout_idx,
                     );
@@ -3367,15 +2687,9 @@ pub const Interpreter = struct {
                     }
                     return self.runtimeError("RuntimeError");
                 },
-                .comptime_exhaustiveness_failed => |failed| {
-                    return self.comptimeExhaustivenessFailed(failed.site);
-                },
-                .comptime_branch_taken => |marker| {
-                    try self.comptime_branch_hits.append(self.evalAllocator(), .{
-                        .site = marker.site,
-                        .branch_index = marker.branch_index,
-                    });
-                    current = marker.next;
+                .comptime_exhaustiveness_failed => {
+                    self.failed_crash_stmt = current;
+                    return self.triggerCrash(LIR.comptime_exhaustiveness_failure_message);
                 },
                 .incref => |inc| {
                     if (builtin.mode == .debug and !frame.isAssigned(inc.value)) {
@@ -3384,7 +2698,6 @@ pub const Interpreter = struct {
                             .{ @backingInt(inc.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt incref: proc={d} stmt={d} local={d} layout={d} count={d} ptr=0x{x} rc={any}", .{
                         @backingInt(frame.proc_id),
@@ -3393,16 +2706,17 @@ pub const Interpreter = struct {
                         @backingInt(self.store.getLocal(inc.value).layout_idx),
                         inc.count,
                         @intFromPtr((try self.getLocalChecked(frame, inc.value)).ptr),
-                        inc.rc,
+                        self.store.rcHelper(inc.rc),
                     });
+                    if (self.store.getLocal(inc.value).dyn != null) {
+                        try self.dynIncref(frame, inc.value, inc.count);
+                        current = inc.next;
+                        continue;
+                    }
                     const inc_value = try self.getLocalChecked(frame, inc.value);
-                    const inc_layout = self.store.getLocal(inc.value).layout_idx;
                     try self.performExplicitRcStmt(
-                        frame,
-                        .incref,
-                        inc.rc,
+                        self.store.rcHelper(inc.rc),
                         inc_value,
-                        inc_layout,
                         inc.count,
                         inc.atomicity,
                     );
@@ -3415,7 +2729,6 @@ pub const Interpreter = struct {
                             .{ @backingInt(dec.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt decref: proc={d} stmt={d} local={d} layout={d} ptr=0x{x} rc={any}", .{
                         @backingInt(frame.proc_id),
@@ -3423,64 +2736,71 @@ pub const Interpreter = struct {
                         @backingInt(dec.value),
                         @backingInt(self.store.getLocal(dec.value).layout_idx),
                         @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
-                        dec.rc,
+                        self.store.rcHelper(dec.rc),
                     });
+                    if (self.store.getLocal(dec.value).dyn != null) {
+                        try self.dynDecref(frame, dec.value);
+                        current = dec.next;
+                        continue;
+                    }
                     const dec_value = try self.getLocalChecked(frame, dec.value);
-                    const dec_layout = self.store.getLocal(dec.value).layout_idx;
                     try self.performExplicitRcStmt(
-                        frame,
-                        .decref,
-                        dec.rc,
+                        self.store.rcHelper(dec.rc),
                         dec_value,
-                        dec_layout,
                         0,
                         dec.atomicity,
                     );
                     current = dec.next;
                 },
-                .decref_if_initialized => |dec| {
-                    const cond_value = try self.readSwitchValue(
-                        try self.getLocalChecked(frame, dec.cond),
-                        self.store.getLocal(dec.cond).layout_idx,
+                .decref_if_initialized => |dec_stmt| {
+                    const dec = self.store.stmtRow(dec_stmt.data);
+                    const cond_value = try self.layoutRuntime().readSwitchValue(
+                        try self.getLocalChecked(frame, dec_stmt.cond),
+                        self.store.getLocal(dec_stmt.cond).layout_idx,
                     );
                     if ((cond_value & dec.cond_mask) == dec.cond_mask) {
-                        if (builtin.mode == .debug and !frame.isAssigned(dec.value)) {
+                        if (builtin.mode == .debug and !frame.isAssigned(dec_stmt.value)) {
                             debugPrint(
                                 "LIR/interpreter invariant violated before decref_if_initialized: local {d} unassigned in proc {d} at stmt {d}\n",
-                                .{ @backingInt(dec.value), @backingInt(frame.proc_id), @backingInt(current) },
+                                .{ @backingInt(dec_stmt.value), @backingInt(frame.proc_id), @backingInt(current) },
                             );
                             self.debugDumpProc(frame.proc_id);
-                            self.debugPrintStmtChain(current, 20);
                         }
                         trace_rc.log("stmt decref_if_initialized: proc={d} stmt={d} cond={d} mask=0x{x} local={d} layout={d} ptr=0x{x}", .{
                             @backingInt(frame.proc_id),
                             @backingInt(current),
-                            @backingInt(dec.cond),
+                            @backingInt(dec_stmt.cond),
                             dec.cond_mask,
-                            @backingInt(dec.value),
-                            @backingInt(self.store.getLocal(dec.value).layout_idx),
-                            @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
+                            @backingInt(dec_stmt.value),
+                            @backingInt(self.store.getLocal(dec_stmt.value).layout_idx),
+                            @intFromPtr((try self.getLocalChecked(frame, dec_stmt.value)).ptr),
                         });
-                        try self.performExplicitRcStmt(
-                            frame,
-                            .decref,
-                            dec.rc,
-                            try self.getLocalChecked(frame, dec.value),
-                            self.store.getLocal(dec.value).layout_idx,
-                            0,
-                            dec.atomicity,
-                        );
+                        if (self.store.getLocal(dec_stmt.value).dyn != null) {
+                            try self.dynDecref(frame, dec_stmt.value);
+                        } else {
+                            try self.performExplicitRcStmt(
+                                dec.rc,
+                                try self.getLocalChecked(frame, dec_stmt.value),
+                                0,
+                                dec.atomicity,
+                            );
+                        }
                     }
-                    current = dec.next;
+                    current = dec_stmt.next;
                 },
                 .free => |free_stmt| {
+                    if (self.store.getLocal(free_stmt.value).dyn != null) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: free of dynamic local {d} in proc {d}",
+                            .{ @backingInt(free_stmt.value), @backingInt(frame.proc_id) },
+                        );
+                    }
                     if (builtin.mode == .debug and !frame.isAssigned(free_stmt.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before free: local {d} unassigned in proc {d} at stmt {d}\n",
                             .{ @backingInt(free_stmt.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
-                        self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt free: proc={d} stmt={d} local={d} layout={d} ptr=0x{x}", .{
                         @backingInt(frame.proc_id),
@@ -3490,18 +2810,15 @@ pub const Interpreter = struct {
                         @intFromPtr((try self.getLocalChecked(frame, free_stmt.value)).ptr),
                     });
                     try self.performExplicitRcStmt(
-                        frame,
-                        .free,
-                        free_stmt.rc,
+                        self.store.rcHelper(free_stmt.rc),
                         try self.getLocalChecked(frame, free_stmt.value),
-                        self.store.getLocal(free_stmt.value).layout_idx,
                         0,
                         free_stmt.atomicity,
                     );
                     current = free_stmt.next;
                 },
                 .switch_stmt => |switch_stmt| {
-                    const cond_value = try self.readSwitchValue(
+                    const cond_value = try self.layoutRuntime().readSwitchValue(
                         try self.getLocalChecked(frame, switch_stmt.cond),
                         self.store.getLocal(switch_stmt.cond).layout_idx,
                     );
@@ -3533,7 +2850,7 @@ pub const Interpreter = struct {
                     current = target;
                 },
                 .switch_initialized_payload => |switch_stmt| {
-                    const cond_value = try self.readSwitchValue(
+                    const cond_value = try self.layoutRuntime().readSwitchValue(
                         try self.getLocalChecked(frame, switch_stmt.cond),
                         self.store.getLocal(switch_stmt.cond).layout_idx,
                     );
@@ -3561,8 +2878,6 @@ pub const Interpreter = struct {
                 .str_match_set => |str_match_set| {
                     current = try self.execStrMatchSet(frame, current, str_match_set);
                 },
-                .loop_continue => return .loop_continue,
-                .loop_break => return .loop_break,
                 .join => |join_stmt| {
                     current = join_stmt.remainder;
                 },
@@ -3576,12 +2891,6 @@ pub const Interpreter = struct {
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
                     self.failed_crash_stmt = current;
-                    if (@backingInt(current) < self.failure_origins.len) {
-                        if (self.failure_origins[@backingInt(current)]) |origin| {
-                            self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
-                            self.failed_stmt_region = origin.region orelse base.Region.zero();
-                        }
-                    }
                     switch (crash_stmt.msg) {
                         .literal => |literal| return self.triggerCrash(self.store.getString(literal)),
                         .local => |message_local| {
@@ -3609,447 +2918,23 @@ pub const Interpreter = struct {
     }
 
     fn debugDumpProc(self: *LirInterpreter, proc_id: LirProcSpecId) void {
-        const proc_spec = self.store.getProcSpec(proc_id);
-        const body = proc_spec.body orelse {
-            debugPrint("  proc {d} has no body\n", .{@backingInt(proc_id)});
-            return;
-        };
-
-        debugPrint(
-            "  proc {d} name={d} body={d} ret_layout={d}\n",
-            .{
-                @backingInt(proc_id),
-                proc_spec.name.raw(),
-                @backingInt(body),
-                @backingInt(proc_spec.ret_layout),
-            },
-        );
-        const args = self.store.getLocalSpan(proc_spec.args);
-        if (args.len > 0) {
-            debugPrint("  args:", .{});
-            for (0..args.len) |i| {
-                const arg = GuardedList.at(args, i);
-                const layout_idx = self.store.getLocal(arg).layout_idx;
-                debugPrint(" {d}:{d}", .{ @backingInt(arg), @backingInt(layout_idx) });
-            }
-            debugPrint("\n", .{});
-        }
-        const local_count = self.store.localCount();
-        if (local_count > 0) {
-            debugPrint("  locals:\n", .{});
-            for (0..local_count) |idx| {
-                const local = self.store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(idx)))));
-                const layout_idx = local.layout_idx;
-                const layout_val = self.layout_store.getLayout(layout_idx);
-                debugPrint(
-                    "    local {d}: layout={d} tag={s}",
-                    .{ idx, @backingInt(layout_idx), @tagName(layout_val.tag) },
-                );
-                if (layout_val.tag == .list) {
-                    debugPrint(" elem={d}", .{@backingInt(layout_val.getIdx())});
-                }
-                if (layout_val.tag == .tag_union) {
-                    const tu_info = self.layout_store.getTagUnionInfo(layout_val);
-                    debugPrint(" variants={d}", .{tu_info.variants.len});
-                }
-                debugPrint("\n", .{});
-            }
-        }
-
-        var visited = collections.DenseMap(CFStmtId, void).init(self.evalAllocator());
-        defer visited.deinit();
-        var stack = std.ArrayListUnmanaged(CFStmtId).empty;
-        defer stack.deinit(self.evalAllocator());
-        stack.append(self.evalAllocator(), body) catch return;
-
-        while (stack.items.len > 0) {
-            const stmt_id = stack.pop().?;
-            if (visited.contains(stmt_id)) continue;
-            visited.put(stmt_id, {}) catch return;
-            const stmt = self.store.getCFStmt(stmt_id);
-            switch (stmt) {
-                .assign_ref => |assign| {
-                    debugPrint("    {d}: assign_ref target={d} op={any} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        assign.op,
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_literal => |assign| {
-                    debugPrint("    {d}: assign_literal target={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .init_uninitialized => |uninit| {
-                    debugPrint("    {d}: init_uninitialized target={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(uninit.target),
-                        @backingInt(uninit.next),
-                    });
-                    stack.append(self.evalAllocator(), uninit.next) catch return;
-                },
-                .assign_call => |assign| {
-                    debugPrint("    {d}: assign_call proc={d} target={d} args=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.proc),
-                        @backingInt(assign.target),
-                    });
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    for (0..arg_locals.len) |i| {
-                        const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@backingInt(arg_local)});
-                    }
-                    debugPrint("out_desc={any} next={d}\n", .{ assign.out_desc, @backingInt(assign.next) });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_call_erased => |assign| {
-                    debugPrint("    {d}: assign_call_erased target={d} closure={d} args=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        @backingInt(assign.closure),
-                    });
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    for (0..arg_locals.len) |i| {
-                        const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@backingInt(arg_local)});
-                    }
-                    debugPrint("result_desc=", .{});
-                    if (assign.result_desc) |desc_ref| {
-                        debugPrint("{any}", .{desc_ref});
-                    } else {
-                        debugPrint("null", .{});
-                    }
-                    debugPrint(" next={d}\n", .{@backingInt(assign.next)});
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_packed_erased_fn => |assign| {
-                    debugPrint("    {d}: assign_packed_erased_fn target={d} reuse={?d} unique={} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        if (assign.reuse) |reuse| @backingInt(reuse) else null,
-                        assign.reuse_unique,
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_boxy_desc_ref => |assign| {
-                    debugPrint("    {d}: assign_boxy_desc_ref target={d} desc={any} captures=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        assign.desc,
-                    });
-                    const capture_locals = self.store.getLocalSpan(assign.captures);
-                    for (0..capture_locals.len) |i| {
-                        debugPrint("{d} ", .{@backingInt(GuardedList.at(capture_locals, i))});
-                    }
-                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                inline .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                => |assign| {
-                    debugPrint("    {d}: {any}\n", .{ @backingInt(stmt_id), stmt });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_call_dict => |assign| {
-                    debugPrint(
-                        "    {d}: assign_call_dict target={d} method={d} slot={d} args=",
-                        .{ @backingInt(stmt_id), @backingInt(assign.target), @backingInt(assign.method), assign.method_slot },
-                    );
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    for (0..arg_locals.len) |i| {
-                        const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@backingInt(arg_local)});
-                    }
-                    debugPrint("hidden=", .{});
-                    const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
-                    for (0..hidden_arg_locals.len) |i| {
-                        const hidden_local = GuardedList.at(hidden_arg_locals, i);
-                        debugPrint("{d} ", .{@backingInt(hidden_local)});
-                    }
-                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .boxy_tag_match => |tag_match| {
-                    debugPrint("    {d}: {any}\n", .{ @backingInt(stmt_id), stmt });
-                    stack.append(self.evalAllocator(), tag_match.on_match) catch return;
-                    stack.append(self.evalAllocator(), tag_match.on_miss) catch return;
-                },
-                .assign_low_level => |assign| {
-                    debugPrint("    {d}: assign_low_level target={d} op={s} args=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        @tagName(assign.op),
-                    });
-                    const arg_locals = self.store.getLocalSpan(assign.args);
-                    for (0..arg_locals.len) |i| {
-                        const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@backingInt(arg_local)});
-                    }
-                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_list => |assign| {
-                    debugPrint("    {d}: assign_list target={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_struct => |assign| {
-                    debugPrint("    {d}: assign_struct target={d} fields=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                    });
-                    const field_locals = self.store.getLocalSpan(assign.fields);
-                    for (0..field_locals.len) |i| {
-                        const field_local = GuardedList.at(field_locals, i);
-                        debugPrint("{d} ", .{@backingInt(field_local)});
-                    }
-                    debugPrint("next={d}\n", .{
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .assign_tag => |assign| {
-                    debugPrint("    {d}: assign_tag target={d} variant={d} discrim={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        assign.variant_index,
-                        assign.discriminant,
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .store_struct => |assign| {
-                    debugPrint("    {d}: store_struct dest={d} fields=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.dest),
-                    });
-                    const fields = self.store.getLocalSpan(assign.fields);
-                    for (0..fields.len) |index| {
-                        const field_local = GuardedList.at(fields, index);
-                        debugPrint("{d} ", .{@backingInt(field_local)});
-                    }
-                    debugPrint("next={d}\n", .{
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .store_tag => |assign| {
-                    debugPrint("    {d}: store_tag dest={d} variant={d} discrim={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.dest),
-                        assign.variant_index,
-                        assign.discriminant,
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .set_local => |assign| {
-                    debugPrint("    {d}: set_local target={d} value={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(assign.target),
-                        @backingInt(assign.value),
-                        @backingInt(assign.next),
-                    });
-                    stack.append(self.evalAllocator(), assign.next) catch return;
-                },
-                .debug => |debug_stmt| {
-                    debugPrint("    {d}: debug next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(debug_stmt.next),
-                    });
-                    stack.append(self.evalAllocator(), debug_stmt.next) catch return;
-                },
-                .expect => |expect_stmt| {
-                    debugPrint("    {d}: expect cond={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(expect_stmt.condition),
-                        @backingInt(expect_stmt.next),
-                    });
-                    stack.append(self.evalAllocator(), expect_stmt.next) catch return;
-                },
-                .runtime_error => {
-                    debugPrint("    {d}: runtime_error\n", .{@backingInt(stmt_id)});
-                },
-                .comptime_exhaustiveness_failed => |failed| {
-                    debugPrint("    {d}: comptime_exhaustiveness_failed site={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(failed.site),
-                    });
-                },
-                .comptime_branch_taken => |marker| {
-                    debugPrint("    {d}: comptime_branch_taken site={d} branch={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(marker.site),
-                        marker.branch_index,
-                        @backingInt(marker.next),
-                    });
-                    stack.append(self.evalAllocator(), marker.next) catch return;
-                },
-                .incref => |inc| {
-                    debugPrint("    {d}: incref value={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(inc.value),
-                        @backingInt(inc.next),
-                    });
-                    stack.append(self.evalAllocator(), inc.next) catch return;
-                },
-                .decref => |dec| {
-                    debugPrint("    {d}: decref value={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(dec.value),
-                        @backingInt(dec.next),
-                    });
-                    stack.append(self.evalAllocator(), dec.next) catch return;
-                },
-                .decref_if_initialized => |dec| {
-                    debugPrint("    {d}: decref_if_initialized cond={d} mask=0x{x} value={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(dec.cond),
-                        dec.cond_mask,
-                        @backingInt(dec.value),
-                        @backingInt(dec.next),
-                    });
-                    stack.append(self.evalAllocator(), dec.next) catch return;
-                },
-                .free => |dec| {
-                    debugPrint("    {d}: free value={d} next={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(dec.value),
-                        @backingInt(dec.next),
-                    });
-                    stack.append(self.evalAllocator(), dec.next) catch return;
-                },
-                .switch_stmt => |switch_stmt| {
-                    debugPrint("    {d}: switch cond={d} default={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(switch_stmt.cond),
-                        @backingInt(switch_stmt.default_branch),
-                    });
-                    stack.append(self.evalAllocator(), switch_stmt.default_branch) catch return;
-                    const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-                    for (0..branches.len) |i| {
-                        const branch = GuardedList.at(branches, i);
-                        debugPrint("        branch {d} -> {d}\n", .{
-                            branch.value,
-                            @backingInt(branch.body),
-                        });
-                        stack.append(self.evalAllocator(), branch.body) catch return;
-                    }
-                },
-                .switch_initialized_payload => |switch_stmt| {
-                    debugPrint("    {d}: switch_initialized_payload cond={d} mask=0x{x} payload={d} initialized={d} uninitialized={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(switch_stmt.cond),
-                        switch_stmt.cond_mask,
-                        @backingInt(switch_stmt.payload),
-                        @backingInt(switch_stmt.initialized_branch),
-                        @backingInt(switch_stmt.uninitialized_branch),
-                    });
-                    stack.append(self.evalAllocator(), switch_stmt.initialized_branch) catch return;
-                    stack.append(self.evalAllocator(), switch_stmt.uninitialized_branch) catch return;
-                },
-                .str_match => |str_match| {
-                    debugPrint("    {d}: str_match source={d} on_match={d} on_miss={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(str_match.source),
-                        @backingInt(str_match.on_match),
-                        @backingInt(str_match.on_miss),
-                    });
-                    stack.append(self.evalAllocator(), str_match.on_match) catch return;
-                    stack.append(self.evalAllocator(), str_match.on_miss) catch return;
-                },
-                .str_match_set => |str_match_set| {
-                    debugPrint("    {d}: str_match_set source={d} arms={d} on_miss={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(str_match_set.source),
-                        str_match_set.arms.len,
-                        @backingInt(str_match_set.on_miss),
-                    });
-                    const arms = self.store.getStrMatchArms(str_match_set.arms);
-                    for (0..arms.len) |i| {
-                        const arm = GuardedList.at(arms, i);
-                        stack.append(self.evalAllocator(), arm.on_match) catch return;
-                    }
-                    stack.append(self.evalAllocator(), str_match_set.on_miss) catch return;
-                },
-                .loop_continue => {
-                    debugPrint("    {d}: loop_continue\n", .{@backingInt(stmt_id)});
-                },
-                .loop_break => {
-                    debugPrint("    {d}: loop_break\n", .{@backingInt(stmt_id)});
-                },
-                .join => |join| {
-                    debugPrint("    {d}: join id={d} params=", .{
-                        @backingInt(stmt_id),
-                        @backingInt(join.id),
-                    });
-                    const params = self.store.getLocalSpan(join.params);
-                    for (0..params.len) |i| {
-                        const param_local = GuardedList.at(params, i);
-                        debugPrint("{d} ", .{@backingInt(param_local)});
-                    }
-                    debugPrint("body={d} remainder={d}\n", .{
-                        @backingInt(join.body),
-                        @backingInt(join.remainder),
-                    });
-                    stack.append(self.evalAllocator(), join.body) catch return;
-                    stack.append(self.evalAllocator(), join.remainder) catch return;
-                },
-                .jump => |jump| {
-                    debugPrint("    {d}: jump target={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(jump.target),
-                    });
-                },
-                .ret => |ret| {
-                    debugPrint("    {d}: ret value={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(ret.value),
-                    });
-                },
-                .crash => |crash| {
-                    switch (crash.msg) {
-                        .literal => |literal| debugPrint("    {d}: crash literal={d}\n", .{
-                            @backingInt(stmt_id),
-                            @backingInt(literal),
-                        }),
-                        .local => |local| debugPrint("    {d}: crash local={d}\n", .{
-                            @backingInt(stmt_id),
-                            @backingInt(local),
-                        }),
-                    }
-                },
-                .expect_err => |expect_err_stmt| {
-                    debugPrint("    {d}: expect_err message={d}\n", .{
-                        @backingInt(stmt_id),
-                        @backingInt(expect_err_stmt.message),
-                    });
-                },
-            }
-        }
+        if (comptime builtin.target.os.tag == .freestanding) return;
+        var buffer: std.Io.Writer.Allocating = .init(self.evalAllocator());
+        defer buffer.deinit();
+        lir.DebugPrint.writeProc(self.evalAllocator(), self.store, self.layout_store, proc_id, &buffer.writer) catch return;
+        debugPrint("{s}", .{buffer.written()});
     }
+
+    /// Argument count up to which a low-level statement's argument arrays
+    /// live on the stack.
+    const low_level_inline_args = 8;
 
     fn collectLocalValues(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]Value {
         if (locals.len == 0) return &.{};
-        const values = try self.arena.allocator().alloc(Value, locals.len);
+        return try self.collectLocalValuesInto(frame, locals, try self.evalAllocator().alloc(Value, locals.len));
+    }
+
+    fn collectLocalValuesInto(self: *LirInterpreter, frame: *const Frame, locals: anytype, values: []Value) Error![]Value {
         for (0..locals.len) |i| {
             const local_id = GuardedList.at(locals, i);
             values[i] = try self.getLocalChecked(frame, local_id);
@@ -4059,30 +2944,12 @@ pub const Interpreter = struct {
 
     fn localLayouts(self: *LirInterpreter, locals: anytype) Error![]layout_mod.Idx {
         if (locals.len == 0) return &.{};
-        const layouts = try self.arena.allocator().alloc(layout_mod.Idx, locals.len);
-        for (0..locals.len) |i| {
-            const local_id = GuardedList.at(locals, i);
-            layouts[i] = self.store.getLocal(local_id).layout_idx;
-        }
-        return layouts;
+        return self.localLayoutsInto(locals, try self.evalAllocator().alloc(layout_mod.Idx, locals.len));
     }
 
-    fn localBoxyDescs(self: *LirInterpreter, frame: *const Frame, locals: anytype) Error![]?*const LirProgram.BoxyTypeDesc {
-        if (locals.len == 0) return &.{};
-        const descs = try self.arena.allocator().alloc(?*const LirProgram.BoxyTypeDesc, locals.len);
+    fn localLayoutsInto(self: *LirInterpreter, locals: anytype, layouts: []layout_mod.Idx) []layout_mod.Idx {
         for (0..locals.len) |i| {
             const local_id = GuardedList.at(locals, i);
-            descs[i] = frame.localDesc(local_id) orelse
-                try self.resolveOptionalBoxyDescRef(frame, self.store.getLocal(local_id).boxy_desc);
-        }
-        return descs;
-    }
-
-    fn localLayoutsFromSpan(self: *LirInterpreter, locals: LocalSpan) Error![]const layout_mod.Idx {
-        const local_ids = self.store.getLocalSpan(locals);
-        const layouts = try self.arena.allocator().alloc(layout_mod.Idx, local_ids.len);
-        for (0..local_ids.len) |i| {
-            const local_id = GuardedList.at(local_ids, i);
             layouts[i] = self.store.getLocal(local_id).layout_idx;
         }
         return layouts;
@@ -4091,37 +2958,16 @@ pub const Interpreter = struct {
     const ErasedCallResult = struct {
         value: Value,
         layout: layout_mod.Idx,
-        desc: ?*const LirProgram.BoxyTypeDesc = null,
-        /// When the value came unconverted from a pending call: the
-        /// descriptor that call's statement stored it as.
-        stored_as: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
     const PendingErasedCall = struct {
         closure: Value,
+        closure_layout: layout_mod.Idx,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        arg_descs: []const *const LirProgram.BoxyTypeDesc,
-        arg_desc_keys: []const LIR.ErasedArgDescKey,
         arg_plan: LIR.ErasedCallArgsPlanId,
-        /// The layout and result descriptor the deferring statement calls
-        /// with.
+        /// The layout the deferring statement calls with.
         site_layout: layout_mod.Idx,
-        result_desc: ?*const LirProgram.BoxyTypeDesc,
-        /// The last conversion a procedure skipped by returning while this
-        /// call was pending. Each procedure that returns early replaces it.
-        conversion: ?PendingConversion,
-    };
-
-    /// A conversion of a pending call's result that a procedure left to
-    /// whoever makes the call: the layout that procedure returns and the
-    /// descriptor it would have stored the result as.
-    const PendingConversion = struct {
-        layout: layout_mod.Idx,
-        desc: ?*const LirProgram.BoxyTypeDesc,
-        /// The conversion stores the result under the descriptor the value
-        /// arrives with.
-        keeps_own_desc: bool,
     };
 
     /// Whether calls pending after a statement are made in this frame.
@@ -4133,63 +2979,171 @@ pub const Interpreter = struct {
         };
     }
 
-    /// Make every pending erased call in turn. Each is made exactly as its
-    /// statement wrote it. The result that ends the chain is then converted
-    /// the way the procedures that returned early would have converted it,
-    /// as the native erased-call runtime does.
-    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame) Error!?ErasedCallResult {
-        var result: ?ErasedCallResult = null;
-        // The conversion skipped on the way out to this caller. It belongs
-        // to the first pending call; later ones are left inside its extent.
-        var outermost: ?PendingConversion = null;
-        var first = true;
-        while (self.pending_erased) |call| {
-            self.pending_erased = null;
-            const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
-            if (self.pending_erased == null) {
-                var current = try self.boxy_runtime.materializeCallResult(
-                    self.boxyFrameHooks(frame),
-                    raw.value,
-                    raw.layout,
-                    raw.desc,
-                    call.result_desc,
-                    call.site_layout,
-                );
-                var current_layout = call.site_layout;
-                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
-                    const conversion = skipped orelse continue;
-                    current = try self.boxy_runtime.materializeCallResult(
-                        self.boxyFrameHooks(frame),
-                        current.value,
-                        current_layout,
-                        current.desc,
-                        if (conversion.keeps_own_desc) current.desc else conversion.desc,
-                        conversion.layout,
-                    );
-                    current_layout = conversion.layout;
-                }
-                result = .{
-                    .value = current.value,
-                    .layout = current_layout,
-                    .desc = current.desc,
-                    .stored_as = if (call.conversion == null and outermost == null) call.result_desc else null,
-                };
-            }
-            if (first) {
-                outermost = call.conversion;
-                first = false;
-            }
-            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
-                "LIR/interpreter invariant violated: pending erased call had a null closure",
-                .{},
-            );
-            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
-        }
-        return result;
+    /// A dynamic erased call left pending (`pending_dyn`).
+    const PendingDynCall = struct {
+        closure: [*]u8,
+        args: ?[]align(16) u8,
+        /// The driven call passes the reference this record owns on to the
+        /// callee as its reuse input (an owned deferred call).
+        transfer: bool,
+    };
+
+    /// Whether an erased call is pending.
+    fn hasPendingCall(self: *const LirInterpreter) bool {
+        return self.pending_erased != null or self.pending_dyn != null;
     }
 
-    fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
-        return self.boxy_runtime.readSwitchValue(value, layout_idx);
+    /// The size of a statement target's bytes.
+    fn targetSize(self: *LirInterpreter, frame: *const Frame, target: LocalId) Error!usize {
+        if (self.store.getLocal(target).dyn != null) return (try self.localDesc(frame, target)).size;
+        return self.helper.sizeOf(self.store.getLocal(target).layout_idx);
+    }
+
+    /// Make every pending erased call in turn, each exactly as its statement
+    /// wrote it, and leave the result of the one that leaves none pending in
+    /// a fresh value of `layout`.
+    fn drivePendingValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!ErasedCallResult {
+        const size = self.helper.sizeOf(layout_idx);
+        if (size == 0) {
+            try self.drivePendingInto(null, 0);
+            return .{ .value = Value.zst, .layout = layout_idx };
+        }
+        const value = try self.alloc(layout_idx);
+        try self.drivePendingInto(value.ptr, size);
+        return .{ .value = value, .layout = layout_idx };
+    }
+
+    /// Make every pending erased call in turn, each exactly as its statement
+    /// wrote it. The call that leaves none pending writes its result, of
+    /// `ret_size` bytes, to `ret`; a dynamic call writes it there itself.
+    fn drivePendingInto(self: *LirInterpreter, ret: ?[*]u8, ret_size: usize) Error!void {
+        // Only the last call of a chain produces the result, so each call
+        // that leaves another pending leaves nothing in scratch the next
+        // needs.
+        const chain_mark = self.scratch.mark();
+        while (self.hasPendingCall()) {
+            self.scratch.restore(chain_mark);
+            if (self.pending_dyn) |pending| {
+                self.pending_dyn = null;
+                defer if (pending.args) |args| self.allocator.free(args);
+                try self.invokeErasedInto(pending.closure, if (ret_size == 0) null else ret, if (pending.args) |args| args.ptr else null, if (pending.transfer) pending.closure else null);
+                // ARC explicitly transferred this reference to the pending
+                // call: an owned call's callee consumed it, and every other
+                // is released here.
+                if (!pending.transfer) builtins.erased_callable.decref(pending.closure, &self.roc_ops);
+                continue;
+            }
+            // The call may leave another pending, which replaces the owned
+            // copy, so this one is read from scratch.
+            const call = try self.copyPendingErasedCall(self.pending_erased.?, self.evalAllocator());
+            self.pending_erased = null;
+            const raw = try self.evalErasedCallOnce(call.closure, null, call.args, call.arg_layouts, call.arg_plan, call.site_layout, false);
+            if (!self.hasPendingCall()) {
+                try self.checkCallResultLayout(raw.layout, call.site_layout);
+                if (ret_size != 0) @memcpy(ret.?[0..ret_size], raw.value.ptr[0..ret_size]);
+            }
+            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse
+                return self.invariantFailedError("LIR/interpreter invariant violated: pending erased call had a null closure", .{});
+            // ARC explicitly transferred this reference to the pending call.
+            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
+        }
+    }
+
+    /// Call the erased callable `closure` in the uniform erased-callable
+    /// ABI, as the native erased-call runtime does: an interpreted callee
+    /// learns that its caller makes the calls it leaves pending.
+    /// A fresh closure of `proc` whose descriptor-described capture record
+    /// is a copy of `record`, with the record's size as its capture
+    /// capacity; the callable takes over the record's references.
+    fn allocInterpreterClosure(self: *LirInterpreter, proc: LirProcSpecId, record: [*]const u8, record_desc: *const boxy.TypeDesc) Error![*]u8 {
+        const capture_size = erased_callable_context_capture_offset + record_desc.size;
+        const data_ptr = try self.allocRocDataWithRc(
+            builtins.erased_callable.payloadSize(capture_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+        );
+        builtins.erased_callable.payloadPtr(data_ptr).* = .{
+            .callable_fn_ptr = &interpreterErasedCallableTrampoline,
+            .on_drop = &interpreterErasedCallableOnDrop,
+        };
+        if (self.retained_owner) |owner| owner.retain();
+        erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
+            .owner = self.retained_owner,
+            .interpreter = self,
+            .proc_id = @backingInt(proc),
+            .drop_layout_plus_one = 0,
+            .capture_value_offset = @intCast(erased_callable_context_capture_offset),
+            .drop_kind = @backingInt(ErasedCallableCaptureDrop.desc),
+            .padding = .{ 0, 0, 0 },
+        };
+        const capture = erasedCallableInterpreterCaptureValuePtr(data_ptr);
+        @memcpy(capture[0..record_desc.size], record[0..record_desc.size]);
+        @as(*align(1) usize, @ptrCast(capture + @sizeOf(usize))).* = record_desc.size;
+        return data_ptr;
+    }
+
+    /// Invoke `closure` with its own capture; `reuse` is the allocation an
+    /// owned call transfers to it, which is `closure` or null.
+    fn invokeErasedInto(self: *LirInterpreter, closure: [*]u8, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8) Error!void {
+        var out_desc: ?*const anyopaque = null;
+        if (interpretedCallable(closure)) |callable| {
+            self.erased_caller_drives = true;
+            try self.callInterpreterErasedCallable(callable, &self.roc_ops, ret, args, reuse, &out_desc);
+        } else {
+            builtins.erased_callable.payloadPtr(closure).callable_fn_ptr(&self.roc_ops, ret, args, builtins.erased_callable.capturePtr(closure), reuse, &out_desc);
+        }
+    }
+
+    /// Copy the values a deferred erased call reads into storage that
+    /// outlives the statement and frame deferring it.
+    fn ownPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall) Error!PendingErasedCall {
+        self.pending_erased_storage.clearRetainingCapacity();
+        return try self.copyPendingErasedCall(call, null);
+    }
+
+    /// Copy a pending erased call's values into `allocator`, or into
+    /// `pending_erased_storage` when `allocator` is null.
+    fn copyPendingErasedCall(self: *LirInterpreter, call: PendingErasedCall, allocator: ?Allocator) Error!PendingErasedCall {
+        const layouts_offset = call.args.len * @sizeOf(Value);
+        const closure_sa = self.helper.sizeAlignOf(call.closure_layout);
+        var end = std.mem.alignForward(usize, layouts_offset + call.arg_layouts.len * @sizeOf(layout_mod.Idx), closure_sa.alignment.toByteUnits());
+        const closure_offset = end;
+        end += closure_sa.size;
+        var inline_arg_offsets: [low_level_inline_args]usize = undefined;
+        const arg_offsets = if (call.args.len <= inline_arg_offsets.len)
+            inline_arg_offsets[0..call.args.len]
+        else
+            try self.evalAllocator().alloc(usize, call.args.len);
+        for (call.args, call.arg_layouts, arg_offsets) |arg, arg_layout, *arg_offset| {
+            const sa = self.helper.sizeAlignOf(arg_layout);
+            end = std.mem.alignForward(usize, end, sa.alignment.toByteUnits());
+            arg_offset.* = end;
+            if (!arg.isZst()) end += sa.size;
+        }
+        const bytes: [*]align(16) u8 = if (allocator) |a|
+            (try a.alignedAlloc(u8, .@"16", @max(end, 1))).ptr
+        else blk: {
+            try self.pending_erased_storage.resize(self.allocator, end);
+            break :blk self.pending_erased_storage.items.ptr;
+        };
+        const args: [*]Value = @ptrCast(bytes);
+        const layouts: [*]layout_mod.Idx = @ptrCast(@alignCast(bytes + layouts_offset));
+        @memcpy(layouts[0..call.arg_layouts.len], call.arg_layouts);
+        for (call.args, call.arg_layouts, arg_offsets, 0..) |arg, arg_layout, arg_offset, index| {
+            args[index] = if (arg.isZst()) arg else copied: {
+                const copy = Value{ .ptr = bytes + arg_offset };
+                copy.copyFrom(arg, self.helper.sizeOf(arg_layout));
+                break :copied copy;
+            };
+        }
+        var copied = call;
+        copied.args = args[0..call.args.len];
+        copied.arg_layouts = layouts[0..call.arg_layouts.len];
+        if (!call.closure.isZst()) {
+            copied.closure = .{ .ptr = bytes + closure_offset };
+            copied.closure.copyFrom(call.closure, closure_sa.size);
+        }
+        return copied;
     }
 
     fn materializeLocalValue(
@@ -4197,7 +3151,7 @@ pub const Interpreter = struct {
         value: Value,
         target_layout: layout_mod.Idx,
     ) Error!Value {
-        return try self.boxy_runtime.materializeLocalValue(self.boxyFrameHooks(null), value, target_layout);
+        return try self.layoutRuntime().materializeLocalValue(self.valueHooks(), value, target_layout);
     }
 
     fn evalAssignRef(
@@ -4206,28 +3160,28 @@ pub const Interpreter = struct {
         op: LIR.RefOp,
         target_layout: layout_mod.Idx,
     ) Error!Value {
-        return switch (op) {
-            .local => |source| blk: {
-                const source_layout = self.store.getLocal(source).layout_idx;
+        return switch (op.kind) {
+            .local => blk: {
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const local_value = try self.coerceExplicitRefValueToLayout(
-                    try self.getLocalChecked(frame, source),
+                    try self.getLocalChecked(frame, op.source),
                     source_layout,
                     target_layout,
                 );
-                break :blk try self.materializeLocalValue(local_value, target_layout);
+                break :blk local_value;
             },
-            .field => |field| blk: {
-                const source_val = try self.getLocalChecked(frame, field.source);
-                const source_layout = self.store.getLocal(field.source).layout_idx;
+            .field => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
                 const struct_base = self.resolveStructBaseValue(source_val, source_layout);
                 const struct_layout_val = self.layout_store.getLayout(struct_base.layout);
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
                     struct_layout_val.getStruct().idx,
-                    field.field_idx,
+                    op.index,
                 );
                 const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
                     struct_layout_val.getStruct().idx,
-                    field.field_idx,
+                    op.index,
                 );
                 const field_value = try self.coerceExplicitRefValueToLayout(
                     struct_base.value.offset(field_offset),
@@ -4243,105 +3197,98 @@ pub const Interpreter = struct {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
                         .{
-                            @backingInt(field.source),
+                            @backingInt(op.source),
                             @backingInt(source_layout),
                             @backingInt(struct_base.layout),
-                            field.field_idx,
+                            op.index,
                             @backingInt(actual_field_layout),
                             @backingInt(target_layout),
                         },
                     );
                 }
-                break :blk try self.materializeLocalValue(field_value, target_layout);
+                break :blk field_value;
             },
-            .tag_payload => |payload| blk: {
-                const source_val = try self.getLocalChecked(frame, payload.source);
-                const source_layout = self.store.getLocal(payload.source).layout_idx;
-                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+            .tag_payload => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
+                const tag_base = self.layoutRuntime().resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != op.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload access expected discriminant {d} but observed {d}",
-                        .{ payload.tag_discriminant, disc },
+                        .{ op.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.variant_index);
+                const actual_payload_layout = self.layoutRuntime().tagPayloadLayout(source_layout, op.variant_index);
                 const payload_layout_val = self.layout_store.getLayout(actual_payload_layout);
                 switch (payload_layout_val.tag) {
                     .struct_ => {
                         const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(
                             payload_layout_val.getStruct().idx,
-                            payload.payload_idx,
+                            op.index,
                         );
                         const actual_field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(
                             payload_layout_val.getStruct().idx,
-                            payload.payload_idx,
+                            op.index,
                         );
                         const payload_value = try self.coerceExplicitRefValueToLayout(
                             tag_base.value.offset(field_offset),
                             actual_field_layout,
                             target_layout,
                         );
-                        break :blk try self.materializeLocalValue(payload_value, target_layout);
+                        break :blk payload_value;
                     },
                     .scalar,
                     .box,
                     .box_of_zst,
-                    .erased_box,
                     .list,
                     .list_of_zst,
                     .closure,
                     .erased_callable,
                     .zst,
+                    .hole,
                     .tag_union,
                     .ptr,
+                    .dynamic,
                     => {
-                        if (builtin.mode == .debug and payload.payload_idx != 0) {
+                        if (builtin.mode == .debug and op.index != 0) {
                             self.invariantFailed(
                                 "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
-                                .{ payload.payload_idx, @backingInt(actual_payload_layout) },
+                                .{ op.index, @backingInt(actual_payload_layout) },
                             );
                         }
                         const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
-                        break :blk try self.materializeLocalValue(payload_value, target_layout);
+                        break :blk payload_value;
                     },
                 }
             },
-            .tag_payload_struct => |payload| blk: {
-                const source_val = try self.getLocalChecked(frame, payload.source);
-                const source_layout = self.store.getLocal(payload.source).layout_idx;
-                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+            .tag_payload_struct => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
+                const tag_base = self.layoutRuntime().resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != op.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload struct access expected discriminant {d} but observed {d}",
-                        .{ payload.tag_discriminant, disc },
+                        .{ op.tag_discriminant, disc },
                     );
                 }
-                const actual_payload_layout = self.tagPayloadLayout(source_layout, payload.variant_index);
+                const actual_payload_layout = self.layoutRuntime().tagPayloadLayout(source_layout, op.variant_index);
                 const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
-                break :blk try self.materializeLocalValue(payload_value, target_layout);
+                break :blk payload_value;
             },
-            .list_reinterpret => |list_reinterpret| blk: {
-                const reinterpreted = try self.coerceExplicitListValueToLayout(
-                    try self.getLocalChecked(frame, list_reinterpret.backing_ref),
-                    self.store.getLocal(list_reinterpret.backing_ref).layout_idx,
-                    target_layout,
-                );
-                break :blk try self.materializeLocalValue(reinterpreted, target_layout);
+            .list_reinterpret => blk: {
+                const reinterpreted = try self.layoutRuntime().coerceExplicitListValueToLayout(try self.getLocalChecked(frame, op.source), self.store.getLocal(op.source).layout_idx, target_layout);
+                break :blk reinterpreted;
             },
-            .nominal => |nominal| blk: {
-                const reinterpreted = try self.coerceExplicitNominalValueToLayout(
-                    try self.getLocalChecked(frame, nominal.backing_ref),
-                    self.store.getLocal(nominal.backing_ref).layout_idx,
-                    target_layout,
-                );
-                break :blk try self.materializeLocalValue(reinterpreted, target_layout);
+            .nominal => blk: {
+                const reinterpreted = try self.layoutRuntime().coerceExplicitNominalValueToLayout(self.valueHooks(), try self.getLocalChecked(frame, op.source), self.store.getLocal(op.source).layout_idx, target_layout);
+                break :blk reinterpreted;
             },
-            .discriminant => |discriminant| blk: {
-                const source_val = try self.getLocalChecked(frame, discriminant.source);
-                const source_layout = self.store.getLocal(discriminant.source).layout_idx;
-                const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
+            .discriminant => blk: {
+                const source_val = try self.getLocalChecked(frame, op.source);
+                const source_layout = self.store.getLocal(op.source).layout_idx;
+                const tag_base = self.layoutRuntime().resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
                 const disc_value = try self.alloc(target_layout);
                 switch (self.helper.sizeOf(target_layout)) {
@@ -4354,7 +3301,7 @@ pub const Interpreter = struct {
                         .{@backingInt(target_layout)},
                     ),
                 }
-                break :blk try self.materializeLocalValue(disc_value, target_layout);
+                break :blk disc_value;
             },
         };
     }
@@ -4362,68 +3309,28 @@ pub const Interpreter = struct {
     fn evalLiteral(self: *LirInterpreter, literal: LIR.LiteralValue, target_layout: layout_mod.Idx) Error!Value {
         return switch (literal) {
             .i64_literal => |lit| self.evalI64Literal(lit.value, lit.layout_idx),
-            .i128_literal => |lit| self.evalI128Literal(lit.value, lit.layout_idx),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit self.layoutRuntime().i128LiteralValue(self.valueHooks(), lit.value, lit.layout_idx);
+            },
             .f64_literal => |value| self.evalF64Literal(value),
             .f32_literal => |value| self.evalF32Literal(value),
             .dec_literal => |value| self.evalDecLiteral(value),
             .str_literal => |idx| self.evalStrLiteral(idx),
-            .boxy_dynamic_num_literal => self.invariantFailedError(
-                "LIR/interpreter invariant violated: descriptor-guided numeric literal reached plain literal evaluation",
-                .{},
-            ),
-            .boxy_dynamic_frac_literal => self.invariantFailedError(
-                "LIR/interpreter invariant violated: descriptor-guided fractional literal reached plain literal evaluation",
-                .{},
-            ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
-            .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
+            .static_data => |read| self.evalStaticDataLiteral(read.id, target_layout),
         };
-    }
-
-    fn effectiveBoxyScalarLiteralDesc(
-        self: *LirInterpreter,
-        desc: *const LirProgram.BoxyTypeDesc,
-        default_layout: layout_mod.Idx,
-    ) Error!*const LirProgram.BoxyTypeDesc {
-        return self.boxy_runtime.effectiveBoxyScalarLiteralDesc(desc, default_layout);
-    }
-
-    fn evalBoxyDynamicNumLiteral(
-        self: *LirInterpreter,
-        value: i128,
-        desc: *const LirProgram.BoxyTypeDesc,
-        target_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.boxyDynamicNumLiteral(self.boxyFrameHooks(null), value, desc, target_layout);
-    }
-
-    fn evalBoxyDynamicFracLiteral(
-        self: *LirInterpreter,
-        dec_bits: i128,
-        desc: *const LirProgram.BoxyTypeDesc,
-        target_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.boxyDynamicFracLiteral(self.boxyFrameHooks(null), dec_bits, desc, target_layout);
     }
 
     fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {
         const val = try self.alloc(.opaque_ptr);
         const encoded: usize = @backingInt(proc_id) + 1;
-        switch (self.layout_store.targetUsize().size()) {
-            4 => val.write(u32, @intCast(encoded)),
-            8 => val.write(usize, encoded),
-            else => unreachable,
+        switch (self.layout_store.targetUsize()) {
+            .u32 => val.write(u32, @intCast(encoded)),
+            .u64 => val.write(usize, encoded),
         }
         return val;
-    }
-
-    pub fn failStaticDataDemand(self: *LirInterpreter, message: []const u8) Error {
-        const owned = self.allocator.dupe(u8, message) catch return error.OutOfMemory;
-        if (self.roc_env.crash_message) |old| self.allocator.free(old);
-        self.roc_env.crash_message = owned;
-        self.roc_env.crashed = true;
-        return error.Crash;
     }
 
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
@@ -4434,7 +3341,6 @@ pub const Interpreter = struct {
                 .{index},
             );
         }
-        if (self.static_data_demand) |demand| try demand.ensure(demand.context, id);
         const result = try self.alloc(target_layout);
         const size = self.helper.sizeOf(target_layout);
         if (size != 0) {
@@ -4447,7 +3353,6 @@ pub const Interpreter = struct {
     pub const InterpretedCallable = struct {
         proc: LIR.LirProcSpecId,
         capture_ptr: [*]u8,
-        result_desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
     /// Decode only the explicit static-header or interpreter-context ABI.
@@ -4460,7 +3365,7 @@ pub const Interpreter = struct {
         }
         if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        return .{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr), .result_desc = context.result_desc };
+        return .{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr) };
     }
 
     fn staticErasedCallableTrampoline(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void {
@@ -4472,7 +3377,9 @@ pub const Interpreter = struct {
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
-        return @ptrCast(@alignCast(capture_ptr orelse unreachable));
+        const non_null_capture = capture_ptr orelse
+            base.invariant("LIR/interpreter invariant violated: interpreter erased callable had no capture address", .{});
+        return @ptrCast(@alignCast(non_null_capture));
     }
 
     pub fn erasedCallableInterpreterContextFromPayload(data_ptr: [*]u8) *ErasedCallableInterpreterContext {
@@ -4498,12 +3405,13 @@ pub const Interpreter = struct {
         out_desc: *?*const anyopaque,
     ) callconv(.c) void {
         const context = erasedCallableInterpreterContextFromCapture(capture);
+        const capture_ptr = capture orelse unreachable; // erasedCallableInterpreterContextFromCapture rejected a null capture above
         const owner = context.owner;
         if (owner) |retained| {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(.{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = capture_ptr + context.capture_value_offset }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
@@ -4524,13 +3432,10 @@ pub const Interpreter = struct {
             },
             error.OutOfMemory => prefix ++ "ran out of memory",
             error.RuntimeError => prefix ++ "hit runtime error",
-            error.ComptimeExhaustiveness => prefix ++ "hit compile-time exhaustiveness marker",
             error.DivisionByZero => prefix ++ "hit division by zero",
             error.UnsupportedHostedFunction => prefix ++ "reached an unsupported hosted function",
             error.InvalidHostedFunctionSignature => prefix ++ "reached an invalid hosted function signature",
-            // expect_err statements only occur in top-level expect test
-            // roots, never in callable bodies.
-            error.ExpectErr => unreachable,
+            error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, not callable bodies
         };
         leaveAndReleaseErasedCallableOwner(owner);
         ops.crash(message);
@@ -4560,6 +3465,13 @@ pub const Interpreter = struct {
     ) Error!void {
         const drop_kind: ErasedCallableCaptureDrop = @fromBackingInt(@intCast(context.drop_kind));
         if (drop_kind == .none) return;
+        if (drop_kind == .desc) {
+            const capture_ptr = capture orelse unreachable; // interpreterErasedCallableOnDrop derived context from this capture, which rejects null
+            boxy.walk.captureDrop(capture_ptr + context.capture_value_offset, &self.roc_ops);
+            return;
+        }
+        const scratch_mark = self.scratch.mark();
+        defer self.scratch.restore(scratch_mark);
         const capture_layout: layout_mod.Idx = if (context.drop_layout_plus_one == 0)
             self.invariantFailed(
                 "LIR/interpreter invariant violated: erased callable capture drop lacked a layout",
@@ -4567,36 +3479,16 @@ pub const Interpreter = struct {
             )
         else
             @fromBackingInt(@intCast(context.drop_layout_plus_one - 1));
-        const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
+        const capture_ptr = capture orelse unreachable; // interpreterErasedCallableOnDrop derived context from this capture, which rejects null
+        const capture_value_ptr = capture_ptr + context.capture_value_offset;
         switch (drop_kind) {
-            .none => unreachable,
+            .none, .desc => unreachable, // these drop kinds returned above
             .rc_helper => self.performRcHelperRequired(
                 .{ .op = .decref, .layout_idx = capture_layout },
                 .{ .ptr = capture_value_ptr },
                 1,
                 .atomic,
             ),
-            .boxy_capture => {
-                const desc_address = self.readPointerInt(.{
-                    .ptr = capture_value_ptr + context.drop_desc_field_offset,
-                });
-                const desc: *const LirProgram.BoxyTypeDesc = if (desc_address == 0)
-                    self.invariantFailed(
-                        "LIR/interpreter invariant violated: Boxy erased callable capture drop descriptor was null",
-                        .{},
-                    )
-                else
-                    @ptrFromInt(desc_address);
-                try self.boxy_runtime.performBoxyLayoutDrop(
-                    self.boxyFrameHooks(null),
-                    .{ .ptr = capture_value_ptr },
-                    capture_layout,
-                    desc,
-                    .decref,
-                    1,
-                    .atomic,
-                );
-            },
         }
     }
 
@@ -4610,7 +3502,13 @@ pub const Interpreter = struct {
         out_desc: *?*const anyopaque,
     ) Error!void {
         self.bindCallerRocOps(ops);
-        self.bindBoxyRuntime();
+        // The result is copied to `ret`, so nothing the call leaves in the
+        // interpreter's stacks outlives it, including after a crash unwinds
+        // past the frames that would release their own storage.
+        const scratch_mark = self.scratch.mark();
+        defer self.scratch.restore(scratch_mark);
+        const frame_mark = self.frame_stack.mark();
+        defer self.frame_stack.restore(frame_mark);
         if (sljmp.supported) {
             var call_jmp_buf: JmpBuf = undefined;
             const prev_jmp_buf = self.roc_env.installJumpBuf(&call_jmp_buf);
@@ -4625,6 +3523,10 @@ pub const Interpreter = struct {
 
         const proc_id = callable.proc;
         const proc_spec = self.store.getProcSpec(proc_id);
+        if (proc_spec.abi == .erased_record) {
+            out_desc.* = null;
+            return self.callErasedRecordProc(proc_id, proc_spec, callable.capture_ptr, ret, args, reuse_ptr);
+        }
         const proc_arg_locals = self.store.getLocalSpan(proc_spec.args);
         if (proc_arg_locals.len < 2) {
             return self.invariantFailedError(
@@ -4634,8 +3536,8 @@ pub const Interpreter = struct {
         }
 
         const explicit_arg_count = proc_arg_locals.len - 2;
-        var proc_args = try self.arena.allocator().alloc(Value, proc_arg_locals.len);
-        var proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_arg_locals.len);
+        var proc_args = try self.evalAllocator().alloc(Value, proc_arg_locals.len);
+        var proc_arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, proc_arg_locals.len);
         const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} has no argument plan",
@@ -4669,22 +3571,18 @@ pub const Interpreter = struct {
         }
 
         const capture_value_ptr = callable.capture_ptr;
-        proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(capture_value_ptr));
+        // The hidden arguments are copied into the callee's frame when it
+        // begins, while these cells are live.
+        var capture_cell: PointerIntCell = .{};
+        var reuse_cell: PointerIntCell = .{};
+        proc_args[explicit_arg_count] = self.pointerIntCellValue(&capture_cell, @intFromPtr(capture_value_ptr));
         proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
         const reuse_index = explicit_arg_count + 1;
-        proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
+        proc_args[reuse_index] = self.pointerIntCellValue(&reuse_cell, if (reuse_ptr) |ptr| @intFromPtr(ptr) else 0);
         proc_arg_layouts[reuse_index] = self.store.getLocal(GuardedList.at(proc_arg_locals, reuse_index)).layout_idx;
 
-        const descriptor_bindings = try self.erasedDescriptorBindingsFromCapture(proc_spec, capture_value_ptr);
-        // A consuming call transfers ownership of the callable allocation to the
-        // callee (the host passes the payload as `reuse_ptr`), so evaluating the
-        // proc can free the allocation that `context` points into. Read the
-        // context's result descriptor before the call so the post-call fixup,
-        // which uses it when the proc returns no descriptor of its own, never
-        // dereferences freed memory.
-        const context_result_desc = callable.result_desc;
-        const result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
-        out_desc.* = @ptrCast(result.desc orelse context_result_desc);
+        const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
+        out_desc.* = null;
         const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
         if (ret_size > 0) {
             const ret_ptr = ret orelse {
@@ -4697,65 +3595,6 @@ pub const Interpreter = struct {
         }
     }
 
-    fn erasedDescriptorBindingsFromCapture(
-        self: *LirInterpreter,
-        proc_spec: LirProcSpec,
-        capture_ptr: [*]u8,
-    ) Error![]EvalDescriptorBinding {
-        const params = self.boxy_runtime.boxy_tables.erased_arg_desc_params[proc_spec.erased_arg_desc_params.start..][0..proc_spec.erased_arg_desc_params.len];
-        const offsets = self.boxy_runtime.boxy_tables.erased_arg_desc_offsets[proc_spec.erased_arg_desc_offsets.start..][0..proc_spec.erased_arg_desc_offsets.len];
-        const bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, params.len);
-
-        for (params, 0..) |param, param_index| {
-            const desc = if (param.read == .call_key) direct: {
-                var capture_offset: ?u32 = null;
-                for (offsets) |entry| {
-                    if (!std.meta.eql(entry.key, param.key)) continue;
-                    if (capture_offset != null) {
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased descriptor key had multiple capture offsets",
-                            .{},
-                        );
-                    }
-                    capture_offset = entry.offset;
-                }
-                const offset = capture_offset orelse return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: exact erased descriptor parameter had no capture offset",
-                    .{},
-                );
-                const raw_ptr = self.readPointerInt(.{ .ptr = capture_ptr + offset });
-                if (raw_ptr == 0) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: exact erased descriptor capture was null",
-                        .{},
-                    );
-                }
-                break :direct @as(*const LirProgram.BoxyTypeDesc, @ptrFromInt(raw_ptr));
-            } else projected: {
-                var parent: ?*const LirProgram.BoxyTypeDesc = null;
-                for (params[0..param_index], bindings[0..param_index]) |candidate, binding| {
-                    if (candidate.key.arg_index == param.key.arg_index and
-                        candidate.key.descriptor_index == param.source_descriptor_index)
-                    {
-                        parent = binding.desc;
-                        break;
-                    }
-                }
-                const parent_desc = parent orelse return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                    .{},
-                );
-                break :projected switch (param.read) {
-                    .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
-                    .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_nested_index),
-                    .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(null), parent_desc, param.source_tag_name, param.source_nested_index),
-                };
-            };
-            bindings[param_index] = .{ .local = param.local, .desc = desc };
-        }
-        return bindings;
-    }
-
     /// Make an erased call and then every call it leaves pending, as the
     /// native erased-call runtime does.
     fn evalErasedCall(
@@ -4764,8 +3603,6 @@ pub const Interpreter = struct {
         closure_local: LocalId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        arg_descs: []const *const LirProgram.BoxyTypeDesc,
-        arg_desc_keys: []const LIR.ErasedArgDescKey,
         arg_plan: LIR.ErasedCallArgsPlanId,
         ret_layout: layout_mod.Idx,
         reuse_closure: bool,
@@ -4778,19 +3615,17 @@ pub const Interpreter = struct {
             );
         }
         const closure_value = try self.getLocalChecked(frame, closure_local);
-        const first = try self.evalErasedCallOnce(frame, closure_value, closure_local, args, arg_layouts, arg_descs, arg_desc_keys, arg_plan, ret_layout, reuse_closure);
-        return try self.drivePendingErasedCalls(frame) orelse first;
+        const first = try self.evalErasedCallOnce(closure_value, closure_local, args, arg_layouts, arg_plan, ret_layout, reuse_closure);
+        if (!self.hasPendingCall()) return first;
+        return try self.drivePendingValue(ret_layout);
     }
 
     fn evalErasedCallOnce(
         self: *LirInterpreter,
-        frame: *Frame,
         closure_value: Value,
         closure_local: ?LocalId,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        arg_descs: []const *const LirProgram.BoxyTypeDesc,
-        arg_desc_keys: []const LIR.ErasedArgDescKey,
         arg_plan: LIR.ErasedCallArgsPlanId,
         ret_layout: layout_mod.Idx,
         reuse_closure: bool,
@@ -4803,7 +3638,10 @@ pub const Interpreter = struct {
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (interpretedCallable(closure_ptr)) |callable| {
+        // A `.boxy` worker takes the uniform record ABI, which the packed
+        // call below supplies through its trampoline.
+        if (interpretedCallable(closure_ptr)) |callable| interpreted: {
+            if (self.store.getProcSpecImmediate(callable.proc).abi == .erased_record) break :interpreted;
             const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);
@@ -4813,14 +3651,13 @@ pub const Interpreter = struct {
                     .{@backingInt(proc_id)},
                 );
             }
-            const desc_params = self.boxy_runtime.boxy_tables.erased_arg_desc_params[proc_spec.erased_arg_desc_params.start..][0..proc_spec.erased_arg_desc_params.len];
             const capture_param = proc_spec.erased_capture_arg orelse {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had no capture parameter metadata",
                     .{@backingInt(proc_id)},
                 );
             };
-            const explicit_arg_count = proc_spec.erased_arg_layouts.len;
+            const explicit_arg_count = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args.?).offsets.len;
             if (proc_params.len != explicit_arg_count + 2) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had {d} parameters for {d} explicit arguments plus capture/reuse",
@@ -4833,109 +3670,17 @@ pub const Interpreter = struct {
                     .{ @backingInt(proc_id), explicit_arg_count, args.len, arg_layouts.len },
                 );
             }
-            const worker_layouts_end = @as(usize, proc_spec.erased_arg_layouts.start) + proc_spec.erased_arg_layouts.len;
-            if (worker_layouts_end > self.boxy_runtime.boxy_tables.erased_arg_layouts.len or
-                proc_spec.erased_arg_layouts.len != explicit_arg_count)
-            {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased callable proc {d} argument layout span was invalid",
-                    .{@backingInt(proc_id)},
-                );
-            }
-            const worker_arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[proc_spec.erased_arg_layouts.start..worker_layouts_end];
-
-            const proc_args = try self.arena.allocator().alloc(Value, proc_params.len);
-            const proc_arg_layouts = try self.arena.allocator().alloc(layout_mod.Idx, proc_params.len);
+            const proc_args = try self.evalAllocator().alloc(Value, proc_params.len);
+            const proc_arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, proc_params.len);
             @memset(proc_args, undefined);
             @memset(proc_arg_layouts, undefined);
             for (args, arg_layouts, 0..) |arg, arg_layout, index| {
                 const param_layout = self.store.getLocal(GuardedList.at(proc_params, index)).layout_idx;
-                const expected_layout = worker_arg_layouts[index];
-                if (expected_layout != self.layout_store.runtimeRepresentationLayoutIdx(param_layout)) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: erased callable proc {d} argument {d} layout metadata disagreed with its parameter",
-                        .{ @backingInt(proc_id), index },
-                    );
+                if (arg_layout != self.layout_store.runtimeRepresentationLayoutIdx(param_layout)) {
+                    return self.invariantFailedError("LIR/interpreter invariant violated: erased callable argument ABI differs from its worker", .{});
                 }
-                // A closure built in a providing module against an abstract type
-                // reads its arguments in an erased form; a caller that resolved
-                // the same argument to a concrete layout must box it into that
-                // erased form before the worker runs. Only the erased worker's
-                // param layout differs from the concrete call-site layout, so the
-                // conversion is confined to those args.
-                if (arg_layout != expected_layout) {
-                    var arg_desc: ?*const LirProgram.BoxyTypeDesc = null;
-                    for (arg_desc_keys, arg_descs) |key, desc| {
-                        if (key.arg_index != index or key.descriptor_index != 0) continue;
-                        if (arg_desc != null) {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: erased call supplied the root argument descriptor more than once",
-                                .{},
-                            );
-                        }
-                        arg_desc = desc;
-                    }
-                    proc_args[index] = try self.boxy_runtime.materializeErasedCallArgument(
-                        self.boxyFrameHooks(frame),
-                        arg,
-                        arg_layout,
-                        arg_desc,
-                        expected_layout,
-                    );
-                    proc_arg_layouts[index] = param_layout;
-                } else {
-                    proc_args[index] = arg;
-                    proc_arg_layouts[index] = arg_layout;
-                }
-            }
-            if (arg_desc_keys.len != arg_descs.len) {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased argument descriptor values and keys disagreed",
-                    .{},
-                );
-            }
-            const resolved_descs = try self.arena.allocator().alloc(*const LirProgram.BoxyTypeDesc, desc_params.len);
-            const descriptor_bindings = try self.arena.allocator().alloc(EvalDescriptorBinding, desc_params.len);
-            for (desc_params, 0..) |param, desc_param_index| {
-                const desc = if (param.read == .call_key) direct: {
-                    var incoming_desc: ?*const LirProgram.BoxyTypeDesc = null;
-                    for (arg_desc_keys, arg_descs) |key, desc| {
-                        if (!std.meta.eql(key, param.key)) continue;
-                        if (incoming_desc != null) {
-                            return self.invariantFailedError(
-                                "LIR/interpreter invariant violated: erased call supplied one descriptor key more than once",
-                                .{},
-                            );
-                        }
-                        incoming_desc = desc;
-                    }
-                    break :direct incoming_desc orelse
-                        return self.invariantFailedError(
-                            "LIR/interpreter invariant violated: erased callable proc {d} required missing descriptor key ({d}, {d})",
-                            .{ @backingInt(proc_id), param.key.arg_index, param.key.descriptor_index },
-                        );
-                } else projected: {
-                    var parent_desc: ?*const LirProgram.BoxyTypeDesc = null;
-                    for (desc_params[0..desc_param_index], resolved_descs[0..desc_param_index]) |candidate, candidate_desc| {
-                        if (candidate.key.arg_index == param.key.arg_index and
-                            candidate.key.descriptor_index == param.source_descriptor_index)
-                        {
-                            parent_desc = candidate_desc;
-                            break;
-                        }
-                    }
-                    const parent = parent_desc orelse return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: erased descriptor projection parent was not bound",
-                        .{},
-                    );
-                    break :projected switch (param.read) {
-                        .call_key => return self.invariantFailedError("LIR/interpreter invariant violated: erased descriptor parameter read from its call key reached a parent read", .{}),
-                        .nested => try self.boxy_runtime.nestedBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_nested_index),
-                        .tag_payload => try self.boxy_runtime.tagPayloadBoxyDesc(self.boxyFrameHooks(frame), parent, param.source_tag_name, param.source_nested_index),
-                    };
-                };
-                resolved_descs[desc_param_index] = desc;
-                descriptor_bindings[desc_param_index] = .{ .local = param.local, .desc = desc };
+                proc_args[index] = arg;
+                proc_arg_layouts[index] = arg_layout;
             }
             if (GuardedList.at(proc_params, explicit_arg_count) != capture_param) {
                 return self.invariantFailedError(
@@ -4943,7 +3688,11 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[explicit_arg_count] = try self.allocPointerIntValue(@intFromPtr(callable.capture_ptr));
+            // The hidden arguments are copied into the callee's frame when it
+            // begins, while these cells are live.
+            var capture_cell: PointerIntCell = .{};
+            var reuse_cell: PointerIntCell = .{};
+            proc_args[explicit_arg_count] = self.pointerIntCellValue(&capture_cell, @intFromPtr(callable.capture_ptr));
             proc_arg_layouts[explicit_arg_count] = .opaque_ptr;
 
             const reuse_index = explicit_arg_count + 1;
@@ -4957,15 +3706,14 @@ pub const Interpreter = struct {
                     .{},
                 );
             }
-            proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
+            proc_args[reuse_index] = self.pointerIntCellValue(&reuse_cell, if (reuse_closure) @intFromPtr(closure_ptr) else 0);
             proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
             self.erased_caller_drives = true;
-            const proc_result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
+            const proc_result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
             return .{
                 .value = proc_result.value,
                 .layout = proc_spec.ret_layout,
-                .desc = proc_result.desc orelse callable.result_desc,
             };
         }
 
@@ -4980,7 +3728,7 @@ pub const Interpreter = struct {
         const arg_bytes = if (args.len == 0)
             null
         else blk: {
-            const bytes = try self.arena.allocator().alloc(u8, @max(call_plan.size, 1));
+            const bytes = try self.evalAllocator().alloc(u8, @max(call_plan.size, 1));
             for (args, arg_layouts, 0..) |arg_value, arg_layout, index| {
                 const size_align = self.helper.sizeAlignOf(arg_layout);
                 if (size_align.size > 0) {
@@ -4996,20 +3744,19 @@ pub const Interpreter = struct {
         const ret_size = self.helper.sizeOf(call_ret_layout);
         const ret_ptr: ?[*]u8 = if (ret_size == 0) null else result.ptr;
 
-        var returned_desc: ?*const anyopaque = null;
+        var out_desc: ?*const anyopaque = null;
         payload.callable_fn_ptr(
             &self.roc_ops,
             ret_ptr,
             if (arg_bytes) |bytes| @ptrCast(bytes.ptr) else null,
             builtins.erased_callable.capturePtr(closure_ptr),
             if (reuse_closure) closure_ptr else null,
-            &returned_desc,
+            &out_desc,
         );
 
         return .{
             .value = if (ret_size == 0) Value.zst else result,
             .layout = call_ret_layout,
-            .desc = if (returned_desc) |desc| @ptrCast(@alignCast(desc)) else null,
         };
     }
 
@@ -5046,7 +3793,7 @@ pub const Interpreter = struct {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
             if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
                 if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
-                    self.performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
+                    self.layoutRuntime().performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
                     break :blk reuse_ptr;
                 }
 
@@ -5073,16 +3820,10 @@ pub const Interpreter = struct {
         const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
             .none => .none,
             .rc_helper => .rc_helper,
-            .boxy_capture => .boxy_capture,
         };
         const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
             .none => null,
             .rc_helper => |helper| helper.layout_idx,
-            .boxy_capture => |plan| plan.capture_layout,
-        };
-        const drop_desc_field_offset: u32 = switch (assign.on_drop) {
-            .boxy_capture => |plan| plan.desc_field_offset,
-            .none, .rc_helper => 0,
         };
         const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
             &interpreterErasedCallableOnDrop
@@ -5099,22 +3840,22 @@ pub const Interpreter = struct {
             try self.getLocalChecked(frame, capture_local)
         else
             null;
-        const result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc);
         if (self.retained_owner) |owner| owner.retain();
         context.* = .{
             .owner = self.retained_owner,
             .interpreter = self,
-            .result_desc = result_desc,
             .proc_id = @backingInt(assign.proc),
             .drop_layout_plus_one = if (drop_layout) |layout_idx| @backingInt(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
-            .drop_desc_field_offset = drop_desc_field_offset,
             .drop_kind = @backingInt(capture_drop_kind),
             .padding = .{ 0, 0, 0 },
         };
 
         if (capture_value) |value| {
-            const capture_layout = assign.capture_layout orelse unreachable;
+            const capture_layout = assign.capture_layout orelse self.invariantFailed(
+                "LIR/interpreter invariant violated: erased callable proc {d} has a capture but no capture layout",
+                .{@backingInt(assign.proc)},
+            );
             const capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr);
             const size = self.helper.sizeOf(capture_layout);
             if (size > 0) {
@@ -5132,27 +3873,21 @@ pub const Interpreter = struct {
         base_layout: layout_mod.Idx,
     };
 
-    const BoxAllocInfo = boxy_runtime.BoxAllocInfo;
-
-    fn boxAllocInfo(self: *LirInterpreter, box_layout: Layout) BoxAllocInfo {
-        return self.boxy_runtime.boxAllocInfo(self.boxyFrameHooks(null), box_layout);
-    }
-
     fn allocStructValue(self: *LirInterpreter, struct_layout: layout_mod.Idx) Error!AllocatedStruct {
         const struct_layout_val = self.layout_store.getLayout(struct_layout);
         switch (struct_layout_val.tag) {
-            .zst => return .{
+            .zst, .hole => return .{
                 .outer = Value.zst,
                 .base = Value.zst,
                 .base_layout = .zst,
             },
             .box_of_zst => return .{
-                .outer = try self.allocBoxOfZstValue(struct_layout),
+                .outer = try self.layoutRuntime().allocBoxOfZstValue(self.valueHooks(), struct_layout),
                 .base = Value.zst,
                 .base_layout = .zst,
             },
             .box => {
-                const box_info = self.boxAllocInfo(struct_layout_val);
+                const box_info = self.layoutRuntime().boxAllocInfo(self.valueHooks(), struct_layout_val);
                 const data_ptr = try self.allocRocDataWithRc(
                     box_info.elem_size,
                     box_info.elem_alignment,
@@ -5180,13 +3915,13 @@ pub const Interpreter = struct {
                 };
             },
             .scalar,
-            .erased_box,
             .list,
             .list_of_zst,
             .closure,
             .erased_callable,
             .tag_union,
             .ptr,
+            .dynamic,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: assign_struct target layout {d} is not a struct or boxed struct",
                 .{@backingInt(struct_layout)},
@@ -5269,12 +4004,6 @@ pub const Interpreter = struct {
         return allocated.outer;
     }
 
-    const AllocatedTag = boxy_runtime.AllocatedTag;
-
-    fn allocTagValue(self: *LirInterpreter, union_layout: layout_mod.Idx) Error!AllocatedTag {
-        return try self.boxy_runtime.allocTagValue(self.boxyFrameHooks(null), union_layout);
-    }
-
     fn evalTagLiteral(
         self: *LirInterpreter,
         frame: *const Frame,
@@ -5283,7 +4012,7 @@ pub const Interpreter = struct {
         payload_local: ?LocalId,
         union_layout: layout_mod.Idx,
     ) Error!Value {
-        const allocated = try self.allocTagValue(union_layout);
+        const allocated = try self.layoutRuntime().allocTagValue(self.valueHooks(), union_layout);
         if (self.helper.sizeOf(allocated.base_layout) > 0) {
             self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
         } else if (builtin.mode == .debug and discriminant != 0) {
@@ -5293,7 +4022,7 @@ pub const Interpreter = struct {
             );
         }
 
-        const payload_layout = self.tagPayloadLayout(union_layout, variant_index);
+        const payload_layout = self.layoutRuntime().tagPayloadLayout(union_layout, variant_index);
         if (payload_local) |local| {
             const payload_size = self.helper.sizeOf(payload_layout);
             if (payload_size > 0) {
@@ -5312,7 +4041,7 @@ pub const Interpreter = struct {
     }
 
     fn evalListLiteral(self: *LirInterpreter, frame: *const Frame, elems: LocalSpan, list_layout: layout_mod.Idx) Error!Value {
-        const elem_layout = self.listElemLayout(list_layout);
+        const elem_layout = self.layoutRuntime().listElemLayout(list_layout);
         const elem_size = self.helper.sizeOf(elem_layout);
         const elem_locals = self.store.getLocalSpan(elems);
         if (elem_locals.len == 0) {
@@ -5370,8 +4099,12 @@ pub const Interpreter = struct {
         // so the C-ABI trampoline can scatter them into registers.
         var total_args_size: usize = 0;
         var args_alignment: layout_mod.RocAlignment = .@"1";
-        const arg_offsets = try self.allocator.alloc(u32, arg_layouts.len);
-        defer self.allocator.free(arg_offsets);
+        self.hosted_call_depth += 1;
+        defer {
+            self.hosted_call_depth -= 1;
+            if (self.hosted_call_depth == 0) _ = self.hosted_call_arena.reset(.retain_capacity);
+        }
+        const arg_offsets = try self.hosted_call_arena.allocator().alloc(u32, arg_layouts.len);
         for (arg_layouts, arg_offsets) |arg_layout, *arg_offset| {
             const sa = self.helper.sizeAlignOf(arg_layout);
             args_alignment = maxRocAlignment(args_alignment, sa.alignment);
@@ -5395,8 +4128,7 @@ pub const Interpreter = struct {
 
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
 
         if (self.hosted_call_handler) |handler| {
             try handler.dispatch(handler.context, .{
@@ -5418,11 +4150,9 @@ pub const Interpreter = struct {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Call the hosted function with the platform C ABI via the fixed register-image
             // trampoline (no runtime code generation).
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena_state.deinit();
             host_trampoline.call(
                 self.layout_store,
-                arena_state.allocator(),
+                self.hosted_call_arena.allocator(),
                 @ptrCast(hosted_fn),
                 arg_layouts,
                 ret_layout,
@@ -5468,10 +4198,6 @@ pub const Interpreter = struct {
             else => return error.RuntimeError,
         }
         return val;
-    }
-
-    fn evalI128Literal(self: *LirInterpreter, value: i128, layout_idx: layout_mod.Idx) Error!Value {
-        return try self.boxy_runtime.i128LiteralValue(self.boxyFrameHooks(null), value, layout_idx);
     }
 
     fn evalF64Literal(self: *LirInterpreter, value: f64) Error!Value {
@@ -5616,37 +4342,21 @@ pub const Interpreter = struct {
     }
 
     fn readRocStr(_: *LirInterpreter, val: Value) []const u8 {
-        return boxy_runtime.readRocStr(val);
-    }
-
-    fn inspectBoxyValue(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        value_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!Value {
-        var out = std.ArrayList(u8).empty;
-        defer out.deinit(self.evalAllocator());
-
-        try self.boxy_runtime.appendBoxyInspect(self.boxyFrameHooks(frame), &out, value, value_layout, desc);
-        return try self.makeRocStr(out.items);
-    }
-
-    fn layoutNeedsBoxyStructuralDesc(self: *const LirInterpreter, layout_idx: layout_mod.Idx) bool {
-        return self.boxy_runtime.layoutNeedsBoxyStructuralDesc(layout_idx);
+        const rs = valueToRocStr(val);
+        if (rs.isSmallStr()) return val.ptr[0..rs.len()];
+        return rs.asSlice();
     }
 
     fn execStrMatch(
         self: *LirInterpreter,
         frame: *Frame,
         stmt_id: CFStmtId,
-        str_match: anytype,
+        str_match: @FieldType(LIR.CFStmt, "str_match"),
     ) Error!CFStmtId {
         const source_value = try self.getLocalChecked(frame, str_match.source);
         const source_rs = valueToRocStr(source_value);
         const source_bytes = self.readRocStr(source_value);
-        return if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, str_match))
+        return if (try self.execStrMatchArm(frame, stmt_id, source_rs, source_bytes, self.store.stmtRow(str_match.data)))
             str_match.on_match
         else
             str_match.on_miss;
@@ -5757,110 +4467,20 @@ pub const Interpreter = struct {
 
     fn performRawRc(self: *LirInterpreter, op: RcOp, val: Value, layout_idx: layout_mod.Idx, count: u32) void {
         trace.log("performRawRc: op={s} layout={any} val.ptr={*} count={d}", .{ @tagName(op), layout_idx, val.ptr, count });
-        const helper = self.rcHelperForLayout(op, layout_idx);
-        self.performRcHelperIfNeeded(helper, val, count, .atomic);
+        const helper = self.layoutRuntime().rcHelperForLayout(op, layout_idx);
+        self.layoutRuntime().performRcHelperIfNeeded(self.valueHooks(), helper, val, count, .atomic);
     }
 
     fn performExplicitRcStmt(
         self: *LirInterpreter,
-        frame: *const Frame,
-        op: RcOp,
         helper: LIR.RcHelper,
         val: Value,
-        value_layout: layout_mod.Idx,
         count: u32,
         atomicity: LIR.RcAtomicity,
     ) Error!void {
         switch (helper) {
             .concrete => |concrete| self.performRcHelperRequired(concrete, val, count, runtimeRcAtomicity(atomicity)),
-            .boxy => |desc_ref| try self.performBoxyRcStmt(frame, op, desc_ref, val, value_layout, count, runtimeRcAtomicity(atomicity)),
         }
-    }
-
-    fn performBoxyRcStmt(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        op: RcOp,
-        desc_ref: LIR.BoxyDescRef,
-        val: Value,
-        value_layout: layout_mod.Idx,
-        count: u32,
-        atomicity: RcAtomicity,
-    ) Error!void {
-        const desc = try self.resolveBoxyDescRef(frame, desc_ref);
-        const layout_value = self.layout_store.getLayout(value_layout);
-        switch (op) {
-            .incref => {
-                if (layout_value.tag == .box or layout_value.tag == .box_of_zst) {
-                    // Box values are heap-indirect; incref bumps only the outer
-                    // allocation and the layout describes that pointer slot.
-                    const payload_helper = self.rcHelperForLayout(op, value_layout);
-                    self.performRcHelperIfNeeded(payload_helper, val, count, atomicity);
-                    return;
-                }
-                try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .incref, count, atomicity);
-            },
-            .decref => {
-                try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .decref, count, atomicity);
-            },
-            .free => {
-                try self.performBoxyLayoutDrop(frame, val, value_layout, desc, .free, count, atomicity);
-            },
-            // `host_drop` names a generated adapter's signature, not an
-            // operation the interpreter performs, so no RC statement carries it.
-            .host_drop => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: RC statement carried a host-shaped drop adapter",
-                .{},
-            ),
-        }
-    }
-
-    fn performBoxyPayloadDrop(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc: *const LirProgram.BoxyTypeDesc,
-        data_ptr: [*]u8,
-        count: u32,
-        atomicity: RcAtomicity,
-    ) Error!void {
-        try self.boxy_runtime.performBoxyPayloadDrop(self.boxyFrameHooks(frame), desc, data_ptr, count, atomicity);
-    }
-
-    fn performBoxyLayoutDrop(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        val: Value,
-        layout_idx: layout_mod.Idx,
-        desc: ?*const LirProgram.BoxyTypeDesc,
-        op: RcOp,
-        count: u32,
-        atomicity: RcAtomicity,
-    ) Error!void {
-        try self.boxy_runtime.performBoxyLayoutDrop(self.boxyFrameHooks(frame), val, layout_idx, desc, op, count, atomicity);
-    }
-
-    fn boxyBoxAllocationPayloadDesc(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        box_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!?*const LirProgram.BoxyTypeDesc {
-        return self.boxy_runtime.boxyBoxAllocationPayloadDesc(self.boxyFrameHooks(frame), box_layout, desc);
-    }
-
-    /// A box-self descriptor can arrive attached to a value whose static label
-    /// is a different box-family layout: concrete Box locals erase to dynamic
-    /// box storage (and back) as pure relabels, with the descriptor unchanged.
-    /// The descriptor still describes the box value itself. A box-family
-    /// payload layout on a box-family value can only mean box-self, because a
-    /// box's erasure is the box pointer itself—a dynamic box interior is
-    /// never a bare box value.
-    fn boxyDescIsBoxSelfForBoxValue(
-        self: *LirInterpreter,
-        box_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) bool {
-        return self.boxy_runtime.boxyDescIsBoxSelfForBoxValue(box_layout, desc);
     }
 
     fn performBuiltinInternalRc(
@@ -5882,14 +4502,6 @@ pub const Interpreter = struct {
         return self.layout_store.layoutContainsRefcounted(self.layout_store.getLayout(layout_idx));
     }
 
-    fn rcHelperForLayout(self: *LirInterpreter, op: RcOp, layout_idx: layout_mod.Idx) layout_mod.RcHelper {
-        return self.boxy_runtime.rcHelperForLayout(op, layout_idx);
-    }
-
-    fn performRcHelperIfNeeded(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
-        self.boxy_runtime.performRcHelperIfNeeded(self.boxyFrameHooks(null), helper, val, count, atomicity);
-    }
-
     fn performRcHelperRequired(self: *LirInterpreter, helper: layout_mod.RcHelper, val: Value, count: u32, atomicity: RcAtomicity) void {
         const plan = self.layout_store.rcHelperPlan(helper);
         if (plan == .noop) {
@@ -5898,7 +4510,7 @@ pub const Interpreter = struct {
                 .{@backingInt(helper.layout_idx)},
             );
         }
-        self.boxy_runtime.performRcPlan(self.boxyFrameHooks(null), plan, val, count, atomicity);
+        self.layoutRuntime().performRcPlan(self.valueHooks(), plan, val, count, atomicity);
     }
 
     // ── RcEffect conformance observation (debug builds only) ──
@@ -5919,6 +4531,7 @@ pub const Interpreter = struct {
         val: Value,
         layout_idx: layout_mod.Idx,
     ) ?rc_conformance.Allocation {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) return self.conformanceHoleAllocation(val, layout_idx);
         return switch (self.conformanceRcPlan(layout_idx)) {
             .str_decref => blk: {
                 const rs = valueToRocStr(val);
@@ -5947,6 +4560,25 @@ pub const Interpreter = struct {
         return self.layout_store.rcHelperPlan(.{ .op = .decref, .layout_idx = layout_idx });
     }
 
+    /// The allocation a value holding a demand hole owns. Such a value is a
+    /// list or box header whose items no code reads (design.md
+    /// "Specialization By Demand"): it has no refcount plan, it owns exactly
+    /// its own allocation, and the observer cannot name anything behind it.
+    fn conformanceHoleAllocation(
+        self: *LirInterpreter,
+        val: Value,
+        layout_idx: layout_mod.Idx,
+    ) ?rc_conformance.Allocation {
+        return switch (self.layout_store.getLayout(layout_idx).tag) {
+            .list => rc_conformance.allocationAt(valueToRocList(val).getAllocationDataPtr(&self.roc_ops)),
+            .box => rc_conformance.allocationAt(val.read(?[*]u8)),
+            .hole, .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => self.invariantFailed(
+                "LIR/interpreter invariant violated: a value holding a demand hole had layout {d} ({s}), not a list or box",
+                .{ @backingInt(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+            ),
+        };
+    }
+
     /// Collect every refcounted allocation reachable from a value.
     fn conformanceCollectAllocations(
         self: *LirInterpreter,
@@ -5954,6 +4586,10 @@ pub const Interpreter = struct {
         layout_idx: layout_mod.Idx,
         sink: *rc_conformance.AllocationSet,
     ) void {
+        if (self.layout_store.layoutHoldsHole(layout_idx)) {
+            if (self.conformanceHoleAllocation(val, layout_idx)) |found| sink.add(found.rc_addr);
+            return;
+        }
         self.conformanceCollectPlan(self.conformanceRcPlan(layout_idx), val, sink, 0);
     }
 
@@ -6074,27 +4710,9 @@ pub const Interpreter = struct {
         self.conformanceCollectAllocations(result, ret_layout, &observation.result_reachable);
     }
 
-    fn performErasedCallableFinalDropIfUnique(
-        self: *LirInterpreter,
-        data_ptr: ?[*]u8,
-        op: layout_mod.RcOp,
-        count: u32,
-    ) void {
-        self.boxy_runtime.performErasedCallableFinalDropIfUnique(data_ptr, op, count);
-    }
-
-    fn performErasedCallableFinalDrop(
-        self: *LirInterpreter,
-        data_ptr: ?[*]u8,
-        op: layout_mod.RcOp,
-        count: u32,
-    ) void {
-        self.boxy_runtime.performErasedCallableFinalDrop(data_ptr, op, count);
-    }
-
     // ── Value ↔ RocStr/RocList marshaling ──
 
-    const valueToRocStr = boxy_runtime.valueToRocStr;
+    const valueToRocStr = @import("layout_runtime.zig").valueToRocStr;
 
     const PrefixParseSource = union(enum) { str: RocStr, utf8: RocList };
     const PrefixParseOut = struct { err: [*]u8, rest: [*]u8, value: [*]u8 };
@@ -6125,30 +4743,46 @@ pub const Interpreter = struct {
         return val;
     }
 
-    const valueToRocList = boxy_runtime.valueToRocList;
+    const valueToRocList = @import("layout_runtime.zig").valueToRocList;
 
     fn valueToRocListForLayout(
         self: *LirInterpreter,
         list_val: Value,
         list_layout: layout_mod.Idx,
     ) RocList {
-        return self.boxy_runtime.valueToRocListForLayout(list_val, list_layout);
+        return self.layoutRuntime().valueToRocListForLayout(list_val, list_layout);
     }
 
     fn rocListToValue(self: *LirInterpreter, rl: RocList, ret_layout: layout_mod.Idx) Error!Value {
-        return try self.boxy_runtime.rocListToValue(self.boxyFrameHooks(null), rl, ret_layout);
+        return try self.layoutRuntime().rocListToValue(self.valueHooks(), rl, ret_layout);
     }
 
     const ListElemInfo = struct { alignment: u32, width: usize };
 
-    const ListElementRcContext = struct {
-        interp: *LirInterpreter,
-        frame: *const Frame,
-        elem_layout: layout_mod.Idx,
-        elem_desc: ?*const LirProgram.BoxyTypeDesc,
+    /// Where a list operation reads its element facts: the list's static
+    /// layout, or the element descriptor a `.boxy` generic body passes.
+    const ListElemSource = union(enum) {
+        list_layout: layout_mod.Idx,
+        desc: *const TypeDesc,
     };
 
-    fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
+    const ListElementRcContext = struct {
+        interp: *LirInterpreter,
+        elem: union(enum) {
+            layout: layout_mod.Idx,
+            desc: *const TypeDesc,
+        },
+    };
+
+    fn listElemSource(ll: LowLevelEvalInput, list_layout: layout_mod.Idx) ListElemSource {
+        return if (ll.elem_desc) |desc| .{ .desc = desc } else .{ .list_layout = list_layout };
+    }
+
+    fn listElemInfo(self: *LirInterpreter, source: ListElemSource) ListElemInfo {
+        const list_layout = switch (source) {
+            .desc => |desc| return .{ .alignment = if (desc.size == 0) 1 else desc.alignment, .width = desc.size },
+            .list_layout => |list_layout| list_layout,
+        };
         const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
             .{@backingInt(list_layout)},
@@ -6165,15 +4799,79 @@ pub const Interpreter = struct {
         return .{ .alignment = 1, .width = 0 };
     }
 
-    fn builtinListElemRc(self: *LirInterpreter, list_layout: layout_mod.Idx) bool {
-        return self.builtinInternalContainsRefcounted("interpreter.builtinListElemRc", self.listElemLayout(list_layout));
+    fn builtinListElemRc(self: *LirInterpreter, source: ListElemSource) bool {
+        return switch (source) {
+            .desc => |desc| desc.containsRefcounted(),
+            .list_layout => |list_layout| self.builtinInternalContainsRefcounted("interpreter.builtinListElemRc", self.layoutRuntime().listElemLayout(list_layout)),
+        };
     }
 
-    fn listElemLayout(self: *LirInterpreter, list_layout: layout_mod.Idx) layout_mod.Idx {
-        return self.boxy_runtime.listElemLayout(list_layout);
+    /// A list operand: a statically laid out list value, or a list's bytes.
+    fn listValue(self: *LirInterpreter, source: ListElemSource, list_val: Value) RocList {
+        return switch (source) {
+            .desc => valueToRocList(list_val),
+            .list_layout => |list_layout| self.valueToRocListForLayout(list_val, list_layout),
+        };
     }
 
-    const canonicalZstList = boxy_runtime.canonicalZstList;
+    /// A list result: a value of the result layout, or a dynamic list's bytes.
+    fn listResult(self: *LirInterpreter, ll: LowLevelEvalInput, rl: RocList) Error!Value {
+        if (self.layout_store.getLayout(ll.ret_layout).tag != .dynamic) return self.rocListToValue(rl, ll.ret_layout);
+        const val = try self.allocAlignedBytes(@sizeOf(RocList), .fromByteUnits(@alignOf(RocList)));
+        @memcpy(val.ptr[0..@sizeOf(RocList)], std.mem.asBytes(&rl));
+        return val;
+    }
+
+    /// Storage for an element result: a value of the result layout, or a
+    /// dynamic element's bytes.
+    fn listElemResult(self: *LirInterpreter, ll: LowLevelEvalInput, info: ListElemInfo) Error!Value {
+        if (self.layout_store.getLayout(ll.ret_layout).tag != .dynamic) return self.alloc(ll.ret_layout);
+        return self.allocAlignedBytes(info.width, .fromByteUnits(@intCast(info.alignment)));
+    }
+
+    const ListReplaceResultShape = struct {
+        value: Value,
+        list_offset: u32,
+        value_offset: u32,
+    };
+
+    /// The `{ list : List(a), value : a }` result of `list_replace_unsafe`,
+    /// from its static layout or its descriptor.
+    fn listReplaceResultShape(self: *LirInterpreter, ll: LowLevelEvalInput) Error!ListReplaceResultShape {
+        if (ll.ret_desc) |ret_desc| {
+            const record = backingDesc(ret_desc);
+            if (record.kind != .record or record.count != 2) {
+                return self.invariantFailedError("LIR/interpreter invariant violated: list_replace_unsafe result descriptor is not a two-field record", .{});
+            }
+            const first = record.fieldBySemanticIndex(0);
+            const second = record.fieldBySemanticIndex(1);
+            const first_is_list = first.desc.kind == .list;
+            return .{
+                .value = try self.allocAlignedBytes(record.size, .fromByteUnits(@intCast(record.alignment))),
+                .list_offset = if (first_is_list) first.offset else second.offset,
+                .value_offset = if (first_is_list) second.offset else first.offset,
+            };
+        }
+        // Disambiguate the two fields by their layout tag (one is a list, one is the element).
+        const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
+        if (ret_layout_val.tag != .struct_) return self.runtimeError("list_replace_unsafe: expected struct return layout");
+        const rec_idx = ret_layout_val.getStruct().idx;
+        const f0_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
+        const f0_layout_val = self.layout_store.getLayout(f0_layout);
+        const f0_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
+        const f1_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
+        const f0_is_list = f0_layout_val.tag == .list or f0_layout_val.tag == .list_of_zst;
+        return .{
+            .value = try self.alloc(ll.ret_layout),
+            .list_offset = if (f0_is_list) f0_offset else f1_offset,
+            .value_offset = if (f0_is_list) f1_offset else f0_offset,
+        };
+    }
+
+    /// The canonical allocation-free representation of a ZST list.
+    fn canonicalZstList(len: usize) RocList {
+        return .{ .bytes = null, .length = len, .capacity_or_alloc_ptr = 0 };
+    }
 
     fn zstSublistLen(size: usize, start_u64: u64, len_u64: u64) usize {
         if (size == 0 or len_u64 == 0 or start_u64 >= @as(u64, @intCast(size))) return 0;
@@ -6185,27 +4883,21 @@ pub const Interpreter = struct {
 
     fn listElementIncref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
-        const ctx_ptr = context orelse unreachable;
+        const ctx_ptr = context orelse unreachable; // every list op that passes this callback passes its ListElementRcContext with it
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
-        const value = Value{ .ptr = element.? };
-        if (ctx.elem_desc) |desc| {
-            ctx.interp.performBoxyLayoutDrop(ctx.frame, value, ctx.elem_layout, desc, .incref, 1, .atomic) catch |err|
-                ctx.interp.invariantFailed("descriptor-guided list element incref failed: {s}", .{@errorName(err)});
-        } else {
-            ctx.interp.performBuiltinInternalRc("interpreter.listElementIncref", .incref, value, ctx.elem_layout, 1);
+        switch (ctx.elem) {
+            .layout => |elem_layout| ctx.interp.performBuiltinInternalRc("interpreter.listElementIncref", .incref, .{ .ptr = element.? }, elem_layout, 1),
+            .desc => |desc| boxy.walk.incref(desc, element.?, 1, &ctx.interp.roc_ops),
         }
     }
 
     fn listElementDecref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
         if (element == null) return;
-        const ctx_ptr = context orelse unreachable;
+        const ctx_ptr = context orelse unreachable; // every list op that passes this callback passes its ListElementRcContext with it
         const ctx: *const ListElementRcContext = @ptrCast(@alignCast(ctx_ptr));
-        const value = Value{ .ptr = element.? };
-        if (ctx.elem_desc) |desc| {
-            ctx.interp.performBoxyLayoutDrop(ctx.frame, value, ctx.elem_layout, desc, .decref, 1, .atomic) catch |err|
-                ctx.interp.invariantFailed("descriptor-guided list element decref failed: {s}", .{@errorName(err)});
-        } else {
-            ctx.interp.performBuiltinInternalRc("interpreter.listElementDecref", .decref, value, ctx.elem_layout, 1);
+        switch (ctx.elem) {
+            .layout => |elem_layout| ctx.interp.performBuiltinInternalRc("interpreter.listElementDecref", .decref, .{ .ptr = element.? }, elem_layout, 1),
+            .desc => |desc| boxy.walk.decref(desc, element.?, &ctx.interp.roc_ops),
         }
     }
 
@@ -6214,8 +4906,7 @@ pub const Interpreter = struct {
     fn callBuiltinStr1(self: *LirInterpreter, comptime func: anytype, a: RocStr, update_mode: UpdateMode, ret_layout: layout_mod.Idx) Error!Value {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
         const result = func(a, update_mode, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
@@ -6223,8 +4914,7 @@ pub const Interpreter = struct {
     fn callBuiltinStr2(self: *LirInterpreter, comptime func: anytype, a: RocStr, b: RocStr, ret_layout: layout_mod.Idx) Error!Value {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
         const result = func(a, b, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
     }
@@ -6234,63 +4924,16 @@ pub const Interpreter = struct {
     fn callBuiltinStr2Mode(self: *LirInterpreter, comptime func: anytype, a: RocStr, b: RocStr, update_mode: UpdateMode, ret_layout: layout_mod.Idx) Error!Value {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
         const result = func(a, b, update_mode, &self.roc_ops);
         return self.rocStrToValue(result, ret_layout);
-    }
-
-    fn unwrapSingleFieldPayloadLayout(self: *LirInterpreter, layout_idx: layout_mod.Idx) ?layout_mod.Idx {
-        return self.boxy_runtime.unwrapSingleFieldPayloadLayout(layout_idx);
-    }
-
-    /// Locate the BadUtf8 variant inside an err tag union that may have been extended via `?`
-    /// to include additional error tags. The Str.from_utf8 layout contract represents BadUtf8
-    /// as a record whose original-index 0 field is the U64 byte index and whose original-index
-    /// 1 field is the one-byte UTF-8 problem tag.
-    fn findBadUtf8Variant(
-        self: *LirInterpreter,
-        inner_tu: *const layout_mod.TagUnionData,
-    ) ?struct { disc: u32, struct_idx: layout_mod.StructIdx } {
-        const inner_v = self.layout_store.getTagUnionVariants(inner_tu);
-        for (0..inner_v.len) |i| {
-            const inner_payload = inner_v.get(@intCast(i)).payload_layout;
-            const unwrapped = self.unwrapSingleFieldPayloadLayout(inner_payload) orelse inner_payload;
-            const inner_layout = self.layout_store.getLayout(unwrapped);
-            if (inner_layout.tag != .struct_) continue;
-
-            const struct_idx = inner_layout.getStruct().idx;
-            const struct_data = self.layout_store.getStructData(struct_idx);
-            const fields = self.layout_store.struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 2) continue;
-
-            var has_index_field = false;
-            var has_problem_field = false;
-            for (0..fields.len) |fi| {
-                const field = fields.get(fi);
-                const field_layout = self.layout_store.getLayout(field.layout);
-                const field_size = self.layout_store.layoutSize(field_layout);
-                switch (field.index) {
-                    0 => has_index_field = field_size == 8,
-                    1 => has_problem_field = field_size == 1,
-                    else => {},
-                }
-            }
-            if (has_index_field and has_problem_field) {
-                return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-            }
-        }
-        return null;
     }
 
     const LowLevelEvalInput = struct {
         op: LIR.LowLevel,
         args: []const Value,
         arg_layouts: []const layout_mod.Idx,
-        arg_descs: []const ?*const LirProgram.BoxyTypeDesc,
         ret_layout: layout_mod.Idx,
-        ret_desc: ?*const LirProgram.BoxyTypeDesc,
-        frame: *const Frame,
         callable_proc: ?LirProcSpecId = null,
         /// The statement's statically-proven-unique argument mask; bit i set
         /// means argument i's runtime uniqueness check is redundant and the
@@ -6301,36 +4944,22 @@ pub const Interpreter = struct {
         /// in-place branch is statically dead, so the op yields 0 without the
         /// runtime uniqueness check. Ignored by every other op.
         interchangeable: layout_mod.WidthValues(bool) = layout_mod.WidthValues(bool).both(true, true),
+        /// The element descriptor of a list operation a `.boxy` generic body
+        /// emits (`LowLevelExtra.dyn_elem_desc`). Its list arguments and
+        /// results, and element results, are then the values' bytes.
+        elem_desc: ?*const TypeDesc = null,
+        /// The descriptor of a dynamic result, for an operation whose result
+        /// layout is a record the static layout store does not have.
+        ret_desc: ?*const TypeDesc = null,
     };
 
-    fn listElementRcContext(self: *LirInterpreter, ll: LowLevelEvalInput, list_layout: layout_mod.Idx) Error!ListElementRcContext {
-        const elem_layout = self.listElemLayout(list_layout);
-        const elem_layout_value = self.layout_store.getLayout(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-        const elem_is_box = elem_is_erased_box or elem_layout_value.tag == .box;
-        var elem_desc: ?*const LirProgram.BoxyTypeDesc = null;
-
-        if (elem_is_box) {
-            const list_desc = if (ll.arg_descs.len > 0) ll.arg_descs[0] orelse ll.ret_desc else ll.ret_desc;
-            if (list_desc) |desc| {
-                elem_desc = try self.firstNestedBoxyDesc(ll.frame, desc) orelse
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: descriptor-backed list layout {d} had no element descriptor",
-                        .{@backingInt(list_layout)},
-                    );
-            } else if (elem_is_erased_box) {
-                return self.invariantFailedError(
-                    "LIR/interpreter invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
-                    .{@backingInt(elem_layout)},
-                );
-            }
-        }
-
+    fn listElementRcContext(self: *LirInterpreter, source: ListElemSource) ListElementRcContext {
         return .{
             .interp = self,
-            .frame = ll.frame,
-            .elem_layout = elem_layout,
-            .elem_desc = elem_desc,
+            .elem = switch (source) {
+                .desc => |desc| .{ .desc = desc },
+                .list_layout => |list_layout| .{ .layout = self.layoutRuntime().listElemLayout(list_layout) },
+            },
         };
     }
 
@@ -6374,18 +5003,17 @@ pub const Interpreter = struct {
 
     /// Evaluate `list_reserve` or `list_reserve_for_append` through `reserve`,
     /// the builtin that picks the grown capacity.
-    fn evalListReserve(self: *LirInterpreter, ll: LowLevelEvalInput, arg_layout: layout_mod.Idx, comptime reserve: anytype) Error!Value {
-        const info = self.listElemInfo(arg_layout);
-        const elems_rc = self.builtinListElemRc(arg_layout);
-        const list_val = self.valueToRocListForLayout(ll.args[0], arg_layout);
+    fn evalListReserve(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, comptime reserve: anytype) Error!Value {
+        const info = self.listElemInfo(list_elems);
+        const elems_rc = self.builtinListElemRc(list_elems);
+        const list_val = self.listValue(list_elems, ll.args[0]);
         if (info.width == 0) {
-            return self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+            return self.listResult(ll, canonicalZstList(list_val.len()));
         }
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return error.Crash;
-        var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+        if (crash_boundary.set() != 0) return error.Crash;
+        var elem_rc_ctx = self.listElementRcContext(list_elems);
         const result = reserve(
             list_val,
             info.alignment,
@@ -6399,7 +5027,7 @@ pub const Interpreter = struct {
             updateModeForArg0(ll.unique_args),
             &self.roc_ops,
         );
-        return self.rocListToValue(result, ll.ret_layout);
+        return self.listResult(ll, result);
     }
 
     fn evalLowLevel(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
@@ -6410,12 +5038,11 @@ pub const Interpreter = struct {
             ll.arg_layouts[0]
         else
             ll.ret_layout;
+        const list_elems = listElemSource(ll, arg_layout);
 
         return switch (ll.op) {
-            .num_plus, .num_minus, .num_times => unreachable,
-            // LIR lowering splits this into an alias and `list_prefetch`.
-            .list_prefetched => unreachable,
-            .list_sort_with => self.evalListSortWith(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member, and verifyArithmeticBoundary rejects it in LIR
+            .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             // ── String ops ──
             .str_is_eq => blk: {
                 const result = builtins.str.strEqual(valueToRocStr(args[0]), valueToRocStr(args[1]));
@@ -6494,8 +5121,7 @@ pub const Interpreter = struct {
             .str_repeat => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.repeatC(valueToRocStr(args[0]), args[1].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6504,8 +5130,7 @@ pub const Interpreter = struct {
             .str_split_first => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.splitFirst(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6531,8 +5156,7 @@ pub const Interpreter = struct {
             .str_split_last => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.splitLast(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6558,8 +5182,7 @@ pub const Interpreter = struct {
             .str_drop_prefix_caseless_ascii => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strDropPrefixCaselessAscii(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
 
                 const layout_val = self.layout_store.getLayout(ll.ret_layout);
@@ -6604,93 +5227,39 @@ pub const Interpreter = struct {
             .str_to_utf8 => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strToUtf8C(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .str_from_utf8 => blk: {
-                // str_from_utf8(list) -> Try(Str, [BadUtf8 {index: U64, problem: Utf8Problem}, ..])
-                // The C builtin returns FromUtf8Try (a flat struct). We convert it to the Roc
-                // tag union layout using layout-resolved offsets. Note the err tag union has an
-                // open extension (`..`), so at the call site it may be unified with other error
-                // tags from `?` chaining. We must locate the BadUtf8 variant inside that
-                // (possibly multi-variant) inner tag union and write the inner discriminant
-                // when there is more than one inner variant.
+                // str_from_utf8(list) -> Try(Str, { index : U64, problem : Utf8Problem })
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.fromUtf8C(self.valueToRocListForLayout(args[0], arg_layout), UpdateMode.Immutable, &self.roc_ops);
 
                 const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
                 if (ret_layout_val.tag != .tag_union) {
-                    return self.runtimeError("str_from_utf8 expected a tag union return layout");
+                    return self.invariantFailedError("str_from_utf8 expected a Try return layout", .{});
                 }
                 const tu_data = self.layout_store.getTagUnionData(ret_layout_val.getTagUnion().idx);
-                const variants = self.layout_store.getTagUnionVariants(tu_data);
-
-                // Discover Ok (Str payload) and Err variant indices from the layout.
-                var ok_disc: ?u32 = null;
-                var err_disc: ?u32 = null;
-                var err_record_idx: ?layout_mod.StructIdx = null;
-                var inner_tu_data_opt: ?*const layout_mod.TagUnionData = null;
-                var inner_bad_utf8_disc: u32 = 0;
-                for (0..variants.len) |i| {
-                    const v_payload = variants.get(@intCast(i)).payload_layout;
-                    const candidate = self.unwrapSingleFieldPayloadLayout(v_payload) orelse v_payload;
-                    if (candidate == .str) {
-                        ok_disc = @intCast(i);
-                    } else {
-                        err_disc = @intCast(i);
-                        const err_layout = self.layout_store.getLayout(candidate);
-                        switch (err_layout.tag) {
-                            .struct_ => err_record_idx = err_layout.getStruct().idx,
-                            .tag_union => {
-                                const inner_tu = self.layout_store.getTagUnionData(err_layout.getTagUnion().idx);
-                                inner_tu_data_opt = inner_tu;
-                                const found = self.findBadUtf8Variant(inner_tu);
-                                if (found) |info| {
-                                    err_record_idx = info.struct_idx;
-                                    inner_bad_utf8_disc = info.disc;
-                                }
-                            },
-                            .scalar,
-                            .box,
-                            .box_of_zst,
-                            .erased_box,
-                            .list,
-                            .list_of_zst,
-                            .closure,
-                            .erased_callable,
-                            .zst,
-                            .ptr,
-                            => {},
-                        }
-                    }
+                // `Try`'s `Err` is discriminant 0 and `Ok` is 1; `Err`'s payload is the error record.
+                const err_payload = self.layout_store.getTagUnionVariants(tu_data).get(0).payload_layout;
+                const err_layout = self.layout_store.getLayout(self.layoutRuntime().unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+                if (err_layout.tag != .struct_) {
+                    return self.invariantFailedError("str_from_utf8's error was not a record", .{});
                 }
+                const rec_idx = err_layout.getStruct().idx;
 
                 const val = try self.alloc(ll.ret_layout);
                 @memset(val.ptr[0..tu_data.size.get(self.layout_store.targetUsize())], 0);
-
-                const resolved_ok = ok_disc orelse return self.runtimeError("str_from_utf8: no Ok variant in layout");
-                const resolved_err = err_disc orelse return self.runtimeError("str_from_utf8: no Err variant in layout");
-                const rec_idx = err_record_idx orelse return self.runtimeError("str_from_utf8: could not resolve error record layout");
-
                 if (result.is_ok) {
                     @memcpy(val.ptr[0..@sizeOf(RocStr)], std.mem.asBytes(&result.string));
-                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_ok);
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, 1);
                 } else {
-                    const index_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
-                    const problem_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
-                    val.offset(index_off).write(u64, result.byte_index);
-                    val.offset(problem_off).write(u8, @backingInt(result.problem_code));
-                    if (inner_tu_data_opt) |inner_tu| {
-                        // The inner tag union sits at offset 0 of the Err payload, which is at
-                        // offset 0 of the outer tag union. Write its discriminant in place.
-                        inner_tu.writeDiscriminant(val.ptr, inner_bad_utf8_disc, self.layout_store.targetUsize());
-                    }
-                    self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_err);
+                    val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0)).write(u64, result.byte_index);
+                    val.offset(self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1)).write(u8, @backingInt(result.problem_code));
+                    self.helper.writeTagDiscriminant(val, ll.ret_layout, 0);
                 }
                 break :blk val;
             },
@@ -6717,40 +5286,45 @@ pub const Interpreter = struct {
             .str_from_utf8_lossy => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.fromUtf8Lossy(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_split_on => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strSplitOn(valueToRocStr(args[0]), valueToRocStr(args[1]), &self.roc_ops);
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
             .str_join_with => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strJoinWithC(self.valueToRocListForLayout(args[0], arg_layout), valueToRocStr(args[1]), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_parts => blk: {
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                const parts = try self.allocator.alloc(RocStr, args.len);
+                defer self.allocator.free(parts);
+                for (args, parts) |arg, *part| part.* = valueToRocStr(arg);
+                const result = builtins.str.strFromParts(parts, &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_with_capacity => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.withCapacityC(args[0].read(u64), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_reserve => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.reserveC(valueToRocStr(args[0]), args[1].read(u64), updateModeForArg0(ll.unique_args), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6758,8 +5332,7 @@ pub const Interpreter = struct {
             .str_inspect => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.str.strEscapeAndQuote(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
@@ -6807,42 +5380,18 @@ pub const Interpreter = struct {
                 val.write(i128, args[0].read(i128));
                 break :blk val;
             },
-            .num_to_str => blk: {
-                // Generic num_to_str uses arg layout to determine type
-                const size = self.helper.sizeOf(arg_layout);
-                const l = self.layout_store.getLayout(arg_layout);
-                const is_float = l.tag == .scalar and l.getScalar().tag == .frac;
-                if (isDec(arg_layout)) {
-                    const dec = RocDec{ .num = args[0].read(i128) };
-                    var crash_boundary = self.enterCrashBoundary();
-                    defer crash_boundary.deinit();
-                    const sj = crash_boundary.set();
-                    if (sj != 0) return self.crashError();
-                    const result = builtins.dec.to_str(dec, &self.roc_ops);
-                    break :blk self.rocStrToValue(result, ll.ret_layout);
-                } else if (is_float) {
-                    const bits: u64 = switch (size) {
-                        4 => @as(u64, @as(u32, @bitCast(args[0].read(f32)))),
-                        else => @bitCast(args[0].read(f64)),
-                    };
-                    const result = builtins.str.floatToStrFromBits(bits, size == 4, &self.roc_ops);
-                    break :blk self.rocStrToValue(result, ll.ret_layout);
-                } else {
-                    break :blk self.numToStrByLayout(args[0], arg_layout, ll.ret_layout);
-                }
-            },
 
             // ── List ops ──
             // A hint only: nothing to do, and nothing to return.
             .list_prefetch => Value.zst,
             .list_len => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u64, @intCast(rl.len()));
                 break :blk val;
             },
             .list_capacity => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const val = try self.alloc(ll.ret_layout);
                 // A list of zero-width elements never allocates, so its stored
                 // capacity is zero however many elements it holds. Report the
@@ -6851,32 +5400,32 @@ pub const Interpreter = struct {
                 break :blk val;
             },
             .list_slack_unique => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u64, builtins.list.listSlackUnique(rl, &self.roc_ops));
                 break :blk val;
             },
             .list_owned_unique => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const val = try self.alloc(ll.ret_layout);
                 val.write(u64, builtins.list.listOwnedUnique(rl, &self.roc_ops));
                 break :blk val;
             },
             .list_get_unsafe => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const idx = args[1].read(u64);
-                const info = self.listElemInfo(arg_layout);
-                if (info.width == 0 or rl.bytes == null) break :blk try self.alloc(ll.ret_layout);
+                const info = self.listElemInfo(list_elems);
+                if (info.width == 0 or rl.bytes == null) break :blk try self.listElemResult(ll, info);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
-                const val = try self.alloc(ll.ret_layout);
+                const val = try self.listElemResult(ll, info);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
                 break :blk val;
             },
             .list_append_unsafe => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + 1));
                 }
                 const result = builtins.list.listAppendUnsafe(
                     list_val,
@@ -6884,16 +5433,16 @@ pub const Interpreter = struct {
                     info.width,
                     &builtins.list.copy_fallback,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_concat => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_a = self.valueToRocListForLayout(args[0], arg_layout);
-                const list_b = self.valueToRocListForLayout(args[1], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_a = self.listValue(list_elems, args[0]);
+                const list_b = self.listValue(list_elems, args[1]);
                 if (info.width == 0) {
                     const total_len = list_a.len() + list_b.len();
-                    break :blk self.rocListToValue(canonicalZstList(total_len), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(total_len));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
@@ -6901,7 +5450,7 @@ pub const Interpreter = struct {
                 if (sj != 0) {
                     return self.crashError();
                 }
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listConcat(
                     list_a,
                     list_b,
@@ -6916,24 +5465,23 @@ pub const Interpreter = struct {
                     updateModeForArg1(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_append_range_within => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 const count = args[2].read(u64);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
                 }
                 if (count == 0) {
-                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                    break :blk self.listResult(ll, list_val);
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listAppendRangeWithin(
                     list_val,
                     args[1].read(u64),
@@ -6948,21 +5496,20 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_copy_range_within => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 const count = args[3].read(u64);
                 if (info.width == 0 or count == 0) {
-                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                    break :blk self.listResult(ll, list_val);
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listCopyRangeWithin(
                     list_val,
                     args[1].read(u64),
@@ -6977,20 +5524,20 @@ pub const Interpreter = struct {
                     if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_append_range_within_unsafe => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 const count = args[2].read(u64);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
                 }
                 if (count == 0) {
-                    break :blk self.rocListToValue(list_val, ll.ret_layout);
+                    break :blk self.listResult(ll, list_val);
                 }
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listAppendRangeWithinUnsafe(
                     list_val,
                     args[1].read(u64),
@@ -7001,38 +5548,38 @@ pub const Interpreter = struct {
                     if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
-            .list_append_le_bytes => blk: {
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+            .list_append_le_bytes, .list_append_le_bytes_unsafe => blk: {
+                const list_val = self.listValue(list_elems, args[0]);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
+                // The unchecked variant's list is already proven unique with
+                // the spare word, so the builtin runs in place.
                 const result = builtins.list.listAppendLeBytes(
                     list_val,
                     args[1].read(u64),
                     args[2].read(u64),
                     1,
-                    updateModeForArg0(ll.unique_args),
+                    if (ll.op == .list_append_le_bytes_unsafe) .InPlace else updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_append_sublist => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
-                const src_val = self.valueToRocListForLayout(args[1], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
+                const src_val = self.listValue(list_elems, args[1]);
                 const count = args[3].read(u64);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + @as(usize, @intCast(count))), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + @as(usize, @intCast(count))));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listAppendSublist(
                     list_val,
                     src_val,
@@ -7048,20 +5595,19 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_prepend => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len() + 1), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len() + 1));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listPrepend(
                     list_val,
                     info.alignment,
@@ -7076,21 +5622,20 @@ pub const Interpreter = struct {
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_swap => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
                     // ZST elements: swap is a no-op on observable contents; length unchanged.
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len()));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listSwap(
                     list_val,
                     info.alignment,
@@ -7106,7 +5651,7 @@ pub const Interpreter = struct {
                     &builtins.list.copy_fallback,
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_map_prepare_reuse => args[0],
             .list_map_can_reuse => blk: {
@@ -7116,43 +5661,49 @@ pub const Interpreter = struct {
                     val.write(u8, 0);
                     break :blk val;
                 }
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 val.write(u8, if (builtins.list.listMapCanReuse(rl, &self.roc_ops)) 1 else 0);
                 break :blk val;
             },
-            .list_map_cast_unsafe => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
-                break :blk self.rocListToValue(rl, ll.ret_layout);
+            .list_item_size_at_most => blk: {
+                const fits = self.listElemInfo(list_elems).width <= args[1].read(u64);
+                const val = try self.alloc(ll.ret_layout);
+                val.write(u8, @as(u8, @intFromBool(fits)));
+                break :blk val;
             },
-            .list_map_extract_unsafe => blk: {
+            .list_map_cast_unsafe => blk: {
+                const rl = self.listValue(list_elems, args[0]);
+                break :blk self.listResult(ll, rl);
+            },
+            .list_map_extract_unsafe, .list_move_out_unsafe => blk: {
                 // Same data movement as list_get_unsafe; ownership of the
                 // element transfers out of the buffer, which is RC metadata
                 // rather than runtime behavior.
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const idx = args[1].read(u64);
-                const info = self.listElemInfo(arg_layout);
-                if (info.width == 0) break :blk try self.alloc(ll.ret_layout);
+                const info = self.listElemInfo(list_elems);
+                if (info.width == 0) break :blk try self.listElemResult(ll, info);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
-                const val = try self.alloc(ll.ret_layout);
+                const val = try self.listElemResult(ll, info);
                 @memcpy(val.ptr[0..info.width], elem_ptr[0..info.width]);
                 break :blk val;
             },
             .list_map_write_unsafe => blk: {
-                const rl = self.valueToRocListForLayout(args[0], arg_layout);
+                const rl = self.listValue(list_elems, args[0]);
                 const idx = args[1].read(u64);
-                const info = self.listElemInfo(arg_layout);
-                if (info.width == 0) break :blk self.rocListToValue(rl, ll.ret_layout);
+                const info = self.listElemInfo(list_elems);
+                if (info.width == 0) break :blk self.listResult(ll, rl);
                 const elem_ptr = rl.bytes.? + @as(usize, @intCast(idx)) * info.width;
                 @memcpy(elem_ptr[0..info.width], args[2].ptr[0..info.width]);
-                break :blk self.rocListToValue(rl, ll.ret_layout);
+                break :blk self.listResult(ll, rl);
             },
             .list_sublist, .list_sublist_borrowed => blk: {
                 if (args.len != 2 or ll.arg_layouts.len != 2) {
                     return self.runtimeError("list_sublist expected 2 arguments");
                 }
 
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
                 const record_layout = ll.arg_layouts[1];
                 const record_layout_val = self.layout_store.getLayout(record_layout);
                 if (record_layout_val.tag != .struct_) {
@@ -7164,22 +5715,21 @@ pub const Interpreter = struct {
                 const start_field_off = self.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1);
                 const start = args[1].offset(start_field_off).read(u64);
                 const len = args[1].offset(len_field_off).read(u64);
-                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                const source_list = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
                     const result_len = zstSublistLen(source_list.len(), start, len);
-                    break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(result_len));
                 }
 
                 if (ll.op == .list_sublist_borrowed) {
                     const result = builtins.list.listSublistBorrowed(source_list, info.width, start, len, elems_rc, &self.roc_ops);
-                    break :blk self.rocListToValue(result, ll.ret_layout);
+                    break :blk self.listResult(ll, result);
                 }
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listSublist(
                     source_list,
                     info.alignment,
@@ -7192,23 +5742,22 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_drop_at => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const source_list = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
                     const len = source_list.len();
                     const drop_index = args[1].read(u64);
                     const result_len = if (drop_index >= @as(u64, @intCast(len))) len else len -| 1;
-                    break :blk self.rocListToValue(canonicalZstList(result_len), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(result_len));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listDropAt(
                     source_list,
                     info.alignment,
@@ -7222,42 +5771,30 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_replace_unsafe => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
 
-                // The return layout is a 2-field record { list : List(a), value : a }.
-                // Disambiguate the two fields by their layout tag (one is a list, one is the element).
-                const ret_layout_val = self.layout_store.getLayout(ll.ret_layout);
-                if (ret_layout_val.tag != .struct_) return self.runtimeError("list_replace_unsafe: expected struct return layout");
-                const rec_idx = ret_layout_val.getStruct().idx;
-                const f0_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 0);
-                const f0_layout_val = self.layout_store.getLayout(f0_layout);
-                const f0_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
-                const f1_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
-                const f1_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(rec_idx, 1);
-                const f0_is_list = f0_layout_val.tag == .list or f0_layout_val.tag == .list_of_zst;
-                const list_field_off = if (f0_is_list) f0_offset else f1_offset;
-                const value_field_off = if (f0_is_list) f1_offset else f0_offset;
-                const list_field_layout = if (f0_is_list) f0_layout else f1_layout;
-
-                const val = try self.alloc(ll.ret_layout);
+                // The result is the record { list : List(a), value : a }.
+                const shape = try self.listReplaceResultShape(ll);
+                const list_field_off = shape.list_offset;
+                const value_field_off = shape.value_offset;
+                const val = shape.value;
 
                 if (info.width == 0) {
                     // ZST element: list is unchanged, value field is zero-sized so we don't write to it.
-                    const source_list = self.valueToRocListForLayout(args[0], arg_layout);
-                    const list_val_inner = try self.rocListToValue(canonicalZstList(source_list.len()), list_field_layout);
-                    @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
+                    const source_list = self.listValue(list_elems, args[0]);
+                    const unchanged = canonicalZstList(source_list.len());
+                    @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], std.mem.asBytes(&unchanged));
                     break :blk val;
                 }
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
 
                 // listReplace writes the displaced (old) element into the out_element slot.
                 // Aim that slot directly at the value field of the result record.
@@ -7265,7 +5802,7 @@ pub const Interpreter = struct {
 
                 const result_list = if (updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
+                        self.listValue(list_elems, args[0]),
                         args[1].read(u64),
                         @ptrCast(args[2].ptr),
                         info.width,
@@ -7274,7 +5811,7 @@ pub const Interpreter = struct {
                     )
                 else
                     builtins.list.listReplace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
+                        self.listValue(list_elems, args[0]),
                         info.alignment,
                         args[1].read(u64),
                         @ptrCast(args[2].ptr),
@@ -7290,29 +5827,27 @@ pub const Interpreter = struct {
                     );
 
                 // Write the resulting list into the list field of the record.
-                const list_val_inner = try self.rocListToValue(result_list, list_field_layout);
-                @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], list_val_inner.ptr[0..@sizeOf(RocList)]);
+                @memcpy(val.offset(list_field_off).ptr[0..@sizeOf(RocList)], std.mem.asBytes(&result_list));
 
                 break :blk val;
             },
             .list_set, .list_set_in_place_unsafe => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
                 if (info.width == 0) {
-                    const source_list = self.valueToRocListForLayout(args[0], arg_layout);
-                    break :blk self.rocListToValue(canonicalZstList(source_list.len()), ll.ret_layout);
+                    const source_list = self.listValue(list_elems, args[0]);
+                    break :blk self.listResult(ll, canonicalZstList(source_list.len()));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 // listReplace moves the old element into a scratch slot. list_set does not
                 // return that ownership unit, so release it after the replacement.
                 const old_elem = try self.allocAlignedBytes(info.width, layout_mod.RocAlignment.fromByteUnits(@intCast(info.alignment)));
                 const result = if (ll.op == .list_set_in_place_unsafe or updateModeForArg0(ll.unique_args) == .InPlace)
                     builtins.list.listReplaceInPlace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
+                        self.listValue(list_elems, args[0]),
                         args[1].read(u64),
                         @ptrCast(args[2].ptr),
                         info.width,
@@ -7321,7 +5856,7 @@ pub const Interpreter = struct {
                     )
                 else
                     builtins.list.listReplace(
-                        self.valueToRocListForLayout(args[0], arg_layout),
+                        self.listValue(list_elems, args[0]),
                         info.alignment,
                         args[1].read(u64),
                         @ptrCast(args[2].ptr),
@@ -7338,44 +5873,42 @@ pub const Interpreter = struct {
                 if (elems_rc) {
                     listElementDecref(@ptrCast(&elem_rc_ctx), @ptrCast(old_elem.ptr));
                 }
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_with_capacity => blk: {
-                const elem_layout = self.listElemLayout(ll.ret_layout);
-                const sa = self.helper.sizeAlignOf(elem_layout);
-                if (sa.size == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
+                const result_elems = listElemSource(ll, ll.ret_layout);
+                const info = self.listElemInfo(result_elems);
+                if (info.width == 0) {
+                    break :blk self.listResult(ll, canonicalZstList(0));
                 }
-                const elems_rc = self.builtinInternalContainsRefcounted("interpreter.list_with_capacity.elem_rc", elem_layout);
+                const elems_rc = self.builtinListElemRc(result_elems);
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = builtins.list.listWithCapacity(
                     args[0].read(u64),
-                    @intCast(sa.alignment.toByteUnits()),
-                    sa.size,
+                    info.alignment,
+                    info.width,
                     elems_rc,
                     null,
                     &builtins.utils.rcNone,
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
-            .list_reserve => try self.evalListReserve(ll, arg_layout, builtins.list.listReserve),
-            .list_reserve_for_append => try self.evalListReserve(ll, arg_layout, builtins.list.listReserveForAppend),
+            .list_reserve => try self.evalListReserve(ll, list_elems, builtins.list.listReserve),
+            .list_reserve_for_append => try self.evalListReserve(ll, list_elems, builtins.list.listReserveForAppend),
             .list_clear => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const source_list = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const source_list = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(0), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(0));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listSublist(
                     source_list,
                     info.alignment,
@@ -7388,20 +5921,19 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
             .list_release_excess_capacity => blk: {
-                const info = self.listElemInfo(arg_layout);
-                const elems_rc = self.builtinListElemRc(arg_layout);
-                const list_val = self.valueToRocListForLayout(args[0], arg_layout);
+                const info = self.listElemInfo(list_elems);
+                const elems_rc = self.builtinListElemRc(list_elems);
+                const list_val = self.listValue(list_elems, args[0]);
                 if (info.width == 0) {
-                    break :blk self.rocListToValue(canonicalZstList(list_val.len()), ll.ret_layout);
+                    break :blk self.listResult(ll, canonicalZstList(list_val.len()));
                 }
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                var elem_rc_ctx = try self.listElementRcContext(ll, arg_layout);
+                if (crash_boundary.set() != 0) return self.crashError();
+                var elem_rc_ctx = self.listElementRcContext(list_elems);
                 const result = builtins.list.listReleaseExcessCapacity(
                     list_val,
                     info.alignment,
@@ -7414,15 +5946,11 @@ pub const Interpreter = struct {
                     updateModeForArg0(ll.unique_args),
                     &self.roc_ops,
                 );
-                break :blk self.rocListToValue(result, ll.ret_layout);
+                break :blk self.listResult(ll, result);
             },
-            .list_first => self.evalListFirst(args[0], arg_layout, ll.ret_layout),
-            .list_last => self.evalListLast(args[0], arg_layout, ll.ret_layout),
-            .list_drop_first => self.evalListDropFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_drop_last => self.evalListDropLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_take_first => self.evalListTakeFirst(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
+            .list_take_first => self.evalListSublist(ll, list_elems, args[0], updateModeForArg0(ll.unique_args), 0, args[1].read(u64)),
+            .list_take_last => self.evalListTakeLast(ll, list_elems, args[0], args[1], updateModeForArg0(ll.unique_args)),
+            .list_reverse => self.evalListReverse(ll, list_elems, args[0], updateModeForArg0(ll.unique_args)),
 
             // ── Arithmetic ──
             .num_int_add_wrap,
@@ -7454,18 +5982,17 @@ pub const Interpreter = struct {
             .num_abs => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, null),
             .num_abs_checked => self.numUnaryOp(args[0], ll.ret_layout, arg_layout, .abs, .num_abs_checked),
             .num_abs_diff => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .abs_diff, null),
-            .num_pow => self.evalNumPow(args[0], args[1], ll.ret_layout, arg_layout),
-            .num_atan2 => self.evalNumAtan2(args[0], args[1], ll.ret_layout, arg_layout),
-            .num_sqrt => self.evalNumSqrt(args[0], ll.ret_layout, arg_layout),
-            .num_sin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .sin),
-            .num_cos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .cos),
-            .num_tan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .tan),
-            .num_asin => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .asin),
-            .num_acos => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .acos),
-            .num_atan => self.evalNumFloatUnaryMath(args[0], ll.ret_layout, arg_layout, .atan),
-            .num_log => self.evalNumLog(args[0], ll.ret_layout, arg_layout),
-            .num_floor => self.evalNumFloor(args[0], ll.ret_layout, arg_layout),
-            .num_ceiling => self.evalNumCeiling(args[0], ll.ret_layout, arg_layout),
+            .num_pow => self.evalFracMath(.pow, args[0], args[1], ll.ret_layout, arg_layout),
+            .num_atan2 => self.evalFracMath(.atan2, args[0], args[1], ll.ret_layout, arg_layout),
+            .num_sqrt => self.evalFracMath(.sqrt, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_sin => self.evalFracMath(.sin, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_cos => self.evalFracMath(.cos, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_tan => self.evalFracMath(.tan, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_asin => self.evalFracMath(.asin, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_acos => self.evalFracMath(.acos, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_atan => self.evalFracMath(.atan, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_floor => self.evalFracMath(.floor, args[0], args[0], ll.ret_layout, arg_layout),
+            .num_ceiling => self.evalFracMath(.ceiling, args[0], args[0], ll.ret_layout, arg_layout),
 
             // ── Bitwise shifts ──
             .num_shift_left_by => self.numShiftOp(args[0], args[1], ll.ret_layout, arg_layout, .shl),
@@ -7562,10 +6089,7 @@ pub const Interpreter = struct {
             },
 
             // ── Hasher ──
-            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, switch (self.dict_seed_mode) {
-                .runtime => builtins.utils.dictPseudoSeed(),
-                .comptime_zero => 0,
-            }),
+            .dict_pseudo_seed => self.writeHasherValue(ll.ret_layout, builtins.utils.dictPseudoSeed()),
             .hasher_finish => self.writeHasherValue(ll.ret_layout, builtins.hash.hasher_finish(args[0].read(u64))),
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);
@@ -7645,8 +6169,7 @@ pub const Interpreter = struct {
             => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const bytes = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const result = if (ll.op == .crypto_sha256_hash_bytes)
                     builtins.crypto.sha256HashBytes(bytes.ptr, bytes.len, &self.roc_ops)
@@ -7659,8 +6182,7 @@ pub const Interpreter = struct {
             => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const result = if (ll.op == .crypto_sha256_hasher_empty)
                     builtins.crypto.sha256HasherEmpty(&self.roc_ops)
                 else
@@ -7672,8 +6194,7 @@ pub const Interpreter = struct {
             => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
                 const result = if (ll.op == .crypto_sha256_hasher_write)
@@ -7687,8 +6208,7 @@ pub const Interpreter = struct {
             => blk: {
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 const state = try self.byteListSlice(args[0], try self.lowLevelArgLayout(ll, 0));
                 const result = if (ll.op == .crypto_sha256_hasher_finish)
                     builtins.crypto.sha256HasherFinish(state.ptr, state.len, &self.roc_ops)
@@ -7793,8 +6313,7 @@ pub const Interpreter = struct {
 
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
 
                 const source: PrefixParseSource = switch (spec.source) {
                     .str => .{ .str = valueToRocStr(args[0]) },
@@ -7829,9 +6348,26 @@ pub const Interpreter = struct {
                 break :blk val;
             },
 
+            // ── Box ops ──
+            .box_box => try self.layoutRuntime().boxBox(self.valueHooks(), args[0], ll.ret_layout),
+            .box_unbox, .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
+            .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
+            .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
+            .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
+            .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
+            .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),
+            .ptr_load => try self.evalPtrLoad(args[0], ll.ret_layout),
+            .ptr_cast => try self.evalPtrCast(args[0], ll.ret_layout),
+
+            // ── Crash ──
+            .crash => return self.triggerCrash("Roc crashed"),
+
             // ── Numeric conversions ──
-            // ── Numeric conversions ──
-            inline .u8_to_i16,
+            // Every op that no arm above names must be a numeric conversion;
+            // anything else fails to compile here.
+            inline .u8_to_i8_wrap,
+            .u8_to_i8_try,
+            .u8_to_i16,
             .u8_to_i32,
             .u8_to_i64,
             .u8_to_i128,
@@ -7842,8 +6378,6 @@ pub const Interpreter = struct {
             .u8_to_f32,
             .u8_to_f64,
             .u8_to_dec,
-            .u8_to_i8_wrap,
-            .u8_to_i8_try,
             .i8_to_i16,
             .i8_to_i32,
             .i8_to_i64,
@@ -7861,26 +6395,26 @@ pub const Interpreter = struct {
             .i8_to_f32,
             .i8_to_f64,
             .i8_to_dec,
-            .u16_to_i32,
-            .u16_to_i64,
-            .u16_to_i128,
-            .u16_to_u32,
-            .u16_to_u64,
-            .u16_to_u128,
             .u16_to_i8_wrap,
             .u16_to_i8_try,
             .u16_to_i16_wrap,
             .u16_to_i16_try,
+            .u16_to_i32,
+            .u16_to_i64,
+            .u16_to_i128,
             .u16_to_u8_wrap,
             .u16_to_u8_try,
+            .u16_to_u32,
+            .u16_to_u64,
+            .u16_to_u128,
             .u16_to_f32,
             .u16_to_f64,
             .u16_to_dec,
+            .i16_to_i8_wrap,
+            .i16_to_i8_try,
             .i16_to_i32,
             .i16_to_i64,
             .i16_to_i128,
-            .i16_to_i8_wrap,
-            .i16_to_i8_try,
             .i16_to_u8_wrap,
             .i16_to_u8_try,
             .i16_to_u16_wrap,
@@ -7894,29 +6428,29 @@ pub const Interpreter = struct {
             .i16_to_f32,
             .i16_to_f64,
             .i16_to_dec,
-            .u32_to_i64,
-            .u32_to_i128,
-            .u32_to_u64,
-            .u32_to_u128,
             .u32_to_i8_wrap,
             .u32_to_i8_try,
             .u32_to_i16_wrap,
             .u32_to_i16_try,
             .u32_to_i32_wrap,
             .u32_to_i32_try,
+            .u32_to_i64,
+            .u32_to_i128,
             .u32_to_u8_wrap,
             .u32_to_u8_try,
             .u32_to_u16_wrap,
             .u32_to_u16_try,
+            .u32_to_u64,
+            .u32_to_u128,
             .u32_to_f32,
             .u32_to_f64,
             .u32_to_dec,
-            .i32_to_i64,
-            .i32_to_i128,
             .i32_to_i8_wrap,
             .i32_to_i8_try,
             .i32_to_i16_wrap,
             .i32_to_i16_try,
+            .i32_to_i64,
+            .i32_to_i128,
             .i32_to_u8_wrap,
             .i32_to_u8_try,
             .i32_to_u16_wrap,
@@ -7930,8 +6464,6 @@ pub const Interpreter = struct {
             .i32_to_f32,
             .i32_to_f64,
             .i32_to_dec,
-            .u64_to_i128,
-            .u64_to_u128,
             .u64_to_i8_wrap,
             .u64_to_i8_try,
             .u64_to_i16_wrap,
@@ -7940,22 +6472,24 @@ pub const Interpreter = struct {
             .u64_to_i32_try,
             .u64_to_i64_wrap,
             .u64_to_i64_try,
+            .u64_to_i128,
             .u64_to_u8_wrap,
             .u64_to_u8_try,
             .u64_to_u16_wrap,
             .u64_to_u16_try,
             .u64_to_u32_wrap,
             .u64_to_u32_try,
+            .u64_to_u128,
             .u64_to_f32,
             .u64_to_f64,
             .u64_to_dec,
-            .i64_to_i128,
             .i64_to_i8_wrap,
             .i64_to_i8_try,
             .i64_to_i16_wrap,
             .i64_to_i16_try,
             .i64_to_i32_wrap,
             .i64_to_i32_try,
+            .i64_to_i128,
             .i64_to_u8_wrap,
             .i64_to_u8_try,
             .i64_to_u16_wrap,
@@ -8012,85 +6546,75 @@ pub const Interpreter = struct {
             .i128_to_f64,
             .i128_to_dec_try_unsafe,
             .f32_to_i8_trunc,
-            .f32_to_i16_trunc,
-            .f32_to_i32_trunc,
-            .f32_to_i64_trunc,
-            .f32_to_i128_trunc,
-            .f32_to_u8_trunc,
-            .f32_to_u16_trunc,
-            .f32_to_u32_trunc,
-            .f32_to_u64_trunc,
-            .f32_to_u128_trunc,
-            .f32_to_f64,
             .f32_to_i8_try_unsafe,
+            .f32_to_i16_trunc,
             .f32_to_i16_try_unsafe,
+            .f32_to_i32_trunc,
             .f32_to_i32_try_unsafe,
+            .f32_to_i64_trunc,
             .f32_to_i64_try_unsafe,
+            .f32_to_i128_trunc,
             .f32_to_i128_try_unsafe,
+            .f32_to_u8_trunc,
             .f32_to_u8_try_unsafe,
+            .f32_to_u16_trunc,
             .f32_to_u16_try_unsafe,
+            .f32_to_u32_trunc,
             .f32_to_u32_try_unsafe,
+            .f32_to_u64_trunc,
             .f32_to_u64_try_unsafe,
+            .f32_to_u128_trunc,
             .f32_to_u128_try_unsafe,
+            .f32_to_f64,
             .f64_to_i8_trunc,
-            .f64_to_i16_trunc,
-            .f64_to_i32_trunc,
-            .f64_to_i64_trunc,
-            .f64_to_i128_trunc,
-            .f64_to_u8_trunc,
-            .f64_to_u16_trunc,
-            .f64_to_u32_trunc,
-            .f64_to_u64_trunc,
-            .f64_to_u128_trunc,
-            .f64_to_f32_wrap,
             .f64_to_i8_try_unsafe,
+            .f64_to_i16_trunc,
             .f64_to_i16_try_unsafe,
+            .f64_to_i32_trunc,
             .f64_to_i32_try_unsafe,
+            .f64_to_i64_trunc,
             .f64_to_i64_try_unsafe,
+            .f64_to_i128_trunc,
             .f64_to_i128_try_unsafe,
+            .f64_to_u8_trunc,
             .f64_to_u8_try_unsafe,
+            .f64_to_u16_trunc,
             .f64_to_u16_try_unsafe,
+            .f64_to_u32_trunc,
             .f64_to_u32_try_unsafe,
+            .f64_to_u64_trunc,
             .f64_to_u64_try_unsafe,
+            .f64_to_u128_trunc,
             .f64_to_u128_try_unsafe,
+            .f64_to_f32_wrap,
             .f64_to_f32_try_unsafe,
             .dec_to_i8_trunc,
+            .dec_to_i8_try_unsafe,
             .dec_to_i16_trunc,
+            .dec_to_i16_try_unsafe,
             .dec_to_i32_trunc,
+            .dec_to_i32_try_unsafe,
             .dec_to_i64_trunc,
+            .dec_to_i64_try_unsafe,
             .dec_to_i128_trunc,
             .dec_to_u8_trunc,
-            .dec_to_u16_trunc,
-            .dec_to_u32_trunc,
-            .dec_to_u64_trunc,
-            .dec_to_u128_trunc,
-            .dec_to_i8_try_unsafe,
-            .dec_to_i16_try_unsafe,
-            .dec_to_i32_try_unsafe,
-            .dec_to_i64_try_unsafe,
             .dec_to_u8_try_unsafe,
+            .dec_to_u16_trunc,
             .dec_to_u16_try_unsafe,
+            .dec_to_u32_trunc,
             .dec_to_u32_try_unsafe,
+            .dec_to_u64_trunc,
             .dec_to_u64_try_unsafe,
+            .dec_to_u128_trunc,
             .dec_to_u128_try_unsafe,
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => |op| self.numericConversion(comptime numeric_conversion.getConversionSpec(op).?, args[0], ll.ret_layout),
-
-            // ── Box ops ──
-            .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
-            .box_unbox, .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
-            .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
-            .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
-            .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
-            .box_alloc_zeroed => try self.evalBoxAllocZeroed(ll.ret_layout),
-            .ptr_store => try self.evalPtrStore(args[0], args[1], ll.arg_layouts[1]),
-            .ptr_load => try self.evalPtrLoad(args[0], ll.ret_layout),
-            .ptr_cast => try self.evalPtrCast(args[0], ll.ret_layout),
-
-            // ── Crash ──
-            .crash => return self.triggerCrash("Roc crashed"),
+            => |op| self.numericConversion(
+                comptime numeric_conversion.getConversionSpec(op) orelse @compileError("unhandled low-level op " ++ @tagName(op)),
+                args[0],
+                ll.ret_layout,
+            ),
         };
     }
 
@@ -8102,7 +6626,7 @@ pub const Interpreter = struct {
         actual_value: Value,
         actual_layout: layout_mod.Idx,
     ) Error!void {
-        try self.boxy_runtime.writeStructFieldValue(self.boxyFrameHooks(null), struct_base, field_offset, expected_layout, actual_value, actual_layout);
+        try self.layoutRuntime().writeStructFieldValue(self.valueHooks(), struct_base, field_offset, expected_layout, actual_value, actual_layout);
     }
 
     const NumOp = enum { add, sub, mul, div, div_trunc, rem, mod, negate, abs, abs_diff };
@@ -8110,20 +6634,33 @@ pub const Interpreter = struct {
     const ShiftOp = enum { shl, shr, shr_zf };
     const BitwiseOp = enum { @"and", @"or", xor, not };
     const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
-    /// The unsigned integer type a numeric operand of `bits` bits is read as.
-    fn UInt(comptime bits: u16) type {
-        return @Int(.unsigned, bits);
+    /// Bit width of an integer operand.
+    const IntWidth = enum(u16) { w8 = 8, w16 = 16, w32 = 32, w64 = 64, w128 = 128 };
+    /// Bit width of a float operand.
+    const FloatWidth = enum(u16) { w32 = 32, w64 = 64 };
+
+    /// The unsigned integer type a numeric operand of `width` is read as.
+    fn UInt(comptime width: IntWidth) type {
+        return @Int(.unsigned, @backingInt(width));
     }
 
-    /// The signed integer type a numeric operand of `bits` bits is read as.
-    fn SInt(comptime bits: u16) type {
-        return @Int(.signed, bits);
+    /// The signed integer type a numeric operand of `width` is read as.
+    fn SInt(comptime width: IntWidth) type {
+        return @Int(.signed, @backingInt(width));
+    }
+
+    /// The float type a numeric operand of `width` is read as.
+    fn Float(comptime width: FloatWidth) type {
+        return switch (width) {
+            .w32 => f32,
+            .w64 => f64,
+        };
     }
 
     const NumericOperandKind = union(enum) {
-        unsigned_int: u16,
-        signed_int: u16,
-        float: u16,
+        unsigned_int: IntWidth,
+        signed_int: IntWidth,
+        float: FloatWidth,
         dec,
     };
 
@@ -8165,7 +6702,8 @@ pub const Interpreter = struct {
         for (0..@min(ll.args.len, operands.len)) |i| {
             operands[i] = self.readLowBits(ll.args[i], try self.lowLevelArgLayout(ll, i));
         }
-        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(ll.op.simdOpIndex() orelse unreachable));
+        const simd_index = ll.op.simdOpIndex() orelse unreachable; // evalLowLevel dispatches evalSimd only for simd_* ops, which form simdOpIndex's contiguous range
+        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(simd_index));
         const result_bits = builtins.simd.eval(simd_op, source_kind, destination_kind, operands[0], operands[1], operands[2]);
         const result = try self.alloc(ll.ret_layout);
         const result_size = @min(self.helper.sizeOf(ll.ret_layout), @sizeOf(u128));
@@ -8232,27 +6770,19 @@ pub const Interpreter = struct {
         return self.rocListToValue(list, ll.ret_layout);
     }
 
-    /// Determine if a layout index represents a Dec type.
-    fn isDec(layout_idx: layout_mod.Idx) bool {
-        return layout_idx == .dec;
-    }
-
-    /// Determine if a layout index represents an unsigned integer.
-    const isUnsigned = boxy_runtime.isUnsigned;
-
     fn numericOperandKind(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!NumericOperandKind {
-        if (layout_idx == .u8) return .{ .unsigned_int = 8 };
-        if (layout_idx == .u16) return .{ .unsigned_int = 16 };
-        if (layout_idx == .u32) return .{ .unsigned_int = 32 };
-        if (layout_idx == .u64) return .{ .unsigned_int = 64 };
-        if (layout_idx == .u128) return .{ .unsigned_int = 128 };
-        if (layout_idx == .i8) return .{ .signed_int = 8 };
-        if (layout_idx == .i16) return .{ .signed_int = 16 };
-        if (layout_idx == .i32) return .{ .signed_int = 32 };
-        if (layout_idx == .i64) return .{ .signed_int = 64 };
-        if (layout_idx == .i128) return .{ .signed_int = 128 };
-        if (layout_idx == .f32) return .{ .float = 32 };
-        if (layout_idx == .f64) return .{ .float = 64 };
+        if (layout_idx == .u8) return .{ .unsigned_int = .w8 };
+        if (layout_idx == .u16) return .{ .unsigned_int = .w16 };
+        if (layout_idx == .u32) return .{ .unsigned_int = .w32 };
+        if (layout_idx == .u64) return .{ .unsigned_int = .w64 };
+        if (layout_idx == .u128) return .{ .unsigned_int = .w128 };
+        if (layout_idx == .i8) return .{ .signed_int = .w8 };
+        if (layout_idx == .i16) return .{ .signed_int = .w16 };
+        if (layout_idx == .i32) return .{ .signed_int = .w32 };
+        if (layout_idx == .i64) return .{ .signed_int = .w64 };
+        if (layout_idx == .i128) return .{ .signed_int = .w128 };
+        if (layout_idx == .f32) return .{ .float = .w32 };
+        if (layout_idx == .f64) return .{ .float = .w64 };
         if (layout_idx == .dec) return .dec;
         return self.invariantFailedError(
             "LIR/interpreter invariant violated: numeric low-level op used non-numeric layout {d} ({s})",
@@ -8273,13 +6803,21 @@ pub const Interpreter = struct {
 
         if (checked_op != null and is_division_like) {
             switch (kind) {
-                .unsigned_int => |bits| switch (bits) {
-                    inline 8, 16, 32, 64, 128 => |w| if (b.read(UInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
+                .unsigned_int => |width| switch (width) {
+                    inline .w8,
+                    .w16,
+                    .w32,
+                    .w64,
+                    .w128,
+                    => |w| if (b.read(UInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                 },
-                .signed_int => |bits| switch (bits) {
-                    inline 8, 16, 32, 64, 128 => |w| if (b.read(SInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
+                .signed_int => |width| switch (width) {
+                    inline .w8,
+                    .w16,
+                    .w32,
+                    .w64,
+                    .w128,
+                    => |w| if (b.read(SInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                 },
                 .dec, .float => return self.invariantFailedError(
                     "LIR/interpreter invariant violated: checked integer op used non-integer layout {d}",
@@ -8289,18 +6827,26 @@ pub const Interpreter = struct {
         }
 
         switch (kind) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), try self.intBinOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op, checked_op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(UInt(w), try self.intBinOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op, checked_op)),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), try self.intBinOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op, checked_op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(SInt(w), try self.intBinOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op, checked_op)),
             },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, floatBinOp(f32, a.read(f32), b.read(f32), op)),
-                64 => val.write(f64, floatBinOp(f64, a.read(f64), b.read(f64), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float width {d}", .{bits}),
+            .float => |width| switch (width) {
+                inline .w32,
+                .w64,
+                => |w| val.write(Float(w), floatBinOp(Float(w), a.read(Float(w)), b.read(Float(w)), op)),
             },
             .dec => val.write(i128, try self.decBinOp(a.read(i128), b.read(i128), op, checked_op)),
         }
@@ -8315,7 +6861,7 @@ pub const Interpreter = struct {
         ret_layout: layout_mod.Idx,
         arg_layout: layout_mod.Idx,
     ) Error!Value {
-        const entry = CheckedArithmetic.classify(low_level) orelse unreachable;
+        const entry = CheckedArithmetic.classify(low_level) orelse unreachable; // evalLowLevel dispatches here only for integer family ops
         if (entry.mode == .overflows) {
             return self.evalIntegerOverflows(a, b, ret_layout, arg_layout, entry.operation);
         }
@@ -8356,13 +6902,21 @@ pub const Interpreter = struct {
         operation: CheckedArithmetic.Operation,
     ) Error!bool {
         return switch (try self.numericOperandKind(arg_layout)) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(UInt(w), a.read(UInt(w)), b.read(UInt(w)), operation),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| intBinOverflows(UInt(w), a.read(UInt(w)), b.read(UInt(w)), operation),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(SInt(w), a.read(SInt(w)), b.read(SInt(w)), operation),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| intBinOverflows(SInt(w), a.read(SInt(w)), b.read(SInt(w)), operation),
             },
             .dec => if (operation == .mul)
                 return self.invariantFailedError("LIR/interpreter invariant violated: Dec multiplication used the integer arithmetic family", .{})
@@ -8381,27 +6935,35 @@ pub const Interpreter = struct {
         const layout_val = self.layout_store.getLayout(arg_layout);
 
         if (op == .eq and switch (layout_val.tag) {
-            .zst, .struct_, .list, .list_of_zst, .tag_union => true,
+            .zst, .hole, .struct_, .list, .list_of_zst, .tag_union => true,
             .scalar => layout_val.getScalar().tag == .str,
-            .box, .box_of_zst, .erased_box, .closure, .erased_callable, .ptr => false,
+            .box, .box_of_zst, .closure, .erased_callable, .ptr, .dynamic => false,
         }) {
-            val.write(u8, if (try self.valuesEqual(a, b, arg_layout)) 1 else 0);
+            val.write(u8, if (try self.layoutRuntime().valuesEqual(a, b, arg_layout)) 1 else 0);
             return val;
         }
 
         const result: bool = switch (try self.numericOperandKind(arg_layout)) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| cmpOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| cmpOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| cmpOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| cmpOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op),
             },
-            .float => |bits| switch (bits) {
-                32 => cmpOp(f32, a.read(f32), b.read(f32), op),
-                64 => cmpOp(f64, a.read(f64), b.read(f64), op),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float compare width {d}", .{bits}),
+            .float => |width| switch (width) {
+                inline .w32,
+                .w64,
+                => |w| cmpOp(Float(w), a.read(Float(w)), b.read(Float(w)), op),
             },
             .dec => cmpOp(i128, a.read(i128), b.read(i128), op),
         };
@@ -8409,26 +6971,30 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn valuesEqual(self: *LirInterpreter, a: Value, b: Value, layout_idx: layout_mod.Idx) Error!bool {
-        return self.boxy_runtime.valuesEqual(a, b, layout_idx);
-    }
-
     fn evalCompare(self: *LirInterpreter, a: Value, b: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| cmpOrder(UInt(w), a.read(UInt(w)), b.read(UInt(w))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| cmpOrder(UInt(w), a.read(UInt(w)), b.read(UInt(w))),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| cmpOrder(SInt(w), a.read(SInt(w)), b.read(SInt(w))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| cmpOrder(SInt(w), a.read(SInt(w)), b.read(SInt(w))),
             },
-            .float => |bits| switch (bits) {
-                32 => cmpOrder(f32, a.read(f32), b.read(f32)),
-                64 => cmpOrder(f64, a.read(f64), b.read(f64)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float compare width {d}", .{bits}),
+            .float => |width| switch (width) {
+                inline .w32,
+                .w64,
+                => |w| cmpOrder(Float(w), a.read(Float(w)), b.read(Float(w))),
             },
             .dec => cmpOrder(i128, a.read(i128), b.read(i128)),
         };
@@ -8439,13 +7005,21 @@ pub const Interpreter = struct {
     fn numShiftOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: ShiftOp) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), shiftOp(UInt(w), a.read(UInt(w)), b.read(u8), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer shift width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(UInt(w), shiftOp(UInt(w), a.read(UInt(w)), b.read(u8), op)),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), shiftOp(SInt(w), a.read(SInt(w)), b.read(u8), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer shift width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(SInt(w), shiftOp(SInt(w), a.read(SInt(w)), b.read(u8), op)),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: shift used non-integer layout {d}",
@@ -8458,13 +7032,21 @@ pub const Interpreter = struct {
     fn numBitwiseOp(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, op: BitwiseOp) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .unsigned_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), bitwiseOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
+            .unsigned_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(UInt(w), bitwiseOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op)),
             },
-            .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), bitwiseOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
+            .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| val.write(SInt(w), bitwiseOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op)),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: bitwise used non-integer layout {d}",
@@ -8484,9 +7066,13 @@ pub const Interpreter = struct {
             // Bit counting reads the two's-complement bit pattern, so the
             // operand's signedness does not affect the result; read each width
             // as its unsigned counterpart.
-            .unsigned_int, .signed_int => |bits| switch (bits) {
-                inline 8, 16, 32, 64, 128 => |w| bitCount(UInt(w), a.read(UInt(w)), op),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported integer bit-count width {d}", .{bits}),
+            .unsigned_int, .signed_int => |width| switch (width) {
+                inline .w8,
+                .w16,
+                .w32,
+                .w64,
+                .w128,
+                => |w| bitCount(UInt(w), a.read(UInt(w)), op),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: bit count used non-integer layout {d}",
@@ -8497,191 +7083,102 @@ pub const Interpreter = struct {
         return val;
     }
 
-    fn evalNumPow(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                val.write(i128, builtins.dec.powC(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, builtins.float_math_f32.pow(a.read(f32), b.read(f32))),
-                64 => val.write(f64, builtins.float_math_f64.pow(a.read(f64), b.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float pow width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_pow survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumAtan2(self: *LirInterpreter, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                val.write(i128, builtins.dec.atan2C(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, builtins.float_math_f32.atan2(a.read(f32), b.read(f32))),
-                64 => val.write(f64, builtins.float_math_f64.atan2(a.read(f64), b.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float atan2 width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_atan2 survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumSqrt(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                val.write(i128, builtins.dec.sqrtC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @sqrt(a.read(f32))),
-                64 => val.write(f64, @sqrt(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float sqrt width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_sqrt survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumLog(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                val.write(i128, builtins.dec.logC(RocDec{ .num = a.read(i128) }, &self.roc_ops));
-            },
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, builtins.float_math_f32.log(a.read(f32))),
-                64 => val.write(f64, @log(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float log width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_log survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-        }
-        return val;
-    }
-
-    const FloatUnaryMathOp = enum {
+    /// Fractional math low-level ops. Integers never reach these: lowering
+    /// rejects them. Dec `floor`/`ceiling` are likewise lowered away.
+    const FracMathOp = enum {
+        pow,
+        atan2,
+        sqrt,
         sin,
         cos,
         tan,
         asin,
         acos,
         atan,
-    };
+        floor,
+        ceiling,
 
-    fn floatUnaryMath(comptime F: type, value: F, comptime op: FloatUnaryMathOp) F {
-        if (F == f32) {
+        fn float(comptime op: FracMathOp, comptime F: type, a: F, b: F) F {
+            const math = if (F == f32) builtins.float_math_f32 else builtins.float_math_f64;
             return switch (op) {
-                .sin => builtins.float_math_f32.sin(value),
-                .cos => builtins.float_math_f32.cos(value),
-                .tan => builtins.float_math_f32.tan(value),
-                .asin => builtins.float_math_f32.asin(value),
-                .acos => builtins.float_math_f32.acos(value),
-                .atan => builtins.float_math_f32.atan(value),
+                .pow => math.pow(a, b),
+                .atan2 => math.atan2(a, b),
+                .sqrt => @sqrt(a),
+                .sin => math.sin(a),
+                .cos => math.cos(a),
+                .tan => math.tan(a),
+                .asin => math.asin(a),
+                .acos => math.acos(a),
+                .atan => math.atan(a),
+                .floor => @floor(a),
+                .ceiling => @ceil(a),
             };
         }
-        return switch (op) {
-            .sin => builtins.float_math_f64.sin(value),
-            .cos => builtins.float_math_f64.cos(value),
-            .tan => builtins.float_math_f64.tan(value),
-            .asin => builtins.float_math_f64.asin(value),
-            .acos => builtins.float_math_f64.acos(value),
-            .atan => builtins.float_math_f64.atan(value),
-        };
-    }
 
-    fn evalNumFloatUnaryMath(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx, comptime op: FloatUnaryMathOp) Error!Value {
+        /// Whether a Dec operand can reach this op at all.
+        fn hasDec(comptime op: FracMathOp) bool {
+            return switch (op) {
+                .floor, .ceiling => false,
+                .pow,
+                .atan2,
+                .sqrt,
+                .sin,
+                .cos,
+                .tan,
+                .asin,
+                .acos,
+                .atan,
+                => true,
+            };
+        }
+
+        /// The Dec builtin for this op.
+        fn dec(comptime op: FracMathOp, a: RocDec, b: RocDec, roc_ops: *RocOps) i128 {
+            return switch (op) {
+                .pow => builtins.dec.powC(a, b, roc_ops),
+                .atan2 => builtins.dec.atan2C(a, b, roc_ops),
+                .sqrt => builtins.dec.sqrtC(a, roc_ops),
+                .sin => builtins.dec.sinC(a, roc_ops),
+                .cos => builtins.dec.cosC(a, roc_ops),
+                .tan => builtins.dec.tanC(a, roc_ops),
+                .asin => builtins.dec.asinC(a, roc_ops),
+                .acos => builtins.dec.acosC(a, roc_ops),
+                .atan => builtins.dec.atanC(a, roc_ops),
+                .floor, .ceiling => unreachable, // evalFracMath returns before calling dec for ops whose hasDec is false
+            };
+        }
+
+        /// Whether the Dec builtin runs inside a crash boundary.
+        fn decCrashBoundary(comptime op: FracMathOp) bool {
+            return op != .atan2;
+        }
+    };
+
+    fn evalFracMath(self: *LirInterpreter, comptime op: FracMathOp, a: Value, b: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, floatUnaryMath(f32, a.read(f32), op)),
-                64 => val.write(f64, floatUnaryMath(f64, a.read(f64), op)),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float {s} width {d}", .{ @tagName(op), bits }),
-            },
             .dec => {
-                var crash_boundary = self.enterCrashBoundary();
-                defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
-                const dec = RocDec{ .num = a.read(i128) };
-                const result = switch (op) {
-                    .sin => builtins.dec.sinC(dec, &self.roc_ops),
-                    .cos => builtins.dec.cosC(dec, &self.roc_ops),
-                    .tan => builtins.dec.tanC(dec, &self.roc_ops),
-                    .asin => builtins.dec.asinC(dec, &self.roc_ops),
-                    .acos => builtins.dec.acosC(dec, &self.roc_ops),
-                    .atan => builtins.dec.atanC(dec, &self.roc_ops),
-                };
-                val.write(i128, result);
+                if (comptime !op.hasDec()) return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: Dec num_{s} survived lowering for layout {d}",
+                    .{ @tagName(op), @backingInt(arg_layout) },
+                );
+                if (comptime op.decCrashBoundary()) {
+                    var crash_boundary = self.enterCrashBoundary();
+                    defer crash_boundary.deinit();
+                    if (crash_boundary.set() != 0) return self.crashError();
+                    val.write(i128, op.dec(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
+                } else {
+                    val.write(i128, op.dec(RocDec{ .num = a.read(i128) }, RocDec{ .num = b.read(i128) }, &self.roc_ops));
+                }
+            },
+            .float => |width| switch (width) {
+                inline .w32,
+                .w64,
+                => |w| val.write(Float(w), op.float(Float(w), a.read(Float(w)), b.read(Float(w)))),
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
                 .{ @tagName(op), @backingInt(arg_layout) },
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumFloor(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: Dec num_floor survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @floor(a.read(f32))),
-                64 => val.write(f64, @floor(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float floor width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_floor survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-        }
-        return val;
-    }
-
-    fn evalNumCeiling(self: *LirInterpreter, a: Value, ret_layout: layout_mod.Idx, arg_layout: layout_mod.Idx) Error!Value {
-        const val = try self.alloc(ret_layout);
-        switch (try self.numericOperandKind(arg_layout)) {
-            .dec => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: Dec num_ceiling survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
-            ),
-            .float => |bits| switch (bits) {
-                32 => val.write(f32, @ceil(a.read(f32))),
-                64 => val.write(f64, @ceil(a.read(f64))),
-                else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported float ceiling width {d}", .{bits}),
-            },
-            .signed_int, .unsigned_int => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: integer num_ceiling survived lowering for layout {d}",
-                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8756,16 +7253,6 @@ pub const Interpreter = struct {
             "LIR/interpreter invariant violated: Bool value used layout {d} ({s})",
             .{ @backingInt(bool_layout), @tagName(layout_val.tag) },
         );
-    }
-
-    fn writeVariantPayloadValue(
-        self: *LirInterpreter,
-        destination: Value,
-        variant_payload_layout: layout_mod.Idx,
-        payload: Value,
-        payload_layout: layout_mod.Idx,
-    ) Error!void {
-        try self.boxy_runtime.writeVariantPayloadValue(self.boxyFrameHooks(null), destination, variant_payload_layout, payload, payload_layout);
     }
 
     fn lowLevelTryRecord(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!LowLevelTryRecord {
@@ -8926,16 +7413,16 @@ pub const Interpreter = struct {
                 else
                     self.numTruncateWiden(Src, @Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
                 .@"try" => self.numTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .try_unsafe => unreachable,
+                .trunc, .try_unsafe => unreachable, // no LowLevel int-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact => self.intToFloat(Src, arg, ret_layout),
-                .wrap, .trunc, .@"try", .try_unsafe => unreachable,
+                .wrap, .trunc, .@"try", .try_unsafe => unreachable, // every LowLevel int-to-float conversion op is exact
             },
             .dec => switch (comptime spec.mode) {
                 .exact => self.intToDec(Src, arg, ret_layout),
                 .try_unsafe => self.intToDecTry(Src, arg, ret_layout),
-                .wrap, .trunc, .@"try" => unreachable,
+                .wrap, .trunc, .@"try" => unreachable, // no LowLevel int-to-Dec conversion op has these modes
             },
         };
     }
@@ -8946,15 +7433,15 @@ pub const Interpreter = struct {
             .int => switch (comptime spec.mode) {
                 .trunc => self.floatToInt(Src, spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.floatToIntTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .exact, .wrap, .@"try" => unreachable,
+                .exact, .wrap, .@"try" => unreachable, // no LowLevel float-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact => self.floatWiden(Src, spec.dst.ZigType(), arg, ret_layout),
                 .wrap => self.floatNarrow(Src, spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.floatNarrowTry(Src, spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .@"try" => unreachable,
+                .trunc, .@"try" => unreachable, // no LowLevel float-to-float conversion op has these modes
             },
-            .dec => unreachable,
+            .dec => unreachable, // no LowLevel conversion op converts a float to Dec
         };
     }
 
@@ -8963,14 +7450,14 @@ pub const Interpreter = struct {
             .int => switch (comptime spec.mode) {
                 .trunc => self.decToInt(spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.decToIntTry(spec.dst.ZigType(), arg, ret_layout),
-                .exact, .wrap, .@"try" => unreachable,
+                .exact, .wrap, .@"try" => unreachable, // no LowLevel Dec-to-int conversion op has these modes
             },
             .float => switch (comptime spec.mode) {
                 .exact, .wrap => self.decToFloat(spec.dst.ZigType(), arg, ret_layout),
                 .try_unsafe => self.decToFloatTry(spec.dst.ZigType(), arg, ret_layout),
-                .trunc, .@"try" => unreachable,
+                .trunc, .@"try" => unreachable, // no LowLevel Dec-to-float conversion op has these modes
             },
-            .dec => unreachable,
+            .dec => unreachable, // no LowLevel conversion op converts Dec to Dec
         };
     }
 
@@ -8988,188 +7475,64 @@ pub const Interpreter = struct {
                 const dec = RocDec{ .num = arg.read(i128) };
                 var crash_boundary = self.enterCrashBoundary();
                 defer crash_boundary.deinit();
-                const sj = crash_boundary.set();
-                if (sj != 0) return self.crashError();
+                if (crash_boundary.set() != 0) return self.crashError();
                 break :blk self.rocStrToValue(builtins.dec.to_str(dec, &self.roc_ops), ret_layout);
             },
         };
     }
 
     fn numToStr(self: *LirInterpreter, comptime T: type, arg: Value, _: layout_mod.Idx) Error!Value {
-        const arena = self.arena.allocator();
-        const formatted = std.fmt.allocPrint(arena, "{d}", .{arg.read(T)}) catch return error.OutOfMemory;
+        comptime std.debug.assert(@typeInfo(T) == .int and @bitSizeOf(T) <= 128);
+        var buffer: [40]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buffer, "{d}", .{arg.read(T)}) catch unreachable; // an integer of at most 128 bits has at most 39 digits and a sign
         return try self.makeRocStr(formatted);
-    }
-
-    fn numToStrByLayout(self: *LirInterpreter, arg: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const size = self.helper.sizeOf(arg_layout);
-        return switch (size) {
-            1 => if (isUnsigned(arg_layout)) self.numToStr(u8, arg, ret_layout) else self.numToStr(i8, arg, ret_layout),
-            2 => if (isUnsigned(arg_layout)) self.numToStr(u16, arg, ret_layout) else self.numToStr(i16, arg, ret_layout),
-            4 => if (isUnsigned(arg_layout)) self.numToStr(u32, arg, ret_layout) else self.numToStr(i32, arg, ret_layout),
-            8 => if (isUnsigned(arg_layout)) self.numToStr(u64, arg, ret_layout) else self.numToStr(i64, arg, ret_layout),
-            16 => if (isUnsigned(arg_layout)) self.numToStr(u128, arg, ret_layout) else self.numToStr(i128, arg, ret_layout),
-            else => self.makeRocStr("0"),
-        };
     }
 
     // ── List operation helpers ──
 
-    fn evalListFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            // Result tag union: payload at 0, discriminant after
-            @memcpy(val.ptr[0..info.width], rl.bytes.?[0..info.width]);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0); // Err tag
-        }
-        return val;
-    }
-
-    fn evalListLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            const last_offset = (rl.len() - 1) * info.width;
-            @memcpy(val.ptr[0..info.width], rl.bytes.?[last_offset..][0..info.width]);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0);
-        }
-        return val;
-    }
-
-    fn evalListDropFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
+    /// Keep `len` elements of the list starting at `start`, releasing the rest.
+    fn evalListSublist(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, update_mode: UpdateMode, start: u64, len: u64) Error!Value {
+        const rl = self.listValue(list_elems, list_arg);
+        const info = self.listElemInfo(list_elems);
         if (info.width == 0) {
-            return self.rocListToValue(canonicalZstList(zstSublistLen(rl.len(), 1, std.math.maxInt(u64))), ret_layout);
+            return self.listResult(ll, canonicalZstList(zstSublistLen(rl.len(), start, len)));
         }
+        const elems_rc = self.builtinListElemRc(list_elems);
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
+        if (crash_boundary.set() != 0) return self.crashError();
+        var elem_rc_ctx = self.listElementRcContext(list_elems);
         const result = builtins.list.listSublist(
             rl,
             info.alignment,
             info.width,
             elems_rc,
-            1,
-            std.math.maxInt(u64),
+            start,
+            len,
             if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
             if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
             update_mode,
             &self.roc_ops,
         );
-        return self.rocListToValue(result, ret_layout);
+        return self.listResult(ll, result);
     }
 
-    fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const len = rl.len();
-        if (info.width == 0) {
-            return self.rocListToValue(canonicalZstList(if (len == 0) 0 else len - 1), ret_layout);
-        }
-        if (len == 0) return self.rocListToValue(rl, ret_layout);
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-        const result = builtins.list.listSublist(
-            rl,
-            info.alignment,
-            info.width,
-            elems_rc,
-            0,
-            len - 1,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            &self.roc_ops,
-        );
-        return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListTakeFirst(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        if (info.width == 0) {
-            return self.rocListToValue(canonicalZstList(zstSublistLen(rl.len(), 0, count_arg.read(u64))), ret_layout);
-        }
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-        const result = builtins.list.listSublist(
-            rl,
-            info.alignment,
-            info.width,
-            elems_rc,
-            0,
-            count_arg.read(u64),
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            &self.roc_ops,
-        );
-        return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        const len = rl.len();
+    fn evalListTakeLast(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, count_arg: Value, update_mode: UpdateMode) Error!Value {
+        const len = self.listValue(list_elems, list_arg).len();
         const take = count_arg.read(u64);
         const start = if (take >= len) 0 else len - @as(usize, @intCast(take));
-        if (info.width == 0) {
-            return self.rocListToValue(canonicalZstList(zstSublistLen(len, @intCast(start), take)), ret_layout);
-        }
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-        const result = builtins.list.listSublist(
-            rl,
-            info.alignment,
-            info.width,
-            elems_rc,
-            @intCast(start),
-            take,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            &self.roc_ops,
-        );
-        return self.rocListToValue(result, ret_layout);
+        return self.evalListSublist(ll, list_elems, list_arg, update_mode, @intCast(start), take);
     }
 
-    fn evalListReverse(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elems_rc = self.builtinListElemRc(list_layout);
-        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
+    fn evalListReverse(self: *LirInterpreter, ll: LowLevelEvalInput, list_elems: ListElemSource, list_arg: Value, update_mode: UpdateMode) Error!Value {
+        const rl = self.listValue(list_elems, list_arg);
+        const info = self.listElemInfo(list_elems);
+        const elems_rc = self.builtinListElemRc(list_elems);
+        if (info.width == 0) return self.listResult(ll, canonicalZstList(rl.len()));
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
+        if (crash_boundary.set() != 0) return self.crashError();
+        var elem_rc_ctx = self.listElementRcContext(list_elems);
         const result = builtins.list.listReverse(
             rl,
             info.alignment,
@@ -9183,39 +7546,7 @@ pub const Interpreter = struct {
             &builtins.list.copy_fallback,
             &self.roc_ops,
         );
-        return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListSortWith(self: *LirInterpreter, list_arg: Value, callable_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        if (info.width == 0) return self.rocListToValue(canonicalZstList(rl.len()), ret_layout);
-        const callable = self.readBoxedDataPointer(callable_arg) orelse return self.invariantFailedError(
-            "LIR/interpreter invariant violated: list_sort_with received a null erased callable",
-            .{},
-        );
-        const elems_rc = self.builtinListElemRc(list_layout);
-        var crash_boundary = self.enterCrashBoundary();
-        defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
-        var elem_rc_ctx = try self.listElementRcContext(ll, list_layout);
-        const result = builtins.list.listSortWith(
-            rl,
-            callable,
-            info.alignment,
-            info.width,
-            elems_rc,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementIncref else &builtins.utils.rcNone,
-            if (elems_rc) @ptrCast(&elem_rc_ctx) else null,
-            if (elems_rc) &listElementDecref else &builtins.utils.rcNone,
-            update_mode,
-            false,
-            null,
-            &self.roc_ops,
-        );
-        return self.rocListToValue(result, ret_layout);
+        return self.listResult(ll, result);
     }
 
     /// Generic integer binary operation.
@@ -9324,8 +7655,7 @@ pub const Interpreter = struct {
     fn callDecBinaryBuiltin(self: *LirInterpreter, comptime func: anytype, av: i128, bv: i128) Error!i128 {
         var crash_boundary = self.enterCrashBoundary();
         defer crash_boundary.deinit();
-        const sj = crash_boundary.set();
-        if (sj != 0) return self.crashError();
+        if (crash_boundary.set() != 0) return self.crashError();
         return func(RocDec{ .num = av }, RocDec{ .num = bv }, &self.roc_ops);
     }
 
@@ -9343,7 +7673,7 @@ pub const Interpreter = struct {
             .negate => -%av,
             .abs => blk: {
                 if (checked_op != null and av == std.math.minInt(i128)) {
-                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable;
+                    const message = CheckedArithmetic.overflowMessageForLayout(checked_op.?, .dec) orelse unreachable; // the only checked abs op is num_abs_checked, which has a Dec overflow message
                     return self.triggerCrash(message);
                 }
                 break :blk if (av < 0) -%av else av;
@@ -9415,369 +7745,28 @@ pub const Interpreter = struct {
     // Layout helpers
 
     fn readPointerInt(self: *const LirInterpreter, value: Value) usize {
-        return self.boxy_runtime.readPointerInt(value);
+        return self.layoutRuntime().readPointerInt(value);
     }
 
-    fn writePointerInt(self: *const LirInterpreter, value: Value, raw_ptr: usize) void {
-        self.boxy_runtime.writePointerInt(value, raw_ptr);
-    }
+    /// Storage for one pointer-sized integer outside interpreter scratch, for
+    /// a value that is copied into frame storage while the cell is live.
+    const PointerIntCell = struct {
+        bytes: [@sizeOf(usize)]u8 align(@alignOf(usize)) = undefined,
+    };
 
-    fn allocPointerIntValue(self: *LirInterpreter, raw_ptr: usize) Error!Value {
-        const value = try self.alloc(.opaque_ptr);
-        self.writePointerInt(value, raw_ptr);
+    fn pointerIntCellValue(self: *const LirInterpreter, cell: *PointerIntCell, raw_ptr: usize) Value {
+        const value = Value{ .ptr = &cell.bytes };
+        self.layoutRuntime().writePointerInt(value, raw_ptr);
         return value;
     }
 
     fn readBoxedDataPointer(self: *const LirInterpreter, boxed: Value) ?[*]u8 {
-        return self.boxy_runtime.readBoxedDataPointer(boxed);
+        return self.layoutRuntime().readBoxedDataPointer(boxed);
     }
 
     fn writeBoxedDataPointer(self: *const LirInterpreter, boxed: Value, data_ptr: ?[*]u8) void {
-        self.boxy_runtime.writeBoxedDataPointer(boxed, data_ptr);
+        self.layoutRuntime().writeBoxedDataPointer(boxed, data_ptr);
     }
-
-    fn allocBoxOfZstValue(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!Value {
-        return try self.boxy_runtime.allocBoxOfZstValue(self.boxyFrameHooks(null), layout_idx);
-    }
-
-    fn requireBoxyTypeDesc(self: *const LirInterpreter, desc_id: LIR.BoxyTypeDescId) *const LirProgram.BoxyTypeDesc {
-        return self.boxy_runtime.requireBoxyTypeDesc(desc_id);
-    }
-
-    fn requireBoxyDict(self: *const LirInterpreter, dict_id: LIR.BoxyDictId) *const LirProgram.BoxyDict {
-        return self.boxy_runtime.requireBoxyDict(dict_id);
-    }
-
-    fn requireBoxyMethodSlots(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyMethodSlot {
-        return self.boxy_runtime.requireBoxyMethodSlots(span);
-    }
-
-    fn requireBoxyTagVariants(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyTagVariant {
-        return self.boxy_runtime.requireBoxyTagVariants(span);
-    }
-
-    fn requireBoxyDescRefs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LIR.BoxyDescRef {
-        return self.boxy_runtime.requireBoxyDescRefs(span);
-    }
-
-    fn requireBoxyDictRefs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LIR.BoxyDictRef {
-        return self.boxy_runtime.requireBoxyDictRefs(span);
-    }
-
-    fn requireBoxyMethodArgLayouts(self: *const LirInterpreter, span: LIR.BoxySpan) []const layout_mod.Idx {
-        return self.boxy_runtime.requireBoxyMethodArgLayouts(span);
-    }
-
-    fn requireBoxyMethodHiddenDescSources(
-        self: *const LirInterpreter,
-        span: LIR.BoxySpan,
-    ) []const LirProgram.BoxyMethodHiddenDescSource {
-        return self.boxy_runtime.requireBoxyMethodHiddenDescSources(span);
-    }
-
-    fn requireBoxyTagPayloadDescs(self: *const LirInterpreter, span: LIR.BoxySpan) []const LirProgram.BoxyTagPayloadDesc {
-        return self.boxy_runtime.requireBoxyTagPayloadDescs(span);
-    }
-
-    fn resolveBoxyDescRef(self: *LirInterpreter, frame: *const Frame, desc_ref: LIR.BoxyDescRef) Error!*const LirProgram.BoxyTypeDesc {
-        return switch (desc_ref) {
-            .static => |desc_id| self.requireBoxyTypeDesc(desc_id),
-            .runtime => |runtime_id| blk: {
-                if (runtime_id >= self.runtime_boxy_type_descs.items.len) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: runtime boxy descriptor id {d} exceeded descriptor table length {d}",
-                        .{ runtime_id, self.runtime_boxy_type_descs.items.len },
-                    );
-                }
-                break :blk self.runtime_boxy_type_descs.items[runtime_id];
-            },
-            .local => |local| blk: {
-                const value = try self.getLocalChecked(frame, local);
-                const raw_ptr = self.readPointerInt(value);
-                if (raw_ptr == 0) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: boxy descriptor local {d} contained a null descriptor pointer",
-                        .{@backingInt(local)},
-                    );
-                }
-                break :blk @ptrFromInt(raw_ptr);
-            },
-            .dict_method_arg => |projection| blk: {
-                const dict = try self.resolveBoxyDictRef(frame, .{ .local = projection.dict });
-                break :blk try self.boxy_runtime.resolveDictMethodArgDesc(
-                    BoxyFrameHooks{ .interp = self, .frame = frame },
-                    dict,
-                    projection.method_slot,
-                    @backingInt(projection.method),
-                    projection.arg_index,
-                );
-            },
-            .dict_method_hidden => |projection| blk: {
-                const dict = try self.resolveBoxyDictRef(frame, .{ .local = projection.dict });
-                break :blk try self.boxy_runtime.resolveDictMethodHiddenDesc(
-                    BoxyFrameHooks{ .interp = self, .frame = frame },
-                    dict,
-                    projection.method_slot,
-                    @backingInt(projection.method),
-                    projection.hidden_index,
-                    projection.shape,
-                );
-            },
-        };
-    }
-
-    fn resolveOptionalBoxyDescRef(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc_ref: ?LIR.BoxyDescRef,
-    ) Error!?*const LirProgram.BoxyTypeDesc {
-        return if (desc_ref) |ref| try self.resolveBoxyDescRef(frame, ref) else null;
-    }
-
-    fn resolveBoxyDictRef(self: *LirInterpreter, frame: *const Frame, dict_ref: LIR.BoxyDictRef) Error!*const LirProgram.BoxyDict {
-        return switch (dict_ref) {
-            .static => |dict_id| blk: {
-                const dict = self.requireBoxyDict(dict_id);
-                if (dict.template) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: template dictionary {d} was read without materializing its captures",
-                        .{@backingInt(dict_id)},
-                    );
-                }
-                break :blk dict;
-            },
-            .local => |local| blk: {
-                const value = try self.getLocalChecked(frame, local);
-                const raw_ptr = self.readPointerInt(value);
-                if (raw_ptr == 0) {
-                    return self.invariantFailedError(
-                        "LIR/interpreter invariant violated: boxy dictionary local {d} contained a null dictionary pointer",
-                        .{@backingInt(local)},
-                    );
-                }
-                break :blk @ptrFromInt(raw_ptr);
-            },
-            .runtime => |runtime_id| try self.boxy_runtime.requireRuntimeBoxyDict(runtime_id),
-        };
-    }
-
-    fn evalBoxyDescRefValue(self: *LirInterpreter, frame: *const Frame, desc_ref: LIR.BoxyDescRef) Error!Value {
-        const desc = try self.materializeBoxyDescRefValue(frame, desc_ref);
-        return try self.allocPointerIntValue(@intFromPtr(desc));
-    }
-
-    fn evalBoxyDescRefValueAtProjection(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc_ref: LIR.BoxyDescRef,
-        nested_index: ?u32,
-        box_payload_layout: ?layout_mod.Idx,
-        tag_payload: ?LIR.BoxyTagPayloadRead,
-        tag_ext: bool,
-        tag_residual_for: ?LIR.BoxyDescRef,
-        captures: LIR.LocalSpan,
-    ) Error!Value {
-        const projection_count = @intFromBool(tag_ext) + @intFromBool(nested_index != null) +
-            @intFromBool(box_payload_layout != null) +
-            @intFromBool(tag_payload != null) + @intFromBool(tag_residual_for != null);
-        if (projection_count > 1) {
-            return self.invariantFailedError("LIR/interpreter invariant violated: descriptor materialization selected multiple projection paths", .{});
-        }
-        const desc = if (tag_residual_for) |target_desc_ref|
-            try self.boxy_runtime.materializeTagResidualBoxyDescRefValue(
-                self.boxyFrameHooks(frame),
-                desc_ref,
-                target_desc_ref,
-                captures,
-            )
-        else if (tag_ext)
-            try self.boxy_runtime.materializeTagExtBoxyDescRefValue(self.boxyFrameHooks(frame), desc_ref, captures)
-        else if (tag_payload) |payload|
-            try self.boxy_runtime.materializeTagPayloadBoxyDescRefValue(
-                self.boxyFrameHooks(frame),
-                desc_ref,
-                payload.tag_name,
-                payload.payload_index,
-                captures,
-            )
-        else if (box_payload_layout) |box_layout|
-            try self.boxy_runtime.materializeBoxPayloadBoxyDescRefValue(
-                self.boxyFrameHooks(frame),
-                desc_ref,
-                box_layout,
-                captures,
-            )
-        else if (nested_index) |index|
-            try self.materializeNestedBoxyDescRefValue(frame, desc_ref, index, captures)
-        else
-            try self.materializeBoxyDescRefValueWithCaptures(frame, desc_ref, captures);
-        return try self.allocPointerIntValue(@intFromPtr(desc));
-    }
-
-    fn materializeBoxyDescRefValue(self: *LirInterpreter, frame: *const Frame, desc_ref: LIR.BoxyDescRef) Error!*const LirProgram.BoxyTypeDesc {
-        return try self.boxy_runtime.materializeBoxyDescRefValue(self.boxyFrameHooks(frame), desc_ref);
-    }
-
-    fn materializeBoxyDescRefValueWithCaptures(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc_ref: LIR.BoxyDescRef,
-        captures: LIR.LocalSpan,
-    ) Error!*const LirProgram.BoxyTypeDesc {
-        return try self.boxy_runtime.materializeBoxyDescRefValueWithCaptures(self.boxyFrameHooks(frame), desc_ref, captures);
-    }
-
-    fn materializeNestedBoxyDescRefValue(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc_ref: LIR.BoxyDescRef,
-        nested_index: u32,
-        captures: LIR.LocalSpan,
-    ) Error!*const LirProgram.BoxyTypeDesc {
-        return try self.boxy_runtime.materializeNestedBoxyDescRefValue(self.boxyFrameHooks(frame), desc_ref, nested_index, captures);
-    }
-
-    fn evalBoxyDictRefValue(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        dict_ref: LIR.BoxyDictRef,
-        captures: LIR.LocalSpan,
-    ) Error!Value {
-        const dict = switch (dict_ref) {
-            .static => |dict_id| if (self.requireBoxyDict(dict_id).template) template: {
-                const capture_locals = self.store.getLocalSpan(captures);
-                const values = try self.arena.allocator().alloc(usize, GuardedList.borrowLen(capture_locals));
-                for (values, 0..) |*value, index| {
-                    value.* = self.readPointerInt(try self.getLocalChecked(frame, GuardedList.at(capture_locals, index)));
-                }
-                break :template try self.boxy_runtime.materializeBoxyDictTemplate(self.boxyFrameHooks(frame), dict_id, values);
-            } else try self.resolveBoxyDictRef(frame, dict_ref),
-            .local, .runtime => try self.resolveBoxyDictRef(frame, dict_ref),
-        };
-        return try self.allocPointerIntValue(@intFromPtr(dict));
-    }
-
-    fn findLocalBoxyTagVariant(
-        self: *const LirInterpreter,
-        desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: LIR.BoxyNameId,
-    ) ?LirProgram.BoxyTagVariant {
-        return self.boxy_runtime.findLocalBoxyTagVariant(desc, tag_name);
-    }
-
-    fn firstNestedBoxyDesc(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!?*const LirProgram.BoxyTypeDesc {
-        return try self.boxy_runtime.firstNestedBoxyDesc(self.boxyFrameHooks(frame), desc);
-    }
-
-    fn requireBoxyTagVariantByDiscriminant(
-        self: *const LirInterpreter,
-        desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u32,
-    ) LirProgram.BoxyTagVariant {
-        return self.boxy_runtime.requireBoxyTagVariantByDiscriminant(desc, discriminant);
-    }
-
-    fn findBoxyTagVariantByDiscriminant(
-        self: *const LirInterpreter,
-        desc: *const LirProgram.BoxyTypeDesc,
-        discriminant: u32,
-    ) ?LirProgram.BoxyTagVariant {
-        return self.boxy_runtime.findBoxyTagVariantByDiscriminant(desc, discriminant);
-    }
-
-    fn boxyTagExtDiscriminant(self: *const LirInterpreter, desc: *const LirProgram.BoxyTypeDesc) ?u32 {
-        return self.boxy_runtime.boxyTagExtDiscriminant(desc);
-    }
-
-    fn resolveBoxyTagExtDesc(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc: *const LirProgram.BoxyTypeDesc,
-    ) Error!*const LirProgram.BoxyTypeDesc {
-        return try self.boxy_runtime.resolveBoxyTagExtDesc(self.boxyFrameHooks(frame), desc);
-    }
-
-    fn requireBoxyTagPayloadLayout(
-        self: *const LirInterpreter,
-        union_layout: layout_mod.Idx,
-        discriminant: u32,
-    ) layout_mod.Idx {
-        return self.boxy_runtime.requireBoxyTagPayloadLayout(union_layout, discriminant);
-    }
-
-    fn constructBoxyTagValue(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: LIR.BoxyNameId,
-        payload: ?Value,
-        payload_layout: layout_mod.Idx,
-        payload_desc: ?*const LirProgram.BoxyTypeDesc,
-        payload_mode: LIR.BoxyTransferMode,
-        target_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.constructBoxyTagValue(
-            self.boxyFrameHooks(frame),
-            desc,
-            tag_name,
-            payload,
-            payload_layout,
-            payload_desc,
-            payload_mode,
-            target_layout,
-        );
-    }
-
-    const BoxyTagPayloadRead = boxy_runtime.BoxyTagPayloadRead;
-
-    fn readBoxyTagPayloadByName(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        source_value: Value,
-        source_layout: layout_mod.Idx,
-        source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: LIR.BoxyNameId,
-        payload_index: u32,
-        target_layout: layout_mod.Idx,
-        source_mode: LIR.BoxyTransferMode,
-    ) Error!BoxyTagPayloadRead {
-        return try self.boxy_runtime.readBoxyTagPayloadByName(self.boxyFrameHooks(frame), source_value, source_layout, source_desc, tag_name, payload_index, target_layout, source_mode);
-    }
-
-    fn boxyTagMatches(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        source_value: Value,
-        source_layout: layout_mod.Idx,
-        source_desc: *const LirProgram.BoxyTypeDesc,
-        tag_name: LIR.BoxyNameId,
-    ) Error!bool {
-        return try self.boxy_runtime.boxyTagMatches(self.boxyFrameHooks(frame), source_value, source_layout, source_desc, tag_name);
-    }
-
-    fn findBoxyPayloadDesc(
-        self: *const LirInterpreter,
-        variant: LirProgram.BoxyTagVariant,
-        payload_index: u32,
-    ) ?LIR.BoxyDescRef {
-        return self.boxy_runtime.findBoxyPayloadDesc(variant, payload_index);
-    }
-
-    fn allocBoxyDynamicPayload(
-        self: *LirInterpreter,
-        payload: Value,
-        payload_layout: layout_mod.Idx,
-        desc: *const LirProgram.BoxyTypeDesc,
-        target_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.allocBoxyDynamicPayload(self.boxyFrameHooks(null), payload, payload_layout, desc, target_layout);
-    }
-
-    const ResolvedTagUnionBase = boxy_runtime.ResolvedTagUnionBase;
 
     const ResolvedStructBase = struct {
         value: Value,
@@ -9815,14 +7804,15 @@ pub const Interpreter = struct {
             },
             .scalar,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
+            .dynamic,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: field projection source layout {d} is not a struct or boxed struct",
                 .{@backingInt(struct_layout)},
@@ -9830,135 +7820,13 @@ pub const Interpreter = struct {
         }
     }
 
-    fn resolveTagUnionBaseValue(
-        self: *LirInterpreter,
-        union_val: Value,
-        union_layout: layout_mod.Idx,
-    ) ResolvedTagUnionBase {
-        return self.boxy_runtime.resolveTagUnionBaseValue(union_val, union_layout);
-    }
-
-    fn resolveBoxyTagBaseValue(
-        self: *LirInterpreter,
-        source_val: Value,
-        source_layout: layout_mod.Idx,
-        source_desc: *const LirProgram.BoxyTypeDesc,
-    ) ResolvedTagUnionBase {
-        return self.boxy_runtime.resolveBoxyTagBaseValue(source_val, source_layout, source_desc);
-    }
-
-    /// Get the payload layout for a given tag discriminant.
-    fn tagPayloadLayout(self: *LirInterpreter, union_layout: layout_mod.Idx, discriminant: u32) layout_mod.Idx {
-        return self.boxy_runtime.tagPayloadLayout(union_layout, discriminant);
-    }
-
-    fn normalizeValueToLayout(
-        self: *const LirInterpreter,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        expected_layout: layout_mod.Idx,
-    ) Value {
-        return self.boxy_runtime.normalizeValueToLayout(value, actual_layout, expected_layout);
-    }
-
-    fn materializeBoxyPayloadToLayout(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        desc: ?*const LirProgram.BoxyTypeDesc,
-        expected_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.materializeBoxyPayloadToLayout(self.boxyFrameHooks(frame), value, actual_layout, desc, expected_layout);
-    }
-
-    fn materializeCallResultToLayout(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        actual_desc: ?*const LirProgram.BoxyTypeDesc,
-        result_desc_ref: ?LIR.BoxyDescRef,
-        expected_layout: layout_mod.Idx,
-    ) Error!boxy_runtime.BoxyAssignedValue {
-        const result_desc = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
-        return try self.boxy_runtime.materializeCallResult(
-            self.boxyFrameHooks(frame),
-            value,
-            actual_layout,
-            actual_desc,
-            result_desc,
-            expected_layout,
-        );
-    }
-
-    /// Store a call's result as the statement's own descriptor describes.
-    /// `stored_as` is the descriptor a pending call's statement already
-    /// stored the value as; applying the same one again changes nothing.
-    fn materializeDrivenCallResult(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        actual_desc: ?*const LirProgram.BoxyTypeDesc,
-        result_desc_ref: ?LIR.BoxyDescRef,
-        stored_as: ?*const LirProgram.BoxyTypeDesc,
-        expected_layout: layout_mod.Idx,
-    ) Error!boxy_runtime.BoxyAssignedValue {
-        const own = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
-        if (stored_as) |applied| {
-            if (own == applied and actual_layout == expected_layout) return .{ .value = value, .desc = actual_desc };
-        }
-        return try self.boxy_runtime.materializeCallResult(
-            self.boxyFrameHooks(frame),
-            value,
-            actual_layout,
-            actual_desc,
-            own,
-            expected_layout,
-        );
-    }
-
-    fn materializeBoxyPayloadToLayoutWithOptionalSourceDesc(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        source_desc: ?*const LirProgram.BoxyTypeDesc,
-        target_desc: *const LirProgram.BoxyTypeDesc,
-        expected_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.materializeBoxyPayloadToLayoutWithOptionalSourceDesc(self.boxyFrameHooks(frame), value, actual_layout, source_desc, target_desc, expected_layout);
-    }
-
-    fn materializeBoxyPayloadToLayoutWithTargetDesc(
-        self: *LirInterpreter,
-        frame: *const Frame,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        source_desc: *const LirProgram.BoxyTypeDesc,
-        target_desc: *const LirProgram.BoxyTypeDesc,
-        expected_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.materializeBoxyPayloadToLayoutWithTargetDesc(self.boxyFrameHooks(frame), value, actual_layout, source_desc, target_desc, expected_layout);
-    }
-
-    fn coerceExplicitListValueToLayout(
-        self: *LirInterpreter,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        expected_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.coerceExplicitListValueToLayout(value, actual_layout, expected_layout);
-    }
-
-    fn coerceExplicitNominalValueToLayout(
-        self: *LirInterpreter,
-        value: Value,
-        actual_layout: layout_mod.Idx,
-        expected_layout: layout_mod.Idx,
-    ) Error!Value {
-        return try self.boxy_runtime.coerceExplicitNominalValueToLayout(self.boxyFrameHooks(null), value, actual_layout, expected_layout);
+    /// Callers and workers share an exact ABI: a call's result already has
+    /// the representation of the statement's target.
+    fn checkCallResultLayout(self: *LirInterpreter, actual_layout: layout_mod.Idx, expected_layout: layout_mod.Idx) Error!void {
+        const actual = self.layout_store.runtimeRepresentationLayoutIdx(actual_layout);
+        const expected = self.layout_store.runtimeRepresentationLayoutIdx(expected_layout);
+        if (actual != expected and !try self.layout_store.acceptsAtHoles(self.allocator, actual, expected))
+            return self.invariantFailedError("call result ABI differs from its worker: {d} to {d}", .{ @backingInt(actual), @backingInt(expected) });
     }
 
     fn coerceExplicitRefValueToLayout(
@@ -9967,15 +7835,11 @@ pub const Interpreter = struct {
         actual_layout: layout_mod.Idx,
         expected_layout: layout_mod.Idx,
     ) Error!Value {
-        return try self.boxy_runtime.coerceExplicitRefValueToLayout(self.boxyFrameHooks(null), value, actual_layout, expected_layout);
+        return try self.layoutRuntime().coerceExplicitRefValueToLayout(self.valueHooks(), value, actual_layout, expected_layout);
     }
 
     fn getLayout(self: *LirInterpreter, idx: layout_mod.Idx) Layout {
         return self.layout_store.getLayout(idx);
-    }
-
-    fn evalBoxBox(self: *LirInterpreter, arg: Value, ret_layout: layout_mod.Idx) Error!Value {
-        return try self.boxy_runtime.boxBox(self.boxyFrameHooks(null), arg, ret_layout);
     }
 
     fn evalBoxUnbox(self: *LirInterpreter, boxed: Value, ret_layout: layout_mod.Idx) Error!Value {
@@ -9994,9 +7858,9 @@ pub const Interpreter = struct {
     fn evalBoxPrepareUpdate(self: *LirInterpreter, boxed: Value, ret_layout: layout_mod.Idx, unique_args: u64) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         switch (ret_layout_val.tag) {
-            .box_of_zst => return try self.allocBoxOfZstValue(ret_layout),
+            .box_of_zst => return try self.layoutRuntime().allocBoxOfZstValue(self.valueHooks(), ret_layout),
             .box => {
-                const box_info = self.boxAllocInfo(ret_layout_val);
+                const box_info = self.layoutRuntime().boxAllocInfo(self.valueHooks(), ret_layout_val);
                 const data_ptr = self.readBoxedDataPointer(boxed) orelse {
                     const result = try self.alloc(ret_layout);
                     self.writeBoxedDataPointer(result, null);
@@ -10039,15 +7903,16 @@ pub const Interpreter = struct {
                 return result;
             },
             .scalar,
-            .erased_box,
             .list,
             .list_of_zst,
             .struct_,
             .closure,
             .erased_callable,
             .zst,
+            .hole,
             .tag_union,
             .ptr,
+            .dynamic,
             => return error.RuntimeError,
         }
     }
@@ -10071,9 +7936,10 @@ pub const Interpreter = struct {
         return result;
     }
 
-    /// ptr_alloca: reserve a zeroed frame slot for the ptr layout's element and
-    /// yield its address. The slot lives in the eval arena, which outlives the
-    /// frame—fine, since TRMC emits at most one alloca per proc invocation.
+    /// ptr_alloca: reserve a zeroed cell for the ptr layout's element and
+    /// yield its address. The running frame is the top of `frame_stack`, so
+    /// the cell is released with that frame, the procedure lifetime LIR gives
+    /// `ptr_alloca` cells.
     fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
         if (builtin.mode == .debug and ret_layout_val.tag != .ptr) {
@@ -10083,10 +7949,12 @@ pub const Interpreter = struct {
             );
         }
         const sa = self.helper.sizeAlignOf(ret_layout_val.getIdx());
-        // allocAlignedByteSlice zero-fills, so the slot reads as null holes until written.
-        const slot = try self.allocAlignedByteSlice(@max(sa.size, 1), sa.alignment);
+        const cell_size = @max(sa.size, 1);
+        const slot = (try self.frame_stack.alloc(cell_size, .fromByteUnits(sa.alignment.toByteUnits())))[0..cell_size];
+        // Zero-filled, so the cell reads as null holes until written.
+        @memset(slot, 0);
         const result = try self.alloc(ret_layout);
-        self.writePointerInt(result, @intFromPtr(slot.ptr));
+        self.layoutRuntime().writePointerInt(result, @intFromPtr(slot.ptr));
         return result;
     }
 
@@ -10094,9 +7962,9 @@ pub const Interpreter = struct {
     /// rc=1 and a zero-filled payload (so any box fields inside read as null).
     fn evalBoxAllocZeroed(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
-        if (ret_layout_val.tag == .box_of_zst) return try self.allocBoxOfZstValue(ret_layout);
+        if (ret_layout_val.tag == .box_of_zst) return try self.layoutRuntime().allocBoxOfZstValue(self.valueHooks(), ret_layout);
 
-        const box_info = self.boxAllocInfo(ret_layout_val);
+        const box_info = self.layoutRuntime().boxAllocInfo(self.valueHooks(), ret_layout_val);
         const data_ptr = try self.allocRocDataWithRc(box_info.elem_size, box_info.elem_alignment, box_info.contains_rc);
         if (box_info.elem_size > 0) {
             @memset(data_ptr[0..box_info.elem_size], 0);
@@ -10151,8 +8019,696 @@ pub const Interpreter = struct {
     /// ptr_cast: identity bits (box(T) -> ptr(T) or ptr -> ptr).
     fn evalPtrCast(self: *LirInterpreter, ptr_val: Value, ret_layout: layout_mod.Idx) Error!Value {
         const result = try self.alloc(ret_layout);
-        self.writePointerInt(result, self.readPointerInt(ptr_val));
+        self.layoutRuntime().writePointerInt(result, self.readPointerInt(ptr_val));
         return result;
+    }
+
+    // ── `.boxy` dynamic values (design.md "`.boxy` Runtime Lowering") ──
+    //
+    // A dynamic local's slot holds the address of its bytes, which its
+    // descriptor describes. Everything except the operations below treats it
+    // as that one pointer-sized word.
+
+    fn readAddress(value: Value) [*]u8 {
+        return @ptrFromInt(value.read(usize));
+    }
+
+    /// Set dynamic local `local`'s address.
+    fn bindDynAddress(frame: *Frame, local: LocalId, address: [*]u8) void {
+        var cell: usize = @intFromPtr(address);
+        frame.setLocal(local, .{ .ptr = @ptrCast(&cell) });
+    }
+
+    /// The address of dynamic local `local`'s bytes.
+    fn dynAddress(self: *LirInterpreter, frame: *const Frame, local: LocalId) Error![*]u8 {
+        return readAddress(try self.getLocalChecked(frame, local));
+    }
+
+    /// The address of a local's bytes: a dynamic local's storage, or a
+    /// closed local's slot.
+    fn localBytes(self: *LirInterpreter, frame: *const Frame, local: LocalId) Error![*]u8 {
+        const value = try self.getLocalChecked(frame, local);
+        return if (self.store.getLocal(local).dyn != null) readAddress(value) else value.ptr;
+    }
+
+    fn localWord(self: *LirInterpreter, frame: *const Frame, local: LocalId) Error!usize {
+        return (try self.getLocalChecked(frame, local)).read(usize);
+    }
+
+    /// The descriptor an `opaque_ptr` descriptor local holds.
+    fn descAt(self: *LirInterpreter, frame: *const Frame, desc_local: LocalId) Error!*const TypeDesc {
+        const word = try self.localWord(frame, desc_local);
+        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: descriptor local {d} is null", .{@backingInt(desc_local)});
+        return @ptrFromInt(word);
+    }
+
+    /// The static data an `opaque_ptr` plan local addresses.
+    fn planAt(self: *LirInterpreter, frame: *const Frame, comptime T: type, plan_local: LocalId) Error!*const T {
+        const word = try self.localWord(frame, plan_local);
+        if (word == 0) return self.invariantFailedError("LIR/interpreter invariant violated: plan local {d} is null", .{@backingInt(plan_local)});
+        return @ptrFromInt(word);
+    }
+
+    /// The value of an index operand: the immediate, or the `u32` local
+    /// holding it.
+    fn indexAt(self: *LirInterpreter, frame: *const Frame, index: LIR.DynIndex) Error!u32 {
+        return switch (index) {
+            .immediate => |value| value,
+            .local => |local| (try self.getLocalChecked(frame, local)).read(u32),
+        };
+    }
+
+    /// The descriptor of dynamic local `local`.
+    fn localDesc(self: *LirInterpreter, frame: *const Frame, local: LocalId) Error!*const TypeDesc {
+        const dyn = self.store.getLocal(local).dyn orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: local {d} is not dynamic",
+            .{@backingInt(local)},
+        );
+        return self.descAt(frame, dyn.desc);
+    }
+
+    /// A nominal shares its backing's layout; field and tag lookups read the
+    /// backing's entries.
+    fn backingDesc(desc: *const TypeDesc) *const TypeDesc {
+        var current = desc;
+        while (current.kind == .nominal) current = current.child.?;
+        return current;
+    }
+
+    /// Where a closed local's bytes live in its frame.
+    fn closedStorage(frame: *const Frame, local: LocalId) [*]u8 {
+        const index = frame.slotIndex(local);
+        if (frame.storage_sizes[index] == 0) return boxy.walk.zeroSizedPtr();
+        return frame.storage + frame.storage_offsets[index];
+    }
+
+    /// The value of a closed local whose bytes are at `bytes`.
+    fn closedValueAt(frame: *const Frame, local: LocalId, bytes: [*]u8) Value {
+        return if (frame.storage_sizes[frame.slotIndex(local)] == 0) Value.zst else .{ .ptr = bytes };
+    }
+
+    /// Where a statement writes `target`'s bytes in place.
+    fn targetStorage(self: *LirInterpreter, frame: *const Frame, target: LocalId) Error![*]u8 {
+        if (self.store.getLocal(target).dyn != null) return self.dynAddress(frame, target);
+        return closedStorage(frame, target);
+    }
+
+    /// Complete a write a statement made into `target`'s storage.
+    fn finishResultStorage(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, storage: [*]u8) Error!void {
+        if (self.store.getLocal(target).dyn != null) return;
+        try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, storage), false);
+    }
+
+    /// The result storage a call to a procedure with a dynamic result
+    /// passes: the target's own bytes.
+    fn callResultStorage(self: *LirInterpreter, frame: *const Frame, target: LocalId) Error![*]u8 {
+        return self.targetStorage(frame, target);
+    }
+
+    /// Write `desc.size` bytes from `src` into dynamic local `local`.
+    fn writeDynLocal(self: *LirInterpreter, frame: *const Frame, local: LocalId, src: [*]const u8) Error!void {
+        boxy.walk.copy(try self.localDesc(frame, local), try self.dynAddress(frame, local), src);
+    }
+
+    /// Write a dynamic or closed target from the bytes at `src`.
+    fn writeTargetBytes(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, src: [*]u8) Error!void {
+        if (self.store.getLocal(target).dyn != null) return self.writeDynLocal(frame, target, src);
+        try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, src), false);
+    }
+
+    /// `set_local` where either side is dynamic: the value's bytes are copied.
+    fn copyLocalBytes(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, value: LocalId) Error!void {
+        if (self.store.getLocal(target).dyn) |dyn| {
+            if (dyn.storage == .view) {
+                return self.invariantFailedError("LIR/interpreter invariant violated: set_local wrote view local {d}", .{@backingInt(target)});
+            }
+        }
+        try self.writeTargetBytes(frame, stmt_id, target, try self.localBytes(frame, value));
+    }
+
+    fn dynIncref(self: *LirInterpreter, frame: *const Frame, local: LocalId, count: u32) Error!void {
+        boxy.walk.incref(try self.localDesc(frame, local), try self.dynAddress(frame, local), @intCast(count), &self.roc_ops);
+    }
+
+    fn dynDecref(self: *LirInterpreter, frame: *const Frame, local: LocalId) Error!void {
+        boxy.walk.decref(try self.localDesc(frame, local), try self.dynAddress(frame, local), &self.roc_ops);
+    }
+
+    const CallArgs = struct {
+        values: []Value,
+        layouts: []layout_mod.Idx,
+        relocations: []const TailCallRelocation = &.{},
+    };
+
+    /// The arguments of a direct call to `callee`. A dynamic parameter
+    /// receives the address of its argument's bytes: a dynamic argument's
+    /// address, or a closed argument's slot. A frame-replacing call also
+    /// records the bytes those addresses name, which move with the call.
+    fn prepareCallArgs(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        callee: *const LirProcSpec,
+        arg_locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+        replaces_frame: bool,
+    ) Error!CallArgs {
+        const values = try self.collectLocalValues(frame, arg_locals);
+        const layouts = try self.localLayouts(arg_locals);
+        const params = self.store.getLocalSpan(callee.args);
+        // A count mismatch is reported when the callee's activation begins.
+        if (params.len != arg_locals.len) return .{ .values = values, .layouts = layouts };
+        var relocations: std.ArrayList(TailCallRelocation) = .empty;
+        for (0..arg_locals.len) |i| {
+            const arg_local = GuardedList.at(arg_locals, i);
+            const arg = self.store.getLocal(arg_local);
+            const param = self.store.getLocal(GuardedList.at(params, i));
+            if (param.dyn == null) {
+                if (arg.dyn != null) {
+                    return self.invariantFailedError(
+                        "LIR/interpreter invariant violated: dynamic local {d} passed to a closed parameter of proc {d}",
+                        .{ @backingInt(arg_local), callee.name.raw() },
+                    );
+                }
+                continue;
+            }
+            var size: u32 = undefined;
+            var alignment: u32 = undefined;
+            if (arg.dyn != null) {
+                const desc = try self.localDesc(frame, arg_local);
+                size = desc.size;
+                alignment = desc.alignment;
+            } else {
+                const sa = self.helper.sizeAlignOf(arg.layout_idx);
+                size = sa.size;
+                alignment = @intCast(sa.alignment.toByteUnits());
+                const cell = try self.alloc(.opaque_ptr);
+                cell.write(usize, @intFromPtr(if (values[i].isZst()) boxy.walk.zeroSizedPtr() else values[i].ptr));
+                values[i] = cell;
+                layouts[i] = param.layout_idx;
+            }
+            if (replaces_frame and size != 0) {
+                try relocations.append(self.evalAllocator(), .{ .arg = @intCast(i), .size = size, .alignment = alignment });
+            }
+        }
+        return .{ .values = values, .layouts = layouts, .relocations = relocations.items };
+    }
+
+    /// Enter an `erased_record` procedure through the uniform erased ABI.
+    fn callErasedRecordProc(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        proc_spec: LirProcSpec,
+        capture: [*]u8,
+        ret: ?[*]u8,
+        args: ?[*]const u8,
+        reuse: ?[*]u8,
+    ) Error!void {
+        const params = self.store.getLocalSpan(proc_spec.args);
+        const capture_param = proc_spec.erased_capture_arg orelse return self.invariantFailedError(
+            "LIR/interpreter invariant violated: erased_record proc {d} has no capture parameter",
+            .{@backingInt(proc_id)},
+        );
+        const proc_args = try self.evalAllocator().alloc(Value, params.len);
+        const proc_arg_layouts = try self.evalAllocator().alloc(layout_mod.Idx, params.len);
+        var explicit_count: usize = 0;
+        for (0..params.len) |i| {
+            const param_id = GuardedList.at(params, i);
+            const param = self.store.getLocal(param_id);
+            proc_arg_layouts[i] = param.layout_idx;
+            if (param_id == capture_param) {
+                const cell = try self.alloc(.opaque_ptr);
+                cell.write(usize, @intFromPtr(capture));
+                proc_args[i] = cell;
+                continue;
+            }
+            if (proc_spec.erased_reuse_arg != null and param_id == proc_spec.erased_reuse_arg.?) {
+                const cell = try self.alloc(param.layout_idx);
+                cell.write(usize, @intFromPtr(reuse));
+                proc_args[i] = cell;
+                continue;
+            }
+            explicit_count += 1;
+            if (param.dyn != null) {
+                const cell = try self.alloc(.opaque_ptr);
+                cell.write(usize, if (args) |bytes| @intFromPtr(bytes) else @intFromPtr(boxy.walk.zeroSizedPtr()));
+                proc_args[i] = cell;
+            } else if (self.helper.sizeOf(param.layout_idx) == 0) {
+                proc_args[i] = Value.zst;
+            } else {
+                const bytes = args orelse return self.invariantFailedError(
+                    "LIR/interpreter invariant violated: erased_record proc {d} expected an argument record",
+                    .{@backingInt(proc_id)},
+                );
+                proc_args[i] = .{ .ptr = @constCast(bytes) };
+            }
+        }
+        if (explicit_count > 1) {
+            return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased_record proc {d} has {d} explicit parameters",
+                .{ @backingInt(proc_id), explicit_count },
+            );
+        }
+        if (proc_spec.dyn_result != null) {
+            self.pending_dyn_result = ret orelse boxy.walk.zeroSizedPtr();
+            _ = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
+            return;
+        }
+        const result = try self.evalProcById(proc_id, proc_args, proc_arg_layouts);
+        const ret_size = self.helper.sizeOf(proc_spec.ret_layout);
+        // A procedure that left a call pending returns no value.
+        if (ret_size > 0 and !self.hasPendingCall()) {
+            const ret_ptr = ret orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: erased_record proc {d} returned a non-ZST result without result storage",
+                .{@backingInt(proc_id)},
+            );
+            @memcpy(ret_ptr[0..ret_size], result.value.ptr[0..ret_size]);
+        }
+    }
+
+    /// A list operation a `.boxy` generic body emits: its last argument is
+    /// the element descriptor, and dynamic arguments and results are read and
+    /// written through their addresses.
+    fn execDynElemLowLevel(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, assign: anytype) Error!void {
+        const all_args = self.store.getLocalSpan(assign.args);
+        if (all_args.len == 0) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: {s} with an element descriptor has no arguments", .{@tagName(assign.op)});
+        }
+        const arg_count = all_args.len - 1;
+        const elem_desc = try self.descAt(frame, GuardedList.at(all_args, arg_count));
+        const values = try self.evalAllocator().alloc(Value, arg_count);
+        const layouts = try self.evalAllocator().alloc(layout_mod.Idx, arg_count);
+        for (0..arg_count) |i| {
+            const local = GuardedList.at(all_args, i);
+            const value = try self.getLocalChecked(frame, local);
+            values[i] = if (self.store.getLocal(local).dyn != null) .{ .ptr = readAddress(value) } else value;
+            layouts[i] = self.store.getLocal(local).layout_idx;
+        }
+        const target_dynamic = self.store.getLocal(assign.target).dyn != null;
+        const extra = self.store.stmtRowOrDefault(assign.extra);
+        const value = try self.evalLowLevel(.{
+            .op = assign.op,
+            .args = values,
+            .arg_layouts = layouts,
+            .ret_layout = self.store.getLocal(assign.target).layout_idx,
+            .unique_args = extra.unique_args,
+            .interchangeable = extra.interchangeable,
+            .elem_desc = elem_desc,
+            .ret_desc = if (target_dynamic) try self.localDesc(frame, assign.target) else null,
+        });
+        if (target_dynamic) return self.writeDynLocal(frame, assign.target, value.ptr);
+        try self.setLocalChecked(frame, stmt_id, assign.target, value, false);
+    }
+
+    /// Place every `frame`-storage dynamic local of the running procedure in
+    /// one region of the frame stack, released when the activation ends.
+    fn dynFrameAlloc(self: *LirInterpreter, frame: *Frame) Error!void {
+        var size: usize = 0;
+        var alignment: u32 = 1;
+        for (frame.dyn_frame_slots) |slot| {
+            const desc = try self.localDesc(frame, GuardedList.at(frame.locals, slot));
+            if (desc.size == 0) continue;
+            size = std.mem.alignForward(usize, size, desc.alignment) + desc.size;
+            alignment = @max(alignment, desc.alignment);
+        }
+        const region = try self.frame_stack.alloc(@max(size, 1), .fromByteUnits(alignment));
+        var offset: usize = 0;
+        for (frame.dyn_frame_slots) |slot| {
+            const local = GuardedList.at(frame.locals, slot);
+            const desc = try self.localDesc(frame, local);
+            if (desc.size == 0) {
+                bindDynAddress(frame, local, boxy.walk.zeroSizedPtr());
+                continue;
+            }
+            offset = std.mem.alignForward(usize, offset, desc.alignment);
+            bindDynAddress(frame, local, region + offset);
+            offset += desc.size;
+        }
+    }
+
+    fn requireDynTarget(self: *LirInterpreter, target: ?LocalId, op: LIR.DynOp) Error!LocalId {
+        return target orelse self.invariantFailedError("LIR/interpreter invariant violated: dyn {s} has no target", .{@tagName(op)});
+    }
+
+    /// Write a pointer-sized word (a descriptor, name, dictionary, or
+    /// callable) to `target`.
+    fn setWordTarget(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, word: usize) Error!void {
+        var cell: usize = word;
+        try self.setLocalChecked(frame, stmt_id, target, .{ .ptr = @ptrCast(&cell) }, false);
+    }
+
+    /// Write a scalar result to a closed `target`.
+    fn setScalarTarget(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, comptime T: type, scalar: T) Error!void {
+        const value = try self.alloc(self.store.getLocal(target).layout_idx);
+        value.write(T, scalar);
+        try self.setLocalChecked(frame, stmt_id, target, value, false);
+    }
+
+    /// A component address: a `view` target takes it, a closed target loads
+    /// the component's bytes.
+    fn setComponentTarget(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target: LocalId, address: [*]u8) Error!void {
+        if (self.store.getLocal(target).dyn) |dyn| {
+            if (dyn.storage == .view) {
+                bindDynAddress(frame, target, address);
+            } else {
+                try self.writeDynLocal(frame, target, address);
+            }
+            return;
+        }
+        try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, address), false);
+    }
+
+    fn recordFields(self: *LirInterpreter, desc: *const TypeDesc) Error!*const TypeDesc {
+        const backing = backingDesc(desc);
+        if (backing.kind != .record and backing.kind != .tuple) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: field of a {s} descriptor", .{@tagName(backing.kind)});
+        }
+        return backing;
+    }
+
+    fn fieldBySemanticIndex(self: *LirInterpreter, desc: *const TypeDesc, semantic_index: u32) Error!*const boxy.Field {
+        const record = try self.recordFields(desc);
+        if (semantic_index >= record.count) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: field {d} of a {d}-field descriptor", .{ semantic_index, record.count });
+        }
+        return record.fieldBySemanticIndex(semantic_index);
+    }
+
+    fn variantAt(self: *LirInterpreter, desc: *const TypeDesc, discriminant: u32) Error!struct { union_desc: *const TypeDesc, variant: *const boxy.Variant } {
+        const union_desc = backingDesc(desc);
+        if (union_desc.kind != .tag_union) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: tag of a {s} descriptor", .{@tagName(union_desc.kind)});
+        }
+        if (discriminant >= union_desc.count) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: discriminant {d} of a {d}-variant union", .{ discriminant, union_desc.count });
+        }
+        return .{ .union_desc = union_desc, .variant = &union_desc.variants()[discriminant] };
+    }
+
+    /// The offset of argument `index` of `variant` within the union's bytes.
+    fn variantPayloadOffset(self: *LirInterpreter, variant: *const boxy.Variant, index: u32) Error!u32 {
+        if (index >= variant.payload_count) {
+            return self.invariantFailedError("LIR/interpreter invariant violated: argument {d} of a {d}-argument tag", .{ index, variant.payload_count });
+        }
+        if (variant.payload_count == 1) return 0;
+        return variant.payload.fieldBySemanticIndex(index).offset;
+    }
+
+    fn variantPayloadDesc(variant: *const boxy.Variant, index: u32) *const TypeDesc {
+        if (variant.payload_count == 1) return variant.payload;
+        return variant.payload.fieldBySemanticIndex(index).desc;
+    }
+
+    /// Move the value at `src` into the component slot `desc` describes,
+    /// boxing it when the slot is a recursive type's box.
+    fn writeComponent(self: *LirInterpreter, desc: *const TypeDesc, slot: [*]u8, src: [*]const u8) Error!void {
+        if (desc.kind != .recursive_box) {
+            @memcpy(slot[0..desc.size], src[0..desc.size]);
+            return;
+        }
+        const payload = desc.child.?;
+        const word: usize = if (payload.size == 0) 0 else blk: {
+            const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
+            @memcpy(data[0..payload.size], src[0..payload.size]);
+            break :blk @intFromPtr(data);
+        };
+        @as(*align(1) usize, @ptrCast(slot)).* = word;
+    }
+
+    fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) void {
+        const at = bytes + desc.discriminant_offset;
+        switch (desc.discriminant_size) {
+            0 => {},
+            1 => at[0] = @intCast(discriminant),
+            2 => std.mem.writeInt(u16, at[0..2], @intCast(discriminant), .little),
+            4 => std.mem.writeInt(u32, at[0..4], discriminant, .little),
+            8 => std.mem.writeInt(u64, at[0..8], discriminant, .little),
+            else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
+        }
+    }
+
+    fn execDyn(self: *LirInterpreter, frame: *Frame, stmt_id: CFStmtId, target_or_null: ?LocalId, op: LIR.DynOp) Error!void {
+        if (op == .frame_alloc) return self.dynFrameAlloc(frame);
+        const target = try self.requireDynTarget(target_or_null, op);
+        switch (op) {
+            .frame_alloc => unreachable, // handled above
+            .table_entry => |entry| {
+                const table: [*]const u8 = @ptrFromInt(try self.localWord(frame, entry.table));
+                const word = std.mem.readInt(usize, table[LIR.tableEntryOffset(entry.index, @sizeOf(usize))..][0..@sizeOf(usize)], builtin.cpu.arch.endian());
+                if (self.store.getLocal(target).layout_idx == .u32) {
+                    // A field's or variant's position: the word's low 32 bits.
+                    try self.setScalarTarget(frame, stmt_id, target, u32, @truncate(word));
+                } else {
+                    try self.setWordTarget(frame, stmt_id, target, word);
+                }
+            },
+            .copy => |c| {
+                const desc = try self.descAt(frame, c.desc);
+                const src = try self.localBytes(frame, c.src);
+                if (self.store.getLocal(target).dyn != null) {
+                    boxy.walk.copy(desc, try self.dynAddress(frame, target), src);
+                } else {
+                    try self.setLocalChecked(frame, stmt_id, target, closedValueAt(frame, target, src), false);
+                }
+            },
+            .field_addr => |f| {
+                const field = try self.fieldBySemanticIndex(try self.descAt(frame, f.desc), try self.indexAt(frame, f.field_index));
+                try self.setComponentTarget(frame, stmt_id, target, boxy.compiled.componentAddr(field.desc, (try self.localBytes(frame, f.base)) + field.offset));
+            },
+            .list_item_addr => |e| {
+                const elem = try self.descAt(frame, e.elem_desc);
+                const list = valueToRocList(.{ .ptr = try self.localBytes(frame, e.list) });
+                const index = (try self.getLocalChecked(frame, e.index)).read(u64);
+                const address = if (elem.size == 0) boxy.walk.zeroSizedPtr() else list.bytes.? + @as(usize, @intCast(index)) * elem.size;
+                try self.setComponentTarget(frame, stmt_id, target, address);
+            },
+            .box_payload_addr => |b| {
+                const payload = try self.descAt(frame, b.desc);
+                // A box of a function is the callable itself.
+                if (payload.kind == .erased_callable) {
+                    try self.setComponentTarget(frame, stmt_id, target, try self.localBytes(frame, b.box));
+                    return;
+                }
+                // The box word lives in the box local's bytes, which a dynamic local
+                // holds by address.
+                const word = @as(*const usize, @ptrCast(@alignCast(try self.localBytes(frame, b.box)))).* & ~builtins.utils.DATA_PTR_TAG_MASK;
+                // A box of a zero-sized payload holds no allocation.
+                const address: [*]u8 = if (payload.size == 0 or word == 0) boxy.walk.zeroSizedPtr() else @ptrFromInt(word);
+                try self.setComponentTarget(frame, stmt_id, target, address);
+            },
+            .tag_discriminant => |t| {
+                const desc = backingDesc(try self.descAt(frame, t.desc));
+                if (desc.kind != .tag_union and desc.kind != .bool) {
+                    return self.invariantFailedError("LIR/interpreter invariant violated: discriminant of a {s} descriptor", .{@tagName(desc.kind)});
+                }
+                try self.setScalarTarget(frame, stmt_id, target, u32, desc.readDiscriminant(try self.localBytes(frame, t.base)));
+            },
+            .tag_payload_addr => |t| {
+                const address = boxy.compiled.tagPayloadAddr(try self.descAt(frame, t.desc), try self.localBytes(frame, t.base), t.payload_index, &self.roc_ops);
+                try self.setComponentTarget(frame, stmt_id, target, address);
+            },
+            .record => |r| {
+                const record = try self.recordFields(try self.descAt(frame, r.desc));
+                const fields = self.store.getLocalSpan(r.fields);
+                const dst = try self.targetStorage(frame, target);
+                @memset(dst[0..record.size], 0);
+                for (0..fields.len) |i| {
+                    const field = try self.fieldBySemanticIndex(record, @intCast(i));
+                    try self.writeComponent(field.desc, dst + field.offset, try self.localBytes(frame, GuardedList.at(fields, i)));
+                }
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .record_update => |u| {
+                const values_span = self.store.getLocalSpan(u.values);
+                const values = try self.allocator.alloc([*]const u8, values_span.len);
+                defer self.allocator.free(values);
+                for (values, 0..) |*value, i| value.* = try self.localBytes(frame, GuardedList.at(values_span, i));
+                const desc = try self.descAt(frame, u.desc);
+                const plan: [*]const u32 = @ptrCast(try self.planAt(frame, u32, u.plan));
+                const dst = try self.targetStorage(frame, target);
+                boxy.compiled.updateRecord(try self.descAt(frame, u.base_desc), try self.localBytes(frame, u.base), desc, dst, plan, values, &self.roc_ops);
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .tag => |t| {
+                const found = try self.variantAt(try self.descAt(frame, t.desc), try self.indexAt(frame, t.discriminant));
+                const payloads = self.store.getLocalSpan(t.payloads);
+                if (payloads.len != found.variant.payload_count) {
+                    return self.invariantFailedError("LIR/interpreter invariant violated: tag with {d} payloads for {d} arguments", .{ payloads.len, found.variant.payload_count });
+                }
+                const dst = try self.targetStorage(frame, target);
+                @memset(dst[0..found.union_desc.size], 0);
+                for (0..payloads.len) |i| {
+                    const offset = try self.variantPayloadOffset(found.variant, @intCast(i));
+                    try self.writeComponent(variantPayloadDesc(found.variant, @intCast(i)), dst + offset, try self.localBytes(frame, GuardedList.at(payloads, i)));
+                }
+                writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .list => |l| {
+                const elem = try self.descAt(frame, l.elem_desc);
+                const elems = self.store.getLocalSpan(l.elems);
+                const list: RocList = if (elems.len == 0)
+                    canonicalZstList(0)
+                else if (elem.size == 0)
+                    canonicalZstList(elems.len)
+                else blk: {
+                    const data = try self.allocRocDataWithRc(elem.size * elems.len, elem.alignment, elem.containsRefcounted());
+                    for (0..elems.len) |i| {
+                        @memcpy((data + i * elem.size)[0..elem.size], (try self.localBytes(frame, GuardedList.at(elems, i)))[0..elem.size]);
+                    }
+                    break :blk .{ .bytes = data, .length = elems.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elems.len) };
+                };
+                const dst = try self.targetStorage(frame, target);
+                @memcpy(dst[0..@sizeOf(RocList)], std.mem.asBytes(&list));
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .slot_alloc => |s| {
+                const payload = try self.descAt(frame, s.desc);
+                const word: usize = if (payload.size == 0) 0 else blk: {
+                    const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
+                    @memset(data[0..payload.size], 0);
+                    // Its payload holds no value until `slot_store` fills it.
+                    if (builtin.mode == .debug) try self.inflight_zeroed_box_payloads.put(self.allocator, @intFromPtr(data), {});
+                    break :blk @intFromPtr(data);
+                };
+                const dst = try self.targetStorage(frame, target);
+                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .slot_store => |s| {
+                const payload = try self.descAt(frame, s.desc);
+                const word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, s.slot))).*;
+                if (payload.size != 0) {
+                    const data: [*]u8 = @ptrFromInt(word);
+                    @memcpy(data[0..payload.size], (try self.localBytes(frame, s.value))[0..payload.size]);
+                    if (builtin.mode == .debug) _ = self.inflight_zeroed_box_payloads.remove(word);
+                }
+                const dst = try self.targetStorage(frame, target);
+                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .box => |b| {
+                const payload = try self.descAt(frame, b.desc);
+                // A box of a function is the callable itself, which the box
+                // takes over.
+                const word: usize = if (payload.kind == .erased_callable)
+                    @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, b.payload))).*
+                else if (payload.size == 0) 0 else blk: {
+                    const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
+                    @memcpy(data[0..payload.size], (try self.localBytes(frame, b.payload))[0..payload.size]);
+                    break :blk @intFromPtr(data);
+                };
+                const dst = try self.targetStorage(frame, target);
+                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .eq => |e| {
+                const desc = try self.descAt(frame, e.desc);
+                const lhs = try self.localBytes(frame, e.lhs);
+                const rhs = try self.localBytes(frame, e.rhs);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                const equal = boxy.walk.eq(desc, lhs, rhs, &self.roc_ops);
+                try self.setScalarTarget(frame, stmt_id, target, u8, @intFromBool(equal));
+            },
+            .hash => |h| {
+                const desc = try self.descAt(frame, h.desc);
+                const seed = @as(*align(1) const u64, @ptrCast(try self.localBytes(frame, h.hasher))).*;
+                const value = try self.localBytes(frame, h.value);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                const next = boxy.walk.hash(desc, seed, value, &self.roc_ops);
+                try self.setScalarTarget(frame, stmt_id, target, u64, next);
+            },
+            .inspect => |i| {
+                const desc = try self.descAt(frame, i.desc);
+                const names: ?*const boxy.desc.Names = @ptrFromInt(try self.localWord(frame, i.names));
+                const value = try self.localBytes(frame, i.value);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                const rendered = boxy.walk.inspect(desc, names, value, &self.roc_ops);
+                try self.setLocalChecked(frame, stmt_id, target, try self.rocStrToValue(rendered, self.store.getLocal(target).layout_idx), false);
+            },
+            .view => |v| try self.setComponentTarget(frame, stmt_id, target, @ptrFromInt(try self.localWord(frame, v.address))),
+            .adapt => |a| {
+                const plan = try self.planAt(frame, boxy.desc.AdaptPlan, a.plan);
+                const src = try self.localBytes(frame, a.src);
+                const dst = try self.targetStorage(frame, target);
+                var crash_boundary = self.enterCrashBoundary();
+                defer crash_boundary.deinit();
+                if (crash_boundary.set() != 0) return self.crashError();
+                boxy.compiled.adapt(plan, dst, src, &self.roc_ops);
+                try self.finishResultStorage(frame, stmt_id, target, dst);
+            },
+            .closure => |c| {
+                const record = try self.localBytes(frame, c.capture);
+                const record_desc: *const boxy.TypeDesc = @ptrFromInt(@as(*const usize, @ptrCast(@alignCast(record))).*);
+                const reuse: ?[*]u8 = if (c.reuse) |reuse_local| blk: {
+                    const word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, reuse_local))).*;
+                    break :blk if (word == 0) null else @ptrFromInt(word);
+                } else null;
+                // A transferred allocation is repacked in place when it is
+                // one of this interpreter's closures with a descriptor-
+                // described capture, unique, and large enough; its old
+                // capture is released first. Any other transfer is released.
+                const data_ptr: [*]u8 = if (reuse) |old| repack: {
+                    const payload = builtins.erased_callable.payloadPtr(old);
+                    if (@intFromPtr(payload.callable_fn_ptr) == @intFromPtr(&interpreterErasedCallableTrampoline)) {
+                        const context = erasedCallableInterpreterContextFromPayload(old);
+                        const old_record = erasedCallableInterpreterCaptureValuePtr(old);
+                        const capacity = @as(*align(1) const usize, @ptrCast(old_record + @sizeOf(usize))).*;
+                        if (context.interpreter == self and context.drop_kind == @backingInt(ErasedCallableCaptureDrop.desc) and
+                            record_desc.size <= capacity and (c.reuse_unique or builtins.utils.isUnique(old, &self.roc_ops)))
+                        {
+                            boxy.walk.captureDrop(old_record, &self.roc_ops);
+                            context.proc_id = @backingInt(c.proc);
+                            @memcpy(old_record[0..record_desc.size], record[0..record_desc.size]);
+                            @as(*align(1) usize, @ptrCast(old_record + @sizeOf(usize))).* = capacity;
+                            break :repack old;
+                        }
+                    }
+                    const fresh = try self.allocInterpreterClosure(c.proc, record, record_desc);
+                    builtins.erased_callable.decref(old, &self.roc_ops);
+                    break :repack fresh;
+                } else try self.allocInterpreterClosure(c.proc, record, record_desc);
+                try self.setWordTarget(frame, stmt_id, target, @intFromPtr(data_ptr));
+            },
+            .call_erased => |c| {
+                const closure_word = @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, c.closure))).*;
+                if (closure_word == 0) {
+                    return self.invariantFailedError("LIR/interpreter invariant violated: call_erased of null closure local {d}", .{@backingInt(c.closure)});
+                }
+                const closure: [*]u8 = @ptrFromInt(closure_word);
+                const args: ?[*]const u8 = if (c.args) |args_local| try self.localBytes(frame, args_local) else null;
+                const ret = try self.targetStorage(frame, target);
+                const ret_size = try self.targetSize(frame, target);
+                if (c.deferred) {
+                    if (self.hasPendingCall()) {
+                        return self.invariantFailedError("LIR/interpreter invariant violated: deferred an erased call while another was pending", .{});
+                    }
+                    const owned_args: ?[]align(16) u8 = if (c.args) |args_local| owned: {
+                        const size = try self.targetSize(frame, args_local);
+                        const copy = try self.allocator.alignedAlloc(u8, .@"16", @max(size, 1));
+                        @memcpy(copy[0..size], args.?[0..size]);
+                        break :owned copy;
+                    } else null;
+                    self.pending_dyn = .{ .closure = closure, .args = owned_args, .transfer = c.reuse_closure };
+                    // The target holds no value until whoever makes the
+                    // pending call writes it.
+                    if (!drivesHere(frame, c.drive)) {
+                        if (self.store.getLocal(target).dyn == null) frame.setLocal(target, try self.poisonUninitializedValue(self.store.getLocal(target).layout_idx));
+                        return;
+                    }
+                } else {
+                    // An owned call transfers the closure allocation as the
+                    // callee's reuse input.
+                    try self.invokeErasedInto(closure, if (ret_size == 0) null else ret, args, if (c.reuse_closure) closure else null);
+                }
+                if (self.hasPendingCall()) try self.drivePendingInto(ret, ret_size);
+                try self.finishResultStorage(frame, stmt_id, target, ret);
+            },
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -10233,7 +8789,7 @@ test "interpreter evaluates explicit static data by compact id" {
     const ret_stmt = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
-        .value = .{ .static_data = static_data_id },
+        .value = .{ .static_data = .{ .id = static_data_id } },
         .next = ret_stmt,
     } }, .test_fixture);
     const frame_locals = try store.addLocalSpan(&.{result_local});
@@ -10272,7 +8828,7 @@ test "interpreter turns a compiler host allocation failure into a Roc crash" {
     const with_capacity = try store.addCFStmt(.{ .assign_low_level = .{
         .target = list,
         .op = .list_with_capacity,
-        .rc_effect = base.LowLevel.list_with_capacity.rcEffect(),
+        .rc_effect = try store.addRcEffect(base.LowLevel.list_with_capacity.rcEffect()),
         .args = try store.addLocalSpan(&.{capacity}),
         .next = ret_stmt,
     } }, .test_fixture);

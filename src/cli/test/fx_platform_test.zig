@@ -120,6 +120,8 @@ fn buildAndRunDevBackendApp(
     roc_file: []const u8,
     output_basename: []const u8,
     inspect_output: ?*const fn (std.mem.Allocator, []const u8) FxPlatformTestError!void,
+    /// Arguments `roc build` takes after `--opt=dev`.
+    extra_args: []const []const u8,
 ) FxPlatformTestError!std.process.RunResult {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -153,13 +155,12 @@ fn buildAndRunDevBackendApp(
     try env_map.put("ROC_CACHE_DIR", cache_path);
     try env_map.put("ZIG_LOCAL_CACHE_DIR", zig_local_cache_path);
 
-    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, &[_][]const u8{
-        util.roc_binary_path,
-        "build",
-        "--opt=dev",
-        output_arg,
-        roc_file,
-    }, .{
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(allocator);
+    try argv.appendSlice(allocator, &.{ util.roc_binary_path, "build", "--opt=dev" });
+    try argv.appendSlice(allocator, extra_args);
+    try argv.appendSlice(allocator, &.{ output_arg, roc_file });
+    const build_result = try util.runChildWithTimeout(std.testing.io, allocator, argv.items, .{
         .env_map = &env_map,
         .max_output_bytes = 10 * 1024 * 1024,
     });
@@ -289,6 +290,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
         "test/fx/division_by_zero.roc",
         "fx_dev_division_by_zero",
         null,
+        &.{},
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -323,7 +325,7 @@ fn expectDevRuntimeDivisionByZero() FxPlatformTestError!void {
 fn runIoSpecTest(comptime opt_flag: []const u8, spec: fx_test_specs.TestSpec) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
-    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--", "--test", spec.io_spec }) catch |err| {
+    const result = util.runRocCommand(std.testing.io, allocator, &.{ opt_flag, spec.roc_file, "--test", spec.io_spec }) catch |err| {
         std.debug.print("\n[FAIL] {s} ({s}): failed to run: {}\n", .{ spec.roc_file, opt_flag, err });
         return err;
     };
@@ -401,6 +403,70 @@ test "fx platform boxed erased callable host boundary (dev backend)" {
 
 test "fx platform boxed erased callable host boundary (speed backend)" {
     try runIoSpecTest("--opt=speed", fx_test_specs.host_boxed_fn_boundary_test);
+}
+
+test "fx platform stream left with break is released at loop exit (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform stream left with break is released at loop exit (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform stream left with break is released at loop exit (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.loop_break_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.branch_entry_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.branch_entry_release_test);
+}
+
+test "fx platform value a branch never reads is released at the branch entry (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.branch_entry_release_test);
+}
+
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.le_bytes_append_loop_test);
+}
+
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.le_bytes_append_loop_test);
+}
+
+test "fx platform promoted byte-append loop matches a byte-at-a-time construction (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.le_bytes_append_loop_test);
+}
+
+test "fx platform cold-path list literal and List.with_capacity (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.issue_12196_cold_list_builds_test);
+}
+
+test "fx platform cold-path list literal and List.with_capacity (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.issue_12196_cold_list_builds_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (interpreter)" {
+    try runIoSpecTest("--opt=interpreter", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform taken field passed to an owned variant is released once (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.take_binding_alias_owned_variant_test);
+}
+
+test "fx platform inline list fast paths and their slow arms (dev backend)" {
+    try runIoSpecTest("--opt=dev", fx_test_specs.inline_list_slow_arms_test);
+}
+
+test "fx platform inline list fast paths and their slow arms (speed backend)" {
+    try runIoSpecTest("--opt=speed", fx_test_specs.inline_list_slow_arms_test);
 }
 
 /// Repro for https://github.com/roc-lang/roc/issues/10770: one boxed callable
@@ -486,7 +552,6 @@ test "fx platform direct run preserves RocOps after F32.abs before list allocati
     // direct-run should preserve RocOps across F32.abs and the later list allocation.
     const result = try util.runRocCommand(std.testing.io, allocator, &.{
         "test/fx/issue_9846_direct_abs_list.roc",
-        "--",
         "--test",
         "1>count 1",
     });
@@ -497,6 +562,14 @@ test "fx platform direct run preserves RocOps after F32.abs before list allocati
 }
 
 test "provided static data exports are host-linkable readonly constants" {
+    try expectStaticDataHostConstants(&.{});
+}
+
+test "boxy provided static data exports are host-linkable readonly constants" {
+    try expectStaticDataHostConstants(&.{"--specialize=no"});
+}
+
+fn expectStaticDataHostConstants(extra_args: []const []const u8) FxPlatformTestError!void {
     const allocator = testing.allocator;
 
     const run_result = try buildAndRunDevBackendApp(
@@ -504,6 +577,7 @@ test "provided static data exports are host-linkable readonly constants" {
         "test/static-data-host/app.roc",
         "static_data_host_test",
         inspectStaticDataHostBinary,
+        extra_args,
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1493,6 +1567,7 @@ test "package consumes its app's exact platform API" {
         "test/fx/package_platform_dependency.roc",
         "package-platform-dependency",
         null,
+        &.{},
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
@@ -1734,10 +1809,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: nothing in the program determines the types
-    // this where-clause constrains, and the default chosen for them lacks the
+    // Regression test for #9657: the types this where-clause constrains never
+    // resolve to concrete types, and the default chosen for them lacks the
     // required methods, so check must reject the contract before post-check
-    // lowering, reporting the type as undetermined.
+    // lowering, reporting the type as one that never resolved.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1760,7 +1835,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "never resolved to a") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 
@@ -2375,4 +2450,274 @@ test "imports reject package-root escape and physical source aliases" {
     defer allocator.free(root_alias_result.stderr);
     try util.checkFailure(root_alias_result);
     try testing.expect(std.mem.find(u8, root_alias_result.stderr, "import source alias") != null);
+}
+
+/// One `roc` invocation of a compile-time demand test app: its exit status,
+/// its standard output, and which of the package's `dbg` observations it
+/// reported.
+const ComptimeDemandRun = struct {
+    stdout: []const u8,
+    base: bool,
+    read_by_app_b: bool,
+    never_read: bool,
+
+    fn deinit(self: ComptimeDemandRun, allocator: std.mem.Allocator) void {
+        allocator.free(self.stdout);
+    }
+};
+
+fn runComptimeDemandApp(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    app: []const u8,
+    cache_env: *const std.process.Environ.Map,
+) FxPlatformTestError!ComptimeDemandRun {
+    const result = try util.runRocWithEnv(std.testing.io, allocator, args, app, cache_env);
+    errdefer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try util.checkSuccess(result);
+    return .{
+        .stdout = result.stdout,
+        .base = std.mem.find(u8, result.stderr, "evaluating base") != null,
+        .read_by_app_b = std.mem.find(u8, result.stderr, "evaluating read_by_app_b") != null,
+        .never_read = std.mem.find(u8, result.stderr, "evaluating never_read") != null,
+    };
+}
+
+test "a build evaluates every package constant, with or without a cache" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // Uncached, then a cold cache, then a warm one: every run evaluates (or
+    // replays the observations of) every root, though app A reads only
+    // `read_by_app_a`, whose value reads `base`.
+    const invocations = [_][]const []const u8{ &.{"--no-cache"}, &.{}, &.{} };
+    for (invocations) |args| {
+        const run = try runComptimeDemandApp(allocator, args, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+        try testing.expect(run.base);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(run.never_read);
+    }
+}
+
+test "builds of different apps observe every constant of a package they share a cache for" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // App A caches the package with every root evaluated.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+    }
+    // App B reads a different root of that cache entry, and replays them all.
+    for (0..2) |_| {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_b.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("b: 7\n", run.stdout);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(run.base);
+        try testing.expect(run.never_read);
+    }
+    // App A replays them all as well.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+        try testing.expect(run.base);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(run.never_read);
+    }
+    // Checking observes the same roots.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{"check"}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expect(run.base);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(run.never_read);
+    }
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12437
+test "roc test passes against the object cache a roc check wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // The app's parser combinator chain specializes package lambda-set
+    // members at an app type. `roc test` must compile its own copy of each
+    // one the cached entries `roc check` wrote call by identity.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const test_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"test"},
+        "test/fx/check_then_test_served_callees.roc",
+        &cache_env,
+    );
+    defer allocator.free(test_result.stdout);
+    defer allocator.free(test_result.stderr);
+    try util.checkSuccess(test_result);
+    try testing.expect(std.mem.find(u8, test_result.stdout, "All (1) tests passed") != null);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12693
+test "roc build of an app succeeds against the cache a roc check of another app sharing its package wrote" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // Both apps import the same package. The first app's check stores the
+    // package's compile-time constants `Form.submit` and the closure
+    // `Form.adder`, whose capture is an `Api` nominal `Form` never mentions,
+    // and the second app's build reuses those stored constants: it must
+    // build and run exactly as it does from an empty cache.
+    const check_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{"check"},
+        "test/fx/issue_12693_check_first.roc",
+        &cache_env,
+    );
+    defer allocator.free(check_result.stdout);
+    defer allocator.free(check_result.stderr);
+    try util.checkSuccess(check_result);
+
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "app.bin" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+    const build_result = try util.runRocWithEnv(
+        std.testing.io,
+        allocator,
+        &.{ "build", "--opt=dev", output_arg },
+        "test/fx/issue_12693_build_second.roc",
+        &cache_env,
+    );
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try util.checkSuccess(build_result);
+
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+        .max_output_bytes = 1024 * 1024,
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+    switch (run_result.term) {
+        .exited => |code| try testing.expectEqual(@as(u8, 0), code),
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    try testing.expectEqualStrings("400 400\n", run_result.stdout);
+}
+
+/// Build a compile-time demand pack test app for the dev backend against the
+/// object cache in `cache_env`, run it, and report its output and whether the
+/// build observed `table`'s `dbg`.
+fn buildAndRunComptimeDemandPackApp(
+    allocator: std.mem.Allocator,
+    tmp_path: []const u8,
+    app: []const u8,
+    no_cache: bool,
+    cache_env: *const std.process.Environ.Map,
+) FxPlatformTestError!ComptimeDemandRun {
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "app.bin" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+    const args: []const []const u8 = if (no_cache) &.{ "build", "--opt=dev", "--no-cache", output_arg } else &.{ "build", "--opt=dev", output_arg };
+    const build_result = try util.runRocWithEnv(std.testing.io, allocator, args, app, cache_env);
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try util.checkSuccess(build_result);
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+        .max_output_bytes = 1024 * 1024,
+    });
+    defer allocator.free(run_result.stderr);
+    errdefer allocator.free(run_result.stdout);
+    switch (run_result.term) {
+        .exited => |code| if (code != 0) return error.UnexpectedExitCode,
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    return .{
+        .stdout = run_result.stdout,
+        .base = std.mem.find(u8, build_result.stderr, "evaluating table") != null,
+        .read_by_app_b = false,
+        .never_read = false,
+    };
+}
+
+test "an app linking an object-cache entry observes every compile-time root" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    const Step = struct { app: []const u8, no_cache: bool, stdout: []const u8 };
+    // `table` is read directly by one app and only through `Lib.sum_table`
+    // by another, whose build may link `sum_table` from a pack an earlier
+    // build wrote, and by neither in a third: every build evaluates or
+    // replays it, whatever the cache holds.
+    const steps = [_]Step{
+        .{ .app = "test/fx/comptime_demand_pack_none.roc", .no_cache = false, .stdout = "a: 42\n" },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = false, .stdout = "b: 16\n" },
+        .{ .app = "test/fx/comptime_demand_pack_direct.roc", .no_cache = false, .stdout = "c: 6\n" },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = false, .stdout = "b: 16\n" },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = true, .stdout = "b: 16\n" },
+        .{ .app = "test/fx/comptime_demand_pack_none.roc", .no_cache = false, .stdout = "a: 42\n" },
+    };
+    for (steps) |step| {
+        const run = try buildAndRunComptimeDemandPackApp(allocator, tmp_path, step.app, step.no_cache, &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings(step.stdout, run.stdout);
+        try testing.expect(run.base);
+    }
 }

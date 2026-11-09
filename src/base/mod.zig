@@ -34,10 +34,20 @@ pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const invariant = @import("invariant.zig").invariant;
+/// Tests that pin a compiler invariant firing, by running the violation in a
+/// child copy of the test binary.
+pub const death_test = @import("death_test.zig");
+/// Per-thread record of in-flight compiler work, printed when the compiler
+/// crashes.
+pub const ice_context = @import("ice_context.zig");
+/// The exhaustive classification of each phase-state field against the
+/// phase's definitional frames.
+pub const state_discipline = @import("state_discipline.zig");
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
+pub const recursive_digest = @import("recursive_digest.zig");
 /// SHA-256 on the CPU's SHA-256 instructions, interchangeable with `std.crypto.hash.sha2.Sha256`.
 pub const Sha256 = @import("sha256.zig").Sha256;
 pub const ModuleIdentity = @import("module_identity.zig");
@@ -46,11 +56,13 @@ pub const ModuleIdentity = @import("module_identity.zig");
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
-pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
+/// Allocator that refuses in-place growth, re-exported from `collections`.
+pub const DeterministicAllocator = @import("collections").DeterministicAllocator;
 pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
+pub const eval_stack = @import("eval_stack.zig");
 pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
@@ -63,17 +75,22 @@ pub const source_utils = @import("source_utils.zig");
 pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+pub const typo = @import("typo.zig");
 /// Default expanded-size cap for platform and CLI URL bundles.
 pub const max_bundle_expanded_bytes: u64 = 512 * 1024 * 1024;
 pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
 pub const byte_encoding = @import("byte_encoding.zig");
+/// Strict line-oriented text records for on-disk compiler metadata.
+pub const line_record = @import("line_record.zig");
 
 /// Allocator wrapper that recycles freed large blocks instead of unmapping them.
 pub const LargeBlockAllocator = @import("LargeBlockAllocator.zig");
 /// Logical CPU counts used to size worker pools.
 pub const cpu_count = @import("cpu_count.zig");
+/// Developer-only environment variables, read only by compilers built with developer diagnostics.
+pub const dev_diagnostics = @import("dev_diagnostics.zig");
 /// Settings only tests may change; production builds fix them at compile time.
 pub const TestSwitch = @import("test_switch.zig").TestSwitch;
 
@@ -101,11 +118,14 @@ test {
     std.testing.refAllDecls(TextRankCache);
     std.testing.refAllDecls(LargeBlockAllocator);
     std.testing.refAllDecls(cpu_count);
+    std.testing.refAllDecls(dev_diagnostics);
     std.testing.refAllDecls(TypeDigestHasher);
+    std.testing.refAllDecls(recursive_digest);
     std.testing.refAllDecls(@import("sha256.zig"));
-    std.testing.refAllDecls(DeterministicAllocator);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
+    std.testing.refAllDecls(@import("typo.zig"));
+    std.testing.refAllDecls(line_record);
 }
 
 /// Whether a function calls itself.
@@ -186,7 +206,10 @@ test "base tests" {
     std.testing.refAllDecls(@import("CommonEnv.zig"));
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
+    std.testing.refAllDecls(@import("eval_stack.zig"));
+    std.testing.refAllDecls(@import("death_test.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
+    std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
     std.testing.refAllDecls(@import("LowLevel.zig"));
     std.testing.refAllDecls(@import("memory_fault.zig"));
@@ -198,6 +221,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
+    std.testing.refAllDecls(@import("state_discipline.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));
     std.testing.refAllDecls(@import("SerialStringInterner.zig"));
     std.testing.refAllDecls(@import("SmallStringInterner.zig"));

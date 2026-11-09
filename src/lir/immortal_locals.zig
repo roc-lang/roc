@@ -4,7 +4,9 @@
 //! refcount word set to `REFCOUNT_STATIC_DATA` (zero), and both `increfRcPtr`
 //! and `decrefRcPtr` return without touching a count when they read that
 //! value. A retain or release on such a value is therefore a call, a load and
-//! a compare that can only ever decide to do nothing.
+//! a compare that can only ever decide to do nothing. A word read from a
+//! `.boxy` type table (`DynOp.table_entry`) is the same: a table is static
+//! data, and every word it holds addresses image data too.
 //!
 //! This is deliberately not an ARC question. ARC still gives these values an
 //! ownership unit, still places the retains and releases, and the debug
@@ -22,15 +24,14 @@
 //! and writes a refcount of one, so its retains and releases are load-bearing.
 //!
 //! A local qualifies only when a static-backed literal is the sole thing that
-//! ever writes it. `writers` classifies every statement kind exhaustively so
-//! that adding a kind forces a decision here rather than silently widening the
-//! set.
+//! ever writes it. `writers` marks the writes that are not binders and
+//! classifies literals; every binder comes from the shared definition walk,
+//! whose exhaustive switch forces a decision for each new statement kind.
 
 const std = @import("std");
 const invariant = @import("base").invariant;
 const collections = @import("collections");
 const core = @import("lir_core");
-const BodyClone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -41,7 +42,8 @@ const Body = @import("body_clone.zig");
 
 /// Locals whose every write is a static-backed literal.
 pub const ImmortalLocals = struct {
-    /// Written at least once by a `static_data` or `bytes_literal` literal.
+    /// Written at least once by a `static_data` or `bytes_literal` literal,
+    /// or a type table read.
     static_written: std.DynamicBitSetUnmanaged,
     /// Written by anything other than a static-backed literal. A local several
     /// static literals write on different paths still holds image data on every
@@ -77,7 +79,7 @@ pub fn compute(allocator: Allocator, store: *const LirStore) Allocator.Error!Imm
     errdefer result.deinit(allocator);
 
     var pass: Pass = .{ .store = store, .result = &result };
-    for (store.getCFStmts()) |stmt| pass.writers(stmt);
+    for (0..store.cfStmtCount()) |index| pass.writers(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
     return result;
 }
 
@@ -97,31 +99,12 @@ const Pass = struct {
         self.result.other_written.set(index);
     }
 
-    fn markOtherOpt(self: *Pass, local: ?LocalId) void {
-        if (local) |l| self.markOther(l);
-    }
-
-    fn markOtherSpan(self: *Pass, span: LIR.LocalSpan) void {
-        const locals = self.store.getLocalSpan(span);
-        for (0..GuardedList.borrowLen(locals)) |index| {
-            self.markOther(GuardedList.at(locals, index));
-        }
-    }
-
-    fn markOtherSteps(self: *Pass, span: LIR.StrMatchStepSpan) void {
-        const steps = self.store.getStrMatchSteps(span);
-        for (0..GuardedList.borrowLen(steps)) |index| {
-            switch (GuardedList.at(steps, index).capture) {
-                .discard => {},
-                .view => |local| self.markOther(local),
-            }
-        }
-    }
-
-    /// Record every local this statement writes. Exhaustive by design: a new
-    /// statement kind must be classified here before the analysis compiles.
-    fn writers(self: *Pass, stmt: LIR.CFStmt) void {
-        switch (stmt) {
+    /// Record every local this statement writes: a static-backed literal as a
+    /// static write, everything else as another write. The shared binder
+    /// walk covers every statement that binds a local; the arms here are the
+    /// writes it does not count as binders, and the literal classification.
+    fn writers(self: *Pass, stmt_id: LIR.CFStmtId) void {
+        switch (self.store.getCFStmt(stmt_id)) {
             .assign_literal => |s| switch (s.value) {
                 // Image data, refcount word zero.
                 .static_data, .bytes_literal => self.markStatic(s.target),
@@ -134,78 +117,49 @@ const Pass = struct {
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
-                .boxy_dynamic_num_literal,
-                .boxy_dynamic_frac_literal,
                 .proc_ref,
                 => self.markOther(s.target),
             },
-
-            inline .init_uninitialized,
+            // A type table word is image data, as a static-data literal is.
+            .dyn => |s| if (self.store.stmtRow(s.data) == .table_entry)
+                self.markStatic(s.target.?)
+            else
+                Body.visitStmtDefinitions(self.store, self, stmt_id),
+            .set_local => |s| self.markOther(s.target),
+            inline .store_struct, .store_tag => |s| self.markOther(s.dest),
+            .init_uninitialized,
             .assign_ref,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
             .assign_low_level,
             .assign_list,
             .assign_struct,
             .assign_tag,
-            .set_local,
-            => |s| self.markOther(s.target),
-
-            inline .assign_call, .assign_call_erased => |s| {
-                self.markOther(s.target);
-                self.markOtherOpt(s.out_desc);
-            },
-            inline .assign_call_dict, .assign_packed_erased_fn => |s| self.markOther(s.target),
-            .assign_boxy_tag_payload => |s| {
-                self.markOther(s.target);
-                self.markOtherOpt(s.target_desc);
-            },
-
-            inline .store_struct, .store_tag => |s| self.markOther(s.dest),
-
-            .join => |s| {
-                self.markOtherSpan(s.params);
-                self.markOtherSpan(s.maybe_uninitialized_params);
-            },
-
-            .str_match => |s| self.markOtherSteps(s.steps),
-            .str_match_set => |s| {
-                const arms = self.store.getStrMatchArms(s.arms);
-                for (0..GuardedList.borrowLen(arms)) |index| {
-                    self.markOtherSteps(GuardedList.at(arms, index).steps);
-                }
-            },
-
-            // Write no local.
-            .boxy_tag_match,
             .debug,
             .expect,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
             .free,
             .switch_stmt,
             .switch_initialized_payload,
-            .loop_continue,
-            .loop_break,
+            .str_match,
+            .str_match_set,
+            .join,
             .jump,
             .ret,
             .crash,
-            => {},
+            => Body.visitStmtDefinitions(self.store, self, stmt_id),
         }
+    }
+
+    /// `visitStmtDefinitions` marker: every binder is another write.
+    pub fn noteDefinition(self: *Pass, local: LocalId) void {
+        self.markOther(local);
     }
 };
 
@@ -268,7 +222,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
     }.call;
 
     for (0..count) |index| {
-        BodyClone.redirectSuccessors(store, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), successor, resolve);
+        Body.redirectSuccessors(store, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), successor, resolve);
     }
 
     for (0..store.procSpecCount()) |proc_index| {
@@ -289,7 +243,7 @@ pub fn elide(gpa: Allocator, store: *LirStore) Allocator.Error!usize {
 /// no local can be immortal.
 fn anyStaticLiteral(store: *const LirStore) bool {
     for (0..store.procSpecCount()) |index| {
-        if (store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
+        if (store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).shapes.static_literal) return true;
     }
     return false;
 }
@@ -300,7 +254,6 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
     return switch (stmt) {
         inline .incref, .decref, .decref_if_initialized => |s| .{ s.value, s.next },
         .init_uninitialized,
-        .boxy_tag_match,
         .str_match,
         .str_match_set,
         .switch_stmt,
@@ -311,19 +264,6 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
         .assign_call,
         .assign_call_erased,
         .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
         .assign_low_level,
         .assign_list,
         .assign_struct,
@@ -331,9 +271,9 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
         .store_struct,
         .store_tag,
         .set_local,
+        .dyn,
         .debug,
         .expect,
-        .comptime_branch_taken,
         .free,
         .jump,
         .ret,
@@ -341,8 +281,6 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => null,
     };
 }
@@ -350,20 +288,14 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
 /// A store whose procedures record no static-backed literal must give elision
 /// nothing to drop. Statements no procedure reaches are left behind by earlier
 /// rewrites and are not part of the program, so only procedure bodies count.
-fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!void {
+fn verifyNothingToElide(gpa: Allocator, store: *LirStore) Allocator.Error!void {
     var immortal = try compute(gpa, store);
     defer immortal.deinit(gpa);
-    var work: std.ArrayList(LIR.CFStmtId) = .empty;
-    defer work.deinit(gpa);
-    var visited = try std.DynamicBitSetUnmanaged.initEmpty(gpa, store.cfStmtCount());
-    defer visited.deinit(gpa);
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
-        if (proc.body) |body| try work.append(gpa, body);
-        while (work.pop()) |stmt_id| {
-            if (visited.isSet(@backingInt(stmt_id))) continue;
-            visited.set(@backingInt(stmt_id));
-            try Body.appendSuccessors(store, &work, stmt_id, gpa);
+        const body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).body orelse continue;
+        var walk = try Body.ReachableStmts.initWithAllocator(store, body, gpa);
+        defer walk.deinit();
+        while (try walk.next()) |stmt_id| {
             const value, _ = referenceCount(store.getCFStmt(stmt_id)) orelse continue;
             if (immortal.contains(value)) immortalInvariant("a program without static-literal shapes counted references on an immortal local");
         }
@@ -371,10 +303,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
 }
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        invariant("{s}", .{"immortal locals invariant violated: " ++ message});
-    }
-    unreachable;
+    invariant("{s}", .{"immortal locals invariant violated: " ++ message});
 }
 
 test {

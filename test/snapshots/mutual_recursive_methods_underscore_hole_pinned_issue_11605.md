@@ -197,7 +197,7 @@ EndOfFile,
 ~~~roc
 Client(effects) := { effects : effects }.{
 	first : Client(_), List(_), a -> Try(Str, [Refused(Str), ..others]) where [a.to_str : a -> Str]
-	first = |client, items, x| if List.len(items) == 0 Ok(x.to_str()) else second(client, items, x)
+	first = |client, items, x| if (List.len(items) == 0) Ok(x.to_str()) else second(client, items, x)
 
 	second : Client(_), List(_), b -> Try(Str, [Refused(Str), ..others]) where [b.to_str : b -> Str]
 	second = |client, items, y| {
@@ -229,7 +229,7 @@ run = |sql| {
 					(if-branch
 						(e-method-eq (negated "false")
 							(lhs
-								(e-call (constraint-fn-var 409)
+								(e-call (constraint-fn-var 414)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -238,13 +238,13 @@ run = |sql| {
 								(e-num (value "0"))))
 						(e-tag (name "Ok")
 							(args
-								(e-dispatch-call (method "to_str") (constraint-fn-var 427)
+								(e-dispatch-call (method "to_str") (constraint-fn-var 432)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
 									(args))))))
 				(if-else
-					(e-call (constraint-fn-var 441)
+					(e-call (constraint-fn-var 446)
 						(e-lookup-local
 							(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.second")))
 						(e-lookup-local
@@ -283,12 +283,12 @@ run = |sql| {
 					(p-assign (ident "pinned"))
 					(e-lookup-local
 						(p-assign (ident "items"))))
-				(e-call (constraint-fn-var 481)
+				(e-call (constraint-fn-var 486)
 					(e-lookup-local
 						(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 					(e-lookup-local
 						(p-assign (ident "client")))
-					(e-call (constraint-fn-var 480)
+					(e-call (constraint-fn-var 485)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -332,7 +332,7 @@ run = |sql| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 520)
+								(e-call (constraint-fn-var 525)
 									(e-lookup-local
 										(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 									(e-lookup-local

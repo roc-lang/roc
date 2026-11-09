@@ -70,17 +70,21 @@ test "issue 11246: parent cannot change an error payload" {
     try env.assertOneTypeError("Type Mismatch");
 }
 
-// The three cases below are the other side of the same replay: a composed
-// error row that only the generated parser decides, reaching a binding that
-// did not produce it. The row still settles inside
+// The cases below are the other side of the same replay: a composed error row
+// that only the generated parser decides, reaching a binding that did not
+// produce it. The row still settles inside
 // `finalizeGeneratedCodecConstraintsToQuiescence`, i.e. after both narrowing
-// passes, so the late audit sees it widen; but the expression that introduced
-// the relation lies outside the annotated binding, which is an ordinary caller
-// using an output-position row at a wider union.
+// passes. An annotated VALUE's row is the annotation's at every use (design.md
+// "Value Rows: Uses Share One Row"), so a caller that relates the parser's
+// error row to such a value pins that row to the annotation's tags, and the
+// generated parser's own tags no longer fit: the report is the parser's, at
+// the parser, and never blames the value for a tag it did not produce. A
+// FUNCTION's row is quantified, so each call widens a fresh copy.
 
 /// `seed`'s single tag reaches the composed error row through a CALLER
 /// (`compose`), whose generated parser decides that row at finalization. The
-/// annotation bounds `seed` itself, which produced only `NoByte`.
+/// annotation bounds `seed` at every use, so the parser's row is pinned to
+/// `[NoByte]` and the parser reports the tags that do not fit.
 const caller_widens_top_level_value = prelude ++
     \\seed : [NoByte]
     \\seed = NoByte
@@ -99,9 +103,9 @@ const caller_widens_top_level_value = prelude ++
     \\}
 ;
 
-/// The same widening with `seed` a LOCAL binding sharing one definition and
-/// one binding group with the parser that widens it: writer identity has to be
-/// finer than the enclosing definition to tell these apart.
+/// The same program with `seed` a LOCAL binding sharing one definition and
+/// one binding group with the parser: a local annotated value's row is the
+/// annotation's at every use too.
 const caller_widens_local_value = prelude ++
     \\compose : List(U8) -> Str
     \\compose = |bytes| {
@@ -141,12 +145,12 @@ const caller_widens_function = prelude ++
     \\}
 ;
 
-/// The same caller-side widening, but now the widened binding's OWN
+/// The same caller-side relation, but now the related binding's OWN
 /// right-hand side also holds a generated parser. That parser is punted to the
 /// same late window, so the binding owns a writer; the writer composes the row
-/// behind `v.parse` and never touches `v.seed`, which only the caller widens.
-/// Containment alone cannot separate the two: the writer has to be matched
-/// against the row it could actually have written.
+/// behind `v.parse`, which lists every tag it produces, and never touches
+/// `v.seed`, which the caller pins the other parser's row to. Only that other
+/// parser reports.
 const caller_widens_value_that_owns_a_writer = prelude ++
     \\v : { parse : State -> Try({ value : List(U8), rest : State }, [BadByte(U8), NoByte, Separator(Str), Start(U64)]), seed : [NoByte] }
     \\v = {
@@ -169,10 +173,10 @@ const caller_widens_value_that_owns_a_writer = prelude ++
     \\}
 ;
 
-/// Both rows of the same binding move in the same late window, for opposite
-/// reasons: `v.parse`'s row is widened by `v`'s own parser past what `v`'s
-/// annotation lists (blamed), while `v.seed`'s row is widened by the caller
-/// (not blamed). Exactly one report, and it is the first row's.
+/// Both rows of the same binding are decided in the same late window:
+/// `v`'s own parser produces tags past what `v`'s annotation lists for
+/// `v.parse`, and `v.seed`'s row pins the caller's parser. Each parser
+/// reports the tags its bounded error row refuses: two reports, one per row.
 const owned_writer_widens_one_row_caller_widens_the_other = prelude ++
     \\v : { parse : State -> Try({ value : List(U8), rest : State }, [BadByte(U8), NoByte, Separator(Str)]), seed : [NoByte] }
     \\v = {
@@ -195,16 +199,16 @@ const owned_writer_widens_one_row_caller_widens_the_other = prelude ++
     \\}
 ;
 
-test "issue 11246: a caller's late composed error row does not blame a top-level value" {
+test "issue 11246: a caller's parser row pinned to an annotated top-level value reports at the parser" {
     var env = try TestEnv.init("Test", caller_widens_top_level_value);
     defer env.deinit();
-    try env.assertNoErrors();
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }
 
-test "issue 11246: a caller's late composed error row does not blame a local value" {
+test "issue 11246: a caller's parser row pinned to an annotated local value reports at the parser" {
     var env = try TestEnv.init("Test", caller_widens_local_value);
     defer env.deinit();
-    try env.assertNoErrors();
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }
 
 test "issue 11246: a caller's late composed error row does not blame a function" {
@@ -213,14 +217,14 @@ test "issue 11246: a caller's late composed error row does not blame a function"
     try env.assertNoErrors();
 }
 
-test "issue 11246: a binding that owns a writer is not blamed for a caller's widening" {
+test "issue 11246: a binding that owns a writer is not blamed for a caller's parser row" {
     var env = try TestEnv.init("Test", caller_widens_value_that_owns_a_writer);
     defer env.deinit();
-    try env.assertNoErrors();
+    try env.assertOneTypeError("Parser Error Row Missing Tag");
 }
 
-test "issue 11246: only the row the owned writer reaches is blamed" {
+test "issue 11246: each parser whose error row an annotation pins reports its own tags" {
     var env = try TestEnv.init("Test", owned_writer_widens_one_row_caller_widens_the_other);
     defer env.deinit();
-    try env.assertOneTypeError("Type Mismatch");
+    try env.assertTypeErrorTitles(&.{ "Parser Error Row Missing Tag", "Parser Error Row Missing Tag" });
 }

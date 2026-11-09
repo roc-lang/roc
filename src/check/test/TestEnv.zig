@@ -51,6 +51,18 @@ transitive_envs: []const *const ModuleEnv = &.{},
 /// Test environment for canonicalization testing, providing a convenient wrapper around ModuleEnv, AST, and Can.
 const TestEnv = @This();
 
+/// What checking leaves the module's type store as: sealed, as every
+/// compiler caller of the checker leaves it, or open, for a test that drives
+/// solver machinery on the checked module or builds solver state in it.
+const StoreAfterCheck = enum { sealed, open };
+
+fn runChecker(checker: *Check, comptime store_after_check: StoreAfterCheck) Allocator.Error!void {
+    switch (store_after_check) {
+        .sealed => try checker.checkFile(),
+        .open => try checker.checkFileLeavingStoreOpen(),
+    }
+}
+
 /// Initialize where the provided source is an entire file
 ///
 /// Accepts another module that should already be can'd and type checked, and will
@@ -58,6 +70,21 @@ const TestEnv = @This();
 /// IMPORTANT: This reuses the Builtin module from the imported module to ensure
 /// type variables from auto-imported types (Bool, Try, Str) are shared across modules.
 pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
+    return initWithImportLeaving(module_name, source, other_module_name, other_test_env, .sealed);
+}
+
+/// `initWithImport` leaving this module's type store open (see `StoreAfterCheck`).
+pub fn initWithImportOpen(module_name: []const u8, source: []const u8, other_module_name: []const u8, other_test_env: *const TestEnv) Allocator.Error!TestEnv {
+    return initWithImportLeaving(module_name, source, other_module_name, other_test_env, .open);
+}
+
+fn initWithImportLeaving(
+    module_name: []const u8,
+    source: []const u8,
+    other_module_name: []const u8,
+    other_test_env: *const TestEnv,
+    comptime store_after_check: StoreAfterCheck,
+) Allocator.Error!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -205,8 +232,8 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     checker.fixupTypeWriter();
     errdefer checker.deinit();
 
-    try checker.checkFile();
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    try runChecker(&checker, store_after_check);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -232,16 +259,36 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
 
 /// Check a platform-owned type module using the production hosted transform.
 pub fn initHosted(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
-    return initConfigured(module_name, source, &.{}, true);
+    return initConfigured(module_name, source, &.{}, .sealed, true);
+}
+
+/// `init` leaving the module's type store open (see `StoreAfterCheck`).
+pub fn initOpen(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
+    return initLeaving(module_name, source, &.{}, .open);
 }
 
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
-    return initConfigured(module_name, source, explicit_root_names, false);
+    return initLeaving(module_name, source, explicit_root_names, .sealed);
 }
 
-fn initConfigured(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8, hosted: bool) TestEnvError!TestEnv {
+fn initLeaving(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    comptime store_after_check: StoreAfterCheck,
+) TestEnvError!TestEnv {
+    return initConfigured(module_name, source, explicit_root_names, store_after_check, false);
+}
+
+fn initConfigured(
+    module_name: []const u8,
+    source: []const u8,
+    explicit_root_names: []const []const u8,
+    comptime store_after_check: StoreAfterCheck,
+    hosted: bool,
+) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -338,18 +385,13 @@ fn initConfigured(module_name: []const u8, source: []const u8, explicit_root_nam
     );
     checker.fixupTypeWriter();
     for (explicit_root_names) |root_name| {
-        const root_def_idx = can.explicitRootDefByName(root_name) orelse {
-            if (@import("builtin").mode == .debug) {
-                std.debug.panic("test invariant violated: explicit executable root `{s}` was not found", .{root_name});
-            }
-            unreachable;
-        };
+        const root_def_idx = can.explicitRootDefByName(root_name) orelse return error.TestUnexpectedResult;
         try checker.addExecutableRootDef(root_def_idx);
     }
     errdefer checker.deinit();
 
-    try checker.checkFile();
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    try runChecker(&checker, store_after_check);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     var type_writer = try module_env.initTypeWriter();
     errdefer type_writer.deinit();
@@ -424,6 +466,15 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
 
 /// Initialize where the provided source a single expression
 pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) TestEnvError!TestEnv {
+    return initExprLeaving(module_name, source_expr, .sealed);
+}
+
+/// `initExpr` leaving the module's type store open (see `StoreAfterCheck`).
+pub fn initExprOpen(module_name: []const u8, comptime source_expr: []const u8) TestEnvError!TestEnv {
+    return initExprLeaving(module_name, source_expr, .open);
+}
+
+fn initExprLeaving(module_name: []const u8, comptime source_expr: []const u8, comptime store_after_check: StoreAfterCheck) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const source_wrapper =
@@ -438,7 +489,7 @@ pub fn initExpr(module_name: []const u8, comptime source_expr: []const u8) TestE
     source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    var test_env = try TestEnv.init(module_name, source);
+    var test_env = try TestEnv.initLeaving(module_name, source, &.{}, store_after_check);
     test_env.owned_source = source;
     return test_env;
 }
@@ -616,7 +667,7 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
                 .str_literal,
                 .underscore,
                 .runtime_error,
-                => unreachable,
+                => unreachable, // appendPatternBinders collects only assign, var_assign and as patterns
                 .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
             };
             if (std.mem.eql(u8, target_def_name, idents.getText(ident))) {
@@ -642,6 +693,33 @@ fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Va
 /// Also assert that there were no problems processing the source code.
 pub fn assertLastDefType(self: *TestEnv, expected: []const u8) TestEnvError!void {
     try self.assertNoErrors();
+
+    try testing.expect(self.module_env.all_defs.span.len > 0);
+    const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
+    const last_def_idx = defs_slice[defs_slice.len - 1];
+    const last_def_var = ModuleEnv.varFrom(last_def_idx);
+
+    try self.type_writer.write(last_def_var, .wrap);
+    try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+/// Like `assertLastDefType`, but canonicalization must report exactly the
+/// diagnostics `expected_can_diagnostics`, in order, and type checking must
+/// report no problems.
+pub fn assertLastDefTypeWithCanDiagnostics(
+    self: *TestEnv,
+    expected: []const u8,
+    expected_can_diagnostics: []const std.meta.Tag(CIR.Diagnostic),
+) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    const diagnostics = try self.module_env.getDiagnostics();
+    defer self.gpa.free(diagnostics);
+    try testing.expectEqual(expected_can_diagnostics.len, diagnostics.len);
+    for (diagnostics, expected_can_diagnostics) |diagnostic, expected_tag| {
+        try testing.expectEqual(expected_tag, std.meta.activeTag(diagnostic));
+    }
+    try testing.expectEqual(@as(usize, 0), self.checker.problems.problems.items.len);
 
     try testing.expect(self.module_env.all_defs.span.len > 0);
     const defs_slice = self.module_env.store.sliceDefs(self.module_env.all_defs);
@@ -864,6 +942,45 @@ pub fn assertOneTypeErrorHighlightsWithin(self: *TestEnv, expected_title: []cons
         );
         return error.TestUnexpectedResult;
     }
+}
+
+/// Assert that checking produced a single problem (error or warning) with the
+/// expected title, and that its rendered message contains `expected_substring`.
+pub fn assertOneTypeProblemMsgContains(self: *TestEnv, expected_title: []const u8, expected_substring: []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected_title, report.title);
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    try renderReportToMarkdownBuffer(&report_buf, &report);
+
+    const rendered = report_buf.items;
+    const contains = if (expected_substring.len > rendered.len) false else for (0..rendered.len - expected_substring.len + 1) |start| {
+        if (bytesEqual(rendered[start..][0..expected_substring.len], expected_substring)) break true;
+    } else false;
+    if (!contains) {
+        std.debug.print("expected the report to contain:\n{s}\nbut it was:\n{s}\n", .{ expected_substring, report_buf.items });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn bytesEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x != y) return false;
+    }
+    return true;
 }
 
 /// Assert that there was a single type error when checking the input. Assert

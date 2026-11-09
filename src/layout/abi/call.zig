@@ -13,6 +13,8 @@
 //! consumer so they agree by construction.
 
 const std = @import("std");
+const base = @import("base");
+const collections = @import("collections");
 
 const layout = @import("../layout.zig");
 const store_mod = @import("../store.zig");
@@ -268,10 +270,109 @@ pub fn lower(
     };
 }
 
-const sysv_gp_registers: u8 = 6;
-const aarch64_gp_registers: u8 = 8;
-const simd_argument_registers: u8 = 8;
-const win64_argument_registers: u8 = 4;
+// Argument-register file sizes of each platform C ABI. Classification here and
+// the dev backend's argument-register lists both consume these counts; each
+// register list comptime-asserts its length against them.
+
+/// System V x86-64 general-purpose argument registers.
+pub const sysv_gp_registers: u8 = 6;
+/// AAPCS64 general-purpose argument registers.
+pub const aarch64_gp_registers: u8 = 8;
+/// SSE (System V) and SIMD/FP (AAPCS64) argument registers.
+pub const simd_argument_registers: u8 = 8;
+/// Windows x64 argument positions, shared between general and SSE registers.
+pub const win64_argument_registers: u8 = 4;
+/// The most parameters a wasm function type can declare and still load: the
+/// limit the WebAssembly JS API sets for every engine it hosts. Wasm itself has
+/// no argument registers, so this is the budget `markRegisterOverflow` spends.
+pub const wasm_max_function_params: u32 = 1000;
+
+/// Marks each argument of `lowered` that the target's argument registers
+/// cannot hold, for a parameter list that ends with `trailing_pointers`
+/// pointer parameters which must themselves travel in registers. Arguments
+/// are assigned in order and a marked argument takes no register, so later
+/// ones may still fit. An indirect argument's pointer counts as one integer
+/// argument.
+pub fn markRegisterOverflow(target: Target, lowered: LoweredCall, trailing_pointers: u32, overflow: []bool) void {
+    std.debug.assert(overflow.len == lowered.args.len);
+    @memset(overflow, false);
+    switch (target) {
+        .x86_64_windows => {
+            // Every argument, and an indirect result's pointer, takes one
+            // shared position.
+            var used: u32 = @intFromBool(lowered.ret == .indirect) + @intFromBool(lowered.leading_ops);
+            const limit = win64_argument_registers -| trailing_pointers;
+            for (lowered.args, overflow) |placement, *overflows| {
+                if (placement == .none) continue;
+                if (used < limit) used += 1 else overflows.* = true;
+            }
+        },
+        .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => {
+            // AAPCS64 passes an indirect result's pointer in x8, outside the
+            // argument registers.
+            const indirect_ret_gp: u32 = if (target == .x86_64_sysv) @intFromBool(lowered.ret == .indirect) else 0;
+            const gp_registers: u32 = if (target == .x86_64_sysv) sysv_gp_registers else aarch64_gp_registers;
+            const gp_limit = gp_registers -| trailing_pointers;
+            var gp_used: u32 = indirect_ret_gp + @intFromBool(lowered.leading_ops);
+            var simd_used: u32 = 0;
+            for (lowered.args, overflow) |placement, *overflows| {
+                var first_gp = gp_used;
+                const counts: PieceCounts = switch (placement) {
+                    .none => continue,
+                    .indirect => .{ .gp = 1, .sse = 0 },
+                    .registers => |registers| counts: {
+                        const counts = pieceCounts(registers.pieces);
+                        // AAPCS64 starts a 16-byte-aligned value spanning
+                        // integer registers at an even register; Apple's
+                        // variant drops that rule.
+                        const even_start = switch (registers.carrier) {
+                            .integer => true,
+                            .array => |alignment| alignment == 16,
+                            .piecewise, .structure => false,
+                        };
+                        if (even_start and counts.gp > 1 and (target == .aarch64 or target == .aarch64_windows)) {
+                            first_gp = std.mem.alignForward(u32, gp_used, 2);
+                        }
+                        break :counts counts;
+                    },
+                };
+                if (first_gp + counts.gp <= gp_limit and simd_used + counts.sse <= simd_argument_registers) {
+                    if (counts.gp != 0) gp_used = first_gp + counts.gp;
+                    simd_used += counts.sse;
+                } else {
+                    overflows.* = true;
+                }
+            }
+        },
+        .wasm32, .wasm32v1, .wasm64 => {
+            var used: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops) + trailing_pointers;
+            for (lowered.args, overflow) |placement, *overflows| {
+                const count = wasmPlacementParamCount(placement);
+                if (count == 0) continue;
+                if (used + count <= wasm_max_function_params) used += count else overflows.* = true;
+            }
+        },
+    }
+}
+
+/// The wasm parameters one lowered argument takes.
+fn wasmPlacementParamCount(placement: Placement) u32 {
+    return switch (placement) {
+        .none => 0,
+        .indirect => 1,
+        .registers => |registers| @intCast(registers.pieces.len),
+    };
+}
+
+/// The parameters the wasm function type of a C-ABI signature declares. A
+/// count past `wasm_max_function_params` is a signature no engine loads, and
+/// nothing can move its arguments into memory, because the other side of the
+/// boundary fixes the signature.
+pub fn wasmCAbiParamCount(lowered: LoweredCall) u32 {
+    var count: u32 = @as(u32, @intFromBool(lowered.ret == .indirect)) + @intFromBool(lowered.leading_ops);
+    for (lowered.args) |placement| count += wasmPlacementParamCount(placement);
+    return count;
+}
 
 const PieceCounts = struct { gp: u8, sse: u8 };
 
@@ -313,7 +414,7 @@ fn isCAbiAggregate(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .frac and lay.getScalar().getFrac() == .dec,
         // A union with a runtime discriminant is a C struct.
         .tag_union => true,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -324,7 +425,7 @@ fn isCAbiI128Scalar(store: *const Store, start: Idx) bool {
         .scalar => lay.getScalar().tag == .int and store.layoutSize(lay) == 16,
         // A union with a runtime discriminant is a C struct.
         .tag_union => false,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => false,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => false,
     };
 }
 
@@ -338,7 +439,7 @@ fn cAbiI128VectorKind(store: *const Store, start: Idx) ?layout.Vector {
             null,
         // A union with a runtime discriminant is a C struct.
         .tag_union => null,
-        .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => null,
+        .box, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .ptr, .dynamic => null,
     };
 }
 
@@ -369,7 +470,7 @@ pub fn assignPhysicalArgs(
             win_position = 1;
         },
         .aarch64, .aarch64_macho, .aarch64_windows => {}, // AAPCS64 uses the dedicated x8 indirect-result register.
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
     if (lowered.leading_ops) switch (target) {
         .x86_64_windows => {
@@ -377,7 +478,7 @@ pub fn assignPhysicalArgs(
             win_position += 1;
         },
         .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => gp_used += 1,
-        .wasm32, .wasm32v1, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
     };
 
     for (lowered.args, arg_idxs, args) |placement, arg_idx, *assigned| {
@@ -412,7 +513,7 @@ pub fn assignPhysicalArgs(
                     win_position += 1;
                     gp_used = win_position;
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
             .registers => |registers| switch (target) {
                 .x86_64_windows => {
@@ -488,7 +589,7 @@ pub fn assignPhysicalArgs(
                         }
                     }
                 },
-                .wasm32, .wasm32v1, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable, // the entry assertion rejects wasm targets
             },
         }
     }
@@ -570,7 +671,7 @@ fn narrowScalarExtension(store: *const Store, start: Idx) RegExtension {
             }
             break :blk .zero;
         },
-        .struct_, .closure, .erased_callable, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .zst, .ptr => .none,
+        .struct_, .closure, .erased_callable, .box, .box_of_zst, .list, .list_of_zst, .zst, .hole, .ptr, .dynamic => .none,
     };
 }
 
@@ -673,8 +774,8 @@ fn placementAarch64(
                 }
                 return integerPieces(arena, size, if (size == 16) .integer else .piecewise, extend);
             },
-            .box, .box_of_zst, .erased_box, .ptr => return integerPieces(arena, size, .piecewise, .none),
-            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst => unreachable,
+            .box, .box_of_zst, .ptr, .dynamic => return integerPieces(arena, size, .piecewise, .none),
+            .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .zst, .hole => unreachable, // aarch64.classifyType returns byval only for scalar and pointer-like layouts
         },
     }
 }
@@ -709,7 +810,8 @@ fn placementSysV(
                         .class = .vector,
                         .offset = offset,
                         .size = @intCast(@min(@as(u32, 16), size - offset)),
-                        .vector_kind = try findVectorKind(arena, store, idx) orelse unreachable,
+                        .vector_kind = try findVectorKind(arena, store, idx) orelse
+                            base.invariant("layout ABI invariant violated: System V SSE+SSEUP eightbytes have no vector member", .{}),
                     });
                     i += 1;
                 } else {
@@ -752,7 +854,7 @@ fn placementWin64(
                 .class = .vector,
                 .offset = 0,
                 .size = 16,
-                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable,
+                .vector_kind = cAbiI128VectorKind(store, idx) orelse unreachable, // win_i128 that is no C aggregate and holds no vector is a 16-byte int scalar
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
@@ -769,7 +871,10 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
             const is_vector = dlay.tag == .scalar and dlay.getScalar().tag == .vector;
             const class: RegClass = if (is_vector) .vector else if (is_float) .float else .integer;
             if (wasm.lowerAsDoubleI64(store, direct_idx)) {
-                // A value wider than 64 bits is passed as two i64s.
+                // A value wider than 64 bits is passed as two i64s and, since
+                // a wasm C function returns at most one value, returned
+                // through a result pointer.
+                if (ctx == .ret) return .indirect;
                 return integerPieces(arena, size, .piecewise, .none);
             }
             if (is_vector and !simd_enabled) {
@@ -800,9 +905,13 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: C
 /// closures and transparent unions. Members are visited on an explicit
 /// stack, so aggregate nesting never becomes native call depth.
 fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.mem.Allocator.Error!?layout.Vector {
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, arena);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Idx) = .empty;
-    defer pending.deinit(arena);
-    try pending.append(arena, idx);
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, idx);
     while (pending.pop()) |current| {
         const lay = store.getLayout(current);
         switch (lay.tag) {
@@ -815,17 +924,17 @@ fn findVectorKind(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.m
                 while (i > 0) {
                     i -= 1;
                     if (store.getStructFieldIsPadding(struct_idx, i)) continue;
-                    try pending.append(arena, store.getStructFieldLayout(struct_idx, i));
+                    try pending.append(pending_allocator, store.getStructFieldLayout(struct_idx, i));
                 }
             },
-            .closure => try pending.append(arena, lay.getClosure().captures_layout_idx),
+            .closure => try pending.append(pending_allocator, lay.getClosure().captures_layout_idx),
             .tag_union => {
                 const info = store.getTagUnionInfo(lay);
                 if (info.variants.len == 1 and info.data.discriminant_size == 0) {
-                    try pending.append(arena, info.variants.get(0).payload_layout);
+                    try pending.append(pending_allocator, info.variants.get(0).payload_layout);
                 }
             },
-            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .zst, .ptr => {},
+            .box, .box_of_zst, .list, .list_of_zst, .erased_callable, .zst, .hole, .ptr, .dynamic => {},
         }
     }
     return null;
@@ -856,7 +965,7 @@ test "AArch64 ABI target preserves operating-system variants" {
 test "lower aarch64: random_plant(i32) -> Plant is all registers, no ops" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -874,7 +983,7 @@ test "lower aarch64: random_plant(i32) -> Plant is all registers, no ops" {
 test "lower aarch64: HFA and large aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -895,7 +1004,7 @@ test "lower aarch64: HFA and large aggregates" {
 test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -922,7 +1031,7 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
 test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -941,7 +1050,7 @@ test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {
 test "lower native vectors preserve a single vector register piece" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -965,7 +1074,7 @@ test "lower native vectors preserve a single vector register piece" {
 test "lower aarch64 vector aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -989,7 +1098,7 @@ test "lower aarch64 vector aggregates" {
 test "lower transparent tag payloads with their C ABI leaf class" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1014,7 +1123,7 @@ test "lower transparent tag payloads with their C ABI leaf class" {
 test "lower win64: 16-byte struct is indirect, Plant is one register" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1040,10 +1149,26 @@ test "lower win64: 16-byte struct is indirect, Plant is one register" {
     try testing.expectEqual(Placement.indirect, dec.ret);
 }
 
+test "lower wasm32: a value wider than 64 bits is passed as two i64s and returned indirectly" {
+    var store = try Store.init(testing.allocator, .u32);
+    defer store.deinit();
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    for ([_]Target{ .wasm32, .wasm32v1 }) |target| {
+        for ([_]Idx{ .i128, .u128, .dec }) |wide| {
+            const call = try lower(arena, &store, target, &.{wide}, wide, false);
+            try testing.expectEqual(Placement.indirect, call.ret);
+            try expectRegisters(&.{ .{ .class = .integer, .offset = 0, .size = 8 }, .{ .class = .integer, .offset = 8, .size = 8 } }, call.args[0]);
+        }
+    }
+}
+
 test "lower wasm32: single-variant tag union returns payload register" {
     var store = try Store.init(testing.allocator, .u32);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1059,7 +1184,7 @@ test "lower wasm32: single-variant tag union returns payload register" {
 test "physical sysv allocation spills whole aggregates and aligns vectors" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1091,7 +1216,7 @@ test "physical sysv allocation spills whole aggregates and aligns vectors" {
 test "physical win64 allocation uses shared argument positions" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1111,7 +1236,7 @@ test "physical win64 allocation uses shared argument positions" {
 test "physical aarch64 allocation spills complete HFA and integer aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1143,7 +1268,7 @@ test "physical aarch64 allocation spills complete HFA and integer aggregates" {
 test "physical aarch64 multi-vector aggregate passes a pointer in a GP register" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1161,7 +1286,7 @@ test "physical aarch64 multi-vector aggregate passes a pointer in a GP register"
 test "LLVM carriers preserve native multi-register argument identity" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1210,7 +1335,7 @@ test "LLVM carriers preserve native multi-register argument identity" {
 test "physical aarch64 aligns 16-byte multiword arguments to even GP registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1236,7 +1361,7 @@ test "physical aarch64 aligns 16-byte multiword arguments to even GP registers" 
 test "physical Apple arm64 stack arguments use compact natural alignment" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1254,4 +1379,51 @@ test "physical Apple arm64 stack arguments use compact natural alignment" {
     try testing.expectEqual(@as(u32, 8), elf.args[9].stack_value.offset);
     try testing.expectEqual(@as(u32, 16), elf.args[10].stack_value.offset);
     try testing.expectEqual(@as(u32, 24), elf.stack_size);
+}
+
+test "markRegisterOverflow spends wasm's parameter limit in order" {
+    var args: [wasm_max_function_params + 2]Placement = undefined;
+    @memset(&args, .indirect);
+    args[0] = .none;
+    var overflow: [args.len]bool = undefined;
+
+    const within = args[0 .. wasm_max_function_params + 1];
+    markRegisterOverflow(.wasm32, .{ .leading_ops = false, .ret = .none, .args = within }, 0, overflow[0..within.len]);
+    for (overflow[0..within.len]) |overflowed| try std.testing.expect(!overflowed);
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params), wasmCAbiParamCount(.{ .leading_ops = false, .ret = .none, .args = within }));
+
+    const lowered: LoweredCall = .{ .leading_ops = false, .ret = .indirect, .args = &args };
+    try std.testing.expectEqual(@as(u32, wasm_max_function_params + 2), wasmCAbiParamCount(lowered));
+    markRegisterOverflow(.wasm32, lowered, 1, &overflow);
+    for (overflow, 0..) |overflowed, index| try std.testing.expectEqual(index >= wasm_max_function_params - 1, overflowed);
+}
+
+test "markRegisterOverflow leaves trailing pointers their registers" {
+    const word: Placement = .{ .registers = .{ .pieces = &.{.{ .class = .integer, .offset = 0, .size = 8 }} } };
+    const float: Placement = .{ .registers = .{ .pieces = &.{.{ .class = .float, .offset = 0, .size = 8 }} } };
+    const wide: Placement = .{ .registers = .{
+        .pieces = &.{ .{ .class = .integer, .offset = 0, .size = 8 }, .{ .class = .integer, .offset = 8, .size = 8 } },
+        .carrier = .integer,
+    } };
+    var overflow: [8]bool = undefined;
+
+    // SysV: six integer registers, one taken by an indirect result's pointer
+    // and one reserved for a trailing pointer. A float still has an SSE
+    // register after the integer registers run out.
+    const sysv_args = [_]Placement{ word, word, word, word, word, float, .indirect, word };
+    markRegisterOverflow(.x86_64_sysv, .{ .leading_ops = false, .ret = .indirect, .args = &sysv_args }, 1, &overflow);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, true, false, true, true }, &overflow);
+
+    // Win64: four shared positions, whatever the class.
+    const win_args = [_]Placement{ word, float, word, word, word, word, word, word };
+    markRegisterOverflow(.x86_64_windows, .{ .leading_ops = false, .ret = .none, .args = &win_args }, 1, &overflow);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, true, true, true, true, true }, &overflow);
+
+    // AAPCS64 starts a 128-bit integer at an even register; Apple's variant
+    // does not, and neither passes an indirect result's pointer in x0-x7.
+    const aarch64_args = [_]Placement{ word, wide, word, word, word, word, word };
+    markRegisterOverflow(.aarch64, .{ .leading_ops = false, .ret = .indirect, .args = &aarch64_args }, 2, overflow[0..7]);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, true, true, true }, overflow[0..7]);
+    markRegisterOverflow(.aarch64_macho, .{ .leading_ops = false, .ret = .indirect, .args = &aarch64_args }, 2, overflow[0..7]);
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, false, false, true, true }, overflow[0..7]);
 }

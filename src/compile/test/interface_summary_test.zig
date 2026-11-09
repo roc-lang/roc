@@ -254,3 +254,27 @@ test "interface summary replay of an open request leaf lowers like a fresh expan
         \\}
     );
 }
+
+test "interface summary replay into a body's finished request lowers like a fresh expansion" {
+    // `report` and `measure` lower as deferred bodies whose roots are imported
+    // from their sealed requests, so their own requests carry finished-type
+    // witnesses that the caller's expansion of the same callees did not.
+    try harness.expectInterfaceSummaryReplayFaithfulLir(
+        \\Pair(a) := { first : a, second : a }.{
+        \\    both : Pair(a) -> List(a)
+        \\    both = |pair| [pair.first, pair.second]
+        \\}
+        \\count : List(a) -> U64
+        \\count = |items| items.len()
+        \\measure : Pair(a) -> U64
+        \\measure = |pair| count(Pair.both(pair))
+        \\report : Pair(a) -> Str
+        \\report = |pair| measure(pair).to_str()
+        \\main! = |_args| {
+        \\    echo!(report({ first: "x", second: "y" }))
+        \\    echo!(report({ first: 1.U8, second: 2.U8 }))
+        \\    echo!(measure({ first: "z", second: "w" }).to_str())
+        \\    Ok({})
+        \\}
+    );
+}

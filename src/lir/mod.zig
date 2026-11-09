@@ -16,10 +16,11 @@ pub const RootMetadata = core.RootMetadata;
 pub const Hosted = core.Hosted;
 /// LIR program result shared by post-check lowering and consumers.
 pub const Program = core.Program;
+/// Operand and ownership facts of `dyn` statements.
+pub const DynOps = core.DynOps;
 /// Public checked-module-to-LIR lowering entrypoint.
 pub const CheckedPipeline = @import("checked_pipeline.zig");
 /// One module's closed exports lowered as a program of their own.
-pub const PackProgram = @import("pack_program.zig");
 /// Direct boxed update wrapper rewrite before ARC.
 pub const BoxReuse = @import("box_reuse.zig");
 /// Internal aggregate return-slot variants before ARC.
@@ -28,6 +29,10 @@ pub const ReturnSlot = @import("return_slot.zig");
 pub const StrAppend = @import("str_append.zig");
 /// Shared proc-body cloning and rewrite-soundness helpers before ARC.
 pub const BodyClone = @import("body_clone.zig");
+/// Exact procedure-local stack lifetimes, shared by the native and LLVM
+/// backends.
+pub const StackPlan = @import("StackPlan.zig");
+pub const LocalWrites = @import("LocalWrites.zig");
 /// Struct-typed join parameters split into per-field parameters before ARC.
 pub const PruneJoinParams = @import("prune_join_params.zig");
 pub const ScalarizeJoins = @import("scalarize_joins.zig");
@@ -118,12 +123,6 @@ pub const stack_probe_page_size = LIR.stack_probe_page_size;
 pub const LirProcSpecId = LIR.LirProcSpecId;
 /// Builtin low-level operation identifier reused from `base`.
 pub const LowLevel = LIR.LowLevel;
-/// Pattern type used in LIR.
-pub const LirPattern = LIR.LirPattern;
-/// Identifier of a stored LirPattern.
-pub const LirPatternId = LIR.LirPatternId;
-/// Span into flat pattern-id storage.
-pub const LirPatternSpan = LIR.LirPatternSpan;
 
 /// Domain category byte mixed into a builtin Hasher for a `hasher_write_*`
 /// low-level op. This is the single source of truth shared by the interpreter
@@ -147,7 +146,7 @@ pub fn hasherDomain(op: LowLevel) builtins.hash.HasherDomain {
     if (op == .hasher_write_dec) return .dec;
     if (op == .hasher_write_bytes) return .bytes;
     if (op == .hasher_write_str) return .str;
-    unreachable;
+    @import("base").invariant("LIR invariant violated: hasherDomain expects a hasher_write op, got {s}", .{@tagName(op)});
 }
 
 /// Byte width of the scalar handed to `hasher_write_u64` for a fixed-width
@@ -159,7 +158,7 @@ pub fn hasherU64Width(op: LowLevel) u8 {
     if (op == .hasher_write_u16 or op == .hasher_write_i16) return 2;
     if (op == .hasher_write_u32 or op == .hasher_write_i32 or op == .hasher_write_f32) return 4;
     if (op == .hasher_write_u64 or op == .hasher_write_i64 or op == .hasher_write_f64) return 8;
-    unreachable;
+    @import("base").invariant("LIR invariant violated: hasherU64Width expects a 1/2/4/8-byte hasher_write op, got {s}", .{@tagName(op)});
 }
 
 test "lir tests" {
@@ -177,6 +176,7 @@ test "lir tests" {
     std.testing.refAllDecls(ReturnSlot);
     std.testing.refAllDecls(StrAppend);
     std.testing.refAllDecls(BodyClone);
+    std.testing.refAllDecls(StackPlan);
     std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);

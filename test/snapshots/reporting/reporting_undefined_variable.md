@@ -66,8 +66,6 @@ Is it misspelled, or is there an import missing?<br>
 ~~~
 # LSP
 ~~~text
-name not in scope
-
 Nothing is named foo in this scope.
 Is it misspelled, or is there an import missing?
 

@@ -39,7 +39,7 @@ pub fn run(allocator: std.mem.Allocator) Error!void {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
     const drop_cell = try store.addCFStmt(.{ .decref = .{
         .value = cell,
-        .rc = .{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } },
+        .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = box_u64 } }),
         .next = ret,
     } }, .test_fixture);
     const add = try lowLevelStmt(&store, sum, .num_int_add_wrap, &.{ pre, post }, drop_cell);
@@ -83,7 +83,7 @@ fn lowLevelStmt(
     return store.addCFStmt(.{ .assign_low_level = .{
         .target = target,
         .op = op,
-        .rc_effect = op.rcEffect(),
+        .rc_effect = try store.addRcEffect(op.rcEffect()),
         .args = try store.addLocalSpan(args),
         .next = next,
     } }, .test_fixture);

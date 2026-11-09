@@ -99,7 +99,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -113,7 +113,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -127,7 +127,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -141,7 +141,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "b")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_b")
@@ -155,7 +155,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h1")
@@ -169,7 +169,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h2")
@@ -183,7 +183,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h3")
@@ -197,7 +197,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h4")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h4")
@@ -211,7 +211,7 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "h5")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_h5")
@@ -310,6 +310,18 @@ NON EXHAUSTIVE MATCH - everything.md:29:2:29:7
 			(annotation-start code-block)
 			(indent 1)
 			(text "Z4 []")
+			(annotation-end)
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "Z4 [_]")
+			(annotation-end)
+			(line-break)
+			(text "    ")
+			(annotation-start code-block)
+			(indent 1)
+			(text "Z4 [_, _, _, ..]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -560,7 +572,7 @@ NO CHANGE
 												(p-assign (ident "y"))))))))))
 				(s-let
 					(p-assign (ident "h2"))
-					(e-call (constraint-fn-var 371)
+					(e-call (constraint-fn-var 376)
 						(e-lookup-local
 							(p-assign (ident "h")))
 						(e-lookup-local

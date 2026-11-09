@@ -25,6 +25,7 @@ const Outcome = struct {
     break_outside_loop: usize = 0,
     var_reassigned_in_expect: usize = 0,
     var_across_function_boundary: usize = 0,
+    var_in_binder_pattern: usize = 0,
     expect_err_nodes: usize = 0,
 };
 
@@ -65,6 +66,8 @@ fn canonicalizeModule(source: []const u8) ExpectTestError!Outcome {
             outcome.var_reassigned_in_expect += 1;
         } else if (diag == .var_across_function_boundary) {
             outcome.var_across_function_boundary += 1;
+        } else if (diag == .var_in_binder_pattern) {
+            outcome.var_in_binder_pattern += 1;
         } else if (diag == .break_outside_loop) {
             outcome.break_outside_loop += 1;
         }
@@ -378,7 +381,7 @@ test "var declared inside an expect shadowing an outer var can be reassigned" {
     try testing.expectEqual(Outcome{}, outcome);
 }
 
-test "for and match binders named like an outer var are not reassignments" {
+test "for and match binders named like an outer var are rejected rather than reassignments" {
     const outcome = try canonicalizeModule(
         \\f = |xs| {
         \\    var $x = 0
@@ -394,7 +397,7 @@ test "for and match binders named like an outer var are not reassignments" {
         \\    $x
         \\}
     );
-    try testing.expectEqual(Outcome{}, outcome);
+    try testing.expectEqual(Outcome{ .var_in_binder_pattern = 2 }, outcome);
 }
 
 test "destructuring in an expect cannot reassign a var declared outside it" {

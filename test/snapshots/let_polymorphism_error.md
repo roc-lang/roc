@@ -17,7 +17,7 @@ TYPE MISMATCH - let_polymorphism_error.md:1:11:1:18
 		(title "Type Mismatch")
 		(region (start 1 11) (end 1 18))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "let_polymorphism_error.md") (start 1 11) (end 1 18) (annotation error) (line-text "[42, 4.2, \"hello\"]"))
 			(line-break)

@@ -570,8 +570,8 @@ Every class of work the graph performs, mapped to its target home:
 nowhere in `CheckedModuleArtifact`—over its own store whose only
 meaningful unknowns are the callable slots inside function types. It is the
 first derivation of its domain, not a re-derivation, and it stays (§12).
-Downstream, `solved_lir_lower.zig` and `lambda_mono/` contain **zero**
-unification calls (verified); `SolvedLirLower` emits the final `LirStore`
+Downstream, `solved_lir_lower.zig` contains **zero** unification calls
+(verified); `SolvedLirLower` emits the final `LirStore`
 plus one interned `layout.Store`, and from that point all four backends and
 every LIR pass read stores by index. **Re-derivation of checked facts is
 confined to the Monotype stage.**
@@ -1691,8 +1691,8 @@ ABI finite/erased, capture type)`; each set member becomes an `FnVariant`
 of a generated callable tag union; the Lambda Mono type store has **no
 function type at all**—finite function values *are* their callable tag
 unions, erased ones use the erased callable layout.
-(`src/postcheck/lambda_mono/` is the Debug-only differential oracle, not
-the production consumer.)
+(`src/postcheck/lambda_mono/type.zig` is the function-free type store the
+direct lowerer commits layouts against.)
 
 The one deliberate divergence from cor: **roc does not generalize or
 instantiate per use.** `Content.forall` is never constructed—it exists

@@ -2,7 +2,7 @@
 //!
 //! `SpecBuilder` is the single index that answers every specialization reuse
 //! question in the Monotype pass. A specialization's identity—its callable,
-//! the method scope and codec context its body resolves dispatch in, its
+//! the codec context its body resolves dispatch in, its
 //! exact dispatch evidence, and the closed monomorphic function type
 //! REQUESTED by the call site that reserved it—is written once at `reserve`
 //! and never rewritten. The checked source function type a call site
@@ -11,10 +11,9 @@
 //! instantiation context, so two call sites reaching the same callable at the
 //! same closed type reuse one record even when their checked source types
 //! differ (one annotated with a transparent alias of the other's type, for
-//! instance). Refinements produced later (a deferred
-//! request type sealed by its requester's graph, or the solved type produced
-//! by lowering the body) are data on the `SpecRecord` and become *alias*
-//! lookup entries pointing at the same record, never a rekey. A request whose
+//! instance). The solved type produced by lowering the body is data on the
+//! `SpecRecord` and becomes an *alias* lookup entry pointing at the same
+//! record, never a rekey. A request whose
 //! type is less specific than a record's solved type therefore reuses the
 //! record through the request-shaped alias; it never widens the record
 //! (`design.md`'s one-way snapshot rule).
@@ -35,6 +34,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const check = @import("check");
+const collections = @import("collections");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 
@@ -42,8 +42,6 @@ const names = check.CheckedNames;
 
 /// Deterministic counters used by specialization-shape tests.
 pub const Counters = struct {
-    /// Closed specializations the object cache served at reservation.
-    spec_cache_hits: u64 = 0,
     template_requests: u64 = 0,
     template_hits: u64 = 0,
     template_misses: u64 = 0,
@@ -65,6 +63,20 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    interface_persistent_hits: u64 = 0,
+    interface_persistent_misses: u64 = 0,
+    interface_persistent_invalid: u64 = 0,
+    interface_persistent_records: u64 = 0,
+    interface_persistent_bytes: u64 = 0,
+    interface_persistent_types: u64 = 0,
+    interface_persistent_references: u64 = 0,
+    interface_persistent_composite_records: u64 = 0,
+    interface_persistent_default_records: u64 = 0,
+    interface_persistent_composite_hits: u64 = 0,
+    interface_persistent_default_hits: u64 = 0,
+
+    interface_persistent_unrepresentable: u64 = 0,
+
     /// Summary hits whose expansion contributed no constraint beyond its input.
     interface_summary_unchanged_hits: u64 = 0,
     /// Relation requests whose settled parametric instantiations were captured as holes.
@@ -115,7 +127,7 @@ pub const LocalHit = struct {
 /// authority. `digest` is the topology's `Ast.fnEvidenceDigest`, computed
 /// once by whoever built the topology.
 pub const EvidenceView = struct {
-    nodes: []const check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     digest: Ast.EvidenceDigest,
@@ -124,11 +136,11 @@ pub const EvidenceView = struct {
     program_span: ?ProgramEvidenceSpan = null,
 
     pub fn init(
-        nodes: []const check.ConstStore.ConstFnEvidence,
+        entries: check.ConstStore.ConstFnEvidenceVector,
         frames: []const check.ConstStore.ConstFnEvidenceFrame,
         head: ?u32,
     ) EvidenceView {
-        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+        return .{ .entries = entries, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(entries, frames, head) };
     }
 };
 
@@ -144,16 +156,16 @@ pub const ProgramEvidenceSpan = struct {
 };
 
 const OwnedEvidence = struct {
-    nodes: []check.ConstStore.ConstFnEvidence,
+    entries: check.ConstStore.ConstFnEvidenceVector,
     frames: []check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
     digest: Ast.EvidenceDigest,
 
     fn init(allocator: std.mem.Allocator, source: EvidenceView) std.mem.Allocator.Error!OwnedEvidence {
-        const nodes = try allocator.dupe(check.ConstStore.ConstFnEvidence, source.nodes);
-        errdefer allocator.free(nodes);
+        const entries = try check.ConstStore.dupeVector(allocator, source.entries);
+        errdefer check.ConstStore.freeVector(allocator, entries);
         return .{
-            .nodes = nodes,
+            .entries = entries,
             .frames = try allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, source.frames),
             .head = source.head,
             .digest = source.digest,
@@ -161,18 +173,18 @@ const OwnedEvidence = struct {
     }
 
     fn deinit(self: OwnedEvidence, allocator: std.mem.Allocator) void {
-        allocator.free(self.nodes);
+        check.ConstStore.freeVector(allocator, self.entries);
         allocator.free(self.frames);
     }
 
     fn view(self: OwnedEvidence) EvidenceView {
-        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head, .digest = self.digest };
+        return .{ .entries = self.entries, .frames = self.frames, .head = self.head, .digest = self.digest };
     }
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
     if (!std.meta.eql(left.digest, right.digest)) return false;
-    return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
+    return Ast.fnEvidenceEql(left.entries, left.frames, left.head, right.entries, right.frames, right.head);
 }
 
 /// The request's identity digest must be its evidence topology's digest.
@@ -180,7 +192,7 @@ fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {
     if (!std.meta.eql(identity.evidence_digest, evidence.digest)) return false;
     if (builtin.mode == .debug) {
-        return std.meta.eql(evidence.digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
+        return std.meta.eql(evidence.digest, Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head));
     }
     return true;
 }
@@ -203,7 +215,6 @@ pub const LookupResult = union(enum(u8)) {
 pub const SpecLookupAddress = struct {
     callable_kind: u8,
     module_bytes: [32]u8,
-    method_scope: [32]u8,
     index_a: u32,
     index_b: u32,
     index_c: u32,
@@ -220,12 +231,11 @@ pub const SpecLookupAddress = struct {
     /// Share the durable identity bucket between reservation and draft commit.
     /// Exact type and evidence equality remain the caller's collision checks.
     pub fn fromIdentity(identity: Ast.SpecIdentity) SpecLookupAddress {
-        return from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        return from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
     }
 
     fn from(
         callable: Ast.CallableIdentity,
-        method_scope: names.CheckedModuleDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
@@ -233,7 +243,6 @@ pub const SpecLookupAddress = struct {
         var key: SpecLookupAddress = .{
             .callable_kind = @backingInt(callable),
             .module_bytes = @splat(0),
-            .method_scope = method_scope.bytes,
             .index_a = 0,
             .index_b = 0,
             .index_c = 0,
@@ -272,19 +281,31 @@ pub const SpecLookupAddress = struct {
     }
 };
 
-/// Track creation-time identities and refinement history in debug builds so
-/// the validator can prove no record's identity was rewritten after `reserve`
-/// and that every lookup entry belongs to some record's identity history.
+/// Hashes a lookup address by a fold of its fields. The digests are uniformly
+/// distributed content hashes, so eight bytes of each identify its bucket as
+/// well as all thirty-two; equality still compares the whole address.
+const SpecLookupAddressContext = struct {
+    pub fn hash(_: SpecLookupAddressContext, address: SpecLookupAddress) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        const scalars = [_]u32{ address.callable_kind, address.index_a, address.index_b, address.index_c, @intFromBool(address.default_root) };
+        hasher.update(std.mem.asBytes(&scalars));
+        inline for (.{ "module_bytes", "owner_fn_digest", "default_root_module", "evidence_digest", "codec_contract_digest", "type_digest" }) |field| {
+            hasher.update(@field(address, field)[0..8]);
+        }
+        return hasher.final();
+    }
+
+    pub fn eql(_: SpecLookupAddressContext, left: SpecLookupAddress, right: SpecLookupAddress) bool {
+        return std.meta.eql(left, right);
+    }
+};
+
+/// Track creation-time identities in debug builds so the validator can prove
+/// no record's identity was rewritten after `reserve` and that every lookup
+/// entry belongs to some record's request or solved view.
 const identity_shadow_enabled = builtin.mode == .debug;
 
-/// One request-view refinement remembered by the debug shadow. A record can
-/// be refined more than once while `.reserved` (each deferring graph seals its
-/// own view of the request), and each refinement's alias entry stays in the
-/// lookup map, so the validator needs the full digest history.
-const RefinedDigestShadow = struct {
-    spec: Ast.SpecId,
-    digest: names.TypeDigest,
-};
+const SpecLookupBucket = collections.ChainedBuckets(SpecLookupAddress, Ast.SpecId, SpecLookupAddressContext);
 
 /// Direct specialization reservation table keyed by callable identity, its
 /// dispatch context, and the closed requested (or solved-alias) type digest.
@@ -299,14 +320,13 @@ pub const SpecBuilder = struct {
     /// One owned copy per distinct evidence topology, shared by every record
     /// whose topology is equal, found through `owned_evidence_by_digest`.
     owned_evidence: std.ArrayList(OwnedEvidence),
-    owned_evidence_by_digest: std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)),
+    owned_evidence_by_digest: collections.AutoChainedBuckets(Ast.EvidenceDigest, u32),
     /// The owned copy each program evidence position was already found
     /// equal to.
     owned_evidence_by_program_span: std.AutoHashMap(ProgramEvidenceSpan, u32),
-    lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
+    lookup: SpecLookupBucket,
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
-    refined_digest_shadow: if (identity_shadow_enabled) std.ArrayList(RefinedDigestShadow) else void,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -321,29 +341,23 @@ pub const SpecBuilder = struct {
             .records = records,
             .local_evidence = .empty,
             .owned_evidence = .empty,
-            .owned_evidence_by_digest = std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)).init(allocator),
+            .owned_evidence_by_digest = .empty,
             .owned_evidence_by_program_span = std.AutoHashMap(ProgramEvidenceSpan, u32).init(allocator),
-            .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
+            .lookup = .empty,
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
-            .refined_digest_shadow = if (identity_shadow_enabled) .empty else {},
         };
     }
 
     pub fn deinit(self: *SpecBuilder) void {
         if (identity_shadow_enabled) {
-            self.refined_digest_shadow.deinit(self.allocator);
             self.reserved_identities.deinit(self.allocator);
         }
-        var lists = self.lookup.valueIterator();
-        while (lists.next()) |list| list.deinit(self.allocator);
-        self.lookup.deinit();
+        self.lookup.deinit(self.allocator);
         self.local_evidence.deinit(self.allocator);
         for (self.owned_evidence.items) |evidence| evidence.deinit(self.allocator);
         self.owned_evidence.deinit(self.allocator);
-        var owned_buckets = self.owned_evidence_by_digest.valueIterator();
-        while (owned_buckets.next()) |bucket| bucket.deinit(self.allocator);
-        self.owned_evidence_by_digest.deinit();
+        self.owned_evidence_by_digest.deinit(self.allocator);
         self.owned_evidence_by_program_span.deinit();
     }
 
@@ -358,11 +372,8 @@ pub const SpecBuilder = struct {
         fn_id: Ast.FnId,
     ) std.mem.Allocator.Error!ReserveResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
-        const gop = try self.lookup.getOrPut(address);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-
-        if (try self.matchInBucket(gop.value_ptr.items, identity, evidence)) |hit| {
+        const address = SpecLookupAddress.from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        if (try self.matchInBucket(self.lookup.get(address), identity, evidence)) |hit| {
             return .{
                 .spec = hit.local.spec,
                 .target = hit.target(),
@@ -372,11 +383,10 @@ pub const SpecBuilder = struct {
 
         const spec_id: Ast.SpecId = @fromBackingInt(@intCast(@as(u32, @intCast(self.records.len()))));
         if (self.local_evidence.items.len != @backingInt(spec_id)) invariant("Monotype local specialization evidence table diverged from its records");
+        try self.lookup.ensureUnusedCapacity(self.allocator, 1, 1);
         const owned_index = try self.ownedEvidenceIndex(evidence);
         try self.records.append(self.allocator, .{
             .identity = identity,
-            .request_fn_ty = identity.request_fn_ty,
-            .request_fn_ty_digest = identity.request_fn_ty_digest,
             .solved_fn_ty = identity.request_fn_ty,
             .solved_fn_ty_digest = identity.request_fn_ty_digest,
             .fn_id = fn_id,
@@ -391,7 +401,7 @@ pub const SpecBuilder = struct {
         errdefer if (identity_shadow_enabled) {
             _ = self.reserved_identities.pop();
         };
-        try gop.value_ptr.append(self.allocator, spec_id);
+        self.lookup.appendAssumeCapacity(address, spec_id);
         return .{
             .spec = spec_id,
             .target = .{ .local = fn_id },
@@ -416,10 +426,16 @@ pub const SpecBuilder = struct {
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
         if (!evidenceDigestMatches(identity, evidence)) invariant("Monotype specialization lookup evidence digest did not match its exact topology");
-        const address = SpecLookupAddress.from(identity.callable, identity.method_scope, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
-        const entries = self.lookup.get(address) orelse return null;
-        self.countCandidatesBy(identity.callable, entries.items.len);
-        return try self.matchInBucket(entries.items, identity, evidence);
+        const address = SpecLookupAddress.from(identity.callable, identity.evidence_digest, identity.codec_contract_digest, identity.request_fn_ty_digest);
+        const entries = self.lookup.get(address);
+        if (entries.isEmpty()) return null;
+        if (self.counters != null) {
+            var counted = entries;
+            var amount: usize = 0;
+            while (counted.next()) |_| amount += 1;
+            self.countCandidatesBy(identity.callable, amount);
+        }
+        return try self.matchInBucket(entries, identity, evidence);
     }
 
     /// Match `identity` against one lookup bucket. Request-view matches win
@@ -429,7 +445,7 @@ pub const SpecBuilder = struct {
     /// the exact structural equality collision authority remain.
     fn matchInBucket(
         self: *SpecBuilder,
-        entries: []const Ast.SpecId,
+        entries: SpecLookupBucket.Iterator,
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
@@ -437,14 +453,16 @@ pub const SpecBuilder = struct {
         // program position is known to equal one, comparing copies is
         // comparing topologies.
         const known: ?u32 = if (evidence.program_span) |span| self.owned_evidence_by_program_span.get(span) else null;
-        for (entries) |local_spec| {
+        var request_view = entries;
+        while (request_view.next()) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
-            if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
-            return localResult(local_spec, record, record.request_fn_ty);
+            if (!try self.localViewMatches(record.identity.request_fn_ty, record.identity.request_fn_ty_digest, identity)) continue;
+            return localResult(local_spec, record, record.identity.request_fn_ty);
         }
-        for (entries) |local_spec| {
+        var solved_view = entries;
+        while (solved_view.next()) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
             if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
@@ -500,43 +518,6 @@ pub const SpecBuilder = struct {
         return try self.types.typeEql(self.names, view_ty, identity.request_fn_ty);
     }
 
-    /// Refine a still-`.reserved` record's request view after a requester's
-    /// graph sealed the deferred request type. The identity keeps the
-    /// creation-time request; the sealed shape becomes the record's current
-    /// request view plus an alias lookup entry. This can happen more than
-    /// once while the record stays `.reserved`—each graph that deferred a
-    /// request against the record seals its own view—and each superseded
-    /// shape's entry stays inert in the map: it no longer matches (only the
-    /// owning graphs could produce those shapes), and a later independent
-    /// request at a superseded shape reserves its own record.
-    pub fn refineRequest(
-        self: *SpecBuilder,
-        spec: Ast.SpecId,
-        request_fn_ty: Type.TypeId,
-        request_fn_ty_digest: names.TypeDigest,
-    ) std.mem.Allocator.Error!void {
-        const record = self.recordPtr(spec);
-        if (record.status != .reserved) {
-            invariant("Monotype specialization request was refined after lowering began");
-        }
-        if (digestEql(record.request_fn_ty_digest, request_fn_ty_digest) and
-            record.request_fn_ty == request_fn_ty)
-        {
-            return;
-        }
-        const digest_changed = !digestEql(record.request_fn_ty_digest, request_fn_ty_digest);
-        record.request_fn_ty = request_fn_ty;
-        record.request_fn_ty_digest = request_fn_ty_digest;
-        record.solved_fn_ty = request_fn_ty;
-        record.solved_fn_ty_digest = request_fn_ty_digest;
-        if (digest_changed) {
-            if (identity_shadow_enabled) {
-                try self.refined_digest_shadow.append(self.allocator, .{ .spec = spec, .digest = request_fn_ty_digest });
-            }
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, request_fn_ty_digest, spec);
-        }
-    }
-
     /// Current lifecycle status of a record. The scheduler consults this at
     /// dispatch to skip queued bodies an immediate caller already completed.
     pub fn recordStatus(self: *const SpecBuilder, spec: Ast.SpecId) Ast.SpecStatus {
@@ -570,8 +551,8 @@ pub const SpecBuilder = struct {
         record.solved_fn_ty = solved_fn_ty;
         record.solved_fn_ty_digest = solved_fn_ty_digest;
         record.status = .ready;
-        if (!digestEql(solved_fn_ty_digest, record.request_fn_ty_digest)) {
-            try self.appendAliasEntry(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
+        if (!digestEql(solved_fn_ty_digest, record.identity.request_fn_ty_digest)) {
+            try self.appendAliasEntry(record.identity.callable, record.identity.evidence_digest, record.identity.codec_contract_digest, solved_fn_ty_digest, spec);
         }
     }
 
@@ -581,17 +562,15 @@ pub const SpecBuilder = struct {
     fn appendAliasEntry(
         self: *SpecBuilder,
         callable: Ast.CallableIdentity,
-        method_scope: names.CheckedModuleDigest,
         evidence_digest: Ast.EvidenceDigest,
         codec_contract_digest: names.TypeDigest,
         type_digest: names.TypeDigest,
         spec: Ast.SpecId,
     ) std.mem.Allocator.Error!void {
-        const address = SpecLookupAddress.from(callable, method_scope, evidence_digest, codec_contract_digest, type_digest);
-        const gop = try self.lookup.getOrPut(address);
-        if (!gop.found_existing) gop.value_ptr.* = .empty;
-        for (gop.value_ptr.items) |existing| if (existing == spec) return;
-        try gop.value_ptr.append(self.allocator, spec);
+        const address = SpecLookupAddress.from(callable, evidence_digest, codec_contract_digest, type_digest);
+        var existing = self.lookup.get(address);
+        while (existing.next()) |entry_spec| if (entry_spec == spec) return;
+        try self.lookup.append(self.allocator, address, spec);
     }
 
     fn recordPtr(self: *SpecBuilder, spec: Ast.SpecId) *Ast.SpecRecord {
@@ -617,17 +596,17 @@ pub const SpecBuilder = struct {
     }
 
     fn ownedEvidenceIndexByTopology(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
-        const bucket = try self.owned_evidence_by_digest.getOrPut(evidence.digest);
-        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
-        for (bucket.value_ptr.items) |index| {
+        var bucket = self.owned_evidence_by_digest.get(evidence.digest);
+        while (bucket.next()) |index| {
             if (evidenceEql(self.owned_evidence.items[index].view(), evidence)) return index;
         }
+        try self.owned_evidence_by_digest.ensureUnusedCapacity(self.allocator, 1, 1);
         const index: u32 = @intCast(self.owned_evidence.items.len);
         const owned = try OwnedEvidence.init(self.allocator, evidence);
         errdefer owned.deinit(self.allocator);
         try self.owned_evidence.append(self.allocator, owned);
         errdefer _ = self.owned_evidence.pop();
-        try bucket.value_ptr.append(self.allocator, index);
+        self.owned_evidence_by_digest.appendAssumeCapacity(evidence.digest, index);
         return index;
     }
 
@@ -656,7 +635,7 @@ pub const SpecBuilder = struct {
     };
 
     /// Debug-only integrity validator: every local record must be reachable
-    /// from exactly the keys its immutable identity and refinement history
+    /// from exactly the keys its immutable identity and solved view
     /// produce, from no others, and its identity must equal the identity
     /// captured when it was reserved. Compiled out of release builds.
     pub fn validateLookupIntegrity(self: *const SpecBuilder) void {
@@ -689,60 +668,47 @@ pub const SpecBuilder = struct {
         }
 
         // Forward: every record must be reachable from each address its
-        // history requires (creation identity, every refinement, the current
-        // request view, and the solved view once ready).
+        // history requires (the creation identity, and the solved view once
+        // ready).
         for (0..self.records.len()) |index| {
             const record = self.records.get(index);
             const spec: Ast.SpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             if (!self.recordReachableAt(spec, record, record.identity.request_fn_ty_digest)) {
                 return .record_missing_expected_key;
             }
-            if (!self.recordReachableAt(spec, record, record.request_fn_ty_digest)) {
-                return .record_missing_expected_key;
-            }
             if (record.status == .ready and !self.recordReachableAt(spec, record, record.solved_fn_ty_digest)) {
                 return .record_missing_expected_key;
-            }
-            for (self.refined_digest_shadow.items) |refined| {
-                if (refined.spec != spec) continue;
-                if (!self.recordReachableAt(spec, record, refined.digest)) {
-                    return .record_missing_expected_key;
-                }
             }
         }
 
         // Reverse: every lookup entry must be an address the record's history
         // produced, and no address may list the same record twice.
-        var iterator = self.lookup.iterator();
-        while (iterator.next()) |entry| {
-            for (entry.value_ptr.items, 0..) |spec_id, entry_index| {
+        var addresses = self.lookup.keyIterator();
+        while (addresses.next()) |address| {
+            var specs = self.lookup.get(address.*);
+            while (specs.next()) |spec_id| {
                 const record = self.records.get(@backingInt(spec_id));
-                if (!self.addressInRecordHistory(spec_id, record, entry.key_ptr.*)) {
+                if (!addressInRecordHistory(record, address.*)) {
                     return .record_reachable_from_foreign_key;
                 }
-                for (entry.value_ptr.items[entry_index + 1 ..]) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
+                var later = specs;
+                while (later.next()) |later_spec| if (later_spec == spec_id) return .record_reachable_from_foreign_key;
             }
         }
         return null;
     }
 
     fn recordReachableAt(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, digest: names.TypeDigest) bool {
-        const address = SpecLookupAddress.from(record.identity.callable, record.identity.method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
-        const entries = self.lookup.get(address) orelse return false;
-        for (entries.items) |entry_spec| if (entry_spec == spec) return true;
+        const address = SpecLookupAddress.from(record.identity.callable, record.identity.evidence_digest, record.identity.codec_contract_digest, digest);
+        var entries = self.lookup.get(address);
+        while (entries.next()) |entry_spec| if (entry_spec == spec) return true;
         return false;
     }
 
-    fn addressInRecordHistory(self: *const SpecBuilder, spec: Ast.SpecId, record: Ast.SpecRecord, address: SpecLookupAddress) bool {
+    fn addressInRecordHistory(record: Ast.SpecRecord, address: SpecLookupAddress) bool {
         const callable = record.identity.callable;
-        const method_scope = record.identity.method_scope;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
-        if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.request_fn_ty_digest))) return true;
-        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
-        for (self.refined_digest_shadow.items) |refined| {
-            if (refined.spec != spec) continue;
-            if (std.meta.eql(address, SpecLookupAddress.from(callable, method_scope, record.identity.evidence_digest, record.identity.codec_contract_digest, refined.digest))) return true;
-        }
+        if (std.meta.eql(address, SpecLookupAddress.from(callable, record.identity.evidence_digest, record.identity.codec_contract_digest, record.identity.request_fn_ty_digest))) return true;
+        if (record.status == .ready and std.meta.eql(address, SpecLookupAddress.from(callable, record.identity.evidence_digest, record.identity.codec_contract_digest, record.solved_fn_ty_digest))) return true;
         return false;
     }
 };
@@ -759,7 +725,6 @@ fn localResult(spec: Ast.SpecId, record: *const Ast.SpecRecord, match_ty: Type.T
 
 fn identityEql(left: Ast.SpecIdentity, right: Ast.SpecIdentity) bool {
     return std.meta.eql(left.callable, right.callable) and
-        std.meta.eql(left.method_scope, right.method_scope) and
         std.meta.eql(left.evidence_digest, right.evidence_digest) and
         digestEql(left.codec_contract_digest, right.codec_contract_digest) and
         std.meta.eql(left.codec_contract, right.codec_contract) and
@@ -832,7 +797,7 @@ test "monotype spec builder reuses exact specialization identities" {
     builder.validateLookupIntegrity();
 }
 
-test "monotype spec builder shares equal nominal requests while preserving checked provenance" {
+test "monotype spec builder shares equal nominal requests" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
     var types = Type.Store.init(std.testing.allocator);
@@ -840,26 +805,26 @@ test "monotype spec builder shares equal nominal requests while preserving check
     const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const name = try name_store.internTypeName("Value");
     const first = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const second = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 7 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const distinct = try types.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = name, .source_decl = 8 },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const first_stored = types.typeDigest(&name_store, first);
     const second_stored = types.typeDigest(&name_store, second);
-    try std.testing.expect(!digestEql(first_stored, second_stored));
+    try std.testing.expect(digestEql(first_stored, second_stored));
 
     var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
     defer records.deinit(std.testing.allocator);
@@ -875,9 +840,6 @@ test "monotype spec builder shares equal nominal requests while preserving check
     try std.testing.expectEqual(reserved.spec, reused.spec);
     try std.testing.expect(separate.created);
     try std.testing.expectEqual(@as(usize, 2), records.len());
-    // Sharing code never overwrites either checked-store re-entry reference.
-    try std.testing.expectEqual(@as(u32, 1), @backingInt(types.get(first).named.named_type.ty));
-    try std.testing.expectEqual(@as(u32, 2), @backingInt(types.get(second).named.named_type.ty));
     try std.testing.expectEqual(first_stored, types.typeDigest(&name_store, first));
     try std.testing.expectEqual(second_stored, types.typeDigest(&name_store, second));
     builder.validateLookupIntegrity();
@@ -935,49 +897,6 @@ test "monotype spec builder keeps identity immutable and aliases the solved type
     builder.validateLookupIntegrity();
 }
 
-test "monotype spec builder refines a reserved request through an alias entry" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    var type_store = Type.Store.init(std.testing.allocator);
-    defer type_store.deinit();
-
-    const request_ty = try type_store.add(.zst);
-    const sealed_ty = try type_store.add(.{ .primitive = .str });
-    const request_identity = testSpecIdentity(request_ty, digestWithFirstByte(2));
-    const sealed_digest = digestWithFirstByte(3);
-    const sealed_identity = testSpecIdentity(sealed_ty, sealed_digest);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(std.testing.allocator);
-
-    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
-    defer builder.deinit();
-
-    const reserved = try builder.reserve(request_identity, testEvidenceView(), @fromBackingInt(@intCast(1)));
-    const spec = reserved.spec orelse return error.TestUnexpectedResult;
-
-    try builder.refineRequest(spec, sealed_ty, sealed_digest);
-
-    // The identity still records the creation-time request; the record's
-    // request view carries the sealed shape.
-    const record = builder.records.get(@backingInt(spec));
-    try std.testing.expectEqual(request_ty, record.identity.request_fn_ty);
-    try std.testing.expectEqual(sealed_ty, record.request_fn_ty);
-    try std.testing.expectEqual(Ast.SpecStatus.reserved, record.status);
-
-    // The sealed shape finds the record; the pre-seal shape's entry is inert.
-    const sealed_found = (try builder.find(sealed_identity, testEvidenceView())) orelse return error.TestUnexpectedResult;
-    try std.testing.expectEqual(spec, sealed_found.local.spec);
-    try std.testing.expectEqual(@as(?LookupResult, null), try builder.find(request_identity, testEvidenceView()));
-
-    const repeated = try builder.reserve(sealed_identity, testEvidenceView(), @fromBackingInt(@intCast(2)));
-    try std.testing.expect(!repeated.created);
-    try std.testing.expectEqual(@as(?Ast.SpecId, spec), repeated.spec);
-    try std.testing.expectEqual(@as(usize, 1), records.len());
-    builder.validateLookupIntegrity();
-}
-
 test "monotype spec builder keeps checked module boundary in callable identity" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
@@ -1008,37 +927,6 @@ test "monotype spec builder keeps checked module boundary in callable identity" 
     try std.testing.expectEqual(first.spec, repeated_first.spec);
     try std.testing.expectEqual(Ast.FnSlot{ .local = @fromBackingInt(@intCast(1)) }, repeated_first.target);
     try std.testing.expectEqual(@as(usize, 2), builder.records.len());
-    builder.validateLookupIntegrity();
-}
-
-test "monotype spec builder keeps method scope in specialization identity" {
-    var name_store = names.NameStore.init(std.testing.allocator);
-    defer name_store.deinit();
-
-    var type_store = Type.Store.init(std.testing.allocator);
-    defer type_store.deinit();
-
-    const unit_ty = try type_store.add(.zst);
-    var first_scope = testSpecIdentity(unit_ty, digestWithFirstByte(2));
-    first_scope.method_scope = moduleDigestWithFirstByte(1);
-    var second_scope = first_scope;
-    second_scope.method_scope = moduleDigestWithFirstByte(2);
-
-    var records = Ast.ProgramList(Ast.SpecRecord, "specs").empty;
-    defer records.deinit(std.testing.allocator);
-
-    var builder = SpecBuilder.init(std.testing.allocator, &name_store, &type_store, &records);
-    defer builder.deinit();
-
-    const first = try builder.reserve(first_scope, testEvidenceView(), @fromBackingInt(@intCast(1)));
-    const second = try builder.reserve(second_scope, testEvidenceView(), @fromBackingInt(@intCast(2)));
-    const repeated_first = try builder.reserve(first_scope, testEvidenceView(), @fromBackingInt(@intCast(3)));
-
-    try std.testing.expect(first.created);
-    try std.testing.expect(second.created);
-    try std.testing.expect(!repeated_first.created);
-    try std.testing.expect(first.spec != second.spec);
-    try std.testing.expectEqual(first.spec, repeated_first.spec);
     builder.validateLookupIntegrity();
 }
 
@@ -1138,14 +1026,14 @@ test "monotype spec builder uses exact type equality after digest match" {
     const second_name = try name_store.internTypeName("Second");
 
     const first_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
         .backing = null,
     } });
     const second_ty = try type_store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),
@@ -1252,11 +1140,14 @@ test "monotype spec builder validator catches a hand-corrupted identity" {
         builder.lookupIntegrityError(),
     );
 
-    // Restore the identity but corrupt the request view instead: the record
+    // Restore the identity but corrupt the solved view instead: the record
     // is no longer reachable from the key its history requires.
     records.getPtrImmediate(@backingInt(spec)).identity.request_fn_ty = identity.request_fn_ty;
     records.getPtrImmediate(@backingInt(spec)).identity.request_fn_ty_digest = identity.request_fn_ty_digest;
-    records.getPtrImmediate(@backingInt(spec)).request_fn_ty_digest = digestWithFirstByte(4);
+    builder.markLowering(spec);
+    try builder.markReady(spec, str_ty, digestWithFirstByte(3));
+    try std.testing.expectEqual(@as(?SpecBuilder.IntegrityError, null), builder.lookupIntegrityError());
+    records.getPtrImmediate(@backingInt(spec)).solved_fn_ty_digest = digestWithFirstByte(4);
     try std.testing.expectEqual(
         @as(?SpecBuilder.IntegrityError, .record_missing_expected_key),
         builder.lookupIntegrityError(),
@@ -1310,8 +1201,7 @@ fn testSpecIdentityWithModuleAndEvidence(
             .proc_base = 0,
             .template = 1,
         } },
-        .method_scope = .{},
-        .evidence_digest = Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head),
+        .evidence_digest = Ast.fnEvidenceDigest(evidence.entries, evidence.frames, evidence.head),
         .codec_contract_digest = .{},
         .codec_contract = null,
         .request_fn_ty_digest = request_digest,
@@ -1324,7 +1214,7 @@ const test_evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
 };
 
 fn testEvidenceView() EvidenceView {
-    return EvidenceView.init(&.{}, &test_evidence_frames, 0);
+    return EvidenceView.init(.{}, &test_evidence_frames, 0);
 }
 
 /// Distinct one-node evidence topologies: scheme parameter `index` supplies
@@ -1336,5 +1226,5 @@ const scheme_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
 };
 
 fn schemeEvidenceView(comptime index: usize) EvidenceView {
-    return EvidenceView.init(scheme_evidence_nodes[index .. index + 1], &test_evidence_frames, 0);
+    return EvidenceView.init(.{ .nodes = scheme_evidence_nodes[index .. index + 1] }, &test_evidence_frames, 0);
 }

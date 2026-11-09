@@ -93,7 +93,7 @@ expect 5 ==
 			(lhs
 				(e-num (value "5")))
 			(rhs
-				(e-call (constraint-fn-var 247)
+				(e-call (constraint-fn-var 252)
 					(e-lookup-local
 						(p-assign (ident "Blub.go")))))))
 	(s-expect
@@ -101,7 +101,7 @@ expect 5 ==
 			(lhs
 				(e-num (value "5")))
 			(rhs
-				(e-call (constraint-fn-var 267)
+				(e-call (constraint-fn-var 272)
 					(e-lookup-local
 						(p-assign (ident "Blub.go"))))))))
 ~~~
@@ -109,10 +109,10 @@ expect 5 ==
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "({}) -> U8")))
+		(patt (type "() -> U8")))
 	(type_decls
 		(nominal (type "Blub")
 			(ty-header (name "Blub"))))
 	(expressions
-		(expr (type "({}) -> U8"))))
+		(expr (type "() -> U8"))))
 ~~~

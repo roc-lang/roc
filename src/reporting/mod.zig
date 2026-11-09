@@ -18,6 +18,7 @@ pub const RenderTarget = @import("renderer.zig").RenderTarget;
 pub const RenderTargetPreference = @import("config.zig").RenderTargetPreference;
 
 pub const source_region = @import("source_region.zig");
+pub const suggestion = @import("suggestion.zig");
 
 pub const renderReport = @import("renderer.zig").renderReport;
 pub const renderReportWithConfig = @import("renderer.zig").renderReportWithConfig;
@@ -33,17 +34,14 @@ pub const renderDocumentToMarkdown = @import("renderer.zig").renderDocumentToMar
 pub const renderDocumentToHtml = @import("renderer.zig").renderDocumentToHtml;
 pub const renderDocumentToLsp = @import("renderer.zig").renderDocumentToLsp;
 pub const writeShouted = @import("renderer.zig").writeShouted;
-pub const sanitisePathForSnapshots = @import("renderer.zig").sanitisePathForSnapshots;
+pub const writeEscapedHtml = @import("renderer.zig").writeEscapedHtml;
+pub const displayPath = @import("renderer.zig").displayPath;
 
 // Canonical (presentation-independent) S-expression serialization
 pub const pushReportToSExprTree = @import("report_sexpr.zig").pushReportToSExprTree;
 pub const pushReportsToSExprTree = @import("report_sexpr.zig").pushReportsToSExprTree;
 
 // Configuration utilities
-pub const validateUtf8 = @import("config.zig").validateUtf8;
-pub const truncateUtf8 = @import("config.zig").truncateUtf8;
-pub const formatUtf8 = @import("config.zig").formatUtf8;
-pub const formatUtf8Bounded = @import("config.zig").formatUtf8Bounded;
 
 test {
     const std = @import("std");
@@ -52,4 +50,5 @@ test {
     std.testing.refAllDecls(@import("common_misspellings.zig"));
     std.testing.refAllDecls(@import("report_sexpr.zig"));
     std.testing.refAllDecls(@import("severity.zig"));
+    std.testing.refAllDecls(@import("suggestion.zig"));
 }

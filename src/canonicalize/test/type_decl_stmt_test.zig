@@ -167,7 +167,7 @@ fn expectBlockSetupDoesNotScanStatements(can_source: []const u8) SourceAuditErro
     const expr_driver_start = std.mem.find(u8, can_source, "fn runExprKernel(") orelse return error.MissingCanonicalizeBlock;
     const block_start_rel = std.mem.find(u8, can_source[expr_driver_start..], ".block => |e| {") orelse return error.MissingCanonicalizeBlock;
     const block_start = expr_driver_start + block_start_rel;
-    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "stacks.pushBlockNext(") orelse return error.MissingCanonicalizeBlockWalk;
+    const walk_start_rel = std.mem.find(u8, can_source[block_start..], "stacks.push(.block_next,") orelse return error.MissingCanonicalizeBlockWalk;
     const block_setup = can_source[block_start .. block_start + walk_start_rel];
 
     try expectSourceDoesNotContain(block_setup, "while (");
@@ -228,13 +228,13 @@ fn expectCanonicalizationKernelsUseExplicitPayloadStacks(can_source: []const u8)
     try expectSourceDoesNotContain(can_source, "arrayListItemType");
     try expectSourceDoesNotContain(can_source, "canonicalizedAssociatedLookupMaybeUsed");
 
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = struct", "const ExprKernelLabel = enum", "fn append(self: *PatternKernelWork");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = ", "const ExprKernelLabel = enum", "fn append(self: *PatternKernelWork");
     try expectSourceSliceBetweenDoesNotContain(can_source, "const ExprKernelWork = struct", "const ExprRecordFieldWork = struct", "fn append(self: *ExprKernelWork");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = struct", "fn runTypeAnnoKernel(", "fn append(self: *TypeAnnoKernelWork");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = ", "fn runTypeAnnoKernel(", "fn append(self: *TypeAnnoKernelWork");
 
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = struct", "const ExprKernelLabel = enum", "std.ArrayList(struct");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const PatternKernelWork = ", "const ExprKernelLabel = enum", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "const ExprKernelWork = struct", "const ExprRecordFieldWork = struct", "std.ArrayList(struct");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = struct", "fn runTypeAnnoKernel(", "std.ArrayList(struct");
+    try expectSourceSliceBetweenDoesNotContain(can_source, "const TypeAnnoKernelWork = ", "fn runTypeAnnoKernel(", "std.ArrayList(struct");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "frames.");
     try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "frames.");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runTypeAnnoKernel(", "/// Handle basic type lookup", "frames.");
@@ -811,6 +811,62 @@ test "introduceType records every declaration kind before completing its body" {
         }
         try testing.expectEqual(stmt_idx, (try can.scopeLookupTypeDecl(name)).?);
     }
+}
+
+test "forward-referenced declarations bind their exact declaration kind" {
+    const allocator = testing.allocator;
+    var builtin_ctx = try BuiltinTestContext.init(allocator);
+    defer builtin_ctx.deinit();
+
+    const source =
+        \\f : a, Nom, Opq -> Str where [a.Shows]
+        \\f = |_, _, _| "hi"
+        \\
+        \\coll.Shows : where [coll.shows : coll -> Str]
+        \\Nom := [Nom]
+        \\Opq :: [Opq]
+    ;
+
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Test");
+
+    const ast = try parse.file(allocator, &env.common);
+    defer ast.deinit();
+
+    const roc_ctx = CoreCtx.testing(allocator, allocator);
+    var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
+    defer czer.deinit();
+
+    try czer.canonicalizeFile();
+
+    const diagnostics = try env.getDiagnostics();
+    defer allocator.free(diagnostics);
+    try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
+
+    const module_scope = &czer.scopes.items[0];
+
+    const shows = try env.insertIdent(Ident.for_text("Shows"));
+    const shows_binding = module_scope.type_bindings.get(shows).?;
+    try testing.expect(shows_binding == .local_where_alias);
+    try testing.expect(env.store.getStatement(shows_binding.local_where_alias) == .s_where_alias_decl);
+    try testing.expect(env.store.getStatement(shows_binding.local_where_alias).s_where_alias_decl.receiver != .placeholder);
+
+    const nom = try env.insertIdent(Ident.for_text("Nom"));
+    const nom_binding = module_scope.type_bindings.get(nom).?;
+    try testing.expect(nom_binding == .local_nominal);
+    const nom_stmt = env.store.getStatement(nom_binding.local_nominal);
+    try testing.expect(nom_stmt == .s_nominal_decl);
+    try testing.expect(!nom_stmt.s_nominal_decl.is_opaque);
+    try testing.expect(nom_stmt.s_nominal_decl.anno != .placeholder);
+
+    const opq = try env.insertIdent(Ident.for_text("Opq"));
+    const opq_binding = module_scope.type_bindings.get(opq).?;
+    try testing.expect(opq_binding == .local_nominal);
+    const opq_stmt = env.store.getStatement(opq_binding.local_nominal);
+    try testing.expect(opq_stmt == .s_nominal_decl);
+    try testing.expect(opq_stmt.s_nominal_decl.is_opaque);
+    try testing.expect(opq_stmt.s_nominal_decl.anno != .placeholder);
 }
 
 test "open ext not allowed in type decl" {

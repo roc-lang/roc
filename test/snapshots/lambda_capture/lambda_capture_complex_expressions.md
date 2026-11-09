@@ -41,12 +41,12 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+(|outer| |inner| if (outer > 0) (outer + inner) else inner)(1)(-2)
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-call (constraint-fn-var 252)
-	(e-call (constraint-fn-var 244)
+(e-call (constraint-fn-var 257)
+	(e-call (constraint-fn-var 249)
 		(e-lambda
 			(args
 				(p-assign (ident "outer")))
@@ -59,13 +59,13 @@ NO CHANGE
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 232)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 237)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "outer"))))
 									(args
 										(e-num (value "0"))))
-								(e-dispatch-call (method "plus") (constraint-fn-var 235)
+								(e-dispatch-call (method "plus") (constraint-fn-var 240)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "outer"))))

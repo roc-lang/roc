@@ -174,7 +174,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 		(p-assign (ident "checks"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 340)
+				(e-call (constraint-fn-var 345)
 					(e-lookup-local
 						(p-assign (ident "same")))
 					(e-tag (name "Yes")
@@ -183,7 +183,7 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 					(e-tag (name "Yes")
 						(args
 							(e-num (value "1")))))
-				(e-call (constraint-fn-var 363)
+				(e-call (constraint-fn-var 368)
 					(e-lookup-local
 						(p-assign (ident "is_nope")))
 					(e-tag (name "Yes")
@@ -202,11 +202,11 @@ checks = (same(Yes(1), Yes(1)), is_nope(Yes(2)), value == None)
 	(defs
 		(patt (type "[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]"))
 		(patt (type "[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]"))
-		(patt (type "[Some(Str)]"))
+		(patt (type "[None, Some(Str)]"))
 		(patt (type "(Bool, Bool, Bool)")))
 	(expressions
 		(expr (type "[Nope, ..c], [Nope, ..c] -> Bool where [c.is_eq : c, c -> Bool]"))
 		(expr (type "[Nope, ..a] -> Bool where [a.is_eq : a, a -> Bool]"))
-		(expr (type "[Some(Str)]"))
+		(expr (type "[None, Some(Str)]"))
 		(expr (type "(Bool, Bool, Bool)"))))
 ~~~

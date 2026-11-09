@@ -1,13 +1,11 @@
 //! Statement-LIR to LLVM code generator.
 //!
-//! This backend intentionally uses a small internal ABI:
-//!
-//!     void roc_proc_N(ret_ptr, args_ptr)
-//!
-//! Direct Roc calls pack argument bytes into `args_ptr` using Roc's canonical
-//! alignment order, and callees write results into caller-owned storage. This
-//! avoids target-specific aggregate return and argument rules while still
-//! letting LLVM optimize ordinary local stack traffic.
+//! Every procedure has a packed function, `void roc_proc_N(ret_ptr,
+//! args_ptr)`, for callers that do not know its signature, and direct Roc
+//! calls target a register-passing `fastcc` function built from one signature
+//! per procedure (design.md, "Internal Calling Convention"). Within a body,
+//! `ValuePlan` decides which locals are SSA values and which keep stack slots
+//! (design.md, "LLVM Value Representation").
 //!
 //! Generated code reaches its host only through the fixed runtime symbols
 //! (`roc_alloc`, `roc_crashed`, ...) and hosted-function symbols, which
@@ -19,6 +17,7 @@ const std = @import("std");
 const invariant = @import("base").invariant;
 
 const Base = @import("base");
+const collections = @import("collections");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const SourceLoc = lir.SourceLoc;
@@ -34,6 +33,9 @@ const roc_target = @import("roc_target");
 
 const CoreCtx = @import("ctx").CoreCtx;
 const LlvmBuilder = @import("vendor_llvm_ir").Builder;
+const SlotLifetimes = @import("SlotLifetimes.zig");
+const ValuePlan = @import("ValuePlan.zig");
+const boxy_runtime = @import("boxy_runtime");
 
 const Allocator = std.mem.Allocator;
 const CFStmtId = lir.CFStmtId;
@@ -43,8 +45,21 @@ const LirProcSpec = lir.LirProcSpec;
 const LirProcSpecId = lir.LirProcSpecId;
 const RcAtomicity = lir.LIR.RcAtomicity;
 const StrLiteral = lir.LIR.StrLiteral;
+const RocStr = builtins.str.RocStr;
+const RocList = builtins.list.RocList;
+const SEAMLESS_SLICE_TAG = builtins.list.SEAMLESS_SLICE_TAG;
+
+comptime {
+    // `loadPointer`/`storePointer` on a RocStr's or RocList's own address
+    // access its `bytes` field.
+    std.debug.assert(@offsetOf(RocStr, "bytes") == 0);
+    std.debug.assert(@offsetOf(RocList, "bytes") == 0);
+    // `emitRocStrLenIsSmall` tests the flag as the sign bit of `length`.
+    std.debug.assert(@as(i8, @bitCast(RocStr.small_str_flag)) == std.math.minInt(i8));
+}
 
 const BuiltinSymbol = builtins.builtin_registry.BuiltinFn;
+const builtin_symbol_count = @typeInfo(BuiltinSymbol).@"enum".field_names.len;
 
 const SimdLowLevel = enum(u16) {
     simd_splat = @backingInt(lir.LowLevel.simd_splat),
@@ -100,12 +115,6 @@ const SimdLowLevel = enum(u16) {
     simd_clmul_lo = @backingInt(lir.LowLevel.simd_clmul_lo),
     simd_clmul_hi = @backingInt(lir.LowLevel.simd_clmul_hi),
 };
-
-/// Linker name of a registered builtin; the registry is the only place
-/// builtin symbol names are spelled.
-fn builtinSymbol(comptime f: BuiltinSymbol) [:0]const u8 {
-    return f.symbolName();
-}
 
 /// Bridges the LIR refcount atomicity to the shared table's atomicity so that
 /// refcount-helper symbols are selected through `LowLevelBuiltins.rcHelper`.
@@ -221,13 +230,10 @@ fn getLlvmDataLayout(target: std.Target) []const u8 {
 }
 
 fn unsupportedLlvmDataLayout(target: std.Target) noreturn {
-    if (builtin.mode == .debug) {
-        invariant("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
-            @tagName(target.cpu.arch),
-            @tagName(target.os.tag),
-        });
-    }
-    unreachable;
+    invariant("LLVM codegen invariant violated: unsupported target for data layout: {s}-{s}", .{
+        @tagName(target.cpu.arch),
+        @tagName(target.os.tag),
+    });
 }
 
 fn llvmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
@@ -242,6 +248,27 @@ const max_wrapper_inline_stmts: usize = 32;
 /// loops exceeds the work it does.
 const max_leaf_inline_stmts: usize = 400;
 
+/// One crash block a function shares among the checked operations that fail
+/// with one message. A framed block reads each site's source frames from
+/// phis whose operands accumulate as sites branch to it.
+const SharedCrash = struct {
+    wip: *const LlvmBuilder.WipFunction,
+    msg: []const u8,
+    framed: bool,
+    block: LlvmBuilder.Function.Block.Index,
+    frames_ptr_phi: ?LlvmBuilder.WipFunction.WipPhi = null,
+    frames_len_phi: ?LlvmBuilder.WipFunction.WipPhi = null,
+    frames_ptrs: std.ArrayListUnmanaged(LlvmBuilder.Value) = .empty,
+    frames_lens: std.ArrayListUnmanaged(LlvmBuilder.Value) = .empty,
+    from_blocks: std.ArrayListUnmanaged(LlvmBuilder.Function.Block.Index) = .empty,
+
+    fn deinit(self: *SharedCrash, allocator: std.mem.Allocator) void {
+        self.frames_ptrs.deinit(allocator);
+        self.frames_lens.deinit(allocator);
+        self.from_blocks.deinit(allocator);
+    }
+};
+
 /// Lowers statement-only LIR procedures to LLVM bitcode.
 pub const MonoLlvmCodeGen = struct {
     pub const Entrypoint = struct {
@@ -255,6 +282,15 @@ pub const MonoLlvmCodeGen = struct {
     /// Per proc, whether it is marked always-inline; see
     /// `computeInlineEverywhere`.
     inline_everywhere: std.ArrayList(bool) = .empty,
+    /// Set when compiling for a wasm platform that reserves low memory, whose
+    /// stack sits above static data where nothing traps an overflow, so
+    /// generated code checks the stack bounds; see `emitStackCheck`.
+    stack_checks: bool = false,
+    /// Per proc, whether its body checks the stack bounds; see
+    /// `computeStackCheckProcs`.
+    stack_check_procs: std.ArrayList(bool) = .empty,
+    /// The declarations a stack-bound check names in the current module.
+    stack_check_decls: ?StackCheckDecls = null,
     target: std.Target,
     triple: []const u8,
     data_layout: []const u8,
@@ -264,10 +300,6 @@ pub const MonoLlvmCodeGen = struct {
     /// linker, or the compiler itself after loading the object in-process.
     program_kind: ProgramKind = .in_process,
     store: *const lir.LirStore,
-    erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-    erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-    /// Exact dense LIR proc ids reachable through Boxy method slots.
-    boxy_worker_procs: []const LirProcSpecId,
 
     /// Layout store for resolving composite type layouts (records, tuples).
     /// Set by the evaluator before calling generateCode.
@@ -282,19 +314,17 @@ pub const MonoLlvmCodeGen = struct {
     args_ptr_arg: ?LlvmBuilder.Value = null,
     capture_ptr_arg: ?LlvmBuilder.Value = null,
     reuse_ptr_arg: ?LlvmBuilder.Value = null,
-    ret_desc_ptr_arg: ?LlvmBuilder.Value = null,
-    current_runtime_ret_desc: ?LocalId = null,
     current_ret_layout: layout.Idx = .zst,
     /// Source statement whose machine instructions are currently being emitted.
     /// Default-platform crash lowering consumes its explicit inline-scope chain.
     current_source_stmt: ?CFStmtId = null,
 
-    proc_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    proc_registry: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     /// Per procedure, the function direct Roc calls target: parameters and
     /// small results classified into registers under `fastCallConv`. The packed
     /// `(ret_ptr, args_ptr)` function in `proc_registry` adapts to it for
     /// every caller that needs the uniform shape.
-    fast_registry: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
+    fast_registry: collections.DenseMap(u32, LlvmBuilder.Function.Index),
     /// Register placement of the current fast body's result, when it
     /// returns by value rather than through a result pointer.
     fast_ret_registers: ?layout.abi.RegisterPlacement = null,
@@ -304,12 +334,39 @@ pub const MonoLlvmCodeGen = struct {
     /// call supplies this storage and every member passes it along.
     /// Indexed by tail group.
     tail_scratch: std.ArrayList(TailScratch) = .empty,
+    /// Parameter types and arguments of the direct call being emitted by
+    /// `emitFastDirectCall` or `emitFrameReplacingCall`.
+    fast_call_param_types: std.ArrayList(LlvmBuilder.Type) = .empty,
+    fast_call_args: std.ArrayList(LlvmBuilder.Value) = .empty,
+    /// The image of one refcounted static byte backing while it is built.
+    refcounted_bytes_scratch: std.ArrayList(u8) = .empty,
+    /// Scratch for the C-ABI lowering of one hosted call, reset per call.
+    hosted_abi_arena: Base.SingleThreadArena,
     /// The current fast body's group storage parameter, if its group has any.
     current_tail_scratch: ?LlvmBuilder.Value = null,
     current_tail_group: ?lir.LIR.TailGroupId = null,
     /// Where the erased-callable procedure being compiled keeps whether the
     /// erased-call runtime invoked it, when its body reads that.
     caller_drives_flag: ?LlvmBuilder.Value = null,
+    /// The address of the pending cell of the procedure being compiled
+    /// (`LirProcSpec.uses_pending_cell`).
+    pending_cell: ?LlvmBuilder.Value = null,
+    /// The `result` dynamic local of the procedure being compiled, when its
+    /// result is dynamic (`LirProcSpec.dyn_result`).
+    current_dyn_result: ?LocalId = null,
+    /// The tail carry the procedure being compiled receives, when it takes
+    /// one (`procCarriesTailArgs`).
+    current_carry: ?LlvmBuilder.Value = null,
+    /// The frame locals of the procedure being compiled, whose `frame`
+    /// dynamic locals `frame_alloc` places.
+    current_frame_locals: LocalSpan = LocalSpan.empty(),
+    /// The runs of `frame` dynamic locals of the procedure being compiled
+    /// that share a descriptor, in the order `frame_slots` holds their
+    /// address slots (`allocFrameSlots`).
+    frame_runs: std.ArrayListUnmanaged(FrameRun) = .empty,
+    /// One address slot per `frame` dynamic local of the procedure being
+    /// compiled, in run order.
+    frame_slots: LlvmBuilder.Value = .none,
     /// Group storage this function allocated to enter other groups, and the
     /// function those slots belong to.
     tail_scratch_slots: std.ArrayList(?LlvmBuilder.Value) = .empty,
@@ -322,19 +379,22 @@ pub const MonoLlvmCodeGen = struct {
     tail_drivers: std.ArrayList(TailDriver) = .empty,
     tail_pending_ptr: ?LlvmBuilder.Value = null,
     tail_args_ptr: ?LlvmBuilder.Value = null,
-    builtin_functions: std.StringHashMap(LlvmBuilder.Function.Index),
+    /// Declared builtins, indexed by `BuiltinSymbol`.
+    builtin_functions: [builtin_symbol_count]?LlvmBuilder.Function.Index = @splat(null),
+    /// Declared host, extern, and intrinsic functions, keyed by symbol name.
+    symbol_functions: std.StringHashMap(LlvmBuilder.Function.Index),
     /// Per-function scratch slot RC-helper calls copy their argument into,
     /// so the argument local's own slot address never escapes into the call.
     /// Follows `wip`: saved and restored wherever the active function swaps.
     rc_arg_scratch: ?LlvmBuilder.Value = null,
     /// Shims that give cold-path builtin calls the preserve_most convention,
-    /// keyed by builtin symbol name. See `callBuiltin`.
-    cold_shims: std.StringHashMap(ColdShim),
+    /// indexed by `BuiltinSymbol`. See `emitBuiltinCall`.
+    cold_shims: [builtin_symbol_count]?ColdShim = @splat(null),
     /// How many enclosing cold switch arms the statement being emitted sits
     /// under. Non-zero routes builtin calls through preserve_most shims.
     cold_depth: u32 = 0,
     static_bytes: std.StringHashMap(LlvmBuilder.Value),
-    static_refcounted_backings: std.AutoHashMap(u32, LlvmBuilder.Value),
+    static_refcounted_backings: collections.DenseMap(u32, LlvmBuilder.Value),
     static_data_globals: std.AutoHashMap(u32, LlvmBuilder.Value),
     /// In-process consumers supply a relocated image that outlives execution.
     /// Object emission leaves this null and uses linker-visible data symbols.
@@ -362,46 +422,72 @@ pub const MonoLlvmCodeGen = struct {
     /// external linkage under the symbol ABI; the rest stay internal so the
     /// LLVM pipeline can see every call site and specialize across them.
     static_data_procs: []const LirProcSpecId = &.{},
-    boxy_capture_drop_helpers: std.AutoHashMap(u64, BoxyCaptureDropHelper),
-    boxy_dict_thunks: std.AutoHashMap(u32, LlvmBuilder.Function.Index),
-    join_points: std.AutoHashMap(u32, JoinInfo),
-    compiled_joins: std.AutoHashMap(u32, void),
-    stmt_incoming_counts: std.AutoHashMap(u32, u32),
-    stmt_entry_blocks: std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index),
-    loop_continue_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
-    loop_break_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index),
+    join_points: collections.DenseMap(u32, JoinInfo),
+    compiled_joins: collections.DenseMap(u32, void),
+    stmt_incoming_counts: collections.DenseMap(u32, u32),
+    /// The current procedure's slot lifetime markers.
+    slot_lifetimes: SlotLifetimes,
+    stmt_entry_blocks: collections.DenseMap(u32, LlvmBuilder.Function.Block.Index),
+    /// The join body being entered in its own block, which is also the entry
+    /// block of that statement when other paths arrive at it.
+    entering_join_body: ?CFStmtId = null,
+    /// Store-indexed statement marks for one statement-graph walk at a time:
+    /// a statement is visited when its mark equals `stmt_visit_epoch`.
+    stmt_visit_marks: std.ArrayList(u32) = .empty,
+    stmt_visit_epoch: u32 = 0,
+    /// Case blocks of the switches being emitted, one run per switch (see
+    /// `StmtWork`).
+    switch_case_blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .empty,
+    /// Captures of the string-match bodies queued for emission, one run per
+    /// body (see `StmtWork`).
+    str_match_captures: std.ArrayList(DeferredStrCaptureBinding) = .empty,
     /// Reusable store-indexed columns. Only a procedure's explicit inventory
     /// is invalidated at its end; growing the store initializes only new rows.
     local_slot_storage: std.ArrayList(LocalSlot) = .empty,
-    deferred_str_capture_storage: std.ArrayList(?DeferredStrCapture) = .empty,
     /// Deterministic regression metric for initialization/invalidation work.
     /// Allocation accounting alone cannot detect repeated whole-table clearing.
     local_scratch_rows_visited: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
     /// Active function's view. Synthetic helpers temporarily install no locals.
     local_slots: []LocalSlot = &.{},
-    deferred_str_captures: []?DeferredStrCapture = &.{},
-    /// Number of non-null entries in `deferred_str_captures`. Deferred
-    /// captures are rare, and several hooks run once per local write or once
-    /// per join; the count lets those hooks skip their whole-table scans in
-    /// the overwhelmingly common all-empty state, which otherwise turn
-    /// quadratic in a proc's local count.
-    deferred_str_capture_count: usize = 0,
-    /// Indices of `deferred_str_captures` slots that may be non-null. The
-    /// slot array spans every LIR local, so the clear-all and scan-all
-    /// operations that run per jump and per call must touch only the handful
-    /// of live captures rather than the whole program's local space. Entries
-    /// go stale when a single capture is cleared; readers skip null slots.
-    deferred_str_capture_actives: std.ArrayList(u32) = .empty,
+    /// The current procedure's local representations (see `ValuePlan`).
+    value_plan: ValuePlan,
+    /// By local id, the current definition of each SSA local. Rows are set
+    /// from the procedure's own plan and cleared from its SSA inventory.
+    local_value_storage: std.ArrayList(LocalValue) = .empty,
+    /// Active function's view of `local_value_storage`.
+    local_values: []LocalValue = &.{},
+    /// Undo entries for writes of merged SSA locals since the procedure's
+    /// prologue. A branch arm rolls back to the length it recorded at its
+    /// branch point, so it starts from the definitions that reach it.
+    value_journal: std.ArrayList(JournalEntry) = .empty,
+    /// The current procedure's merge points that have merged locals, by
+    /// statement: their phis and their incoming edges.
+    merge_states: std.AutoHashMapUnmanaged(u32, MergeState) = .empty,
+    /// Owns the current procedure's merge-point storage.
+    merge_arena: Base.SingleThreadArena,
+    /// Each procedure's register-passing signature by procedure id, built once
+    /// when the procedure is declared. Declarations, bodies, direct and
+    /// frame-replacing calls, packed adapters, tail drivers, and value planning
+    /// all read this one signature. A signature depends on its tail group's
+    /// storage, so the table is cleared whenever `tail_scratch` is recomputed.
+    fast_signatures: std.ArrayList(?FastSignature) = .empty,
+    /// Owns `fast_signatures` for the module being built.
+    abi_arena: Base.SingleThreadArena,
+    /// The active procedure's deferred string captures by local. They are
+    /// rare, so the map holds only live captures rather than a row for every
+    /// LIR local, and clearing or scanning them touches only those.
+    deferred_str_captures: collections.DenseMap(LocalId, DeferredStrCapture),
+    /// Reusable list of the captured locals a scan materializes, since
+    /// materializing one changes the map.
+    deferred_str_capture_scratch: std.ArrayList(LocalId) = .empty,
     string_counter: u32 = 0,
+    /// The crash block each function under construction shares among its
+    /// checked operations that fail with one message (`emitCrashIf`).
+    shared_crashes: std.ArrayListUnmanaged(SharedCrash) = .empty,
     /// When true the module is built with DWARF debug info: a compile unit,
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
-    /// True when the module is compiled without LLVM optimization. LLVM 22's
-    /// x86 backend drops the stack-passed arguments of a `musttail` call at
-    /// that level, so frame-replacing calls are marked `tail` instead;
-    /// `tailcc` still guarantees they are tail calls.
-    unoptimized: bool = false,
     /// Emit local variable declarations for source-level debugger inspection.
     emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
@@ -413,6 +499,11 @@ pub const MonoLlvmCodeGen = struct {
     /// Synthetic default-platform apps preserve source proc names and local
     /// debug locations for crash and stack-overflow diagnostics.
     enable_default_platform_diagnostics: bool = false,
+    /// Every function this module defines is optimized for size rather than
+    /// speed (`--opt=size`): it carries LLVM's `optsize` and `minsize`, no
+    /// `inlinehint`, and no shape-based `alwaysinline`, so LLVM's size cost
+    /// model is the one measure of every inlining decision.
+    optimize_for_size: bool = false,
     /// Translates to DW_AT_producer for the compile unit (in DWARF). Users of
     /// this module for codegen should set the value (with the following format)
     /// so that it carries the compiler version:
@@ -427,6 +518,9 @@ pub const MonoLlvmCodeGen = struct {
     debug_globals_fwd_ref: LlvmBuilder.Metadata.Optional = .none,
     current_subprogram: LlvmBuilder.Metadata.Optional = .none,
     current_debug_file: u32 = SourceLoc.no_file,
+    /// The current procedure's source line, where SSA locals' debug values
+    /// are placed when their defining statement is in an inline scope.
+    current_proc_line: u32 = 0,
     /// Virtual source procedures and call-site chains for LIR inline scopes.
     /// These are cleared at each physical procedure because the outermost
     /// call-site scope is that procedure's concrete `DISubprogram`.
@@ -434,9 +528,6 @@ pub const MonoLlvmCodeGen = struct {
     debug_inline_callsites: std.AutoHashMap(u32, LlvmBuilder.Metadata),
     /// Debug type metadata per layout index, memoized per module build.
     debug_types: std.AutoHashMap(u32, LlvmBuilder.Metadata),
-    /// Set as soon as this module lowers a Boxy operation. Linked entrypoints
-    /// use it to initialize the sidecar runtime.
-    boxy_runtime_used: bool = false,
 
     /// Errors reported while building LLVM IR.
     pub const Error = error{
@@ -468,12 +559,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Who runs the module.
     pub const ProgramKind = enum {
-        /// A platform program: entrypoints follow the platform's C ABI and
-        /// the boxy runtime is installed from the embedded sidecar.
+        /// A platform program: entrypoints follow the platform's C ABI.
         platform,
         /// An object the compiler loads in-process: entrypoints take the
-        /// internal (ret_ptr, args_ptr) convention and the evaluator installs
-        /// the boxy runtime before calling in.
+        /// internal (ret_ptr, args_ptr) convention.
         in_process,
     };
 
@@ -491,6 +580,15 @@ pub const MonoLlvmCodeGen = struct {
         }
     };
 
+    /// A run of `frame` dynamic locals sharing one descriptor local, whose
+    /// address slots are `count` consecutive entries of `frame_slots` from
+    /// `start`.
+    const FrameRun = struct {
+        desc: LocalId,
+        start: u32,
+        count: u32,
+    };
+
     const LocalSlot = struct {
         ptr: LlvmBuilder.Value,
         layout_idx: layout.Idx,
@@ -499,9 +597,28 @@ pub const MonoLlvmCodeGen = struct {
         allocated: bool,
     };
 
-    const BoxyListElementDesc = struct {
-        elem_layout: layout.Idx,
-        desc: lir.LIR.BoxyDescRef,
+    /// An SSA local's type and current definition. `value` is `.none` until
+    /// a definition reaches the emitter's position.
+    const LocalValue = struct {
+        ty: LlvmBuilder.Type = .void,
+        value: LlvmBuilder.Value = .none,
+        debug_variable: LlvmBuilder.Metadata.Optional = .none,
+    };
+
+    const JournalEntry = struct {
+        local: LocalId,
+        old: LlvmBuilder.Value,
+    };
+
+    /// One merge point's phis and incoming edges. Each incoming edge records
+    /// its block and, for every merged local live at the merge point, the
+    /// definition that reaches the edge. Edges can be recorded before the
+    /// phis exist: a join's remainder jumps to it before its body is emitted.
+    const MergeState = struct {
+        locals: []const LocalId,
+        phis: []LlvmBuilder.WipFunction.WipPhi = &.{},
+        blocks: std.ArrayList(LlvmBuilder.Function.Block.Index) = .empty,
+        values: std.ArrayList(LlvmBuilder.Value) = .empty,
     };
 
     const JoinInfo = struct {
@@ -511,24 +628,13 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     const StrFromUtf8LayoutInfo = struct {
-        ok_tag: u32,
-        err_tag: u32,
-        outer_disc_offset: u32,
-        outer_disc_size: u32,
+        disc_offset: u32,
+        disc_size: u32,
         err_index_offset: u32,
         err_problem_offset: u32,
-        inner_disc_offset: u32,
-        inner_disc_size: u32,
-        inner_bad_utf8_tag: u32,
     };
 
-    const StrSplitFirstLayoutInfo = struct {
-        after_offset: u32,
-        before_offset: u32,
-        found_offset: u32,
-    };
-
-    const StrSplitLastLayoutInfo = struct {
+    const StrSplitLayoutInfo = struct {
         after_offset: u32,
         before_offset: u32,
         found_offset: u32,
@@ -552,13 +658,6 @@ pub const MonoLlvmCodeGen = struct {
         compiled: bool = false,
     };
 
-    const BoxyCaptureDropHelper = struct {
-        capture_layout: layout.Idx,
-        desc_field_offset: u32,
-        function: LlvmBuilder.Function.Index,
-        compiled: bool = false,
-    };
-
     const ArgOrder = struct {
         index: usize,
         alignment: u32,
@@ -574,9 +673,6 @@ pub const MonoLlvmCodeGen = struct {
     pub fn init(
         allocator: Allocator,
         store: *const lir.LirStore,
-        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-        boxy_worker_procs: []const LirProcSpecId,
     ) MonoLlvmCodeGen {
         return .{
             .allocator = allocator,
@@ -584,27 +680,25 @@ pub const MonoLlvmCodeGen = struct {
             .triple = getLlvmTriple(builtin.target),
             .data_layout = getLlvmDataLayout(builtin.target),
             .store = store,
-            .erased_arg_desc_offsets = erased_arg_desc_offsets,
-            .erased_arg_desc_params = erased_arg_desc_params,
-            .boxy_worker_procs = boxy_worker_procs,
-            .proc_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .fast_registry = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .builtin_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
-            .cold_shims = std.StringHashMap(ColdShim).init(allocator),
+            .proc_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .fast_registry = collections.DenseMap(u32, LlvmBuilder.Function.Index).init(allocator),
+            .hosted_abi_arena = Base.SingleThreadArena.init(allocator),
+            .symbol_functions = std.StringHashMap(LlvmBuilder.Function.Index).init(allocator),
             .static_bytes = std.StringHashMap(LlvmBuilder.Value).init(allocator),
-            .static_refcounted_backings = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
+            .static_refcounted_backings = collections.DenseMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_globals = std.AutoHashMap(u32, LlvmBuilder.Value).init(allocator),
             .static_data_export_rows = std.AutoHashMap(u32, u32).init(allocator),
             .static_data_symbols = std.StringHashMap(LlvmBuilder.Constant).init(allocator),
             .rc_helpers = std.AutoHashMap(u64, RcHelperEntry).init(allocator),
-            .boxy_capture_drop_helpers = std.AutoHashMap(u64, BoxyCaptureDropHelper).init(allocator),
-            .boxy_dict_thunks = std.AutoHashMap(u32, LlvmBuilder.Function.Index).init(allocator),
-            .join_points = std.AutoHashMap(u32, JoinInfo).init(allocator),
-            .compiled_joins = std.AutoHashMap(u32, void).init(allocator),
-            .stmt_incoming_counts = std.AutoHashMap(u32, u32).init(allocator),
-            .stmt_entry_blocks = std.AutoHashMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
-            .loop_continue_blocks = .empty,
-            .loop_break_blocks = .empty,
+            .join_points = collections.DenseMap(u32, JoinInfo).init(allocator),
+            .compiled_joins = collections.DenseMap(u32, void).init(allocator),
+            .deferred_str_captures = collections.DenseMap(LocalId, DeferredStrCapture).init(allocator),
+            .stmt_incoming_counts = collections.DenseMap(u32, u32).init(allocator),
+            .slot_lifetimes = SlotLifetimes.init(allocator),
+            .value_plan = ValuePlan.init(allocator),
+            .merge_arena = Base.SingleThreadArena.init(allocator),
+            .abi_arena = Base.SingleThreadArena.init(allocator),
+            .stmt_entry_blocks = collections.DenseMap(u32, LlvmBuilder.Function.Block.Index).init(allocator),
             .debug_inline_subprograms = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_inline_callsites = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
             .debug_types = std.AutoHashMap(u32, LlvmBuilder.Metadata).init(allocator),
@@ -615,12 +709,9 @@ pub const MonoLlvmCodeGen = struct {
     pub fn initWithTarget(
         allocator: Allocator,
         store: *const lir.LirStore,
-        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-        boxy_worker_procs: []const LirProcSpecId,
         target: std.Target,
     ) MonoLlvmCodeGen {
-        var self = init(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs);
+        var self = init(allocator, store);
         self.target = target;
         self.triple = getLlvmTriple(target);
         self.data_layout = getLlvmDataLayout(target);
@@ -631,14 +722,11 @@ pub const MonoLlvmCodeGen = struct {
     pub fn initForLinkedObject(
         allocator: Allocator,
         store: *const lir.LirStore,
-        erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
-        erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
-        boxy_worker_procs: []const LirProcSpecId,
         target: std.Target,
     ) MonoLlvmCodeGen {
         // Linked objects import the runtime and hosted symbols the platform
         // host defines.
-        var self = initWithTarget(allocator, store, erased_arg_desc_offsets, erased_arg_desc_params, boxy_worker_procs, target);
+        var self = initWithTarget(allocator, store, target);
         self.builtin_symbol_mode = .native_object;
         self.proc_symbol_mode = .lir_symbol;
         self.program_kind = .platform;
@@ -647,21 +735,35 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Releases backend-owned scratch maps.
     pub fn deinit(self: *MonoLlvmCodeGen) void {
+        for (self.shared_crashes.items) |*shared| shared.deinit(self.allocator);
+        self.shared_crashes.deinit(self.allocator);
+        self.frame_runs.deinit(self.allocator);
         self.inline_everywhere.deinit(self.allocator);
+        self.stack_check_procs.deinit(self.allocator);
         self.local_slot_storage.deinit(self.allocator);
-        self.deferred_str_capture_storage.deinit(self.allocator);
-        self.deferred_str_capture_actives.deinit(self.allocator);
+        self.value_plan.deinit();
+        self.local_value_storage.deinit(self.allocator);
+        self.value_journal.deinit(self.allocator);
+        self.merge_states.deinit(self.allocator);
+        self.merge_arena.deinit();
+        self.fast_signatures.deinit(self.allocator);
+        self.abi_arena.deinit();
+        self.deferred_str_captures.deinit();
+        self.deferred_str_capture_scratch.deinit(self.allocator);
         self.debug_types.deinit();
         self.debug_inline_callsites.deinit();
         self.debug_inline_subprograms.deinit();
         self.proc_registry.deinit();
         self.fast_registry.deinit();
         self.tail_scratch.deinit(self.allocator);
+        self.fast_call_param_types.deinit(self.allocator);
+        self.fast_call_args.deinit(self.allocator);
+        self.refcounted_bytes_scratch.deinit(self.allocator);
+        self.hosted_abi_arena.deinit();
         self.tail_scratch_slots.deinit(self.allocator);
         self.clearTailDrivers();
         self.tail_drivers.deinit(self.allocator);
-        self.builtin_functions.deinit();
-        self.cold_shims.deinit();
+        self.symbol_functions.deinit();
         self.clearStaticBytes();
         self.static_bytes.deinit();
         self.static_refcounted_backings.deinit();
@@ -670,14 +772,14 @@ pub const MonoLlvmCodeGen = struct {
         self.clearStaticDataSymbols();
         self.static_data_symbols.deinit();
         self.rc_helpers.deinit();
-        self.boxy_capture_drop_helpers.deinit();
-        self.boxy_dict_thunks.deinit();
         self.join_points.deinit();
         self.compiled_joins.deinit();
         self.stmt_incoming_counts.deinit();
+        self.slot_lifetimes.deinit();
         self.stmt_entry_blocks.deinit();
-        self.loop_continue_blocks.deinit(self.allocator);
-        self.loop_break_blocks.deinit(self.allocator);
+        self.stmt_visit_marks.deinit(self.allocator);
+        self.switch_case_blocks.deinit(self.allocator);
+        self.str_match_captures.deinit(self.allocator);
     }
 
     /// Clears per-module caches while retaining allocated capacity.
@@ -685,25 +787,23 @@ pub const MonoLlvmCodeGen = struct {
         self.proc_registry.clearRetainingCapacity();
         self.fast_registry.clearRetainingCapacity();
         self.tail_scratch.clearRetainingCapacity();
+        self.clearFastSignatures();
         self.tail_scratch_slots.clearRetainingCapacity();
         self.tail_scratch_slots_owner = null;
         self.clearTailDrivers();
-        self.builtin_functions.clearRetainingCapacity();
-        self.cold_shims.clearRetainingCapacity();
+        self.builtin_functions = @splat(null);
+        self.symbol_functions.clearRetainingCapacity();
+        self.cold_shims = @splat(null);
         self.cold_depth = 0;
         self.clearStaticBytes();
         self.static_refcounted_backings.clearRetainingCapacity();
         self.static_data_globals.clearRetainingCapacity();
         self.clearStaticDataSymbols();
         self.rc_helpers.clearRetainingCapacity();
-        self.boxy_capture_drop_helpers.clearRetainingCapacity();
-        self.boxy_dict_thunks.clearRetainingCapacity();
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
         self.stmt_incoming_counts.clearRetainingCapacity();
         self.stmt_entry_blocks.clearRetainingCapacity();
-        self.loop_continue_blocks.clearRetainingCapacity();
-        self.loop_break_blocks.clearRetainingCapacity();
         self.string_counter = 0;
         self.runtime_error_func = null;
         self.debug_compile_unit = .none;
@@ -715,7 +815,7 @@ pub const MonoLlvmCodeGen = struct {
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
         self.debug_types.clearRetainingCapacity();
-        self.boxy_runtime_used = false;
+        self.stack_check_decls = null;
     }
 
     fn clearStaticDataSymbols(self: *MonoLlvmCodeGen) void {
@@ -781,6 +881,7 @@ pub const MonoLlvmCodeGen = struct {
         module_name: []const u8,
         entrypoints: []const ShimEntrypoint,
         hosted_symbols: []const []const u8,
+        package_symbols: []const []const u8,
         image: ?[]const u8,
         default_run_start: bool,
     ) Error!GenerateResult {
@@ -814,7 +915,7 @@ pub const MonoLlvmCodeGen = struct {
             }
             const fn_name = builder.strtabString(symbol) catch return error.OutOfMemory;
             const func = builder.addFunction(dummy_fn_ty, fn_name, .default) catch return error.OutOfMemory;
-            func.setLinkage(.extern_weak, &builder);
+            func.setLinkage(self.hostReferenceLinkage(), &builder);
             try fn_consts.append(self.allocator, func.toConst(&builder));
             // The shim reads each name as a NUL-terminated string.
             const symbol_z = self.allocator.dupeSentinel(u8, symbol, 0) catch return error.OutOfMemory;
@@ -844,9 +945,38 @@ pub const MonoLlvmCodeGen = struct {
         count_var.setMutability(.constant, &builder);
         count_var.setInitializer(builder.intConst(usize_ty, hosted_symbols.len) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
 
+        // The C-ABI entries of the object-cache objects linked beside this
+        // module, with their names, so the machine-code shim can resolve an
+        // image's call to one by name.
+        var package_fn_consts = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer package_fn_consts.deinit(self.allocator);
+        var package_name_consts = std.ArrayList(LlvmBuilder.Constant).empty;
+        defer package_name_consts.deinit(self.allocator);
+        for (package_symbols) |symbol| {
+            const func = builder.addFunction(dummy_fn_ty, builder.strtabString(symbol) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+            try package_fn_consts.append(self.allocator, func.toConst(&builder));
+            const symbol_z = self.allocator.dupeSentinel(u8, symbol, 0) catch return error.OutOfMemory;
+            defer self.allocator.free(symbol_z);
+            try package_name_consts.append(self.allocator, (try self.staticBytes(symbol_z[0 .. symbol_z.len + 1])).toConst().?);
+        }
+        if (package_symbols.len == 0) {
+            try package_fn_consts.append(self.allocator, builder.nullConst(ptr_ty) catch return error.OutOfMemory);
+            try package_name_consts.append(self.allocator, builder.nullConst(ptr_ty) catch return error.OutOfMemory);
+        }
+        const package_table_ty = builder.arrayType(@max(package_symbols.len, 1), ptr_ty) catch return error.OutOfMemory;
+        const package_fns_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_fns) catch return error.OutOfMemory, package_table_ty, .default) catch return error.OutOfMemory;
+        package_fns_var.setMutability(.constant, &builder);
+        package_fns_var.setInitializer(builder.arrayConst(package_table_ty, package_fn_consts.items) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+        const package_names_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_names) catch return error.OutOfMemory, package_table_ty, .default) catch return error.OutOfMemory;
+        package_names_var.setMutability(.constant, &builder);
+        package_names_var.setInitializer(builder.arrayConst(package_table_ty, package_name_consts.items) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+        const package_count_var = builder.addVariable(builder.strtabString(shim_symbols.roc_shim_package_count) catch return error.OutOfMemory, usize_ty, .default) catch return error.OutOfMemory;
+        package_count_var.setMutability(.constant, &builder);
+        package_count_var.setInitializer(builder.intConst(usize_ty, package_symbols.len) catch return error.OutOfMemory, &builder) catch return error.OutOfMemory;
+
         // Embedded LIR image bytes, when building a standalone interpreter binary.
         const image_ref: @FieldType(ShimTarget, "image") = if (image) |bytes| .{
-            .value = try self.staticBytes(bytes),
+            .value = try self.staticImageBytes(bytes),
             .len = bytes.len,
         } else null;
 
@@ -933,9 +1063,45 @@ pub const MonoLlvmCodeGen = struct {
         self.builder = &builder;
         defer self.builder = null;
 
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        return .{
+            .bitcode = try self.serializeBuilderToBitcode(&builder),
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Write the textual LLVM IR of the module `generateEntrypointModule`
+    /// serializes, for tests that inspect emitted code.
+    pub fn printEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+        writer: *std.Io.Writer,
+    ) Error!void {
+        self.reset();
+
+        var builder = try self.createBuilder(module_name);
+        defer builder.deinit();
+
+        self.builder = &builder;
+        defer self.builder = null;
+
+        try self.buildEntrypointModule(&builder, module_name, entrypoints);
+        builder.print(writer) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.WriteFailed => return error.CompilationFailed,
+        };
+    }
+
+    fn buildEntrypointModule(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        module_name: []const u8,
+        entrypoints: []const Entrypoint,
+    ) Error!void {
         if (!builder.strip) {
-            try self.setupDebugInfo(&builder, module_name);
-            if (self.target.ofmt == .elf) try self.embedGdbScript(&builder);
+            try self.setupDebugInfo(builder, module_name);
+            if (self.target.ofmt == .elf) try self.embedGdbScript(builder);
         }
 
         const procs = self.store.getProcSpecs();
@@ -944,7 +1110,6 @@ pub const MonoLlvmCodeGen = struct {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
         try self.compilePendingRcHelpers();
-        try self.compilePendingBoxyCaptureDropHelpers();
         try self.compilePendingColdShims();
 
         for (entrypoints) |entrypoint| {
@@ -967,11 +1132,6 @@ pub const MonoLlvmCodeGen = struct {
             builder.resolveDebugForwardReference(self.debug_enums_fwd_ref.unwrap().?, empty_tuple);
             builder.resolveDebugForwardReference(self.debug_globals_fwd_ref.unwrap().?, empty_tuple);
         }
-
-        return .{
-            .bitcode = try self.serializeBuilderToBitcode(&builder),
-            .allocator = self.allocator,
-        };
     }
 
     /// Creates the compile unit, registers it in `llvm.dbg.cu`, and sets the
@@ -1241,6 +1401,7 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!DebugTypeStep {
         const lay = self.layoutValue(frame.idx);
         switch (lay.tag) {
+            .dynamic => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
             .box, .ptr, .list => {
                 const elem = component orelse return .{ .component = lay.getIdx() };
                 return .{ .done = try self.buildDebugType(builder, frame.idx, elem) };
@@ -1285,7 +1446,7 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(frame.members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory };
             },
-            .scalar, .box_of_zst, .erased_box, .list_of_zst, .tag_union, .closure, .erased_callable, .zst => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
+            .scalar, .box_of_zst, .list_of_zst, .tag_union, .closure, .erased_callable, .zst, .hole => return .{ .done = try self.buildDebugType(builder, frame.idx, null) },
         }
     }
 
@@ -1297,52 +1458,36 @@ pub const MonoLlvmCodeGen = struct {
         ) catch return error.OutOfMemory;
     }
 
-    /// `Str` and `List` are both three words starting with a bytes pointer,
-    /// but the order of their remaining two fields differs.
+    /// The debug type of a `Str` or `List` (`Repr` is `RocStr` or `RocList`):
+    /// three words starting with a bytes pointer, with the remaining two in
+    /// `Repr`'s field order at its target-width offsets.
     fn debugSequenceType(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
+        comptime Repr: type,
         name: []const u8,
         elem_ptr_ty: LlvmBuilder.Metadata,
-        second_field: []const u8,
-        third_field: []const u8,
         size_bits: u64,
         align_bits: u64,
     ) Error!LlvmBuilder.Metadata {
         const usize_ty = try self.debugUsizeType(builder);
         const word_bits: u64 = self.target.ptrBitWidth();
-        const members = [_]LlvmBuilder.Metadata{
-            builder.debugMemberType(
-                builder.metadataString("bytes") catch return error.OutOfMemory,
+        const field_names = comptime std.meta.fieldNames(Repr);
+        var members: [field_names.len]LlvmBuilder.Metadata = undefined;
+        inline for (field_names, &members) |field_name, *member| {
+            const field = @field(std.meta.FieldEnum(Repr), field_name);
+            const offset_bits = @as(u64, Repr.targetFieldOffset(field, self.targetWordSize())) * 8;
+            member.* = builder.debugMemberType(
+                builder.metadataString(field_name) catch return error.OutOfMemory,
                 null,
                 self.debug_compile_unit.unwrap(),
                 0,
-                elem_ptr_ty,
+                if (field == .bytes) elem_ptr_ty else usize_ty,
                 word_bits,
                 word_bits,
-                0,
-            ) catch return error.OutOfMemory,
-            builder.debugMemberType(
-                builder.metadataString(second_field) catch return error.OutOfMemory,
-                null,
-                self.debug_compile_unit.unwrap(),
-                0,
-                usize_ty,
-                word_bits,
-                word_bits,
-                word_bits,
-            ) catch return error.OutOfMemory,
-            builder.debugMemberType(
-                builder.metadataString(third_field) catch return error.OutOfMemory,
-                null,
-                self.debug_compile_unit.unwrap(),
-                0,
-                usize_ty,
-                word_bits,
-                word_bits,
-                word_bits * 2,
-            ) catch return error.OutOfMemory,
-        };
+                offset_bits,
+            ) catch return error.OutOfMemory;
+        }
         return builder.debugStructType(
             builder.metadataString(name) catch return error.OutOfMemory,
             null,
@@ -1383,7 +1528,7 @@ pub const MonoLlvmCodeGen = struct {
                             word_bits,
                             0,
                         ) catch return error.OutOfMemory;
-                        return try self.debugSequenceType(builder, "Str", bytes_ptr, "capacity_or_alloc_ptr", "length", size_bits, align_bits);
+                        return try self.debugSequenceType(builder, RocStr, "Str", bytes_ptr, size_bits, align_bits);
                     },
                     .int => {
                         const precision = scalar.getInt();
@@ -1451,7 +1596,7 @@ pub const MonoLlvmCodeGen = struct {
                     ) catch return error.OutOfMemory,
                 }
             },
-            .box, .box_of_zst, .erased_box => {
+            .box, .box_of_zst => {
                 const elem_ty: ?LlvmBuilder.Metadata = if (lay.tag == .box) elem.? else null;
                 return builder.debugPointerType(
                     builder.metadataString("Box") catch return error.OutOfMemory,
@@ -1464,7 +1609,7 @@ pub const MonoLlvmCodeGen = struct {
                     0,
                 ) catch return error.OutOfMemory;
             },
-            .ptr => {
+            .ptr, .dynamic => {
                 const elem_ty = elem.?;
                 return builder.debugPointerType(
                     builder.metadataString("Ptr") catch return error.OutOfMemory,
@@ -1495,9 +1640,9 @@ pub const MonoLlvmCodeGen = struct {
                     word_bits,
                     0,
                 ) catch return error.OutOfMemory;
-                return try self.debugSequenceType(builder, "List", elem_ptr, "length", "capacity_or_alloc_ptr", size_bits, align_bits);
+                return try self.debugSequenceType(builder, RocList, "List", elem_ptr, size_bits, align_bits);
             },
-            .struct_ => unreachable,
+            .struct_ => unreachable, // stepDebugType builds struct debug types itself and never calls buildDebugType for one
             .tag_union => {
                 const data = self.layouts().getTagUnionData(lay.getTagUnion().idx);
                 var members: std.ArrayList(LlvmBuilder.Metadata) = .empty;
@@ -1529,12 +1674,13 @@ pub const MonoLlvmCodeGen = struct {
                     builder.metadataTuple(members.items) catch return error.OutOfMemory,
                 ) catch return error.OutOfMemory;
             },
-            .closure, .erased_callable, .zst => {
+            .closure, .erased_callable, .zst, .hole => {
                 const name = switch (lay.tag) {
                     .closure => "Closure",
                     .erased_callable => "ErasedCallable",
                     .zst => "Unit",
-                    .scalar, .box, .box_of_zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .ptr => unreachable,
+                    .hole => "hole",
+                    .scalar, .box, .box_of_zst, .list, .list_of_zst, .struct_, .tag_union, .ptr, .dynamic => unreachable, // the enclosing prong matched only closure, erased_callable, zst, and hole
                 };
                 return builder.debugStructType(
                     builder.metadataString(name) catch return error.OutOfMemory,
@@ -1570,14 +1716,19 @@ pub const MonoLlvmCodeGen = struct {
         for (0..frame_locals.len) |i| {
             const local_id = GuardedList.at(frame_locals, i);
             const name = self.store.localName(local_id) orelse continue;
-            const local_slot = self.local_slots[@backingInt(local_id)];
             const variable = builder.debugLocalVar(
                 builder.metadataString(name) catch return error.OutOfMemory,
                 file,
                 scope,
                 proc_line,
-                try self.debugTypeFor(builder, local_slot.layout_idx),
+                try self.debugTypeFor(builder, self.localLayout(local_id)),
             ) catch return error.OutOfMemory;
+            // An SSA local has no address: each definition reports its value.
+            if (self.isSsaLocal(local_id)) {
+                self.local_values[@backingInt(local_id)].debug_variable = variable.toOptional();
+                continue;
+            }
+            const local_slot = self.local_slots[@backingInt(local_id)];
             _ = wip.callIntrinsic(
                 .normal,
                 .none,
@@ -1597,125 +1748,34 @@ pub const MonoLlvmCodeGen = struct {
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
+        if (self.stack_checks) try self.computeStackCheckProcs(procs);
         try self.computeTailScratch(procs);
-        for (procs, 0..) |proc, i| {
+        const order = try self.procEmitOrder(procs);
+        defer self.allocator.free(order);
+        for (order) |i| {
+            const proc = procs[i];
             if (proc.is_static_initializer) continue;
-            try self.declareProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
+            try self.declareProcSpec(@fromBackingInt(i), proc);
         }
-        if (self.usesTailDrivers()) try self.emitTailDrivers(procs);
+        if (self.usesTailDrivers()) try self.emitTailDrivers(procs, order);
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
-        // A Boxy runtime entry body registers every worker's dispatch thunk,
-        // so the thunks exist before any body is compiled.
-        try self.generateBoxyDictProcThunks();
-        for (procs, 0..) |proc, i| {
+        for (order) |i| {
+            const proc = procs[i];
             if (proc.is_static_initializer) continue;
-            try self.compileProcBody(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
+            try self.compileProcBody(@fromBackingInt(i), proc);
         }
     }
 
-    fn generateBoxyDictProcThunks(self: *MonoLlvmCodeGen) Error!void {
-        for (self.boxy_worker_procs) |proc_id| {
-            const proc = self.store.getProcSpec(proc_id);
-            if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
-                llvmInvariantFmt("boxy worker proc {d} had a non-worker procedure shape", .{@backingInt(proc_id)});
-            }
-            try self.generateBoxyDictProcThunk(proc_id, proc);
-        }
-    }
-
-    fn generateBoxyDictProcThunk(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
-        const name = builder.strtabStringFmt("roc_boxy_dict_thunk_{d}", .{@backingInt(proc_id)}) catch return error.OutOfMemory;
-        const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
-        var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
-        defer attrs.deinit(builder);
-        try self.addGeneratedFunctionStackProbeAttrs(&attrs);
-        func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
-        try self.boxy_dict_thunks.put(@backingInt(proc_id), func);
-
-        const outer_wip = self.wip;
-        const outer_ret = self.ret_ptr_arg;
-        const outer_args = self.args_ptr_arg;
-        const outer_capture = self.capture_ptr_arg;
-        const outer_ret_desc_ptr = self.ret_desc_ptr_arg;
-        const outer_runtime_ret_desc = self.current_runtime_ret_desc;
-        const outer_ret_layout = self.current_ret_layout;
-        const outer_slots = self.local_slots;
-        defer {
-            self.wip = outer_wip;
-            self.ret_ptr_arg = outer_ret;
-            self.args_ptr_arg = outer_args;
-            self.capture_ptr_arg = outer_capture;
-            self.ret_desc_ptr_arg = outer_ret_desc_ptr;
-            self.current_runtime_ret_desc = outer_runtime_ret_desc;
-            self.current_ret_layout = outer_ret_layout;
-            self.local_slots = outer_slots;
-        }
-
-        var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = true }) catch return error.OutOfMemory;
-        defer wip.deinit();
-        self.wip = &wip;
-        self.ret_ptr_arg = wip.arg(1);
-        self.args_ptr_arg = wip.arg(0);
-        self.capture_ptr_arg = null;
-        self.ret_desc_ptr_arg = null;
-        self.current_runtime_ret_desc = null;
-        self.current_ret_layout = proc.ret_layout;
-        self.local_slots = &.{};
-
-        const entry = wip.block(0, "entry") catch return error.OutOfMemory;
-        wip.cursor = .{ .block = entry };
-        const params = self.store.getLocalSpan(proc.args);
-        const arg_layouts = try self.procArgLayouts(proc, .all);
-        defer self.allocator.free(arg_layouts);
-        const offsets = try self.computeArgOffsets(arg_layouts, true);
-        defer self.allocator.free(offsets);
-        const args_buf = try self.allocArgBuffer(arg_layouts, true);
-        const raw_args = wip.arg(0);
-        for (0..params.len) |i| {
-            const size = self.layoutDataSize(arg_layouts[i]);
-            if (size == 0) continue;
-            const source_ptr = try self.loadPointer(try self.offsetPtr(raw_args, @intCast(i * self.targetWordSize())));
-            try self.copyBytes(try self.offsetPtr(args_buf, offsets[i]), source_ptr, size, self.alignmentForLayout(arg_layouts[i]));
-        }
-
-        const proc_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        const runtime_out_desc = if (proc.runtime_ret_desc != null)
-            try self.boxyOutDescPtr("dict_thunk_runtime_desc")
-        else
-            null;
-        try self.callProcFunctionIndex(proc_fn, proc, wip.arg(1), args_buf, runtime_out_desc, false);
-
-        const return_desc = if (runtime_out_desc) |runtime_desc_ptr|
-            try self.loadPointer(runtime_desc_ptr)
-        else if (proc.ret_desc) |desc|
-            switch (desc) {
-                .static => try self.resolveBoxyDesc(desc),
-                .local => |local| blk: {
-                    var param_index: ?usize = null;
-                    for (0..params.len) |i| {
-                        if (GuardedList.at(params, i) == local) {
-                            param_index = i;
-                            break;
-                        }
-                    }
-                    if (param_index) |index| {
-                        const source_ptr = try self.loadPointer(try self.offsetPtr(raw_args, @intCast(index * self.targetWordSize())));
-                        break :blk try self.loadPointer(source_ptr);
-                    }
-                    return error.CompilationFailed;
-                },
-                .runtime, .dict_method_arg, .dict_method_hidden => return error.CompilationFailed,
-            }
-        else
-            try self.boxyNullPtr();
-        try self.storePointer(wip.arg(2), return_desc);
-        _ = wip.retVoid() catch return error.OutOfMemory;
-        try self.finishCurrentWipFunction();
+    /// The order procedures are declared and compiled in, which orders the
+    /// module's functions and numbers its helpers: the store's, or, for an
+    /// object-cache pack, identity order, since the program lowering a
+    /// pack's code numbers its procedures however its parallel lowering ran,
+    /// and the pack must be the same object every time.
+    fn procEmitOrder(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error![]u32 {
+        const order = self.allocator.alloc(u32, procs.len) catch return error.OutOfMemory;
+        for (order, 0..) |*index, i| index.* = @intCast(i);
+        return order;
     }
 
     fn declareRuntimeErrorHelper(self: *MonoLlvmCodeGen) Error!void {
@@ -1748,8 +1808,6 @@ pub const MonoLlvmCodeGen = struct {
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
         const outer_reuse = self.reuse_ptr_arg;
-        const outer_ret_desc_ptr = self.ret_desc_ptr_arg;
-        const outer_runtime_ret_desc = self.current_runtime_ret_desc;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         defer {
@@ -1759,8 +1817,6 @@ pub const MonoLlvmCodeGen = struct {
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
             self.reuse_ptr_arg = outer_reuse;
-            self.ret_desc_ptr_arg = outer_ret_desc_ptr;
-            self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
         }
@@ -1773,8 +1829,6 @@ pub const MonoLlvmCodeGen = struct {
         self.args_ptr_arg = null;
         self.capture_ptr_arg = null;
         self.reuse_ptr_arg = null;
-        self.ret_desc_ptr_arg = null;
-        self.current_runtime_ret_desc = null;
         self.current_ret_layout = .zst;
         self.local_slots = &.{};
 
@@ -1787,55 +1841,52 @@ pub const MonoLlvmCodeGen = struct {
     fn declareProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        // An erased callable keeps the public erased ABI
+        // An erased callable, and a `.boxy` worker entered the same way
+        // (`erased_record`), keep the public erased ABI
         // (ops, ret, args, capture, reuse, out_desc), whose leading host
-        // pointer generated code never reads. Every other procedure takes
-        // (ret, args) plus a descriptor slot when it produces one.
-        const params: []const LlvmBuilder.Type = if (proc.abi == .erased_callable)
+        // pointer and trailing descriptor output generated code never reads.
+        // Every other procedure takes (ret, args).
+        const erased_abi = proc.abi != .roc;
+        const params: []const LlvmBuilder.Type = if (erased_abi)
             &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }
-        else if (proc.runtime_ret_desc != null)
-            &.{ ptr_ty, ptr_ty, ptr_ty }
         else
             &.{ ptr_ty, ptr_ty };
         const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
         const name = try self.procFunctionName(builder, proc_id, proc);
         const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        const externally_referenced = self.procNeedsExternalLinkage(proc_id);
+        // A procedure another object of the link defines is a declaration;
+        // one this object defines for other objects is a global definition.
+        const externally_referenced = self.procNeedsExternalLinkage(proc_id) or proc.linked or proc.exported;
         func.setLinkage(if (externally_referenced) .external else .internal, builder);
-        if (externally_referenced and self.target.os.tag == .windows) {
+        if (externally_referenced and !proc.linked and self.target.os.tag == .windows) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        if (self.enable_default_platform_diagnostics) {
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-        } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
-                try attrs_wip.addFnAttr(.alwaysinline, builder);
-            } else {
-                try attrs_wip.addFnAttr(.inlinehint, builder);
-            }
-        }
+        try self.addInliningAttrs(&attrs_wip, proc_id);
         // The erased ABI's unused host pointer and the argument pack are
         // distinct objects. The return slot can point into a reused allocation.
         // In the erased ABI, capture also
         // points inside the callable passed as reuse, so neither pointer may
         // promise noalias: capture reads must precede an explicit release or
         // overwrite through reuse, exactly as ordered in LIR.
-        const ret_param_index: usize = if (proc.abi == .erased_callable) 1 else 0;
+        const ret_param_index: usize = if (erased_abi) 1 else 0;
         for (0..params.len) |param_index| {
             if (param_index == ret_param_index) continue;
-            if (proc.abi == .erased_callable and
+            if (erased_abi and
                 (param_index == ret_param_index + 2 or param_index == ret_param_index + 3)) continue;
             try attrs_wip.addParamAttr(param_index, .@"noalias", builder);
         }
         // The argument pack is only ever copied out of, and its address never
         // outlives the call, so calls leave it unchanged and it can stay a
-        // caller-local object across them.
-        try attrs_wip.addParamAttr(ret_param_index + 1, .readonly, builder);
-        try attrs_wip.addParamAttr(ret_param_index + 1, .nocapture, builder);
+        // caller-local object across them. A `.boxy` worker's dynamic
+        // argument record is a parameter whose bytes the worker addresses
+        // in place.
+        if (proc.abi != .erased_record) {
+            try attrs_wip.addParamAttr(ret_param_index + 1, .readonly, builder);
+            try attrs_wip.addParamAttr(ret_param_index + 1, .nocapture, builder);
+        }
         if (self.enable_default_platform_runtime or self.enable_default_platform_diagnostics) {
             if (self.enable_default_platform_runtime) {
                 try attrs_wip.addFnAttr(.{ .string = .{
@@ -1859,12 +1910,33 @@ pub const MonoLlvmCodeGen = struct {
     /// function. Erased callables keep the public erased ABI, and hosted
     /// procedures have no body of their own.
     fn fastAbiEligible(proc: LirProcSpec) bool {
-        return proc.abi != .erased_callable and proc.hosted == null and proc.body != null;
+        return proc.abi == .roc and proc.hosted == null and (proc.body != null or proc.linked);
+    }
+
+    /// The result layout a register-passing function returns: none for a
+    /// procedure whose result is dynamic, which writes it to the storage
+    /// whose address its caller passes after the arguments.
+    fn fastRetLayout(proc: LirProcSpec) layout.Idx {
+        return if (proc.dyn_result != null) .zst else proc.ret_layout;
+    }
+
+    /// Whether `proc` takes a tail carry: a hidden parameter after its
+    /// arguments holding the storage a frame-replacing call moved its dynamic
+    /// arguments into, because their bytes lived in the frame it replaced.
+    /// Such a procedure has a dynamic parameter and can receive
+    /// frame-replacing calls; it releases its carry when it returns or
+    /// replaces its own frame. Every other caller passes none.
+    fn procCarriesTailArgs(store: *const lir.LirStore, proc: LirProcSpec) bool {
+        if (proc.abi != .roc or proc.tail_group == null) return false;
+        const params = store.getLocalSpan(proc.args);
+        for (0..params.len) |i| {
+            if (store.getLocal(GuardedList.at(params, i)).dyn != null) return true;
+        }
+        return false;
     }
 
     /// The signature of a procedure's register-passing function: its C-ABI
-    /// classification of arguments and result, with an optional trailing
-    /// descriptor output pointer. The classification only decides how a
+    /// classification of arguments and result. The classification only decides how a
     /// value splits into scalars; `fastCallConv` leaves register assignment to
     /// LLVM.
     const FastSignature = struct {
@@ -1872,8 +1944,14 @@ pub const MonoLlvmCodeGen = struct {
         arg_layouts: []const layout.Idx,
         /// Parameter index of the first argument piece.
         args_start: u32,
-        /// Parameter index of the descriptor output pointer, if any.
-        desc_index: ?u32,
+        /// Parameter index of the address of the caller's result storage,
+        /// for a procedure whose result is dynamic (`LirProcSpec.dyn_result`).
+        dyn_result_index: ?u32,
+        /// Parameter index of the tail carry (`procCarriesTailArgs`).
+        carry_index: ?u32,
+        /// Parameter index of the caller's pending cell
+        /// (`LirProcSpec.takesPendingCell`).
+        pending_index: ?u32,
         /// Parameter index of the tail group's shared argument storage, and
         /// that storage's shape, if the group passes any argument in memory.
         scratch_index: ?u32,
@@ -1897,28 +1975,56 @@ pub const MonoLlvmCodeGen = struct {
         scratch: TailScratch,
     };
 
-    fn fastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
-        const arg_layouts = try self.procArgLayouts(proc, .explicit);
-        const owned = try arena.dupe(layout.Idx, arg_layouts);
-        self.allocator.free(arg_layouts);
-        const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, proc.ret_layout, false) catch return error.OutOfMemory;
-        const tail_args = try self.tailArgs(arena, proc, lowered, owned);
+    /// The register-passing signature `declareFastProcSpec` built for `proc_id`.
+    fn fastSignatureOf(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) *const FastSignature {
+        const index: usize = @backingInt(proc_id);
+        if (index < self.fast_signatures.items.len) {
+            if (self.fast_signatures.items[index]) |*sig| return sig;
+        }
+        llvmInvariantFmt("procedure {d} has no register-passing signature", .{index});
+    }
+
+    fn clearFastSignatures(self: *MonoLlvmCodeGen) void {
+        self.fast_signatures.clearRetainingCapacity();
+        _ = self.abi_arena.reset(.retain_capacity);
+    }
+
+    fn computeFastSignature(self: *MonoLlvmCodeGen, arena: std.mem.Allocator, proc: LirProcSpec) Error!FastSignature {
+        const owned = try self.procArgLayoutsIn(arena, proc, .explicit);
+        const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), owned, fastRetLayout(proc), false) catch return error.OutOfMemory;
+        const group_scratch: TailScratch = if (proc.tail_group) |group| blk: {
+            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
+            break :blk self.tail_scratch.items[@backingInt(group)];
+        } else .{};
+        const tail_args = try self.tailArgs(arena, proc, lowered, owned, group_scratch.size > 0);
+        // Under tail drivers, and for a procedure outside every tail group,
+        // each call's stored arguments live in storage its caller owns, sized
+        // for this procedure alone.
+        const scratch: TailScratch = if (self.usesTailDrivers() or proc.tail_group == null) tail_args.scratch else group_scratch;
         var cursor: u32 = if (lowered.ret == .indirect) 1 else 0;
         const args_start = cursor;
         for (lowered.args, tail_args.stored) |placement, stored| {
             if (!stored) cursor += fastPlacementParamCount(placement);
         }
-        const desc_index: ?u32 = if (proc.runtime_ret_desc != null) cursor else null;
-        if (desc_index != null) cursor += 1;
-        const scratch: TailScratch = if (proc.tail_group) |group| blk: {
-            if (@backingInt(group) >= self.tail_scratch.items.len) llvmInvariantFmt("tail group {d} has no recorded argument storage", .{@backingInt(group)});
-            break :blk self.tail_scratch.items[@backingInt(group)];
-        } else .{};
+        const dyn_result_index: ?u32 = if (proc.dyn_result != null) blk: {
+            cursor += 1;
+            break :blk cursor - 1;
+        } else null;
+        const carry_index: ?u32 = if (procCarriesTailArgs(self.store, proc)) blk: {
+            cursor += 1;
+            break :blk cursor - 1;
+        } else null;
+        const pending_index: ?u32 = if (proc.takesPendingCell()) blk: {
+            cursor += 1;
+            break :blk cursor - 1;
+        } else null;
         return .{
             .lowered = lowered,
             .arg_layouts = owned,
             .args_start = args_start,
-            .desc_index = desc_index,
+            .dyn_result_index = dyn_result_index,
+            .carry_index = carry_index,
+            .pending_index = pending_index,
             .scratch_index = if (scratch.size > 0) cursor else null,
             .scratch = scratch,
             .tail_args = tail_args,
@@ -1926,57 +2032,53 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Lay out `proc`'s arguments in its tail group's storage: consecutive,
-    /// each at its own alignment. On AArch64 a tail-group member also stores
-    /// every argument that would otherwise travel on the stack, so its `tailcc`
-    /// function never pops stack arguments: LLVM's AArch64 backend can address
-    /// a spill reload placed between such a call and the caller's stack
-    /// readjustment from the stack pointer before the pop (#12191).
+    /// each at its own alignment. A tail-group member also stores every
+    /// argument its target's argument registers cannot hold, so its `tailcc`
+    /// function never takes stack arguments: LLVM's x86-64 backend emits a
+    /// `musttail` call without storing its stack arguments, and its AArch64
+    /// backend can address a spill reload placed between such a call and the
+    /// caller's stack readjustment from the stack pointer before the pop
+    /// (#12191).
     fn tailArgs(
         self: *MonoLlvmCodeGen,
         arena: std.mem.Allocator,
         proc: LirProcSpec,
         lowered: layout.abi.LoweredCall,
         arg_layouts: []const layout.Idx,
+        group_storage: bool,
     ) Error!TailArgs {
         const offsets = try arena.alloc(u32, lowered.args.len);
         @memset(offsets, 0);
         const stored = try arena.alloc(bool, lowered.args.len);
         @memset(stored, false);
-        if (proc.tail_group != null and self.target.cpu.arch == .aarch64 and !self.usesTailDrivers()) {
-            // x0-x7 and v0-v7 carry arguments (an indirect result uses x8).
-            // The group storage pointer and any descriptor pointer follow the
-            // arguments, so their registers are reserved up front.
-            const reserved: u32 = 1 + @as(u32, @intFromBool(proc.runtime_ret_desc != null));
-            const gp_limit: u32 = 8 - reserved;
-            var gp_used: u32 = 0;
-            var simd_used: u32 = 0;
-            for (lowered.args, stored) |placement, *is_stored| {
-                var gp: u32 = 0;
-                var simd: u32 = 0;
-                var first_gp = gp_used;
-                switch (placement) {
-                    .none => {},
-                    .indirect => gp = 1,
-                    .registers => |registers| {
-                        for (registers.pieces) |piece| switch (piece.class) {
-                            .integer => gp += 1,
-                            .float, .vector => simd += 1,
-                        };
-                        // A 128-bit integer may start at an even register.
-                        if (registers.carrier == .integer) first_gp = std.mem.alignForward(u32, gp_used, 2);
-                    },
-                }
-                if (first_gp + gp <= gp_limit and simd_used + simd <= 8) {
-                    if (gp != 0) gp_used = first_gp + gp;
-                    simd_used += simd;
-                } else {
-                    is_stored.* = true;
-                }
+        // The dynamic result address, the tail carry, the pending cell, and
+        // the storage pointer follow the arguments, so their registers are
+        // reserved up front.
+        const trailing_pointers: u32 = @as(u32, @intFromBool(proc.dyn_result != null)) + @intFromBool(procCarriesTailArgs(self.store, proc)) + @intFromBool(proc.takesPendingCell());
+        if (self.usesTailDrivers()) {
+            // Only a signature past the wasm parameter limit takes a storage
+            // pointer, which then counts against the limit too.
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers, stored);
+            if (std.mem.findScalar(bool, stored, true) != null) {
+                layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
+            }
+        } else if (proc.tail_group != null) {
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + @intFromBool(group_storage), stored);
+        } else {
+            // Arguments past the registers travel in storage the caller owns,
+            // through one pointer, rather than each in its own stack slot:
+            // the callee then reads each where it uses it, instead of holding
+            // every incoming argument from entry to its use, which LLVM's
+            // register allocator handles quadratically in the number of them.
+            layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers, stored);
+            if (std.mem.findScalar(bool, stored, true) != null) {
+                layout.abi.markRegisterOverflow(self.abiTarget(), lowered, trailing_pointers + 1, stored);
             }
         }
+        const own_storage = self.usesTailDrivers() or proc.tail_group == null;
         var cursor: TailScratchCursor = .{};
         for (lowered.args, arg_layouts, offsets, stored) |placement, arg_layout, *offset, is_stored| {
-            if (placement != .indirect and !is_stored) continue;
+            if (!is_stored and (placement != .indirect or own_storage)) continue;
             offset.* = cursor.place(self.layoutDataSize(arg_layout), @intCast(@max(self.sizeAlignOf(arg_layout).alignment.toByteUnits(), 1)));
         }
         return .{
@@ -1999,9 +2101,13 @@ pub const MonoLlvmCodeGen = struct {
     };
 
     /// Size every tail group's shared argument storage for its most demanding
-    /// member.
+    /// member. A group needs storage when a member passes an argument in
+    /// memory or has one its registers cannot hold even without a storage
+    /// pointer; only then does every member reserve a register for that
+    /// pointer, which can leave further arguments to the storage.
     fn computeTailScratch(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
         self.tail_scratch.clearRetainingCapacity();
+        self.clearFastSignatures();
         var group_count: usize = 0;
         for (procs) |proc| {
             if (proc.tail_group) |group| group_count = @max(group_count, @as(usize, @backingInt(group)) + 1);
@@ -2009,20 +2115,30 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
         // Under tail drivers the arguments travel through static storage.
         if (self.usesTailDrivers()) return;
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        const needs_storage = self.allocator.alloc(bool, group_count) catch return error.OutOfMemory;
+        defer self.allocator.free(needs_storage);
+        @memset(needs_storage, false);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
-        for (procs) |proc| {
-            const group = proc.tail_group orelse continue;
-            const entry = &self.tail_scratch.items[@backingInt(group)];
-            if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
-            _ = arena_state.reset(.retain_capacity);
-            const arena = arena_state.allocator();
-            const arg_layouts = try self.procArgLayouts(proc, .explicit);
-            defer self.allocator.free(arg_layouts);
-            const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, proc.ret_layout, false) catch return error.OutOfMemory;
-            const tail_args = try self.tailArgs(arena, proc, lowered, arg_layouts);
-            entry.size = @max(entry.size, tail_args.scratch.size);
-            entry.alignment = @max(entry.alignment, tail_args.scratch.alignment);
+        for ([_]bool{ false, true }) |group_storage| {
+            for (procs) |proc| {
+                const group = proc.tail_group orelse continue;
+                if (proc.is_static_initializer or !fastAbiEligible(proc)) continue;
+                if (group_storage and !needs_storage[@backingInt(group)]) continue;
+                _ = arena_state.reset(.retain_capacity);
+                const arena = arena_state.allocator();
+                const arg_layouts = try self.procArgLayouts(proc, .explicit);
+                defer self.allocator.free(arg_layouts);
+                const lowered = layout.abi.lower(arena, self.layouts(), self.abiTarget(), arg_layouts, fastRetLayout(proc), false) catch return error.OutOfMemory;
+                const tail_args = try self.tailArgs(arena, proc, lowered, arg_layouts, group_storage);
+                if (!group_storage) {
+                    if (tail_args.scratch.size > 0) needs_storage[@backingInt(group)] = true;
+                    continue;
+                }
+                const entry = &self.tail_scratch.items[@backingInt(group)];
+                entry.size = @max(entry.size, tail_args.scratch.size);
+                entry.alignment = @max(entry.alignment, tail_args.scratch.alignment);
+            }
         }
     }
 
@@ -2057,8 +2173,9 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Where a pending frame-replacing call keeps each of its callee's
-    /// arguments in the static argument storage, and the storage one such
-    /// call needs.
+    /// arguments in the static argument storage, and where those arguments
+    /// end, which is where it keeps the callee's tail carry and, a word
+    /// later, its pending cell.
     fn tailArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, offsets: ?[]u32) u32 {
         var offset: u32 = 0;
         for (arg_layouts, 0..) |arg_layout, i| {
@@ -2076,21 +2193,23 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Declare and define every tail driver. A driver takes the address of
-    /// the result an ordinary call into its group produced, and the address
-    /// of that result's runtime descriptor when the call returned one. While
-    /// a member has left a call pending, it calls that callee with the
-    /// arguments in static storage and has it write to the same addresses.
-    fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+    /// the result an ordinary call into its group produced. While a member
+    /// has left a call pending, it calls that callee with the arguments and
+    /// tail carry in static storage and has it write to the same address,
+    /// which is also the address of a dynamic result: a frame-replacing call
+    /// passes its callee the result storage its own caller passed.
+    fn emitTailDrivers(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, order: []const u32) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         var area_size: u32 = 0;
-        for (procs, 0..) |proc, i| {
+        for (order) |i| {
+            const proc = procs[i];
             if (!isTailDriverMember(proc)) continue;
             const arg_layouts = try self.procArgLayouts(proc, .explicit);
             defer self.allocator.free(arg_layouts);
-            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null));
+            area_size = @max(area_size, self.tailArgOffsets(arg_layouts, null) + 2 * self.targetWordSize());
             const driver = self.tailDriverFor(proc) orelse blk: {
-                const fn_ty = builder.fnType(.void, &.{ ptr_ty, ptr_ty }, .normal) catch return error.OutOfMemory;
+                const fn_ty = builder.fnType(.void, &.{ptr_ty}, .normal) catch return error.OutOfMemory;
                 const name = builder.strtabStringFmt("{s}roc_tail_driver.{d}", .{ self.static_symbol_prefix, self.tail_drivers.items.len }) catch return error.OutOfMemory;
                 const function = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
                 function.setLinkage(.internal, builder);
@@ -2137,7 +2256,6 @@ pub const MonoLlvmCodeGen = struct {
         const pending_ptr = self.tail_pending_ptr.?;
         const args_ptr = self.tail_args_ptr.?;
         const result_ptr = wip.arg(0);
-        const desc_ptr = wip.arg(1);
         const i32_align = LlvmBuilder.Alignment.fromByteUnits(4);
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
@@ -2147,11 +2265,12 @@ pub const MonoLlvmCodeGen = struct {
         const invalid = wip.block(0, "invalid") catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = entry };
+        if (self.stack_checks) try self.emitStackCheck(driver.function);
         _ = wip.br(check) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = check };
         const pending = wip.load(.normal, .i32, pending_ptr, i32_align, "") catch return error.OutOfMemory;
-        const none_pending = wip.icmp(.eq, pending, try self.boxyInt(.i32, 0), "") catch return error.OutOfMemory;
+        const none_pending = wip.icmp(.eq, pending, try self.intValue(.i32, 0), "") catch return error.OutOfMemory;
         _ = wip.brCond(none_pending, done, dispatch, .none) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = done };
@@ -2165,7 +2284,7 @@ pub const MonoLlvmCodeGen = struct {
         for (member_blocks) |*block| block.* = wip.block(0, "member") catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = dispatch };
-        _ = wip.store(.normal, try self.boxyInt(.i32, 0), pending_ptr, i32_align) catch return error.OutOfMemory;
+        _ = wip.store(.normal, try self.intValue(.i32, 0), pending_ptr, i32_align) catch return error.OutOfMemory;
         var switch_inst = wip.@"switch"(pending, invalid, @intCast(member_blocks.len), .none) catch return error.OutOfMemory;
         for (member_blocks, 0..) |block, index| {
             switch_inst.addCase(builder.intConst(.i32, index + 1) catch return error.OutOfMemory, block, &wip) catch return error.OutOfMemory;
@@ -2176,12 +2295,10 @@ pub const MonoLlvmCodeGen = struct {
             wip.cursor = .{ .block = block };
             const proc = self.store.getProcSpec(member);
             const fast = self.fast_registry.get(@backingInt(member)) orelse return error.CompilationFailed;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-            defer arena_state.deinit();
-            const sig = try self.fastSignature(arena_state.allocator(), proc);
+            const sig = self.fastSignatureOf(member);
             const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
             defer self.allocator.free(offsets);
-            _ = self.tailArgOffsets(sig.arg_layouts, offsets);
+            const carry_offset = self.tailArgOffsets(sig.arg_layouts, offsets);
 
             var param_types = std.ArrayList(LlvmBuilder.Type).empty;
             defer param_types.deinit(self.allocator);
@@ -2194,19 +2311,36 @@ pub const MonoLlvmCodeGen = struct {
                 try param_types.append(self.allocator, ptr_ty);
                 try call_args.append(self.allocator, result_ptr);
             }
-            for (sig.lowered.args, sig.arg_layouts, offsets) |placement, arg_layout, offset| {
+            const scratch: ?LlvmBuilder.Value = if (sig.scratch_index != null) try self.wasmStoredArgs(sig) else null;
+            for (sig.lowered.args, sig.arg_layouts, offsets, 0..) |placement, arg_layout, offset, i| {
+                if (sig.tail_args.stored[i]) {
+                    _ = try self.writeTailArg(scratch.?, sig, i, try self.offsetPtr(args_ptr, offset));
+                    continue;
+                }
                 switch (placement) {
                     .none => {},
                     .indirect => {
                         try param_types.append(self.allocator, ptr_ty);
                         try call_args.append(self.allocator, try self.offsetPtr(args_ptr, offset));
                     },
-                    .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, try self.offsetPtr(args_ptr, offset), arg_layout),
+                    .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, .{ .memory = try self.offsetPtr(args_ptr, offset) }, arg_layout),
                 }
             }
-            if (sig.desc_index != null) {
+            if (sig.dyn_result_index != null) {
                 try param_types.append(self.allocator, ptr_ty);
-                try call_args.append(self.allocator, desc_ptr);
+                try call_args.append(self.allocator, result_ptr);
+            }
+            if (sig.carry_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset)));
+            }
+            if (sig.pending_index != null) {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, try self.loadPointer(try self.offsetPtr(args_ptr, carry_offset + self.targetWordSize())));
+            }
+            if (scratch) |storage| {
+                try param_types.append(self.allocator, ptr_ty);
+                try call_args.append(self.allocator, storage);
             }
             const result = wip.call(.normal, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
             if (sig.lowered.ret == .registers) {
@@ -2219,15 +2353,18 @@ pub const MonoLlvmCodeGen = struct {
 
     /// After an ordinary call to a tail-group member has written its result
     /// to `result_ptr`, run whatever frame-replacing call it left pending.
-    fn emitTailDrive(self: *MonoLlvmCodeGen, proc: LirProcSpec, result_ptr: LlvmBuilder.Value, desc_ptr: ?LlvmBuilder.Value) Error!void {
+    fn emitTailDrive(self: *MonoLlvmCodeGen, proc: LirProcSpec, result_ptr: LlvmBuilder.Value) Error!void {
         const driver = self.tailDriverFor(proc) orelse return;
         const wip = self.wip orelse return error.CompilationFailed;
-        _ = wip.call(.normal, self.fastCallConv(proc), .none, driver.function.typeOf(self.builder.?), driver.function.toValue(self.builder.?), &.{ result_ptr, desc_ptr orelse try self.boxyNullPtr() }, "") catch return error.OutOfMemory;
+        _ = wip.call(.normal, self.fastCallConv(proc), .none, driver.function.typeOf(self.builder.?), driver.function.toValue(self.builder.?), &.{result_ptr}, "") catch return error.OutOfMemory;
     }
 
     /// The WebAssembly form of a frame-replacing call: leave the callee and
     /// its arguments pending for the group's driver and return. The value
     /// returned is never read; the driver writes the callee's result over it.
+    /// Dynamic arguments move into a carry the callee owns, because their
+    /// bytes may live in the frame being replaced or in this procedure's own
+    /// carry, which is released once nothing here reads it.
     fn emitPendingTailCall(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, args: LocalSpan) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
@@ -2241,50 +2378,36 @@ pub const MonoLlvmCodeGen = struct {
         if (arg_layouts.len != arg_locals.len) return error.CompilationFailed;
         const offsets = try self.allocator.alloc(u32, arg_layouts.len);
         defer self.allocator.free(offsets);
-        _ = self.tailArgOffsets(arg_layouts, offsets);
+        const carry_offset = self.tailArgOffsets(arg_layouts, offsets);
+        const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
+        defer self.allocator.free(moved);
+        const carry: ?LlvmBuilder.Value = if (procCarriesTailArgs(self.store, proc)) try self.emitTailCarry(proc, arg_locals, moved) else null;
+        const param_locals = self.store.getLocalSpan(proc.args);
         for (arg_layouts, offsets, 0..) |arg_layout, offset, i| {
+            const dst = try self.offsetPtr(self.tail_args_ptr.?, offset);
+            const arg_local = GuardedList.at(arg_locals, i);
+            if (self.localDyn(GuardedList.at(param_locals, i)) != null) {
+                try self.storePointer(dst, moved[i]);
+                continue;
+            }
+            if (self.localDyn(arg_local) != null) {
+                llvmInvariantFmt("dynamic local {d} passed to a closed parameter of proc {d}", .{ @backingInt(arg_local), @backingInt(proc_id) });
+            }
             const size = self.layoutDataSize(arg_layout);
             if (size == 0) continue;
-            try self.copyBytes(try self.offsetPtr(self.tail_args_ptr.?, offset), self.slot(GuardedList.at(arg_locals, i)).ptr, size, self.alignmentForLayout(arg_layout));
+            try self.storeLocalToMemory(dst, arg_local, size, self.alignmentForLayout(arg_layout));
         }
-        _ = wip.store(.normal, try self.boxyInt(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
+        if (carry) |storage| try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset), storage);
+        if (proc.takesPendingCell()) try self.storePointer(try self.offsetPtr(self.tail_args_ptr.?, carry_offset + self.targetWordSize()), self.pending_cell orelse
+            llvmInvariantFmt("frame-replacing call to proc {d} without a pending cell", .{@backingInt(proc_id)}));
+        try self.emitFreeCarry();
+        _ = wip.store(.normal, try self.intValue(.i32, tailMemberNumber(driver, proc_id)), self.tail_pending_ptr.?, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
         if (self.fast_ret_registers) |registers| {
             const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
             _ = wip.ret((builder.zeroInitConst(ret_ty) catch return error.OutOfMemory).toValue()) catch return error.OutOfMemory;
         } else {
             _ = wip.retVoid() catch return error.OutOfMemory;
         }
-    }
-
-    /// Return from the procedure without a value while an erased call is
-    /// pending, as the tail-drive pass marked the statement just emitted. The
-    /// caller makes the pending call and never reads this return.
-    fn emitReturnIfCallPending(self: *MonoLlvmCodeGen, pending_return: lir.LIR.PendingReturn) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const result_desc_ptr = if (pending_return.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        const flag = try self.callBoxy(
-            "roc_boxy_return_pending",
-            .i8,
-            &.{ try self.ptrType(), .i32, .i8 },
-            &.{
-                result_desc_ptr,
-                try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.current_ret_layout))),
-                try self.boxyInt(.i8, @intFromBool(pending_return.keeps_own_desc)),
-            },
-        );
-        const pending = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
-        const return_block = wip.block(0, "return_pending") catch return error.OutOfMemory;
-        const continue_block = wip.block(0, "none_pending") catch return error.OutOfMemory;
-        _ = wip.brCond(pending, return_block, continue_block, .none) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = return_block };
-        if (self.fast_ret_registers) |registers| {
-            const ret_ty = try self.cAbiRegisterCarrierType(builder, registers);
-            _ = wip.ret((builder.zeroInitConst(ret_ty) catch return error.OutOfMemory).toValue()) catch return error.OutOfMemory;
-        } else {
-            _ = wip.retVoid() catch return error.OutOfMemory;
-        }
-        wip.cursor = .{ .block = continue_block };
     }
 
     /// The calling convention of `proc`'s register-passing function. `tailcc`
@@ -2303,8 +2426,9 @@ pub const MonoLlvmCodeGen = struct {
     /// The group storage to hand a callee whose signature takes one. A caller
     /// in the same group passes its own along; any other caller owns a slot
     /// for that group in its frame.
-    fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: FastSignature) Error!LlvmBuilder.Value {
-        const group = callee.tail_group orelse llvmInvariantFmt("procedure without a tail group takes tail argument storage", .{});
+    fn tailScratchArg(self: *MonoLlvmCodeGen, callee: LirProcSpec, sig: *const FastSignature) Error!LlvmBuilder.Value {
+        const group = callee.tail_group orelse return self.wasmStoredArgs(sig);
+        if (self.usesTailDrivers()) return self.wasmStoredArgs(sig);
         if (self.current_tail_scratch) |own| {
             if (self.current_tail_group == group) return own;
         }
@@ -2321,6 +2445,13 @@ pub const MonoLlvmCodeGen = struct {
         return storage.*.?;
     }
 
+    /// Storage in this frame for the stored arguments of a call under tail
+    /// drivers or to a procedure outside every tail group. The callee reads a
+    /// parameter it never writes in place and copies out the rest on entry.
+    fn wasmStoredArgs(self: *MonoLlvmCodeGen, sig: *const FastSignature) Error!LlvmBuilder.Value {
+        return self.allocEntryBlockSlot(.i8, sig.scratch.size, LlvmBuilder.Alignment.fromByteUnits(sig.scratch.alignment), "stored_args");
+    }
+
     /// This procedure's tail group storage, where a frame-replacing call
     /// writes the arguments its callee takes in memory.
     fn ownTailScratch(self: *const MonoLlvmCodeGen) LlvmBuilder.Value {
@@ -2330,11 +2461,19 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Copy argument `index` of `sig` from `src` to its offset in the tail
     /// group's storage `scratch`, and return where it landed.
-    fn writeTailArg(self: *MonoLlvmCodeGen, scratch: LlvmBuilder.Value, sig: FastSignature, index: usize, src: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn writeTailArg(self: *MonoLlvmCodeGen, scratch: LlvmBuilder.Value, sig: *const FastSignature, index: usize, src: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const arg_layout = sig.arg_layouts[index];
         const dst = try self.offsetPtr(scratch, sig.tail_args.offsets[index]);
         const size = self.layoutDataSize(arg_layout);
         if (size > 0) try self.copyBytes(dst, src, size, self.alignmentForLayout(arg_layout));
+        return dst;
+    }
+
+    /// `writeTailArg` from a local in either representation.
+    fn writeTailArgLocal(self: *MonoLlvmCodeGen, scratch: LlvmBuilder.Value, sig: *const FastSignature, index: usize, local: LocalId) Error!LlvmBuilder.Value {
+        const arg_layout = sig.arg_layouts[index];
+        const dst = try self.offsetPtr(scratch, sig.tail_args.offsets[index]);
+        try self.storeLocalToMemory(dst, local, self.layoutDataSize(arg_layout), self.alignmentForLayout(arg_layout));
         return dst;
     }
 
@@ -2352,20 +2491,19 @@ pub const MonoLlvmCodeGen = struct {
     fn fastProcFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, proc_id: LirProcSpecId, proc: LirProcSpec) Error!LlvmBuilder.StrtabString {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}.fast", .{@backingInt(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}.fast", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
-                defer self.allocator.free(name);
-                break :blk try self.exportedFunctionName(builder, name);
-            },
+            .lir_symbol => try self.procSymbolFunctionName(builder, proc, ".fast"),
         };
     }
 
     fn declareFastProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const index: usize = @backingInt(proc_id);
+        if (self.fast_signatures.items.len <= index) {
+            try self.fast_signatures.appendNTimes(self.allocator, null, index + 1 - self.fast_signatures.items.len);
+        }
+        self.fast_signatures.items[index] = try self.computeFastSignature(self.abi_arena.allocator(), proc);
+        const sig = self.fastSignatureOf(proc_id);
 
         var param_types = std.ArrayList(LlvmBuilder.Type).empty;
         defer param_types.deinit(self.allocator);
@@ -2397,24 +2535,17 @@ pub const MonoLlvmCodeGen = struct {
                 .registers => |registers| try self.appendCAbiRegisterParamTypes(builder, &attrs_wip, &param_types, registers),
             }
         }
-        if (sig.desc_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.dyn_result_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.carry_index != null) try param_types.append(self.allocator, ptr_ty);
+        if (sig.pending_index != null) try param_types.append(self.allocator, ptr_ty);
         if (sig.scratch_index != null) try param_types.append(self.allocator, ptr_ty);
 
         const fn_ty = builder.fnType(ret_ty, param_types.items, .normal) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, try self.fastProcFunctionName(builder, proc_id, proc), .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
+        func.setLinkage(if (proc.linked or proc.exported) .external else .internal, builder);
         func.setCallConv(self.fastCallConv(proc), builder);
         try self.addGeneratedFunctionStackProbeAttrs(&attrs_wip);
-        if (self.enable_default_platform_diagnostics) {
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-        } else {
-            const inline_everywhere = self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
-            if (inline_everywhere) {
-                try attrs_wip.addFnAttr(.alwaysinline, builder);
-            } else {
-                try attrs_wip.addFnAttr(.inlinehint, builder);
-            }
-        }
+        try self.addInliningAttrs(&attrs_wip, proc_id);
         if (self.enable_default_platform_runtime) {
             try attrs_wip.addFnAttr(.{ .string = .{
                 .kind = builder.string("frame-pointer") catch return error.OutOfMemory,
@@ -2431,18 +2562,30 @@ pub const MonoLlvmCodeGen = struct {
         try self.fast_registry.put(@backingInt(proc_id), func);
     }
 
-    /// Bind the fast function's parameters to the procedure's parameter
-    /// slots: register pieces store into the slot, indirect and stored
-    /// arguments copy out of the caller's memory.
-    fn unpackFastProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec, sig: FastSignature) Error!void {
+    /// Bind the fast function's parameters to the procedure's parameters:
+    /// register pieces store into a slot or assemble an SSA value, and
+    /// indirect and stored arguments borrow stable storage when proven
+    /// immutable, while the rest copy out of the caller's memory.
+    fn unpackFastProcArgs(self: *MonoLlvmCodeGen, proc: LirProcSpec, sig: *const FastSignature) Error!void {
         const builder, const wip = try self.builderAndWip();
         const params = self.store.getLocalSpan(proc.args);
         var cursor: u32 = sig.args_start;
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const param = GuardedList.at(params, i);
-            const param_slot = self.slot(param);
             if (sig.tail_args.stored[i]) {
                 const scratch = wip.arg(sig.scratch_index orelse llvmInvariantFmt("stored argument without tail group storage", .{}));
+                if (self.value_plan.place(param) == .parameter) {
+                    const sa = self.sizeAlignOf(arg_layout);
+                    self.local_slots[@backingInt(param)] = .{
+                        .ptr = try self.offsetPtr(scratch, sig.tail_args.offsets[i]),
+                        .layout_idx = arg_layout,
+                        .size = sa.size,
+                        .alignment = self.llvmAlignment(sa.alignment),
+                        .allocated = true,
+                    };
+                    continue;
+                }
+                const param_slot = self.slot(param);
                 if (param_slot.size != 0) {
                     try self.copyBytes(param_slot.ptr, try self.offsetPtr(scratch, sig.tail_args.offsets[i]), self.layoutDataSize(arg_layout), param_slot.alignment);
                 }
@@ -2453,11 +2596,28 @@ pub const MonoLlvmCodeGen = struct {
                 .indirect => {
                     const src = wip.arg(cursor);
                     cursor += 1;
+                    if (self.value_plan.place(param) == .parameter) {
+                        const sa = self.sizeAlignOf(arg_layout);
+                        self.local_slots[@backingInt(param)] = .{
+                            .ptr = src,
+                            .layout_idx = arg_layout,
+                            .size = sa.size,
+                            .alignment = self.llvmAlignment(sa.alignment),
+                            .allocated = true,
+                        };
+                        continue;
+                    }
+                    const param_slot = self.slot(param);
                     if (param_slot.size != 0) {
                         try self.copyBytes(param_slot.ptr, src, self.layoutDataSize(arg_layout), param_slot.alignment);
                     }
                 },
-                .registers => |registers| try self.storeCAbiRegisterParam(builder, registers, &cursor, param_slot.ptr, arg_layout),
+                .registers => |registers| if (self.isSsaLocal(param)) {
+                    const scalar = try self.scalarFromCAbiParams(builder, registers, &cursor, arg_layout, self.ssaMemoryType(param));
+                    try self.defineSsa(param, try self.toSsaType(scalar, self.local_values[@backingInt(param)].ty, false));
+                } else {
+                    try self.storeCAbiRegisterParam(builder, registers, &cursor, self.slot(param).ptr, arg_layout);
+                },
             }
         }
     }
@@ -2477,10 +2637,9 @@ pub const MonoLlvmCodeGen = struct {
         self.wip = &wip;
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+        if (self.stack_checks) try self.emitStackCheck(packed_fn);
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = self.fastSignatureOf(proc_id);
         const offsets = try self.computeArgOffsets(sig.arg_layouts, true);
         defer self.allocator.free(offsets);
 
@@ -2513,12 +2672,25 @@ pub const MonoLlvmCodeGen = struct {
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, try self.offsetPtr(args_ptr, offset));
                 },
-                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, try self.offsetPtr(args_ptr, offset), arg_layout),
+                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, .{ .memory = try self.offsetPtr(args_ptr, offset) }, arg_layout),
             }
         }
-        if (sig.desc_index != null) {
+        if (sig.dyn_result_index != null) {
+            // The result pointer is the dynamic result's storage.
             try param_types.append(self.allocator, ptr_ty);
-            try call_args.append(self.allocator, wip.arg(2));
+            try call_args.append(self.allocator, ret_ptr);
+        }
+        if (sig.carry_index != null) {
+            // An ordinary call's arguments stay in its caller's frame.
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.nullPtr());
+        }
+        // Whatever calls this function expects a result, so it makes the
+        // call its procedure leaves pending.
+        const pending_cell: ?LlvmBuilder.Value = if (sig.pending_index != null) try self.allocPendingCell() else null;
+        if (pending_cell) |cell| {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, cell);
         }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
@@ -2528,7 +2700,8 @@ pub const MonoLlvmCodeGen = struct {
         if (sig.lowered.ret == .registers) {
             try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, ret_ptr, proc.ret_layout);
         }
-        try self.emitTailDrive(proc, ret_ptr, if (sig.desc_index != null) wip.arg(2) else null);
+        try self.emitTailDrive(proc, ret_ptr);
+        if (pending_cell) |cell| try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ cell, ret_ptr });
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -2571,21 +2744,20 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!LlvmBuilder.StrtabString {
         return switch (self.proc_symbol_mode) {
             .local_index => builder.strtabStringFmt("roc_proc_{d}", .{@backingInt(proc_id)}) catch return error.OutOfMemory,
-            .lir_symbol => blk: {
-                const name = std.fmt.allocPrint(self.allocator, "{s}{s}{s}", .{ self.static_symbol_prefix, lir.ProcIdentity.symbol_name_prefix, &proc.identity.symbolHex() }) catch return error.OutOfMemory;
-                defer self.allocator.free(name);
-                break :blk try self.exportedFunctionName(builder, name);
-            },
+            .lir_symbol => try self.procSymbolFunctionName(builder, proc, ""),
         };
     }
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        // A procedure another object of the link defines was declared and
+        // has no body here.
+        if (proc.linked) return;
+        const ice = Base.ice_context.enter(.{ .phase = .codegen, .stage = "llvm backend", .proc = self.store.iceContextProc(proc_id) });
+        defer ice.leave();
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        var fast_arena = std.heap.ArenaAllocator.init(self.allocator);
-        defer fast_arena.deinit();
-        const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(fast_arena.allocator(), proc) else null;
+        const fast_sig: ?*const FastSignature = if (fast_func != null) self.fastSignatureOf(proc_id) else null;
 
         const outer_wip = self.wip;
         const outer_rc_scratch = self.rc_arg_scratch;
@@ -2593,19 +2765,20 @@ pub const MonoLlvmCodeGen = struct {
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
         const outer_reuse = self.reuse_ptr_arg;
-        const outer_ret_desc_ptr = self.ret_desc_ptr_arg;
-        const outer_runtime_ret_desc = self.current_runtime_ret_desc;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
-        const outer_deferred_str_captures = self.deferred_str_captures;
+        const outer_values = self.local_values;
         const outer_fast_ret_registers = self.fast_ret_registers;
         const outer_tail_scratch = self.current_tail_scratch;
         const outer_tail_group = self.current_tail_group;
         const outer_caller_drives_flag = self.caller_drives_flag;
+        const outer_pending_cell = self.pending_cell;
+        const outer_dyn_result = self.current_dyn_result;
+        const outer_carry = self.current_carry;
+        const outer_frame_locals = self.current_frame_locals;
         // Procedure bodies are emitted serially by compileAllProcSpecs. Helper
         // emission saves/restores the active views without owning this storage.
-        std.debug.assert(self.deferred_str_capture_count == 0);
-        std.debug.assert(self.deferred_str_capture_actives.items.len == 0);
+        std.debug.assert(self.deferred_str_captures.count() == 0);
         defer {
             self.wip = outer_wip;
             self.rc_arg_scratch = outer_rc_scratch;
@@ -2617,19 +2790,19 @@ pub const MonoLlvmCodeGen = struct {
             self.current_tail_scratch = outer_tail_scratch;
             self.current_tail_group = outer_tail_group;
             self.caller_drives_flag = outer_caller_drives_flag;
-            self.ret_desc_ptr_arg = outer_ret_desc_ptr;
-            self.current_runtime_ret_desc = outer_runtime_ret_desc;
+            self.pending_cell = outer_pending_cell;
+            self.current_dyn_result = outer_dyn_result;
+            self.current_carry = outer_carry;
+            self.current_frame_locals = outer_frame_locals;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
-            self.deferred_str_captures = outer_deferred_str_captures;
+            self.local_values = outer_values;
         }
 
         self.join_points.clearRetainingCapacity();
         self.compiled_joins.clearRetainingCapacity();
         self.stmt_incoming_counts.clearRetainingCapacity();
         self.stmt_entry_blocks.clearRetainingCapacity();
-        self.loop_continue_blocks.clearRetainingCapacity();
-        self.loop_break_blocks.clearRetainingCapacity();
         self.debug_inline_subprograms.clearRetainingCapacity();
         self.debug_inline_callsites.clearRetainingCapacity();
 
@@ -2671,6 +2844,7 @@ pub const MonoLlvmCodeGen = struct {
             func.setSubprogram(subprogram, builder);
             self.current_subprogram = subprogram.toOptional();
             self.current_debug_file = proc_loc.file;
+            self.current_proc_line = proc_loc.line;
         }
 
         var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = func, .strip = builder.strip }) catch return error.OutOfMemory;
@@ -2680,6 +2854,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+        if (self.stack_checks and self.stack_check_procs.items[@backingInt(proc_id)]) try self.emitStackCheck(func);
 
         self.current_tail_group = proc.tail_group;
         self.current_tail_scratch = if (fast_sig) |sig|
@@ -2687,66 +2862,103 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         self.caller_drives_flag = null;
-        if (proc.reads_caller_drives) {
-            // Read before anything else can make an erased call: the
-            // runtime's answer describes only this invocation.
-            const flag_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
-            // The runtime names the callable it invokes by the function
-            // pointer callable values hold, which is this procedure's.
-            const own_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-            const flag = try self.callBoxy("roc_boxy_caller_drives", .i8, &.{try self.ptrType()}, &.{own_fn.toValue(builder)});
-            _ = wip.store(.normal, flag, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
-            self.caller_drives_flag = flag_ptr;
+        self.pending_cell = null;
+        if (fast_sig) |sig| {
+            if (sig.pending_index) |index| self.pending_cell = wip.arg(index);
+        }
+        if (proc.uses_pending_cell and self.pending_cell == null) {
+            const own_cell = try self.allocPendingCell();
+            self.pending_cell = own_cell;
+            if (proc.reads_caller_drives) {
+                // A cell in the erased ABI's last argument belongs to the
+                // runtime that invoked this procedure, and makes its calls.
+                const ptr_ty = try self.ptrType();
+                const caller_cell = try self.callBuiltin(.native_callable_caller_cell, ptr_ty, &.{ptr_ty}, &.{wip.arg(5)});
+                const caller_drives = wip.icmp(.ne, caller_cell, try self.nullPtr(), "") catch return error.OutOfMemory;
+                const flag_ptr = try self.allocEntryBlockSlot(.i1, 1, LlvmBuilder.Alignment.fromByteUnits(1), "caller_drives");
+                _ = wip.store(.normal, caller_drives, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+                self.caller_drives_flag = flag_ptr;
+                self.pending_cell = wip.select(.normal, caller_drives, caller_cell, own_cell, "") catch return error.OutOfMemory;
+            }
         }
 
+        self.current_dyn_result = proc.dyn_result;
+        self.current_carry = null;
+        self.current_frame_locals = proc.frame_locals;
         if (proc.abi == .erased_callable) {
             // Parameter 0 is the public erased ABI's host pointer, unread.
             self.ret_ptr_arg = wip.arg(1);
             self.args_ptr_arg = wip.arg(2);
             self.capture_ptr_arg = wip.arg(3);
             self.reuse_ptr_arg = wip.arg(4);
-            self.ret_desc_ptr_arg = wip.arg(5);
+        } else if (proc.abi == .erased_record) {
+            // The same public erased ABI.
+            self.fast_ret_registers = null;
+            self.ret_ptr_arg = wip.arg(1);
+            self.args_ptr_arg = wip.arg(2);
+            self.capture_ptr_arg = wip.arg(3);
+            self.reuse_ptr_arg = wip.arg(4);
         } else if (fast_sig) |sig| {
-            // The fast function returns small results by value: the body
-            // writes its result into a frame slot that the return loads
-            // from. A larger result arrives through the leading pointer.
+            // The fast function returns small results by value, read from
+            // the returned local itself. A larger result arrives through the
+            // leading pointer.
             self.fast_ret_registers = null;
             self.ret_ptr_arg = switch (sig.lowered.ret) {
                 .indirect => wip.arg(0),
                 .registers => |registers| blk: {
                     self.fast_ret_registers = registers;
-                    break :blk try self.allocArgBuffer(&.{proc.ret_layout}, false);
+                    break :blk null;
                 },
-                .none => try self.allocArgBuffer(&.{proc.ret_layout}, false),
+                .none => null,
             };
             self.args_ptr_arg = null;
             self.capture_ptr_arg = null;
             self.reuse_ptr_arg = null;
-            self.ret_desc_ptr_arg = if (sig.desc_index) |index| wip.arg(index) else null;
         } else {
             self.fast_ret_registers = null;
             self.ret_ptr_arg = wip.arg(0);
             self.args_ptr_arg = wip.arg(1);
             self.capture_ptr_arg = null;
             self.reuse_ptr_arg = null;
-            self.ret_desc_ptr_arg = if (proc.runtime_ret_desc != null) wip.arg(2) else null;
         }
-        self.current_runtime_ret_desc = proc.runtime_ret_desc;
         self.current_ret_layout = proc.ret_layout;
 
         self.local_slots = self.local_slot_storage.items;
-        self.deferred_str_captures = self.deferred_str_capture_storage.items;
+        self.local_values = self.local_value_storage.items;
         // Install cleanup before allocating any LLVM slots, including for OOM.
         // Specialized siblings can share LocalIds but never LLVM slot values.
         defer self.clearProcLocalSlots(proc);
         defer self.clearDeferredStrCaptures();
+        defer self.clearValuePlan();
+        if (proc.body) |body| {
+            try self.collectStmtIncomingCounts(body);
+            try self.planLocalValues(proc, body, fast_sig);
+        }
         try self.allocProcLocalSlots(proc);
         if (fast_sig) |sig| {
             try self.unpackFastProcArgs(proc, sig);
+            if (sig.dyn_result_index) |index| try self.storePointer(self.slot(proc.dyn_result.?).ptr, wip.arg(index));
+            if (sig.carry_index) |index| self.current_carry = wip.arg(index);
+        } else if (proc.abi == .erased_record) {
+            try self.bindErasedRecordParams(proc);
         } else {
+            if (proc.dyn_result != null) llvmInvariantFmt("procedure {d} with a dynamic result has no register-passing function", .{@backingInt(proc_id)});
             try self.unpackProcArgs(proc);
         }
-        if (proc.boxy_runtime_entry) try self.emitBoxyRuntimeInit();
+        for (self.value_plan.inventory.items) |local| {
+            const place = self.value_plan.place(local);
+            if (place != .view) continue;
+            const sa = self.sizeAlignOf(self.localLayout(local));
+            self.local_slots[@backingInt(local)] = .{
+                .ptr = try self.offsetPtr(self.slot(place.view.source).ptr, place.view.offset),
+                .layout_idx = self.localLayout(local),
+                .size = sa.size,
+                .alignment = self.llvmAlignment(sa.alignment),
+                .allocated = true,
+            };
+        }
+        // The prologue's definitions are where every path starts.
+        self.value_journal.clearRetainingCapacity();
         if (!builder.strip and self.emit_local_debug_info) {
             try self.declareFrameLocals(proc, self.store.procLoc(proc_id).line);
         }
@@ -2770,7 +2982,8 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 return error.CompilationFailed;
             };
-            try self.collectStmtIncomingCounts(body);
+            defer self.slot_lifetimes.clear();
+            try self.slot_lifetimes.plan(self.store, body, self.store.getLocalSpan(proc.args), AddressedCallLocals{ .codegen = self });
             try self.compileStmt(body);
             if (!self.currentBlockHasTerminator()) {
                 if (self.fast_ret_registers != null) {
@@ -2781,9 +2994,151 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
+        try self.finishMerges();
         try self.finishCurrentWipFunction();
         if (fast_func != null) try self.emitPackedAdapter(proc_id, proc);
     }
+
+    /// Plan the representation of every local of `proc` (see `ValuePlan`),
+    /// and prepare the SSA locals' columns and the merge points' state.
+    fn planLocalValues(self: *MonoLlvmCodeGen, proc: LirProcSpec, body: CFStmtId, fast_sig: ?*const FastSignature) Error!void {
+        try self.value_plan.plan(self.store, proc.args, proc.frame_locals, body, PlanOps{ .codegen = self, .proc = proc, .fast_sig = fast_sig });
+        for (self.value_plan.ssaLocals()) |local| {
+            self.local_values[@backingInt(local)] = .{ .ty = try self.ssaTypeForLayout(self.localLayout(local)) };
+        }
+        var merges = self.value_plan.merges.iterator();
+        while (merges.next()) |entry| {
+            const merge = entry.value_ptr.*;
+            try self.merge_states.put(self.allocator, entry.key_ptr.*, .{ .locals = self.value_plan.merge_locals.items[merge.start..][0..merge.len] });
+        }
+    }
+
+    fn clearValuePlan(self: *MonoLlvmCodeGen) void {
+        for (self.value_plan.ssaLocals()) |local| self.local_values[@backingInt(local)] = .{};
+        self.value_plan.clear();
+        self.value_journal.clearRetainingCapacity();
+        self.merge_states.clearRetainingCapacity();
+        _ = self.merge_arena.reset(.retain_capacity);
+    }
+
+    /// The facts `ValuePlan` consumes from this emitter's contracts.
+    const PlanOps = struct {
+        codegen: *MonoLlvmCodeGen,
+        proc: LirProcSpec,
+        fast_sig: ?*const FastSignature,
+
+        pub fn isCandidate(self: PlanOps, local: LocalId) bool {
+            return hasSsaCarrier(self.codegen.localLayout(local));
+        }
+
+        pub fn borrowParam(self: PlanOps, index: usize) bool {
+            const sig = self.fast_sig orelse return false;
+            // Tail-group argument storage is overwritten before the next
+            // member enters; those parameters must keep their snapshots.
+            // Storage a caller owns for one call lives until the call returns.
+            return self.proc.tail_group == null and (sig.tail_args.stored[index] or sig.lowered.args[index] == .indirect);
+        }
+
+        pub fn memoryView(self: PlanOps, assign: @FieldType(lir.LIR.CFStmt, "assign_ref")) ?ValuePlan.View {
+            const cg = self.codegen;
+            const target_layout = cg.localLayout(assign.target);
+            const target = cg.layoutValue(target_layout);
+            if (target.tag != .struct_ and target.tag != .tag_union) return null;
+            const source_layout = cg.localLayout(assign.op.source);
+            const source = cg.layoutValue(source_layout);
+            if (source.tag != .struct_ and source.tag != .tag_union) return null;
+            var field_layout = source_layout;
+            var offset: u32 = 0;
+            switch (assign.op.kind) {
+                .local, .nominal, .list_reinterpret => {},
+                .field => {
+                    if (source.tag != .struct_) return null;
+                    offset = cg.layouts().getStructFieldOffsetByOriginalIndex(source.getStruct().idx, assign.op.index);
+                    field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(source.getStruct().idx, assign.op.index);
+                },
+                .tag_payload, .tag_payload_struct => {
+                    if (source.tag != .tag_union) return null;
+                    field_layout = cg.tagPayloadLayout(source_layout, assign.op.tag_discriminant);
+                    const payload = cg.layoutValue(field_layout);
+                    if (assign.op.kind == .tag_payload and payload.tag == .struct_) {
+                        offset = cg.layouts().getStructFieldOffsetByOriginalIndex(payload.getStruct().idx, assign.op.index);
+                        field_layout = cg.layouts().getStructFieldLayoutByOriginalIndex(payload.getStruct().idx, assign.op.index);
+                    }
+                },
+                .discriminant => return null,
+            }
+            if (cg.layoutDataSize(field_layout) != cg.layoutDataSize(target_layout)) return null;
+            const source_sa = cg.sizeAlignOf(field_layout);
+            const target_sa = cg.sizeAlignOf(target_layout);
+            if (target_sa.size > source_sa.size or target_sa.alignment.toByteUnits() > source_sa.alignment.toByteUnits()) return null;
+            return .{ .source = assign.op.source, .offset = offset };
+        }
+
+        /// The prologue reads register pieces and copies packed or erased
+        /// arguments by value; an indirect fast argument borrows memory or
+        /// copies a snapshot, while tail-group storage is copied into its slot, and an erased callable's
+        /// hidden capture and reuse parameters are written through theirs.
+        pub fn paramAccess(self: PlanOps, index: usize) ValuePlan.Access {
+            if (self.proc.hosted != null) return .address;
+            if (self.proc.abi == .erased_callable) {
+                const explicit = explicitProcParamCount(self.proc.abi, self.codegen.store.getLocalSpan(self.proc.args).len) catch return .address;
+                return if (index < explicit) .value else .address;
+            }
+            const sig = self.fast_sig orelse return .value;
+            if (sig.tail_args.stored[index]) return .address;
+            return switch (sig.lowered.args[index]) {
+                .none, .registers => .value,
+                .indirect => .address,
+            };
+        }
+
+        /// A direct call passes register pieces and tail group storage from
+        /// either representation and receives a by-value result into either;
+        /// a hosted callee, an indirect argument, a result returned through
+        /// a pointer, and a result a tail driver writes need addresses.
+        pub fn callAccess(self: PlanOps, call: @FieldType(lir.LIR.CFStmt, "assign_call"), operand: ValuePlan.CallOperand) ValuePlan.Access {
+            const codegen = self.codegen;
+            const callee = codegen.store.getProcSpec(call.proc);
+            if (callee.hosted != null) return .address;
+            // A dynamic parameter receives the address of its argument's
+            // bytes, and a dynamic result is written to the target's.
+            switch (operand) {
+                .result => if (callee.dyn_result != null) return .address,
+                .arg => |index| if (codegen.localDyn(GuardedList.at(codegen.store.getLocalSpan(callee.args), index)) != null) return .address,
+            }
+            if (!fastAbiEligible(callee)) return switch (operand) {
+                .result => .address,
+                .arg => .value,
+            };
+            const sig = codegen.fastSignatureOf(call.proc);
+            switch (operand) {
+                .result => {
+                    if (codegen.tailDriverFor(callee) != null) return .address;
+                    return switch (sig.lowered.ret) {
+                        .none, .registers => .value,
+                        .indirect => .address,
+                    };
+                },
+                .arg => |index| {
+                    if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return .value;
+                    if (sig.tail_args.stored[index]) return .value;
+                    return switch (sig.lowered.args[index]) {
+                        .none, .registers => .value,
+                        .indirect => .address,
+                    };
+                },
+            }
+        }
+
+        pub fn isShared(self: PlanOps, stmt: CFStmtId) bool {
+            return (self.codegen.stmt_incoming_counts.get(@backingInt(stmt)) orelse 0) > 1;
+        }
+
+        /// A dynamic result is copied from the returned value's bytes.
+        pub fn returnAccess(self: PlanOps) ValuePlan.Access {
+            return if (self.proc.dyn_result != null) .address else .value;
+        }
+    };
 
     /// Symbol-ABI entrypoint wrapper: exported under the platform's provides
     /// symbol with the entrypoint's natural C ABI. The wrapper marshals its
@@ -2805,7 +3160,7 @@ pub const MonoLlvmCodeGen = struct {
             null;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
@@ -2869,6 +3224,7 @@ pub const MonoLlvmCodeGen = struct {
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+        if (self.stack_checks) try self.emitStackCheck(wrapper);
 
         const ops_value = if (shim != null) blk: {
             // The interpreter needs a real RocOps; the prelinked shim builds
@@ -2910,8 +3266,6 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        try self.emitBoxyRuntimeInit();
-
         if (shim) |sh| {
             const idx_value = builder.intValue(.i32, sh.entry_index) catch return error.OutOfMemory;
             const usize_ty: LlvmBuilder.Type = if (self.targetWordSize() == 8) .i64 else .i32;
@@ -2926,16 +3280,11 @@ pub const MonoLlvmCodeGen = struct {
                 _ = wip.call(.normal, .ccc, .none, entry_ty, entry_fn.toValue(builder), &.{ idx_value, ops_value, ret_slot, args_buf }, "") catch return error.OutOfMemory;
             }
         } else {
-            const proc = self.store.getProcSpec(entry_proc.?);
-            const runtime_out_desc = if (proc.runtime_ret_desc != null)
-                try self.boxyOutDescPtr("entry_runtime_desc")
-            else
-                null;
-            try self.callProcFunctionIndex(proc_fn.?, proc, ret_slot, args_buf, runtime_out_desc, false);
+            try self.callProcFunctionIndex(proc_fn.?, ret_slot, args_buf, false);
         }
 
         if (ret_registers) |registers| {
-            _ = wip.ret(try self.loadCAbiRegisterResult(builder, registers, ret_slot, ret_layout)) catch return error.OutOfMemory;
+            _ = wip.ret(try self.loadCAbiRegisterResult(builder, registers, .{ .memory = ret_slot }, ret_layout)) catch return error.OutOfMemory;
         } else {
             _ = wip.retVoid() catch return error.OutOfMemory;
         }
@@ -2982,19 +3331,14 @@ pub const MonoLlvmCodeGen = struct {
 
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+        if (self.stack_checks) try self.emitStackCheck(wrapper);
 
         const ret_ptr = wip.arg(0);
         const args_ptr = wip.arg(1);
 
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
         try self.copyEntrypointArgsToInternalBuffer(args_ptr, args_buf, arg_layouts);
-        try self.emitBoxyRuntimeInit();
-        const proc = self.store.getProcSpec(entry_proc);
-        const runtime_out_desc = if (proc.runtime_ret_desc != null)
-            try self.boxyOutDescPtr("entry_runtime_desc")
-        else
-            null;
-        try self.callProcFunctionIndex(proc_fn, proc, ret_ptr, args_buf, runtime_out_desc, false);
+        try self.callProcFunctionIndex(proc_fn, ret_ptr, args_buf, false);
         _ = wip.retVoid() catch return error.OutOfMemory;
         try self.finishCurrentWipFunction();
     }
@@ -3042,49 +3386,6 @@ pub const MonoLlvmCodeGen = struct {
         try self.finishCurrentWipFunction();
     }
 
-    fn emitBoxyRuntimeInit(self: *MonoLlvmCodeGen) Error!void {
-        if (!self.boxy_runtime_used and self.boxy_worker_procs.len == 0) return;
-        const builder = self.builder orelse return error.CompilationFailed;
-        // An object the compiler loads in-process runs against the runtime the
-        // evaluator installs before calling it; only a platform program links
-        // the boxy runtime object and installs it from the embedded sidecar.
-        if (self.program_kind == .platform) {
-            const wip = self.wip orelse return error.CompilationFailed;
-            const fn_ty = builder.fnType(.void, &.{try self.ptrType()}, .normal) catch return error.OutOfMemory;
-            const init_fn = try self.declareExternSymbol("roc_boxy_init_embedded", fn_ty);
-            _ = wip.call(.normal, .ccc, .none, fn_ty, init_fn.toValue(builder), &.{try self.boxyNullPtr()}, "") catch return error.OutOfMemory;
-        }
-
-        for (self.boxy_worker_procs) |proc_id| {
-            const proc_index = @backingInt(proc_id);
-            const thunk = self.boxy_dict_thunks.get(proc_index) orelse llvmInvariantFmt(
-                "boxy worker proc {d} had no generated dispatch thunk",
-                .{proc_index},
-            );
-            const proc = self.store.getProcSpec(proc_id);
-            try self.callBoxyVoid(
-                "roc_boxy_register_proc",
-                &.{ .i32, try self.ptrType(), .i32, .i64, .i1, .i64 },
-                &.{
-                    try self.boxyInt(.i32, proc_index),
-                    thunk.toValue(builder),
-                    try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(proc.ret_layout))),
-                    try self.boxyInt(.i64, proc.rc_borrowed_params),
-                    try self.boxyInt(.i1, @intFromBool(proc.rc_ret_borrowed)),
-                    try self.boxyInt(.i64, proc.rc_ret_lenders),
-                },
-            );
-        }
-
-        // An erased worker whose callable values were frozen into static data
-        // is registered here: no packing statement builds those values.
-        for (self.store.getProcSpecs(), 0..) |proc_spec, index| {
-            const capture_layout = proc_spec.static_erased_capture_layout orelse continue;
-            const proc_fn = self.proc_registry.get(@intCast(index)) orelse return error.CompilationFailed;
-            try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), proc_fn, @intCast(builtins.erased_callable.compilerMetadataOffset(self.layoutByteSize(capture_layout))));
-        }
-    }
-
     fn createBuilder(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder {
         return LlvmBuilder.init(.{
             .allocator = self.allocator,
@@ -3094,6 +3395,23 @@ pub const MonoLlvmCodeGen = struct {
             .triple = self.triple,
             .data_layout = self.data_layout,
         }) catch return error.OutOfMemory;
+    }
+
+    /// The exported function name of `proc`'s LIR symbol followed by `suffix`,
+    /// assembled in one buffer.
+    fn procSymbolFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, proc: LirProcSpec, comptime suffix: []const u8) Error!LlvmBuilder.StrtabString {
+        const exact_prefix: []const u8 = if (self.target.os.tag == .macos) "\x01_" else "";
+        var name_sfa_buffer: [128]u8 align(@alignOf(usize)) = undefined;
+        var name_sfa = std.heap.BufferFirstAllocator.init(&name_sfa_buffer, self.allocator);
+        const name_alloc = name_sfa.allocator();
+        const name = try name_alloc.alloc(u8, exact_prefix.len + self.static_symbol_prefix.len + lir.ProcIdentity.symbol_name_len + suffix.len);
+        defer name_alloc.free(name);
+        @memcpy(name[0..exact_prefix.len], exact_prefix);
+        @memcpy(name[exact_prefix.len..][0..self.static_symbol_prefix.len], self.static_symbol_prefix);
+        const symbol_start = exact_prefix.len + self.static_symbol_prefix.len;
+        _ = proc.identity.writeSymbolName(name[symbol_start..][0..lir.ProcIdentity.symbol_name_len]);
+        @memcpy(name[symbol_start + lir.ProcIdentity.symbol_name_len ..], suffix);
+        return builder.strtabString(name) catch return error.OutOfMemory;
     }
 
     fn exportedFunctionName(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, name: []const u8) Error!LlvmBuilder.StrtabString {
@@ -3151,12 +3469,16 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn procArgLayouts(self: *MonoLlvmCodeGen, proc: LirProcSpec, scope: ProcArgLayoutScope) Error![]layout.Idx {
+        return self.procArgLayoutsIn(self.allocator, proc, scope);
+    }
+
+    fn procArgLayoutsIn(self: *MonoLlvmCodeGen, allocator: Allocator, proc: LirProcSpec, scope: ProcArgLayoutScope) Error![]layout.Idx {
         const params = self.store.getLocalSpan(proc.args);
         const count = switch (scope) {
             .all => params.len,
             .explicit => try explicitProcParamCount(proc.abi, params.len),
         };
-        const result = try self.allocator.alloc(layout.Idx, count);
+        const result = try allocator.alloc(layout.Idx, count);
         for (0..count) |i| {
             const local = GuardedList.at(params, i);
             const layout_slot = &result[i];
@@ -3182,11 +3504,10 @@ pub const MonoLlvmCodeGen = struct {
                 };
             }
         }
-        const old_captures_len = self.deferred_str_capture_storage.items.len;
-        if (count > old_captures_len) {
-            try self.deferred_str_capture_storage.resize(self.allocator, count);
-            @memset(self.deferred_str_capture_storage.items[old_captures_len..], null);
-            if (builtin.is_test) self.local_scratch_rows_visited += count - old_captures_len;
+        const old_values_len = self.local_value_storage.items.len;
+        if (count > old_values_len) {
+            try self.local_value_storage.resize(self.allocator, count);
+            @memset(self.local_value_storage.items[old_values_len..], .{});
         }
     }
 
@@ -3206,6 +3527,7 @@ pub const MonoLlvmCodeGen = struct {
             const local_id = GuardedList.at(proc_args, i);
             try self.allocProcLocalSlot(local_id);
         }
+        try self.allocFrameSlots(proc);
         const frame_locals = self.store.getLocalSpan(proc.frame_locals);
         for (0..frame_locals.len) |i| {
             const local_id = GuardedList.at(frame_locals, i);
@@ -3213,9 +3535,74 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Whether `local` is a `frame` dynamic local, whose address slot is an
+    /// entry of `frame_slots`.
+    fn isFrameLocal(self: *const MonoLlvmCodeGen, local: LocalId) bool {
+        const dyn = self.localDyn(local) orelse return false;
+        return dyn.storage == .frame;
+    }
+
+    /// Give the procedure's `frame` dynamic locals their address slots: one
+    /// array, in runs of locals that share a descriptor local, so
+    /// `emitDynFrameAlloc` places each run with one runtime call that writes
+    /// the run's slots itself. The procedure then makes no store per frame
+    /// local; each such store would be a stack access in its entry block,
+    /// and LLVM's WebAssembly register stackifier does work proportional to a
+    /// block's length for every use of the frame register in that block.
+    fn allocFrameSlots(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
+        self.frame_runs.clearRetainingCapacity();
+        self.frame_slots = .none;
+        const frame_locals = self.store.getLocalSpan(proc.frame_locals);
+        var count: u32 = 0;
+        for (0..frame_locals.len) |i| {
+            const local = GuardedList.at(frame_locals, i);
+            if (!self.isFrameLocal(local)) continue;
+            const desc = self.localDyn(local).?.desc;
+            count += 1;
+            for (self.frame_runs.items) |*run| {
+                if (run.desc == desc) {
+                    run.count += 1;
+                    break;
+                }
+            } else try self.frame_runs.append(self.allocator, .{ .desc = desc, .start = 0, .count = 1 });
+        }
+        if (count == 0) return;
+        var start: u32 = 0;
+        for (self.frame_runs.items) |*run| {
+            run.start = start;
+            start += run.count;
+        }
+        const word = self.targetWordSize();
+        self.frame_slots = try self.dynInputArray(word, count);
+        const next = try self.allocator.alloc(u32, self.frame_runs.items.len);
+        defer self.allocator.free(next);
+        for (next, self.frame_runs.items) |*position, run| position.* = run.start;
+        for (0..frame_locals.len) |i| {
+            const local = GuardedList.at(frame_locals, i);
+            if (!self.isFrameLocal(local)) continue;
+            const desc = self.localDyn(local).?.desc;
+            const run_index = for (self.frame_runs.items, 0..) |run, index| {
+                if (run.desc == desc) break index;
+            } else unreachable; // every frame local joined a run above
+            const position = next[run_index];
+            next[run_index] += 1;
+            const local_slot = &self.local_slots[@backingInt(local)];
+            if (local_slot.allocated) continue;
+            const layout_idx = self.store.getLocal(local).layout_idx;
+            local_slot.* = .{
+                .ptr = try self.offsetPtr(self.frame_slots, position * word),
+                .layout_idx = layout_idx,
+                .size = word,
+                .alignment = self.targetPointerAlignment(),
+                .allocated = true,
+            };
+        }
+    }
+
     fn allocProcLocalSlot(self: *MonoLlvmCodeGen, local_id: LocalId) Error!void {
         const local_slot = &self.local_slots[@backingInt(local_id)];
-        if (local_slot.allocated) return;
+        if (local_slot.allocated or self.isSsaLocal(local_id)) return;
+        if (self.value_plan.place(local_id) != .slot) return;
 
         const local = self.store.getLocal(local_id);
         const sa = self.sizeAlignOf(local.layout_idx);
@@ -3288,58 +3675,6 @@ pub const MonoLlvmCodeGen = struct {
         const reuse_param = GuardedList.at(params, explicit_count + 1);
         const reuse_ptr = self.reuse_ptr_arg orelse return error.CompilationFailed;
         try self.storePointer(self.slot(reuse_param).ptr, reuse_ptr);
-
-        const desc_start: usize = proc.erased_arg_desc_params.start;
-        const desc_end = desc_start + proc.erased_arg_desc_params.len;
-        if (desc_end > self.erased_arg_desc_params.len) {
-            llvmInvariantFmt(
-                "erased descriptor-param span [{d}, {d}) exceeded table length {d}",
-                .{ desc_start, desc_end, self.erased_arg_desc_params.len },
-            );
-        }
-        const desc_params = self.erased_arg_desc_params[desc_start..desc_end];
-        for (desc_params, 0..) |param, param_index| {
-            const desc = if (self.erasedArgDescOffsetForKey(proc.erased_arg_desc_offsets, param.key)) |offset|
-                try self.loadPointer(try self.offsetPtr(capture_ptr, offset))
-            else blk: {
-                if (param.read == .call_key) {
-                    llvmInvariantFmt("exact erased descriptor parameter had no capture offset", .{});
-                }
-                var parent_local: ?LocalId = null;
-                for (desc_params[0..param_index]) |candidate| {
-                    if (candidate.key.arg_index == param.key.arg_index and
-                        candidate.key.descriptor_index == param.source_descriptor_index)
-                    {
-                        parent_local = candidate.local;
-                        break;
-                    }
-                }
-                const parent = parent_local orelse
-                    llvmInvariantFmt("projected erased descriptor had no preceding parent parameter", .{});
-                break :blk switch (param.read) {
-                    .call_key, .nested => try self.callBoxy(
-                        "roc_boxy_nested_desc",
-                        try self.ptrType(),
-                        &.{ try self.ptrType(), .i32 },
-                        &.{
-                            try self.loadPointer(self.slot(parent).ptr),
-                            try self.boxyInt(.i32, param.source_nested_index),
-                        },
-                    ),
-                    .tag_payload => try self.callBoxy(
-                        "roc_boxy_tag_payload_desc",
-                        try self.ptrType(),
-                        &.{ try self.ptrType(), .i32, .i32 },
-                        &.{
-                            try self.loadPointer(self.slot(parent).ptr),
-                            try self.boxyInt(.i32, @backingInt(param.source_tag_name)),
-                            try self.boxyInt(.i32, param.source_nested_index),
-                        },
-                    ),
-                };
-            };
-            try self.storePointer(self.slot(param.local).ptr, desc);
-        }
     }
 
     fn unpackProcArgsAtOffsets(
@@ -3351,30 +3686,11 @@ pub const MonoLlvmCodeGen = struct {
     ) Error!void {
         for (0..explicit_count) |i| {
             const param = GuardedList.at(params, i);
-            const param_slot = self.slot(param);
-            if (param_slot.size == 0) continue;
+            const param_layout = self.localLayout(param);
+            if (self.layoutByteSize(param_layout) == 0) continue;
             const src = try self.offsetPtr(args_ptr, GuardedList.at(offsets, i));
-            try self.copyBytes(param_slot.ptr, src, self.layoutDataSize(self.localLayout(param)), param_slot.alignment);
+            try self.defineLocalFromMemory(param, src, self.layoutDataSize(param_layout), self.alignmentForLayout(param_layout));
         }
-    }
-
-    fn erasedArgDescOffsetForKey(
-        self: *const MonoLlvmCodeGen,
-        span: lir.LIR.BoxySpan,
-        key: lir.LIR.ErasedArgDescKey,
-    ) ?u32 {
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.erased_arg_desc_offsets.len) {
-            llvmInvariantFmt(
-                "erased descriptor-offset span [{d}, {d}) exceeded table length {d}",
-                .{ start, end, self.erased_arg_desc_offsets.len },
-            );
-        }
-        for (self.erased_arg_desc_offsets[start..end]) |entry| {
-            if (std.meta.eql(entry.key, key)) return entry.offset;
-        }
-        return null;
     }
 
     fn emitHostedProcBody(self: *MonoLlvmCodeGen, hosted: lir.LIR.HostedProc, proc: LirProcSpec) Error!void {
@@ -3393,31 +3709,30 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
-    /// Heap-backed glue carried across the children of one `switch_stmt` while
-    /// the explicit work stack drives statement emission. The branch case blocks
-    /// were already allocated and the LLVM switch instruction already finished;
+    /// Glue carried across the children of one `switch_stmt` while the
+    /// explicit work stack drives statement emission. The branch case blocks
+    /// were already created and the LLVM switch instruction already finished;
     /// these continuations only set the cursor and queue each branch body.
     const SwitchState = struct {
-        branches: lir.LirStore.StoreSpanBorrow(lir.CFSwitchBranch, "cf_switch_branches"),
-        branch_blocks: []LlvmBuilder.Function.Block.Index,
+        branches: lir.LIR.CFSwitchBranchSpan,
+        /// Where the branch case blocks start in `switch_case_blocks`, one
+        /// per branch.
+        blocks_start: u32,
         default_block: LlvmBuilder.Function.Block.Index,
         default_branch: CFStmtId,
         default_is_cold: bool,
+        /// `value_journal`'s length at the switch.
+        mark: u32,
     };
 
     /// A preserve_most wrapper around one builtin, so a call on a cold path
     /// clobbers almost no registers in its (hot-loop) caller.
     const ColdShim = struct {
         shim: LlvmBuilder.Function.Index,
+        /// The wrapped builtin. Its signature differs from the shim's when
+        /// the builtin writes a list or string result through its first
+        /// parameter (see `callBuiltinVoid`).
         target: LlvmBuilder.Function.Index,
-        fn_ty: LlvmBuilder.Type,
-        /// The wrapped builtin's own signature. Differs from `fn_ty` for
-        /// shims that adapt an out-parameter builtin to a by-value return.
-        target_fn_ty: LlvmBuilder.Type,
-        /// The wrapped builtin writes a three-word list or string through its
-        /// first parameter; the shim drops that parameter and returns the
-        /// words by value, so the caller's result slot never escapes.
-        by_value_out: bool,
         compiled: bool,
     };
 
@@ -3426,21 +3741,29 @@ pub const MonoLlvmCodeGen = struct {
         uninitialized_block: LlvmBuilder.Function.Block.Index,
         initialized_branch: CFStmtId,
         uninitialized_branch: CFStmtId,
+        /// `value_journal`'s length at the switch.
+        mark: u32,
     };
 
-    /// Heap-backed glue carried across the children of one `join` statement: the
+    /// Glue carried across the children of one `join` statement: the
     /// remainder subtree and (the first time the join is seen) the join body.
     const JoinState = struct {
         key: u32,
         join_block: LlvmBuilder.Function.Block.Index,
         after_block: LlvmBuilder.Function.Block.Index,
         body: CFStmtId,
+        /// `value_journal`'s length at the join statement.
+        mark: u32,
     };
 
     const StrMatchBody = struct {
         block: LlvmBuilder.Function.Block.Index,
         stmt: CFStmtId,
-        captures: []const DeferredStrCaptureBinding = &.{},
+        /// The body's run of `str_match_captures`.
+        captures_start: u32 = 0,
+        captures_len: u32 = 0,
+        /// `value_journal`'s length at the match statement.
+        mark: u32 = 0,
     };
 
     /// Drives statement-LIR emission with an explicit heap-backed work stack so
@@ -3449,18 +3772,21 @@ pub const MonoLlvmCodeGen = struct {
     /// exact post-children glue of `switch_stmt` and `join` that recursion
     /// previously interleaved. Continuations are pushed before their child so
     /// the child's whole subtree is emitted first, preserving emission order.
+    ///
+    /// Control statements nest on the work stack, so the runs they keep in
+    /// `switch_case_blocks` and `str_match_captures` are released in reverse
+    /// order of creation: each run is the top of its list when released.
     const StmtWork = union(enum) {
         node: CFStmtId,
-        switch_branch: struct { state: *SwitchState, index: u32 },
-        switch_default: *SwitchState,
-        switch_free: *SwitchState,
+        switch_branch: struct { state: SwitchState, index: u32 },
+        switch_default: SwitchState,
+        /// Releases a switch's case blocks, which start at this index.
+        switch_free: u32,
         cold_region_end,
-        initialized_payload_branch: struct { state: *InitializedPayloadSwitchState, initialized: bool },
-        initialized_payload_free: *InitializedPayloadSwitchState,
-        join_after_remainder: *JoinState,
-        join_after_body: *JoinState,
+        initialized_payload_branch: struct { state: InitializedPayloadSwitchState, initialized: bool },
+        join_after_remainder: JoinState,
+        join_after_body: JoinState,
         str_match_body: StrMatchBody,
-        boxy_tag_body: struct { block: LlvmBuilder.Function.Block.Index, stmt: CFStmtId },
     };
 
     fn compileStmt(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
@@ -3469,25 +3795,33 @@ pub const MonoLlvmCodeGen = struct {
         const wa = sfa.allocator();
         var work = std.ArrayList(StmtWork).empty;
         defer work.deinit(wa);
+        const case_blocks_base = self.switch_case_blocks.items.len;
+        const captures_base = self.str_match_captures.items.len;
+        errdefer {
+            self.switch_case_blocks.shrinkRetainingCapacity(case_blocks_base);
+            self.str_match_captures.shrinkRetainingCapacity(captures_base);
+        }
         try work.append(wa, .{ .node = stmt_id });
         while (work.pop()) |item| {
             switch (item) {
                 .node => |node_id| try self.compileStmtNode(node_id, wa, &work),
                 .switch_branch => |sb| {
                     const wip = self.wip orelse return error.CompilationFailed;
-                    wip.cursor = .{ .block = sb.state.branch_blocks[sb.index] };
-                    if (sb.index + 1 < sb.state.branch_blocks.len) {
+                    wip.cursor = .{ .block = self.switch_case_blocks.items[sb.state.blocks_start + sb.index] };
+                    self.rollbackValues(sb.state.mark);
+                    if (sb.index + 1 < sb.state.branches.len) {
                         try work.append(wa, .{ .switch_branch = .{ .state = sb.state, .index = sb.index + 1 } });
                     } else {
                         try work.append(wa, .{ .switch_default = sb.state });
                     }
-                    const branch = GuardedList.at(sb.state.branches, sb.index);
+                    const branch = GuardedList.at(self.store.getCFSwitchBranches(sb.state.branches), sb.index);
                     try work.append(wa, .{ .node = branch.body });
                 },
                 .switch_default => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = state.default_block };
-                    try work.append(wa, .{ .switch_free = state });
+                    self.rollbackValues(state.mark);
+                    try work.append(wa, .{ .switch_free = state.blocks_start });
                     if (state.default_is_cold) {
                         // The default subtree is emitted before this marker
                         // pops, bracketing the region exactly: a jump out to a
@@ -3500,24 +3834,21 @@ pub const MonoLlvmCodeGen = struct {
                     try work.append(wa, .{ .node = state.default_branch });
                 },
                 .cold_region_end => self.cold_depth -= 1,
-                .switch_free => |state| {
-                    self.allocator.free(state.branch_blocks);
-                    self.allocator.destroy(state);
+                .switch_free => |blocks_start| {
+                    std.debug.assert(blocks_start <= self.switch_case_blocks.items.len);
+                    self.switch_case_blocks.shrinkRetainingCapacity(blocks_start);
                 },
                 .initialized_payload_branch => |branch| {
                     const wip = self.wip orelse return error.CompilationFailed;
+                    self.rollbackValues(branch.state.mark);
                     if (branch.initialized) {
                         wip.cursor = .{ .block = branch.state.initialized_block };
                         try work.append(wa, .{ .initialized_payload_branch = .{ .state = branch.state, .initialized = false } });
                         try work.append(wa, .{ .node = branch.state.initialized_branch });
                     } else {
                         wip.cursor = .{ .block = branch.state.uninitialized_block };
-                        try work.append(wa, .{ .initialized_payload_free = branch.state });
                         try work.append(wa, .{ .node = branch.state.uninitialized_branch });
                     }
-                },
-                .initialized_payload_free => |state| {
-                    self.allocator.destroy(state);
                 },
                 .join_after_remainder => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
@@ -3525,34 +3856,31 @@ pub const MonoLlvmCodeGen = struct {
                     if (!self.compiled_joins.contains(state.key)) {
                         try self.compiled_joins.put(state.key, {});
                         wip.cursor = .{ .block = state.join_block };
+                        self.rollbackValues(state.mark);
+                        try self.enterMerge(state.body);
+                        self.entering_join_body = state.body;
                         try work.append(wa, .{ .join_after_body = state });
                         try work.append(wa, .{ .node = state.body });
                     } else {
                         wip.cursor = .{ .block = state.after_block };
-                        self.allocator.destroy(state);
                     }
                 },
                 .join_after_body => |state| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     if (!self.currentBlockHasTerminator()) _ = wip.br(state.after_block) catch return error.CompilationFailed;
                     wip.cursor = .{ .block = state.after_block };
-                    self.allocator.destroy(state);
                 },
                 .str_match_body => |body| {
                     const wip = self.wip orelse return error.CompilationFailed;
                     wip.cursor = .{ .block = body.block };
+                    self.rollbackValues(body.mark);
                     self.clearDeferredStrCaptures();
-                    for (body.captures) |capture| {
+                    const captures_end = body.captures_start + body.captures_len;
+                    std.debug.assert(captures_end == self.str_match_captures.items.len or body.captures_len == 0);
+                    for (self.str_match_captures.items[body.captures_start..captures_end]) |capture| {
                         try self.installDeferredStrCapture(capture.local, capture.capture);
                     }
-                    if (body.captures.len > 0) {
-                        self.allocator.free(body.captures);
-                    }
-                    try work.append(wa, .{ .node = body.stmt });
-                },
-                .boxy_tag_body => |body| {
-                    const wip = self.wip orelse return error.CompilationFailed;
-                    wip.cursor = .{ .block = body.block };
+                    if (body.captures_len > 0) self.str_match_captures.shrinkRetainingCapacity(body.captures_start);
                     try work.append(wa, .{ .node = body.stmt });
                 },
             }
@@ -3563,48 +3891,32 @@ pub const MonoLlvmCodeGen = struct {
         self.stmt_incoming_counts.clearRetainingCapacity();
         self.stmt_entry_blocks.clearRetainingCapacity();
 
-        var visited = std.AutoHashMap(u32, void).init(self.allocator);
-        defer visited.deinit();
+        try self.beginStmtVisit();
 
         var stack = std.ArrayList(CFStmtId).empty;
         defer stack.deinit(self.allocator);
         try self.noteStmtIncoming(&stack, entry);
 
         while (stack.pop()) |stmt_id| {
-            const key = @backingInt(stmt_id);
-            if (visited.contains(key)) continue;
-            try visited.put(key, {});
+            if (!self.markStmtVisited(stmt_id)) continue;
 
-            switch (self.store.getCFStmt(stmt_id)) {
+            switch (self.store.getCFStmtImmediate(stmt_id).*) {
                 inline .assign_ref,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
+                .dyn,
                 .store_struct,
                 .store_tag,
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -3629,10 +3941,6 @@ pub const MonoLlvmCodeGen = struct {
                     try self.noteStmtIncoming(&stack, str_match.on_match);
                     try self.noteStmtIncoming(&stack, str_match.on_miss);
                 },
-                .boxy_tag_match => |tag_match| {
-                    try self.noteStmtIncoming(&stack, tag_match.on_match);
-                    try self.noteStmtIncoming(&stack, tag_match.on_miss);
-                },
                 .str_match_set => |str_match_set| {
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
                     for (0..arms.len) |i| {
@@ -3647,8 +3955,6 @@ pub const MonoLlvmCodeGen = struct {
                 },
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 .jump,
                 .ret,
                 .crash,
@@ -3676,7 +3982,33 @@ pub const MonoLlvmCodeGen = struct {
     /// statements with no loop, and a leaf of moderate size. Larger bodies
     /// remain ordinary calls, so LLVM can simplify them before deciding
     /// whether to duplicate them into their callers.
+    /// The inlining attributes of a generated procedure. Diagnostics builds
+    /// keep every procedure out of line so crash frames name it. A speed
+    /// build inlines the procedures `computeInlineEverywhere` selects
+    /// everywhere and hints the rest. A size build adds neither: with every
+    /// function in the module marked `minsize` (`builder.zig` marks the
+    /// whole module before optimization), LLVM's size cost model decides
+    /// each call on the callee's expanded size alone.
+    fn addInliningAttrs(self: *MonoLlvmCodeGen, attrs_wip: *LlvmBuilder.FunctionAttributes.Wip, proc_id: LirProcSpecId) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        if (self.enable_default_platform_diagnostics) {
+            try attrs_wip.addFnAttr(.@"noinline", builder);
+        } else if (self.inlineEverywhere(proc_id)) {
+            try attrs_wip.addFnAttr(.alwaysinline, builder);
+        } else if (!self.optimize_for_size) {
+            try attrs_wip.addFnAttr(.inlinehint, builder);
+        }
+    }
+
+    /// Select the procedures a speed build inlines everywhere: wrappers (no
+    /// loop, few statements) and leaves (no calls, moderate size), whose
+    /// per-call cost in their callers' loops exceeds the work they do. That
+    /// is a speed policy; a size build selects nothing and leaves every
+    /// decision to LLVM's size cost model.
     fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        self.inline_everywhere.clearRetainingCapacity();
+        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
+        if (self.optimize_for_size) return;
         const shapes = try self.allocator.alloc(InlineShape, procs.len);
         defer {
             for (shapes) |*shape| shape.callees.deinit(self.allocator);
@@ -3687,8 +4019,6 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
         }
-        self.inline_everywhere.clearRetainingCapacity();
-        try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
         for (procs, 0..) |proc, i| {
             if (proc.body == null or proc.is_static_initializer) continue;
             const shape = &shapes[i];
@@ -3698,39 +4028,166 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// The declarations a stack-bound check names.
+    const StackCheckDecls = struct {
+        stack_pointer: LlvmBuilder.Variable.Index,
+        /// `__stack_low`'s address as an integer. The relocation against it
+        /// carries the room the check needs as its addend, which the composed
+        /// object's analysis fills in (`StackRoom.fillCheckRooms`).
+        bound: LlvmBuilder.Value,
+        overflow: LlvmBuilder.Function.Index,
+    };
+
+    fn stackCheckDecls(self: *MonoLlvmCodeGen) Error!StackCheckDecls {
+        if (self.stack_check_decls) |decls| return decls;
+        const builder = self.builder orelse return error.CompilationFailed;
+
+        const stack_pointer = builder.addVariable(builder.strtabString("__stack_pointer") catch return error.OutOfMemory, .i32, LlvmBuilder.AddrSpace.wasm.variable) catch return error.OutOfMemory;
+        stack_pointer.ptrConst(builder).global.setLinkage(.external, builder);
+
+        // Hidden, so position-independent code addresses it relative to
+        // `__memory_base` instead of through a GOT entry.
+        const stack_low = builder.addVariable(builder.strtabString("__stack_low") catch return error.OutOfMemory, .i8, .default) catch return error.OutOfMemory;
+        stack_low.ptrConst(builder).global.ptr(builder).visibility = .hidden;
+        stack_low.ptrConst(builder).global.setLinkage(.external, builder);
+        const bound = (builder.castConst(.ptrtoint, stack_low.toConst(builder), .i32) catch return error.OutOfMemory).toValue();
+
+        const overflow_ty = builder.fnType(.void, &.{}, .normal) catch return error.OutOfMemory;
+        const overflow = builder.addFunction(overflow_ty, builder.strtabString(shim_symbols.roc_wasm_stack_overflow) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+        overflow.setLinkage(.external, builder);
+        var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
+        defer attrs.deinit(builder);
+        try attrs.addFnAttr(.cold, builder);
+        try attrs.addFnAttr(.noreturn, builder);
+        try attrs.addFnAttr(.nounwind, builder);
+        overflow.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
+
+        const decls = StackCheckDecls{ .stack_pointer = stack_pointer, .bound = bound, .overflow = overflow };
+        self.stack_check_decls = decls;
+        return decls;
+    }
+
+    /// Begin `func`, whose entry block the cursor is at, with a stack-bound
+    /// check, and leave the cursor in the block the rest of its body follows.
+    /// A checked function is never inlined, so its check always runs at the
+    /// entry of the function the composed object's analysis reads it in.
+    fn emitStackCheck(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const decls = try self.stackCheckDecls();
+        try self.markNoInline(func);
+
+        const stack_pointer = wip.load(.normal, .i32, decls.stack_pointer.toValue(builder), LlvmBuilder.Alignment.fromByteUnits(4), "") catch return error.OutOfMemory;
+        const overflowed = wip.icmp(.ult, stack_pointer, decls.bound, "") catch return error.OutOfMemory;
+        const overflow_block = wip.block(1, "stack_overflow") catch return error.OutOfMemory;
+        const ok_block = wip.block(1, "stack_ok") catch return error.OutOfMemory;
+        _ = wip.brCond(overflowed, overflow_block, ok_block, .else_likely) catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = overflow_block };
+        _ = wip.call(.normal, .ccc, .none, decls.overflow.typeOf(builder), decls.overflow.toValue(builder), &.{}, "") catch return error.OutOfMemory;
+        _ = wip.@"unreachable"() catch return error.OutOfMemory;
+
+        wip.cursor = .{ .block = ok_block };
+    }
+
+    /// Replace `func`'s inlining attributes with `noinline`.
+    fn markNoInline(self: *MonoLlvmCodeGen, func: LlvmBuilder.Function.Index) Error!void {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const existing = func.ptrConst(builder).attributes;
+        var fn_attrs = std.ArrayList(LlvmBuilder.Attribute.Index).empty;
+        defer fn_attrs.deinit(self.allocator);
+        for (existing.func(builder).slice(builder)) |attribute| {
+            const kind = attribute.getKind(builder);
+            if (kind == .alwaysinline or kind == .inlinehint or kind == .@"noinline") continue;
+            try fn_attrs.append(self.allocator, attribute);
+        }
+        try fn_attrs.append(self.allocator, builder.attr(.@"noinline") catch return error.OutOfMemory);
+
+        const param_count = func.typeOf(builder).functionParameters(builder).len;
+        const all = try self.allocator.alloc(LlvmBuilder.Attributes, 2 + param_count);
+        defer self.allocator.free(all);
+        all[0] = builder.attrs(fn_attrs.items) catch return error.OutOfMemory;
+        all[1] = existing.ret(builder);
+        for (all[2..], 0..) |*param_attrs, index| param_attrs.* = existing.param(index, builder);
+        func.setAttributes(builder.fnAttrs(all) catch return error.OutOfMemory, builder);
+    }
+
+    /// The procedures whose bodies check the stack bounds: those on a cycle
+    /// of direct calls, and those code can call through a function pointer,
+    /// since builtins and the runtime call back into them on cycles LIR cannot
+    /// show. Every other function this module generates checks too
+    /// (`emitStackCheck`), except the refcount increment helpers, which never
+    /// recurse.
+    fn computeStackCheckProcs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        self.stack_check_procs.clearRetainingCapacity();
+        try self.stack_check_procs.appendNTimes(self.allocator, false, procs.len);
+        const needs = self.stack_check_procs.items;
+
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+
+        const succ_starts = try arena.alloc(u32, procs.len + 1);
+        var succs = std.ArrayList(u32).empty;
+        var work = std.ArrayList(CFStmtId).empty;
+        for (procs, 0..) |proc, index| {
+            succ_starts[index] = @intCast(succs.items.len);
+            if (proc.abi == .erased_callable) needs[index] = true;
+            const body = proc.body orelse continue;
+            try self.beginStmtVisit();
+            try work.append(arena, body);
+            while (work.pop()) |stmt_id| {
+                if (!self.markStmtVisited(stmt_id)) continue;
+                switch (self.store.getCFStmt(stmt_id)) {
+                    .assign_call => |call| try succs.append(arena, @backingInt(call.proc)),
+                    .assign_packed_erased_fn => |packed_fn| needs[@backingInt(self.store.stmtRow(packed_fn.data).proc)] = true,
+                    .assign_literal => |literal| {
+                        switch (literal.value) {
+                            .proc_ref => |proc_id| needs[@backingInt(proc_id)] = true,
+                            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .static_data => {},
+                        }
+                    },
+                    // A dictionary's entry is called through the address
+                    // its composition takes.
+                    .dyn => |dyn_stmt| switch (self.store.stmtRow(dyn_stmt.data)) {
+                        .frame_alloc, .table_entry, .copy, .field_addr, .list_item_addr, .box_payload_addr, .tag_discriminant, .tag_payload_addr, .record, .record_update, .tag, .list, .box, .slot_alloc, .slot_store, .eq, .hash, .inspect, .call_erased, .closure, .view, .adapt => {},
+                    },
+                    .init_uninitialized, .assign_ref, .assign_call_erased, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => {},
+                }
+                try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, arena);
+            }
+        }
+        succ_starts[procs.len] = @intCast(succs.items.len);
+        for (self.static_data_procs) |proc_id| needs[@backingInt(proc_id)] = true;
+
+        const preds = try collections.csr.transpose(arena, succ_starts, succs.items);
+        const components = try collections.scc.compute(arena, succ_starts, succs.items, preds.starts, preds.targets);
+        for (0..components.count()) |component| {
+            const members = components.membersOf(component);
+            var cyclic = members.len > 1;
+            for (succs.items[succ_starts[members[0]]..succ_starts[members[0] + 1]]) |callee| cyclic = cyclic or callee == members[0];
+            if (!cyclic) continue;
+            for (members) |member| needs[member] = true;
+        }
+    }
+
     fn inlineShapeOf(self: *MonoLlvmCodeGen, body: CFStmtId, shape: *InlineShape) Error!void {
-        var visited = std.AutoHashMap(u32, void).init(self.allocator);
-        defer visited.deinit();
+        try self.beginStmtVisit();
         var work = std.ArrayList(CFStmtId).empty;
         defer work.deinit(self.allocator);
         var joins = std.ArrayList(struct { id: lir.LIR.JoinPointId, body: CFStmtId }).empty;
         defer joins.deinit(self.allocator);
         try work.append(self.allocator, body);
         while (work.pop()) |stmt_id| {
-            const entry = try visited.getOrPut(@backingInt(stmt_id));
-            if (entry.found_existing) continue;
+            if (!self.markStmtVisited(stmt_id)) continue;
             shape.count += 1;
             const stmt = self.store.getCFStmt(stmt_id);
             switch (stmt) {
                 .join => |join| try joins.append(self.allocator, .{ .id = join.id, .body = join.body }),
                 .assign_call => |call| try shape.callees.append(self.allocator, call.proc),
-                .assign_call_erased, .assign_call_dict, .assign_packed_erased_fn => shape.opaque_call = true,
+                .assign_call_erased, .assign_packed_erased_fn, .dyn => shape.opaque_call = true,
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -3743,7 +4200,6 @@ pub const MonoLlvmCodeGen = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -3752,8 +4208,6 @@ pub const MonoLlvmCodeGen = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .jump,
                 .ret,
                 .crash,
@@ -3764,11 +4218,10 @@ pub const MonoLlvmCodeGen = struct {
         if (shape.count > max_wrapper_inline_stmts) return;
         // A loop is a join reached again from inside its own body.
         for (joins.items) |join| {
-            visited.clearRetainingCapacity();
+            try self.beginStmtVisit();
             try work.append(self.allocator, join.body);
             while (work.pop()) |stmt_id| {
-                const entry = try visited.getOrPut(@backingInt(stmt_id));
-                if (entry.found_existing) continue;
+                if (!self.markStmtVisited(stmt_id)) continue;
                 const stmt = self.store.getCFStmt(stmt_id);
                 if (stmt == .jump and stmt.jump.target == join.id) {
                     shape.has_loop = true;
@@ -3778,6 +4231,29 @@ pub const MonoLlvmCodeGen = struct {
                 try lir.BodyClone.appendSuccessors(self.store, &work, stmt_id, self.allocator);
             }
         }
+    }
+
+    /// Start a statement-graph walk: no statement is visited yet.
+    fn beginStmtVisit(self: *MonoLlvmCodeGen) Error!void {
+        const count = self.store.cfStmtCount();
+        if (count > self.stmt_visit_marks.items.len) {
+            const old_len = self.stmt_visit_marks.items.len;
+            try self.stmt_visit_marks.resize(self.allocator, count);
+            @memset(self.stmt_visit_marks.items[old_len..], 0);
+        }
+        if (self.stmt_visit_epoch == std.math.maxInt(u32)) {
+            @memset(self.stmt_visit_marks.items, 0);
+            self.stmt_visit_epoch = 0;
+        }
+        self.stmt_visit_epoch += 1;
+    }
+
+    /// Mark `stmt_id` visited in the current walk; false if it already was.
+    fn markStmtVisited(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) bool {
+        const mark = &self.stmt_visit_marks.items[@backingInt(stmt_id)];
+        if (mark.* == self.stmt_visit_epoch) return false;
+        mark.* = self.stmt_visit_epoch;
+        return true;
     }
 
     fn noteStmtIncoming(self: *MonoLlvmCodeGen, stack: *std.ArrayList(CFStmtId), stmt_id: CFStmtId) Error!void {
@@ -3792,6 +4268,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn enterSharedStmtBlock(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!bool {
+        if (self.entering_join_body == stmt_id) {
+            self.entering_join_body = null;
+            return false;
+        }
         const key = @backingInt(stmt_id);
         const count = self.stmt_incoming_counts.get(key) orelse 0;
         if (count <= 1) return false;
@@ -3799,6 +4279,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         if (self.stmt_entry_blocks.get(key)) |block| {
             if (wip.cursor.block != block) {
+                try self.noteMergeEdge(stmt_id);
                 _ = wip.br(block) catch return error.OutOfMemory;
             }
             return true;
@@ -3806,7 +4287,9 @@ pub const MonoLlvmCodeGen = struct {
 
         const block = wip.block(0, "shared_stmt") catch return error.OutOfMemory;
         try self.stmt_entry_blocks.put(key, block);
+        try self.noteMergeEdge(stmt_id);
         try brAndEnter(wip, block);
+        try self.enterMerge(stmt_id);
         return false;
     }
 
@@ -3849,7 +4332,10 @@ pub const MonoLlvmCodeGen = struct {
 
         const builder = self.builder orelse return error.CompilationFailed;
         const scope = self.store.inlineScope(id);
-        const linkage_name = builder.metadataStringFmt("{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() }) catch return error.OutOfMemory;
+        const linkage_name = linkage: {
+            var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+            break :linkage builder.metadataString(scope.source_identity.writeSymbolName(&symbol_name)) catch return error.OutOfMemory;
+        };
         const name = if (scope.source_name.isNone())
             linkage_name
         else
@@ -3930,7 +4416,12 @@ pub const MonoLlvmCodeGen = struct {
         defer self.current_source_stmt = outer_source_stmt;
         self.current_source_stmt = stmt_id;
         try self.setStmtDebugLocation(stmt_id);
+        try self.emitSlotLifetimeMarkers(stmt_id);
         switch (stmt) {
+            .dyn => |dyn_stmt| {
+                try self.emitDyn(dyn_stmt.target, self.store.stmtRow(dyn_stmt.data));
+                try work.append(wa, .{ .node = dyn_stmt.next });
+            },
             .assign_ref => |assign| {
                 try self.emitAssignRef(assign.target, assign.op);
                 try work.append(wa, .{ .node = assign.next });
@@ -3942,100 +4433,45 @@ pub const MonoLlvmCodeGen = struct {
             .init_uninitialized => |uninit| {
                 try work.append(wa, .{ .node = uninit.next });
             },
-            .assign_call => |assign| if (assign.replaces_frame) {
+            .assign_call => |assign| if (self.store.stmtRowOrDefault(assign.extra).replaces_frame) {
                 try self.emitFrameReplacingCall(assign.proc, assign.args);
             } else {
-                try self.emitDirectCall(assign.target, assign.proc, assign.args, assign.out_desc, assign.is_cold);
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
-                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
+                const extra = self.store.stmtRowOrDefault(assign.extra);
+                try self.emitDirectCall(assign.target, assign.proc, assign.args, extra.is_cold);
+                try self.emitDrivePending(extra.drive, assign.target);
                 try work.append(wa, .{ .node = assign.next });
             },
-            .assign_call_erased => |assign| {
+            .assign_call_erased => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitErasedCall(
-                    assign.target,
+                    assign_stmt.target,
                     assign.closure,
                     assign.args,
-                    assign.arg_layouts,
-                    assign.arg_descs,
-                    assign.arg_desc_keys,
                     assign.arg_plan,
-                    assign.result_desc,
-                    assign.out_desc,
                     assign.reuse_closure,
                     assign.deferred,
                 );
-                try self.emitDrivePending(assign.drive, assign.target, assign.result_desc, assign.out_desc);
-                if (assign.returns_pending) |pending| try self.emitReturnIfCallPending(pending);
-                try work.append(wa, .{ .node = assign.next });
+                try self.emitDrivePending(assign.drive, assign_stmt.target);
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
-            .assign_packed_erased_fn => |assign| {
+            .assign_packed_erased_fn => |assign_stmt| {
+                const assign = self.store.stmtRow(assign_stmt.data);
                 try self.emitPackedErasedFn(
-                    assign.target,
+                    assign_stmt.target,
                     assign.proc,
                     assign.capture,
                     assign.capture_layout,
                     assign.on_drop,
-                    assign.result_desc,
                     assign.reuse,
                     assign.reuse_unique,
                 );
-                try work.append(wa, .{ .node = assign.next });
+                try work.append(wa, .{ .node = assign_stmt.next });
             },
-            .assign_boxy_desc_ref => |assign| {
-                try self.emitBoxyDescRef(assign);
+            .assign_low_level => |assign| if (self.store.stmtRowOrDefault(assign.extra).dyn_elem_desc) {
+                try self.emitDynElemLowLevel(assign.target, assign.op, assign.args, self.store.stmtRowOrDefault(assign.extra));
                 try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_dict_ref => |assign| {
-                try self.emitBoxyDictRef(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_box => |assign| {
-                try self.emitBoxyBox(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_record_update => |assign| {
-                try self.emitBoxyRecordUpdate(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_reuse_box => |assign| {
-                try self.copyLocal(assign.target, assign.source);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_unbox => |assign| {
-                try self.emitBoxyUnbox(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_adapt => |assign| {
-                try self.emitBoxyAdapt(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_inspect => |assign| {
-                try self.emitBoxyInspect(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_eq => |assign| {
-                try self.emitBoxyEq(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_hash => |assign| {
-                try self.emitBoxyHash(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_tag => |assign| {
-                try self.emitBoxyTag(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_boxy_tag_payload => |assign| {
-                try self.emitBoxyTagPayload(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .boxy_tag_match => |tag_match| try self.emitBoxyTagMatch(tag_match, wa, work),
-            .assign_call_dict => |assign| {
-                try self.emitBoxyCallDict(assign);
-                try work.append(wa, .{ .node = assign.next });
-            },
-            .assign_low_level => |assign| {
-                try self.emitLowLevel(assign.target, assign.op, assign.args, assign.unique_args, assign.interchangeable, assign.simd_concat_count);
+            } else {
+                try self.emitLowLevel(assign.target, assign.op, assign.args, self.store.stmtRowOrDefault(assign.extra).unique_args, self.store.stmtRowOrDefault(assign.extra).interchangeable, self.store.stmtRowOrDefault(assign.extra).simd_concat_count);
                 try work.append(wa, .{ .node = assign.next });
             },
             .assign_list => |assign| {
@@ -4059,12 +4495,16 @@ pub const MonoLlvmCodeGen = struct {
                 try work.append(wa, .{ .node = assign.next });
             },
             .set_local => |assign| {
-                try self.copyLocal(assign.target, assign.value);
+                if (self.localDyn(assign.target) != null or self.localDyn(assign.value) != null) {
+                    try self.emitDynSetLocal(assign.target, assign.value);
+                } else {
+                    try self.copyLocal(assign.target, assign.value);
+                }
                 try work.append(wa, .{ .node = assign.next });
             },
             .debug => |debug_stmt| {
                 try self.materializeLocalIfDeferred(debug_stmt.message);
-                try self.callBuiltinVoid(builtinSymbol(.dbg_str), &.{try self.ptrType()}, &.{self.slot(debug_stmt.message).ptr});
+                try self.callBuiltinVoid(.dbg_str, &.{try self.ptrType()}, &.{self.slot(debug_stmt.message).ptr});
                 try work.append(wa, .{ .node = debug_stmt.next });
             },
             .expect => |expect_stmt| {
@@ -4075,33 +4515,38 @@ pub const MonoLlvmCodeGen = struct {
                 try self.emitRuntimeError();
             },
             .comptime_exhaustiveness_failed => {
-                try self.emitCrashBytes("compile-time exhaustiveness failure reached runtime code");
-            },
-            .comptime_branch_taken => |marker| {
-                try work.append(wa, .{ .node = marker.next });
+                try self.emitCrashBytes(lir.LIR.comptime_exhaustiveness_failure_message);
             },
             .incref => |inc| {
-                try self.emitExplicitRcStmt(inc.rc, .incref, inc.value, inc.count, inc.atomicity);
+                if (self.localDyn(inc.value) != null) {
+                    try self.emitDynIncref(inc.value, inc.count);
+                } else {
+                    try self.emitExplicitRcStmt(self.store.rcHelper(inc.rc), inc.value, inc.count, inc.atomicity);
+                }
                 try work.append(wa, .{ .node = inc.next });
             },
             .decref => |dec| {
-                try self.emitExplicitRcStmt(dec.rc, .decref, dec.value, 1, dec.atomicity);
+                if (self.localDyn(dec.value) != null) {
+                    try self.emitDynDecref(dec.value);
+                } else {
+                    try self.emitExplicitRcStmt(self.store.rcHelper(dec.rc), dec.value, 1, dec.atomicity);
+                }
                 try work.append(wa, .{ .node = dec.next });
             },
-            .decref_if_initialized => |dec| {
-                try self.emitDecrefIfInitialized(dec.cond, dec.cond_mask, dec.value, dec.rc, dec.atomicity);
-                try work.append(wa, .{ .node = dec.next });
+            .decref_if_initialized => |dec_stmt| {
+                const dec = self.store.stmtRow(dec_stmt.data);
+                try self.emitDecrefIfInitialized(dec_stmt.cond, dec.cond_mask, dec_stmt.value, dec.rc, dec.atomicity);
+                try work.append(wa, .{ .node = dec_stmt.next });
             },
             .free => |free_stmt| {
-                try self.emitExplicitRcStmt(free_stmt.rc, .free, free_stmt.value, 1, free_stmt.atomicity);
+                if (self.localDyn(free_stmt.value) != null) llvmInvariantFmt("free of dynamic local {d}", .{@backingInt(free_stmt.value)});
+                try self.emitExplicitRcStmt(self.store.rcHelper(free_stmt.rc), free_stmt.value, 1, free_stmt.atomicity);
                 try work.append(wa, .{ .node = free_stmt.next });
             },
             .switch_stmt => |sw| try self.emitSwitch(sw, wa, work),
             .switch_initialized_payload => |sw| try self.emitInitializedPayloadSwitch(sw, wa, work),
             .str_match => |str_match| try self.emitStrMatch(str_match, wa, work),
             .str_match_set => |str_match_set| try self.emitStrMatchSet(str_match_set, wa, work),
-            .loop_continue => try self.emitLoopContinue(),
-            .loop_break => try self.emitLoopBreak(),
             .join => |join_stmt| try self.emitJoin(join_stmt, wa, work),
             .jump => |jump_stmt| try self.emitJump(jump_stmt),
             .ret => |ret_stmt| try self.emitReturn(ret_stmt.value),
@@ -4111,9 +4556,9 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     try self.emitCrashBytes(self.store.getString(literal)),
                 .local => |local| if (crash_stmt.checked_error)
-                    try self.emitCheckedErrorCrashLocal(local)
+                    try self.emitCrashLocal(local, .checked_error_crash_str)
                 else
-                    try self.emitCrashLocal(local),
+                    try self.emitCrashLocal(local, .crash_str),
             },
             .expect_err => |expect_err_stmt| {
                 try self.materializeLocalIfDeferred(expect_err_stmt.message);
@@ -4122,7 +4567,7 @@ pub const MonoLlvmCodeGen = struct {
                 const region_end = builder.intValue(.i32, expect_err_stmt.region.end.offset) catch return error.OutOfMemory;
 
                 try self.callBuiltinVoid(
-                    builtinSymbol(.expect_err_str),
+                    .expect_err_str,
                     &.{ try self.ptrType(), .i32, .i32 },
                     &.{
                         self.slot(expect_err_stmt.message).ptr,
@@ -4136,66 +4581,86 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitAssignRef(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LIR.RefOp) Error!void {
-        const target_slot = self.slot(target);
-        switch (op) {
-            .local => |source| try self.copyLocal(target, source),
-            inline .list_reinterpret, .nominal => |ref| try self.copyLocal(target, ref.backing_ref),
-            .discriminant => |ref| {
+        if (op.kind == .field and self.localDyn(op.source) != null) {
+            return self.emitDyn(target, .{ .field_addr = .{ .base = op.source, .desc = self.localDyn(op.source).?.desc, .field_index = .{ .immediate = op.index } } });
+        }
+        if (op.kind == .local and self.localDyn(target) != null) {
+            return self.emitDyn(target, .{ .copy = .{ .src = op.source, .desc = self.localDyn(target).?.desc } });
+        }
+        if (self.value_plan.place(target) == .view) return;
+        switch (op.kind) {
+            .local => try self.copyLocal(target, op.source),
+            inline .list_reinterpret, .nominal => try self.copyLocal(target, op.source),
+            .discriminant => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
                 const discrim = try self.readTagDiscriminant(base.ptr, base.layout_idx);
-                try self.storeIntToLayout(target_slot.ptr, discrim, target_slot.layout_idx);
+                try self.storeLocalInt(target, discrim, self.localLayout(target));
             },
-            .field => |ref| {
+            .field => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveStructBase(ref.source);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveStructBase(op.source);
                 const base_layout = self.layoutValue(base.layout_idx);
                 if (base_layout.tag != .struct_) return error.CompilationFailed;
-                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
-                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, ref.field_idx);
+                const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, op.index);
+                const field_layout = self.layouts().getStructFieldLayoutByOriginalIndex(base_layout.getStruct().idx, op.index);
                 const src = try self.offsetPtr(base.ptr, offset);
-                try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
+                try self.defineLocalFromMemory(target, src, self.layoutDataSize(field_layout), self.alignmentForLayout(field_layout));
             },
-            .tag_payload => |ref| {
+            .tag_payload => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
                 const payload_layout_val = self.layoutValue(payload_layout);
                 var src = base.ptr;
                 var copy_layout = payload_layout;
                 if (payload_layout_val.tag == .struct_) {
-                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    const offset = self.layouts().getStructFieldOffsetByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                     src = try self.offsetPtr(base.ptr, offset);
-                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, ref.payload_idx);
+                    copy_layout = self.layouts().getStructFieldLayoutByOriginalIndex(payload_layout_val.getStruct().idx, op.index);
                 }
-                try self.copyBytes(target_slot.ptr, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
+                try self.defineLocalFromMemory(target, src, self.layoutDataSize(copy_layout), self.alignmentForLayout(copy_layout));
             },
-            .tag_payload_struct => |ref| {
+            .tag_payload_struct => {
                 try self.prepareLocalWrite(target);
-                try self.materializeLocalIfDeferred(ref.source);
-                const base = try self.resolveTagBase(ref.source);
-                const payload_layout = self.tagPayloadLayout(base.layout_idx, ref.tag_discriminant);
-                try self.copyBytes(target_slot.ptr, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
+                try self.materializeLocalIfDeferred(op.source);
+                const base = try self.resolveTagBase(op.source);
+                const payload_layout = self.tagPayloadLayout(base.layout_idx, op.tag_discriminant);
+                try self.defineLocalFromMemory(target, base.ptr, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
             },
         }
     }
 
     fn emitLiteral(self: *MonoLlvmCodeGen, target: LocalId, value: lir.LIR.LiteralValue) Error!void {
         try self.prepareLocalWrite(target);
+        if (self.isSsaLocal(target)) {
+            const target_layout = self.localLayout(target);
+            const literal = switch (value) {
+                .i64_literal => |lit| try self.i128LiteralValue(target_layout, i64LiteralBits(lit.value)),
+                .i128_literal => |lit_id| try self.i128LiteralValue(target_layout, self.store.stmtRow(lit_id).value),
+                .f64_literal => |lit| try self.floatLiteralValue(.f64, lit),
+                .f32_literal => |lit| try self.floatLiteralValue(.f32, lit),
+                .dec_literal => |lit| try self.i128LiteralValue(.dec, lit),
+                .str_literal, .static_data, .bytes_literal, .proc_ref => llvmInvariantFmt("non-numeric literal assigned to SSA local {d}", .{@backingInt(target)}),
+            };
+            if (self.simdVectorForLayout(target_layout) != null) return self.storeSimdLocal(target, literal);
+            return self.storeLocalScalar(target, target_layout, literal);
+        }
         const slot_v = self.slot(target);
         switch (value) {
             .i64_literal => |lit| try self.storeIntLiteral(slot_v.ptr, slot_v.layout_idx, lit.value),
-            .i128_literal => |lit| try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value),
+            .i128_literal => |lit_id| blk_lit: {
+                const lit = self.store.stmtRow(lit_id);
+                break :blk_lit try self.storeI128Literal(slot_v.ptr, slot_v.layout_idx, lit.value);
+            },
             .f64_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f64, lit),
             .f32_literal => |lit| try self.storeFloatLiteral(slot_v.ptr, .f32, lit),
             .dec_literal => |lit| try self.storeI128Literal(slot_v.ptr, .dec, lit),
             .str_literal => |str_idx| try self.emitStrLiteral(slot_v.ptr, str_idx),
-            .boxy_dynamic_num_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.value, lit.desc, lit.default_layout, false),
-            .boxy_dynamic_frac_literal => |lit| try self.emitBoxyDynamicLiteral(target, lit.dec_bits, lit.desc, lit.default_layout, true),
-            .static_data => |id| try self.emitStaticDataLiteral(slot_v, id),
+            .static_data => |read| try self.emitStaticDataLiteral(slot_v, read.id),
             .bytes_literal => |bytes_idx| try self.emitBytesLiteral(slot_v.ptr, bytes_idx),
             .proc_ref => |proc_id| {
                 const func = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
@@ -4204,530 +4669,95 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn boxyNullPtr(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+    fn nullPtr(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         return builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
     }
 
-    fn boxyInt(self: *MonoLlvmCodeGen, ty: LlvmBuilder.Type, value: anytype) Error!LlvmBuilder.Value {
+    fn intValue(self: *MonoLlvmCodeGen, ty: LlvmBuilder.Type, value: anytype) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         return builder.intValue(ty, value) catch return error.OutOfMemory;
-    }
-
-    fn callBoxy(
-        self: *MonoLlvmCodeGen,
-        name: []const u8,
-        ret_type: LlvmBuilder.Type,
-        param_types: []const LlvmBuilder.Type,
-        args: []const LlvmBuilder.Value,
-    ) Error!LlvmBuilder.Value {
-        const builder, const wip = try self.builderAndWip();
-        self.boxy_runtime_used = true;
-        const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
-        const func = try self.declareExternSymbol(name, fn_ty);
-        return wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), args, "") catch return error.OutOfMemory;
-    }
-
-    fn callBoxyVoid(
-        self: *MonoLlvmCodeGen,
-        name: []const u8,
-        param_types: []const LlvmBuilder.Type,
-        args: []const LlvmBuilder.Value,
-    ) Error!void {
-        _ = try self.callBoxy(name, .void, param_types, args);
-    }
-
-    fn boxyValuePtr(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
-        try self.materializeLocalIfDeferred(local);
-        return if (self.slot(local).size == 0) try self.boxyNullPtr() else self.slot(local).ptr;
-    }
-
-    fn resolveBoxyDesc(self: *MonoLlvmCodeGen, desc: lir.LIR.BoxyDescRef) Error!LlvmBuilder.Value {
-        const ptr_ty = try self.ptrType();
-        return switch (desc) {
-            .static => |desc_id| try self.callBoxy(
-                "roc_boxy_static_desc",
-                ptr_ty,
-                &.{.i32},
-                &.{try self.boxyInt(.i32, @backingInt(desc_id))},
-            ),
-            .local => |local| blk: {
-                try self.materializeLocalIfDeferred(local);
-                break :blk try self.loadPointer(self.slot(local).ptr);
-            },
-            .dict_method_arg => |projection| try self.callBoxy(
-                "roc_boxy_dict_method_arg_desc",
-                ptr_ty,
-                &.{ ptr_ty, .i32, .i32, .i32 },
-                &.{
-                    try self.resolveBoxyDict(.{ .local = projection.dict }),
-                    try self.boxyInt(.i32, projection.method_slot),
-                    try self.boxyInt(.i32, @backingInt(projection.method)),
-                    try self.boxyInt(.i32, projection.arg_index),
-                },
-            ),
-            .dict_method_hidden => |projection| try self.callBoxy(
-                "roc_boxy_dict_method_hidden_desc",
-                ptr_ty,
-                &.{ ptr_ty, .i32, .i32, .i32, .i32 },
-                &.{
-                    try self.resolveBoxyDict(.{ .local = projection.dict }),
-                    try self.boxyInt(.i32, projection.method_slot),
-                    try self.boxyInt(.i32, @backingInt(projection.method)),
-                    try self.boxyInt(.i32, projection.hidden_index),
-                    try self.boxyInt(.i32, @backingInt(projection.shape)),
-                },
-            ),
-            .runtime => error.CompilationFailed,
-        };
-    }
-
-    fn resolveBoxyDict(self: *MonoLlvmCodeGen, dict: lir.LIR.BoxyDictRef) Error!LlvmBuilder.Value {
-        const ptr_ty = try self.ptrType();
-        return switch (dict) {
-            .static => |dict_id| try self.callBoxy(
-                "roc_boxy_static_dict",
-                ptr_ty,
-                &.{.i32},
-                &.{try self.boxyInt(.i32, @backingInt(dict_id))},
-            ),
-            .local => |local| blk: {
-                try self.materializeLocalIfDeferred(local);
-                break :blk try self.loadPointer(self.slot(local).ptr);
-            },
-            .runtime => error.CompilationFailed,
-        };
-    }
-
-    fn storeBoxyOutDesc(self: *MonoLlvmCodeGen, target: LocalId, out_desc_ptr: LlvmBuilder.Value) Error!void {
-        const desc_ref = self.store.getLocal(target).boxy_desc orelse return;
-        const desc_local = desc_ref.localOrNull() orelse return;
-        try self.prepareLocalWrite(desc_local);
-        try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr));
-    }
-
-    fn emitBoxyDescRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const captures = self.store.getLocalSpan(assign.captures);
-        var desc: LlvmBuilder.Value = undefined;
-
-        if (assign.tag_residual_for) |target_ref| {
-            if (assign.nested_index != null or assign.box_payload_layout != null or assign.tag_payload != null or assign.tag_ext or captures.len != 0) return error.CompilationFailed;
-            desc = try self.callBoxy(
-                "roc_boxy_tag_residual_desc",
-                ptr_ty,
-                &.{ ptr_ty, ptr_ty },
-                &.{ try self.resolveBoxyDesc(assign.desc), try self.resolveBoxyDesc(target_ref) },
-            );
-        } else if (captures.len == 0) {
-            desc = try self.resolveBoxyDesc(assign.desc);
-        } else {
-            const desc_id = switch (assign.desc) {
-                .static => |id| id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => return error.CompilationFailed,
-            };
-            const wip = self.wip orelse return error.CompilationFailed;
-            const ids = try self.allocEntryBlockSlot(.i32, @intCast(captures.len), LlvmBuilder.Alignment.fromByteUnits(4), "boxy_capture_ids");
-            const descs = try self.allocEntryBlockSlot(ptr_ty, @intCast(captures.len), self.targetPointerAlignment(), "boxy_capture_descs");
-            for (0..captures.len) |i| {
-                const capture = GuardedList.at(captures, i);
-                const id_ptr = try self.offsetPtr(ids, @intCast(i * 4));
-                _ = wip.store(.normal, try self.boxyInt(.i32, @backingInt(capture)), id_ptr, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
-                try self.storePointer(try self.offsetPtr(descs, @intCast(i * self.targetWordSize())), try self.resolveBoxyDesc(.{ .local = capture }));
-            }
-            desc = try self.callBoxy(
-                "roc_boxy_desc_copy",
-                ptr_ty,
-                &.{ .i32, ptr_ty, ptr_ty, self.ptrSizedIntType() },
-                &.{
-                    try self.boxyInt(.i32, @backingInt(desc_id)),
-                    ids,
-                    descs,
-                    try self.boxyInt(self.ptrSizedIntType(), captures.len),
-                },
-            );
-        }
-
-        const projection_count = @intFromBool(assign.nested_index != null) +
-            @intFromBool(assign.box_payload_layout != null) +
-            @intFromBool(assign.tag_payload != null) + @intFromBool(assign.tag_ext);
-        if (projection_count > 1) return error.CompilationFailed;
-        if (assign.box_payload_layout) |box_layout| {
-            desc = try self.callBoxy(
-                "roc_boxy_box_payload_desc",
-                ptr_ty,
-                &.{ ptr_ty, .i32 },
-                &.{ desc, try self.boxyInt(.i32, @backingInt(box_layout)) },
-            );
-        } else if (assign.nested_index) |nested_index| {
-            desc = try self.callBoxy(
-                "roc_boxy_nested_desc",
-                ptr_ty,
-                &.{ ptr_ty, .i32 },
-                &.{ desc, try self.boxyInt(.i32, nested_index) },
-            );
-        } else if (assign.tag_payload) |payload| {
-            desc = try self.callBoxy(
-                "roc_boxy_tag_payload_desc",
-                ptr_ty,
-                &.{ ptr_ty, .i32, .i32 },
-                &.{
-                    desc,
-                    try self.boxyInt(.i32, @backingInt(payload.tag_name)),
-                    try self.boxyInt(.i32, payload.payload_index),
-                },
-            );
-        } else if (assign.tag_ext) {
-            desc = try self.callBoxy("roc_boxy_tag_ext_desc", ptr_ty, &.{ptr_ty}, &.{desc});
-        }
-        try self.storePointer(self.slot(assign.target).ptr, desc);
-    }
-
-    fn emitBoxyDictRef(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const captures = self.store.getLocalSpan(assign.captures);
-        if (captures.len == 0) {
-            try self.storePointer(self.slot(assign.target).ptr, try self.resolveBoxyDict(assign.dict));
-            return;
-        }
-        // A template dictionary is materialized with the values of the frame
-        // locals its method slots name.
-        const dict_id = switch (assign.dict) {
-            .static => |id| id,
-            .local, .runtime => return error.CompilationFailed,
-        };
-        const ptr_ty = try self.ptrType();
-        const wip = self.wip orelse return error.CompilationFailed;
-        const ids = try self.allocEntryBlockSlot(.i32, @intCast(captures.len), LlvmBuilder.Alignment.fromByteUnits(4), "boxy_dict_capture_ids");
-        const values = try self.allocEntryBlockSlot(ptr_ty, @intCast(captures.len), self.targetPointerAlignment(), "boxy_dict_capture_values");
-        for (0..captures.len) |i| {
-            const capture = GuardedList.at(captures, i);
-            const id_ptr = try self.offsetPtr(ids, @intCast(i * 4));
-            _ = wip.store(.normal, try self.boxyInt(.i32, @backingInt(capture)), id_ptr, LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
-            try self.materializeLocalIfDeferred(capture);
-            try self.storePointer(try self.offsetPtr(values, @intCast(i * self.targetWordSize())), try self.loadPointer(self.slot(capture).ptr));
-        }
-        const dict = try self.callBoxy(
-            "roc_boxy_dict_copy",
-            ptr_ty,
-            &.{ .i32, ptr_ty, ptr_ty, self.ptrSizedIntType() },
-            &.{
-                try self.boxyInt(.i32, @backingInt(dict_id)),
-                ids,
-                values,
-                try self.boxyInt(self.ptrSizedIntType(), captures.len),
-            },
-        );
-        try self.storePointer(self.slot(assign.target).ptr, dict);
-    }
-
-    fn boxyOutDescPtr(self: *MonoLlvmCodeGen, name: []const u8) Error!LlvmBuilder.Value {
-        return try self.allocEntryBlockSlot(try self.ptrType(), 1, self.targetPointerAlignment(), name);
-    }
-
-    fn emitBoxyBox(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const payload_desc_ref = assign.payload_desc orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const out_desc = try self.boxyOutDescPtr("boxy_box_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_box",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty, .i8, .i32 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.boxyValuePtr(assign.payload),
-                try self.boxyInt(.i32, @backingInt(assign.payload_layout)),
-                if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                try self.resolveBoxyDesc(payload_desc_ref),
-                try self.boxyInt(.i8, @backingInt(assign.payload_mode)),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
-            },
-        );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
-    }
-
-    fn emitBoxyRecordUpdate(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const out_desc = try self.boxyOutDescPtr("boxy_record_update_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_record_update",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty, .i32, ptr_ty, .i32 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.boxyValuePtr(assign.base),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.base))),
-                try self.resolveBoxyDesc(assign.base_desc),
-                try self.boxyValuePtr(assign.fields),
-                try self.boxyInt(.i32, @backingInt(assign.fields_layout)),
-                try self.resolveBoxyDesc(assign.fields_desc),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
-            },
-        );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
-    }
-
-    fn emitBoxyUnbox(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const out_desc = try self.boxyOutDescPtr("boxy_unbox_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_unbox",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty, .i32, .i8 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.boxyValuePtr(assign.source),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.source))),
-                try self.resolveBoxyDesc(assign.source_desc),
-                if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(assign.target_layout)),
-                try self.boxyInt(.i8, @backingInt(assign.source_mode)),
-            },
-        );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
-    }
-
-    fn emitBoxyAdapt(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const out_desc = try self.boxyOutDescPtr("boxy_adapt_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_adapt",
-            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, .i8 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.boxyValuePtr(assign.source),
-                if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(assign.adapter)),
-                try self.boxyInt(.i8, @backingInt(assign.source_mode)),
-            },
-        );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
-    }
-
-    fn emitBoxyInspect(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        try self.callBoxyVoid(
-            "roc_boxy_inspect",
-            &.{ ptr_ty, ptr_ty, .i32, ptr_ty },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                try self.boxyValuePtr(assign.source),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.source))),
-                try self.resolveBoxyDesc(assign.source_desc),
-            },
-        );
-    }
-
-    fn emitBoxyEq(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        try self.callBoxyVoid(
-            "roc_boxy_eq",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                try self.boxyValuePtr(assign.lhs),
-                try self.boxyValuePtr(assign.rhs),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.lhs))),
-                try self.resolveBoxyDesc(assign.desc),
-            },
-        );
-    }
-
-    fn emitBoxyHash(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        try self.callBoxyVoid(
-            "roc_boxy_hash",
-            &.{ ptr_ty, ptr_ty, .i32, ptr_ty, ptr_ty },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                try self.boxyValuePtr(assign.value),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.value))),
-                try self.resolveBoxyDesc(assign.desc),
-                try self.boxyValuePtr(assign.hasher),
-            },
-        );
-    }
-
-    fn emitBoxyTag(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        try self.callBoxyVoid(
-            "roc_boxy_tag",
-            &.{ ptr_ty, ptr_ty, .i32, ptr_ty, .i32, ptr_ty, .i8, .i32 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                try self.resolveBoxyDesc(assign.target_desc),
-                try self.boxyInt(.i32, @backingInt(assign.tag_name)),
-                if (assign.payload) |payload| try self.boxyValuePtr(payload) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(assign.payload_layout)),
-                if (assign.payload_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                try self.boxyInt(.i8, @backingInt(assign.payload_mode)),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
-            },
-        );
-    }
-
-    fn emitBoxyTagPayload(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        const ptr_ty = try self.ptrType();
-        const out_desc = try self.boxyOutDescPtr("boxy_tag_payload_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_tag_payload",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, .i32, .i32, .i32, .i8 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.boxyValuePtr(assign.source),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.source))),
-                try self.resolveBoxyDesc(assign.source_desc),
-                try self.boxyInt(.i32, @backingInt(assign.tag_name)),
-                try self.boxyInt(.i32, assign.payload_index),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
-                try self.boxyInt(.i8, @backingInt(assign.source_mode)),
-            },
-        );
-        if (assign.target_desc) |desc_local| {
-            try self.prepareLocalWrite(desc_local);
-            try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc));
-        }
-    }
-
-    fn emitBoxyTagMatch(self: *MonoLlvmCodeGen, tag_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
-        const ptr_ty = try self.ptrType();
-        const wip = self.wip orelse return error.CompilationFailed;
-        const matches = try self.callBoxy(
-            "roc_boxy_tag_match",
-            .i1,
-            &.{ ptr_ty, .i32, ptr_ty, .i32 },
-            &.{
-                try self.boxyValuePtr(tag_match.source),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(tag_match.source))),
-                try self.resolveBoxyDesc(tag_match.source_desc),
-                try self.boxyInt(.i32, @backingInt(tag_match.tag_name)),
-            },
-        );
-        const on_match = wip.block(0, "boxy_tag_match") catch return error.OutOfMemory;
-        const on_miss = wip.block(0, "boxy_tag_miss") catch return error.OutOfMemory;
-        _ = wip.brCond(matches, on_match, on_miss, .none) catch return error.OutOfMemory;
-        try work.append(wa, .{ .boxy_tag_body = .{ .block = on_miss, .stmt = tag_match.on_miss } });
-        try work.append(wa, .{ .boxy_tag_body = .{ .block = on_match, .stmt = tag_match.on_match } });
-    }
-
-    fn emitBoxyCallDict(self: *MonoLlvmCodeGen, assign: anytype) Error!void {
-        try self.prepareLocalWrite(assign.target);
-        if (self.builder == null) return error.CompilationFailed;
-        const wip = self.wip orelse return error.CompilationFailed;
-        const ptr_ty = try self.ptrType();
-        const arg_locals = self.store.getLocalSpan(assign.args);
-        const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
-        const hidden_locals = self.store.getLocalSpan(assign.hidden_args);
-        if (arg_desc_locals.len != arg_locals.len) return error.CompilationFailed;
-        const word = self.targetWordSize();
-        const layout_offset = word;
-        const desc_offset = std.mem.alignForward(u32, layout_offset + 4, word);
-        const arg_stride = desc_offset + word;
-
-        const args_ptr = if (arg_locals.len == 0) try self.boxyNullPtr() else blk: {
-            const raw = try self.allocEntryBlockSlot(.i8, @intCast(arg_locals.len * arg_stride), self.targetPointerAlignment(), "boxy_call_args");
-            for (0..arg_locals.len) |i| {
-                const local = GuardedList.at(arg_locals, i);
-                const desc_local = GuardedList.at(arg_desc_locals, i);
-                const entry = try self.offsetPtr(raw, @intCast(i * arg_stride));
-                try self.storePointer(entry, try self.boxyValuePtr(local));
-                _ = wip.store(.normal, try self.boxyInt(.i32, @backingInt(self.localLayout(local))), try self.offsetPtr(entry, layout_offset), LlvmBuilder.Alignment.fromByteUnits(4)) catch return error.OutOfMemory;
-                const desc = try self.loadPointer(self.slot(desc_local).ptr);
-                try self.storePointer(try self.offsetPtr(entry, desc_offset), desc);
-            }
-            break :blk raw;
-        };
-
-        const hidden_ptr = if (hidden_locals.len == 0) try self.boxyNullPtr() else blk: {
-            const raw = try self.allocEntryBlockSlot(ptr_ty, @intCast(hidden_locals.len), self.targetPointerAlignment(), "boxy_hidden_args");
-            for (0..hidden_locals.len) |i| {
-                const local = GuardedList.at(hidden_locals, i);
-                try self.storePointer(try self.offsetPtr(raw, @intCast(i * word)), try self.loadPointer(self.slot(local).ptr));
-            }
-            break :blk raw;
-        };
-
-        const out_desc = try self.boxyOutDescPtr("boxy_call_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_call_dict",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32, .i32, ptr_ty, self.ptrSizedIntType(), ptr_ty, self.ptrSizedIntType(), ptr_ty, .i32 },
-            &.{
-                try self.boxyValuePtr(assign.target),
-                out_desc,
-                try self.resolveBoxyDict(assign.dict),
-                try self.boxyInt(.i32, assign.method_slot),
-                try self.boxyInt(.i32, @backingInt(assign.method)),
-                args_ptr,
-                try self.boxyInt(self.ptrSizedIntType(), arg_locals.len),
-                hidden_ptr,
-                try self.boxyInt(self.ptrSizedIntType(), hidden_locals.len),
-                if (assign.result_desc) |ref| try self.resolveBoxyDesc(ref) else try self.boxyNullPtr(),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(assign.target))),
-            },
-        );
-        try self.storeBoxyOutDesc(assign.target, out_desc);
-    }
-
-    fn emitBoxyDynamicLiteral(
-        self: *MonoLlvmCodeGen,
-        target: LocalId,
-        value: i128,
-        desc: lir.LIR.BoxyDescRef,
-        default_layout: layout.Idx,
-        fractional: bool,
-    ) Error!void {
-        const ptr_ty = try self.ptrType();
-        const literal_ptr = try self.allocEntryBlockSlot(.i128, 1, LlvmBuilder.Alignment.fromByteUnits(16), "boxy_literal");
-        try self.storeI128Literal(literal_ptr, .i128, value);
-        const out_desc = try self.boxyOutDescPtr("boxy_literal_desc");
-        try self.callBoxyVoid(
-            if (fractional) "roc_boxy_dynamic_frac_literal_ref" else "roc_boxy_dynamic_num_literal_ref",
-            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, .i32 },
-            &.{
-                try self.boxyValuePtr(target),
-                out_desc,
-                literal_ptr,
-                try self.resolveBoxyDesc(desc),
-                try self.boxyInt(.i32, @backingInt(default_layout)),
-                try self.boxyInt(.i32, @backingInt(self.localLayout(target))),
-            },
-        );
-        try self.storeBoxyOutDesc(target, out_desc);
     }
 
     fn callProcFunctionIndex(
         self: *MonoLlvmCodeGen,
         func: LlvmBuilder.Function.Index,
-        proc: LirProcSpec,
         ret_ptr: LlvmBuilder.Value,
         args_ptr: LlvmBuilder.Value,
-        out_desc_ptr: ?LlvmBuilder.Value,
         is_cold: bool,
     ) Error!void {
-        if ((proc.runtime_ret_desc != null) != (out_desc_ptr != null)) {
-            llvmInvariantFmt(
-                "procedure descriptor output ({}) did not match callee ABI ({})",
-                .{ out_desc_ptr != null, proc.runtime_ret_desc != null },
-            );
+        _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+    }
+
+    fn inlineEverywhere(self: *const MonoLlvmCodeGen, proc_id: LirProcSpecId) bool {
+        return self.inline_everywhere.items.len > @backingInt(proc_id) and self.inline_everywhere.items[@backingInt(proc_id)];
+    }
+
+    /// The local addresses passed to out-of-line procedures and explicit RC
+    /// helpers. Procedure calls follow the fast ABI; RC calls follow the same
+    /// scratch-versus-local rule as emission. No ownership is inferred here.
+    const AddressedCallLocals = struct {
+        codegen: *MonoLlvmCodeGen,
+
+        pub const AppendError = Error;
+
+        pub fn storageRoot(self: AddressedCallLocals, local: LocalId) LocalId {
+            return self.codegen.value_plan.storageRoot(local);
         }
-        if (out_desc_ptr) |desc_ptr| {
-            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr, desc_ptr }, is_cold);
-        } else {
-            _ = try self.callFunctionIndex(func, &.{ ret_ptr, args_ptr }, is_cold);
+
+        pub fn appendAddressed(self: AddressedCallLocals, stmt: lir.LIR.CFStmt, out: *std.ArrayList(LocalId)) AppendError!void {
+            const codegen = self.codegen;
+            switch (stmt) {
+                inline .incref, .decref, .decref_if_initialized, .free => |rc| {
+                    if (codegen.localDyn(rc.value) == null and rcUsesLocalSlot(codegen.layoutByteSize(codegen.localLayout(rc.value)))) {
+                        try out.append(codegen.allocator, rc.value);
+                    }
+                    return;
+                },
+                .assign_call => {},
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return,
+            }
+            const call = stmt.assign_call;
+            if (codegen.store.stmtRowOrDefault(call.extra).replaces_frame) return;
+            const proc = codegen.store.getProcSpec(call.proc);
+            if (proc.hosted != null) return;
+            if (!codegen.enable_default_platform_diagnostics and codegen.inlineEverywhere(call.proc)) return;
+            if (codegen.fast_registry.get(@backingInt(call.proc)) == null) {
+                try out.append(codegen.allocator, call.target);
+                return;
+            }
+            const sig = codegen.fastSignatureOf(call.proc);
+            // A dynamic local's slot holds an address; the bytes it names
+            // live elsewhere.
+            if ((sig.lowered.ret == .indirect or sig.dyn_result_index != null) and codegen.localDyn(call.target) == null) try out.append(codegen.allocator, call.target);
+            const args = codegen.store.getLocalSpan(call.args);
+            const params = codegen.store.getLocalSpan(proc.args);
+            for (sig.lowered.args, 0..) |placement, i| {
+                const arg = GuardedList.at(args, i);
+                if (codegen.localDyn(GuardedList.at(params, i)) != null) {
+                    if (codegen.localDyn(arg) == null and !sig.tail_args.stored[i]) try out.append(codegen.allocator, arg);
+                    continue;
+                }
+                if (placement == .indirect and !sig.tail_args.stored[i]) try out.append(codegen.allocator, arg);
+            }
         }
+    };
+
+    fn emitSlotLifetimeMarkers(self: *MonoLlvmCodeGen, stmt_id: CFStmtId) Error!void {
+        const markers = self.slot_lifetimes.at(stmt_id);
+        for (markers) |marker| {
+            const intrinsic: LlvmBuilder.Intrinsic = switch (marker.kind) {
+                .start => .@"lifetime.start",
+                .end => .@"lifetime.end",
+            };
+            try self.emitLifetimeMarker(intrinsic, self.slot(marker.local).ptr);
+        }
+    }
+
+    /// Mark the start or end of the lifetime of the stack slot at `ptr`.
+    fn emitLifetimeMarker(self: *MonoLlvmCodeGen, intrinsic: LlvmBuilder.Intrinsic, ptr: LlvmBuilder.Value) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        _ = wip.callIntrinsic(.normal, .none, intrinsic, &.{try self.ptrType()}, &.{ptr}, "") catch return error.OutOfMemory;
     }
 
     fn emitDirectCall(
@@ -4735,22 +4765,18 @@ pub const MonoLlvmCodeGen = struct {
         target: LocalId,
         proc_id: LirProcSpecId,
         args: LocalSpan,
-        out_desc: ?LocalId,
         is_cold: bool,
     ) Error!void {
         try self.prepareLocalWrite(target);
         const proc = self.store.getProcSpec(proc_id);
-        if ((out_desc != null) != (proc.runtime_ret_desc != null)) {
-            llvmInvariantFmt(
-                "direct call to proc {d} descriptor output ({}) did not match callee ABI ({})",
-                .{ @backingInt(proc_id), out_desc != null, proc.runtime_ret_desc != null },
-            );
-        }
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
         const param_locals = self.store.getLocalSpan(proc.args);
         if (arg_locals.len != param_locals.len) return error.CompilationFailed;
         if (proc.hosted) |hosted| {
+            if (builtin.mode == .debug and (self.localDyn(target) != null or self.anyDynamic(arg_locals))) {
+                invariant("LLVM codegen invariant violated: a hosted call to proc {d} passes dynamic values", .{@backingInt(proc_id)});
+            }
             const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
             defer self.allocator.free(arg_layouts);
             for (0..param_locals.len) |i| {
@@ -4768,10 +4794,13 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         if (self.fast_registry.get(@backingInt(proc_id))) |fast| {
-            try self.emitFastDirectCall(target, proc, fast, arg_locals, out_desc, is_cold);
+            try self.emitFastDirectCall(target, proc_id, proc, fast, arg_locals, is_cold);
             return;
         }
 
+        if (builtin.mode == .debug and (proc.dyn_result != null or self.localDyn(target) != null or self.anyDynamic(param_locals))) {
+            invariant("LLVM codegen invariant violated: a packed call to proc {d} passes dynamic values", .{@backingInt(proc_id)});
+        }
         const arg_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
         defer self.allocator.free(arg_layouts);
         for (0..param_locals.len) |i| {
@@ -4781,53 +4810,64 @@ pub const MonoLlvmCodeGen = struct {
         const args_buf = try self.allocArgBuffer(arg_layouts, true);
         try self.packRocArgsFromLocals(args_buf, arg_locals, arg_layouts);
         const func = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        const out_desc_ptr = if (proc.runtime_ret_desc != null)
-            try self.boxyOutDescPtr("direct_call_desc")
-        else
-            null;
-        try self.callProcFunctionIndex(func, proc, self.slot(target).ptr, args_buf, out_desc_ptr, is_cold);
-        if (out_desc) |desc_local| {
-            try self.prepareLocalWrite(desc_local);
-            try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
-        }
+        try self.callProcFunctionIndex(func, self.slot(target).ptr, args_buf, is_cold);
     }
 
     /// A direct call through the callee's register-passing function: each
     /// argument's pieces load straight from its slot, an indirect argument
-    /// passes its slot's address for the callee to copy, and a by-value
+    /// passes its storage address for the callee to borrow, and a by-value
     /// result stores into the target slot.
     fn emitFastDirectCall(
         self: *MonoLlvmCodeGen,
         target: LocalId,
+        proc_id: LirProcSpecId,
         proc: LirProcSpec,
         fast: LlvmBuilder.Function.Index,
         arg_locals: anytype,
-        out_desc: ?LocalId,
         is_cold: bool,
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = self.fastSignatureOf(proc_id);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
 
-        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
-        defer param_types.deinit(self.allocator);
-        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
-        defer call_args.deinit(self.allocator);
+        const param_types = &self.fast_call_param_types;
+        param_types.clearRetainingCapacity();
+        const call_args = &self.fast_call_args;
+        call_args.clearRetainingCapacity();
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         const ptr_ty = try self.ptrType();
 
+        // A dynamic target receives the callee's result at its own storage.
+        const target_storage = if (self.localDyn(target) != null) try self.dynAddress(target) else null;
         if (sig.lowered.ret == .indirect) {
+            // The `sret` pointer is `noalias`: no argument may name its slot.
+            if (builtin.mode == .debug) {
+                for (0..arg_locals.len) |i| {
+                    if (self.value_plan.storageRoot(GuardedList.at(arg_locals, i)) == self.value_plan.storageRoot(target)) invariant("LLVM codegen invariant violated: call target {d} is also one of its arguments", .{@backingInt(target)});
+                }
+            }
             try param_types.append(self.allocator, ptr_ty);
-            try call_args.append(self.allocator, self.slot(target).ptr);
+            try call_args.append(self.allocator, target_storage orelse self.slot(target).ptr);
         }
+        const param_locals = self.store.getLocalSpan(proc.args);
         const scratch: ?LlvmBuilder.Value = if (sig.scratch_index != null) try self.tailScratchArg(proc, sig) else null;
+        // Storage for one call to a procedure outside every tail group lives
+        // only for that call, so exclusive call sites can share stack space.
+        const call_storage: ?LlvmBuilder.Value = if (proc.tail_group == null) scratch else null;
+        if (call_storage) |storage| try self.emitLifetimeMarker(.@"lifetime.start", storage);
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const arg_local = GuardedList.at(arg_locals, i);
+            const dynamic_param = self.localDyn(GuardedList.at(param_locals, i)) != null;
+            if (!dynamic_param and self.localDyn(arg_local) != null) {
+                invariant("LLVM codegen invariant violated: dynamic local {d} passed to a closed parameter of proc {d}", .{ @backingInt(arg_local), @backingInt(proc_id) });
+            }
             if (sig.tail_args.stored[i]) {
-                _ = try self.writeTailArg(scratch.?, sig, i, self.slot(arg_local).ptr);
+                if (dynamic_param) {
+                    _ = try self.writeTailArgAddress(scratch.?, sig, i, try self.bytesAddress(arg_local));
+                } else {
+                    _ = try self.writeTailArgLocal(scratch.?, sig, i, arg_local);
+                }
                 continue;
             }
             switch (placement) {
@@ -4836,13 +4876,26 @@ pub const MonoLlvmCodeGen = struct {
                     try param_types.append(self.allocator, ptr_ty);
                     try call_args.append(self.allocator, self.slot(arg_local).ptr);
                 },
-                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+                .registers => |registers| {
+                    // A dynamic parameter receives the address of its
+                    // argument's bytes.
+                    const source: PieceSource = if (dynamic_param) try self.addressPieceSource(try self.bytesAddress(arg_local)) else try self.localPieceSource(arg_local);
+                    try self.appendCAbiRegisterCallArg(builder, &attrs_wip, param_types, call_args, registers, source, arg_layout);
+                },
             }
         }
-        const out_desc_ptr = if (sig.desc_index != null) try self.boxyOutDescPtr("direct_call_desc") else null;
-        if (out_desc_ptr) |desc_ptr| {
+        if (sig.dyn_result_index != null) {
             try param_types.append(self.allocator, ptr_ty);
-            try call_args.append(self.allocator, desc_ptr);
+            try call_args.append(self.allocator, target_storage orelse self.slot(target).ptr);
+        }
+        if (sig.carry_index != null) {
+            // An ordinary call's arguments stay in this frame.
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.nullPtr());
+        }
+        if (sig.pending_index != null) {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
         }
         if (scratch) |storage| {
             try param_types.append(self.allocator, ptr_ty);
@@ -4854,13 +4907,15 @@ pub const MonoLlvmCodeGen = struct {
         }
         const result = wip.call(.normal, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
-            try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, self.slot(target).ptr, proc.ret_layout);
+            if (self.isSsaLocal(target)) {
+                const scalar = try self.scalarFromCAbiResult(builder, sig.lowered.ret.registers, result, proc.ret_layout, self.ssaMemoryType(target));
+                try self.defineSsa(target, try self.toSsaType(scalar, self.local_values[@backingInt(target)].ty, false));
+            } else {
+                try self.storeCAbiRegisterResult(builder, sig.lowered.ret.registers, result, target_storage orelse self.slot(target).ptr, proc.ret_layout);
+            }
         }
-        try self.emitTailDrive(proc, self.slot(target).ptr, out_desc_ptr);
-        if (out_desc) |desc_local| {
-            try self.prepareLocalWrite(desc_local);
-            try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr.?));
-        }
+        if (self.tailDriverFor(proc) != null) try self.emitTailDrive(proc, target_storage orelse self.slot(target).ptr);
+        if (call_storage) |storage| try self.emitLifetimeMarker(.@"lifetime.end", storage);
     }
 
     /// A direct call whose callee returns on this procedure's behalf. Every
@@ -4875,21 +4930,19 @@ pub const MonoLlvmCodeGen = struct {
         const proc = self.store.getProcSpec(proc_id);
         const fast = self.fast_registry.get(@backingInt(proc_id)) orelse
             llvmInvariantFmt("frame-replacing call to proc {d} has no register-passing function", .{@backingInt(proc_id)});
-        if ((proc.runtime_ret_desc != null) != (self.ret_desc_ptr_arg != null) or proc.ret_layout != self.current_ret_layout) {
+        if (proc.ret_layout != self.current_ret_layout) {
             llvmInvariantFmt("frame-replacing call to proc {d} does not share its caller's return contract", .{@backingInt(proc_id)});
         }
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const sig = try self.fastSignature(arena_state.allocator(), proc);
+        const sig = self.fastSignatureOf(proc_id);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
 
-        var param_types = std.ArrayList(LlvmBuilder.Type).empty;
-        defer param_types.deinit(self.allocator);
-        var call_args = std.ArrayList(LlvmBuilder.Value).empty;
-        defer call_args.deinit(self.allocator);
+        const param_types = &self.fast_call_param_types;
+        param_types.clearRetainingCapacity();
+        const call_args = &self.fast_call_args;
+        call_args.clearRetainingCapacity();
         var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
         defer attrs_wip.deinit(builder);
         const ptr_ty = try self.ptrType();
@@ -4898,34 +4951,61 @@ pub const MonoLlvmCodeGen = struct {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, self.ret_ptr_arg orelse return error.CompilationFailed);
         }
+        // Dynamic arguments move into a carry the callee owns, because their
+        // bytes may live in the frame being replaced; then this procedure's
+        // own carry, which they may have lived in, is released.
+        const moved = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
+        defer self.allocator.free(moved);
+        const carry: ?LlvmBuilder.Value = if (sig.carry_index != null) try self.emitTailCarry(proc, arg_locals, moved) else null;
+        try self.emitFreeCarry();
+        const param_locals = self.store.getLocalSpan(proc.args);
         for (sig.lowered.args, sig.arg_layouts, 0..) |placement, arg_layout, i| {
             const arg_local = GuardedList.at(arg_locals, i);
+            const dynamic_param = self.localDyn(GuardedList.at(param_locals, i)) != null;
+            if (dynamic_param and carry == null) llvmInvariantFmt("frame-replacing call to proc {d} passes a dynamic argument without a carry", .{@backingInt(proc_id)});
             if (sig.tail_args.stored[i]) {
-                _ = try self.writeTailArg(self.ownTailScratch(), sig, i, self.slot(arg_local).ptr);
+                if (dynamic_param) {
+                    _ = try self.writeTailArgAddress(self.ownTailScratch(), sig, i, moved[i]);
+                } else {
+                    _ = try self.writeTailArgLocal(self.ownTailScratch(), sig, i, arg_local);
+                }
                 continue;
             }
             switch (placement) {
                 .none => {},
                 .indirect => {
                     try param_types.append(self.allocator, ptr_ty);
-                    try call_args.append(self.allocator, try self.writeTailArg(self.ownTailScratch(), sig, i, self.slot(arg_local).ptr));
+                    try call_args.append(self.allocator, try self.writeTailArgLocal(self.ownTailScratch(), sig, i, arg_local));
                 },
-                .registers => |registers| try self.appendCAbiRegisterCallArg(builder, &attrs_wip, &param_types, &call_args, registers, self.slot(arg_local).ptr, arg_layout),
+                .registers => |registers| {
+                    const source: PieceSource = if (dynamic_param) try self.addressPieceSource(moved[i]) else try self.localPieceSource(arg_local);
+                    try self.appendCAbiRegisterCallArg(builder, &attrs_wip, param_types, call_args, registers, source, arg_layout);
+                },
             }
         }
-        // The callee writes its result descriptor where this procedure's
-        // caller asked for this procedure's.
-        if (sig.desc_index != null) {
+        if (sig.dyn_result_index != null) {
+            // The callee writes its result where this procedure's caller
+            // asked for this procedure's.
+            const own_result = self.current_dyn_result orelse llvmInvariantFmt("frame-replacing call with a dynamic result from a procedure without one", .{});
             try param_types.append(self.allocator, ptr_ty);
-            try call_args.append(self.allocator, self.ret_desc_ptr_arg.?);
+            try call_args.append(self.allocator, try self.dynAddress(own_result));
+        }
+        if (carry) |storage| {
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, storage);
+        }
+        if (sig.pending_index != null) {
+            // The callee leaves its pending call where this procedure's
+            // caller waits for this procedure's.
+            try param_types.append(self.allocator, ptr_ty);
+            try call_args.append(self.allocator, try self.pendingCell());
         }
         if (sig.scratch_index != null) {
             try param_types.append(self.allocator, ptr_ty);
             try call_args.append(self.allocator, self.current_tail_scratch orelse
                 llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
         }
-        const call_kind: LlvmBuilder.Function.Instruction.Call.Kind = if (self.unoptimized) .tail else .musttail;
-        const result = wip.call(call_kind, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        const result = wip.call(.musttail, self.fastCallConv(proc), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             _ = wip.ret(result) catch return error.OutOfMemory;
         } else {
@@ -4938,12 +5018,7 @@ pub const MonoLlvmCodeGen = struct {
         target: LocalId,
         closure: LocalId,
         args: LocalSpan,
-        arg_layouts: lir.LIR.BoxySpan,
-        arg_descs: LocalSpan,
-        arg_desc_keys: lir.LIR.BoxySpan,
         arg_plan: lir.LIR.ErasedCallArgsPlanId,
-        result_desc: ?lir.LIR.BoxyDescRef,
-        out_desc: ?LocalId,
         reuse_closure: bool,
         deferred: bool,
     ) Error!void {
@@ -4956,21 +5031,7 @@ pub const MonoLlvmCodeGen = struct {
         const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
         const reuse_ptr = if (reuse_closure) closure_ptr else builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const arg_locals = self.store.getLocalSpan(args);
-        const arg_desc_locals = self.store.getLocalSpan(arg_descs);
-        if (arg_locals.len != arg_layouts.len) {
-            llvmInvariantFmt(
-                "erased call passed {d} arguments but {d} runtime layouts",
-                .{ arg_locals.len, arg_layouts.len },
-            );
-        }
-        if (arg_desc_locals.len != arg_desc_keys.len) {
-            llvmInvariantFmt(
-                "erased call passed {d} descriptors but {d} descriptor keys",
-                .{ arg_desc_locals.len, arg_desc_keys.len },
-            );
-        }
         try self.materializeLocalSpanIfDeferred(arg_locals);
-        try self.materializeLocalSpanIfDeferred(arg_desc_locals);
         const source_layouts = try self.allocator.alloc(layout.Idx, arg_locals.len);
         defer self.allocator.free(source_layouts);
         for (0..arg_locals.len) |i| {
@@ -4992,77 +5053,25 @@ pub const MonoLlvmCodeGen = struct {
             try self.packErasedArgsFromLocals(buf, arg_locals, source_layouts, offsets);
             break :blk buf;
         };
-        const arg_descs_ptr = if (arg_desc_locals.len == 0)
-            builder.nullValue(ptr_ty) catch return error.OutOfMemory
-        else blk: {
-            const desc_buf = try self.allocEntryBlockSlot(ptr_ty, @intCast(arg_desc_locals.len), self.targetPointerAlignment(), "erased_arg_descs");
-            for (0..arg_desc_locals.len) |i| {
-                const desc_local = GuardedList.at(arg_desc_locals, i);
-                try self.storePointer(
-                    try self.offsetPtr(desc_buf, @intCast(i * self.targetWordSize())),
-                    try self.loadPointer(self.slot(desc_local).ptr),
-                );
-            }
-            break :blk desc_buf;
-        };
         if (deferred) {
-            // The runtime records the call; whoever awaits this procedure's
-            // result makes it, so the target holds no value yet.
-            const usize_ty: LlvmBuilder.Type = if (self.targetWordSize() == 8) .i64 else .i32;
-            const args_len: u32 = if (arg_locals.len == 0) 0 else self.store.getErasedCallArgsPlan(arg_plan).size;
-            try self.callBoxyVoid(
-                "roc_boxy_defer_erased",
-                &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, ptr_ty, .i32, .i32, .i32, .i32, ptr_ty, .i32 },
-                &.{
-                    fn_ptr,
-                    closure_ptr,
-                    capture_ptr,
-                    args_buf,
-                    try self.boxyInt(usize_ty, args_len),
-                    arg_descs_ptr,
-                    try self.boxyInt(.i32, arg_desc_keys.start),
-                    try self.boxyInt(.i32, arg_desc_keys.len),
-                    try self.boxyInt(.i32, arg_layouts.start),
-                    try self.boxyInt(.i32, arg_layouts.len),
-                    if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr(),
-                    try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
-                },
-            );
-            if (out_desc) |desc_local| {
-                try self.prepareLocalWrite(desc_local);
-                try self.storePointer(self.slot(desc_local).ptr, try self.boxyNullPtr());
-            }
-            return;
+            try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8 }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_buf, try self.intValue(self.ptrSizedIntType(), self.store.getErasedCallArgsPlan(arg_plan).size), try self.intValue(.i8, 0) });
+        } else {
+            const ret_ptr = if (self.slot(target).size == 0) try self.nullPtr() else self.slot(target).ptr;
+            try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_buf, capture_ptr, reuse_ptr });
         }
-        const ret_ptr = if (self.slot(target).size == 0)
-            builder.nullValue(ptr_ty) catch return error.OutOfMemory
-        else
-            self.slot(target).ptr;
-        const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        const out_desc_ptr = try self.boxyOutDescPtr("boxy_erased_result_desc");
-        try self.callBoxyVoid(
-            "roc_boxy_call_erased",
-            &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty, .i32, .i32, .i32, .i32 },
-            &.{
-                fn_ptr,
-                ret_ptr,
-                args_buf,
-                capture_ptr,
-                reuse_ptr,
-                out_desc_ptr,
-                result_desc_ptr,
-                try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
-                arg_descs_ptr,
-                try self.boxyInt(.i32, arg_desc_keys.start),
-                try self.boxyInt(.i32, arg_desc_keys.len),
-                try self.boxyInt(.i32, arg_layouts.start),
-                try self.boxyInt(.i32, arg_layouts.len),
-            },
-        );
-        if (out_desc) |desc_local| {
-            try self.prepareLocalWrite(desc_local);
-            try self.storePointer(self.slot(desc_local).ptr, try self.loadPointer(out_desc_ptr));
-        }
+    }
+
+    /// An empty pending cell in this frame.
+    fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        const word_size = self.targetWordSize();
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        try self.storePointer(cell, try self.nullPtr());
+        return cell;
+    }
+
+    /// The pending cell of the procedure being compiled.
+    fn pendingCell(self: *const MonoLlvmCodeGen) Error!LlvmBuilder.Value {
+        return self.pending_cell orelse llvmInvariantFmt("a statement that can leave an erased call pending in a procedure without a pending cell", .{});
     }
 
     /// Run the erased calls a callee left pending, as the tail-drive pass
@@ -5072,46 +5081,28 @@ pub const MonoLlvmCodeGen = struct {
         self: *MonoLlvmCodeGen,
         drive: lir.LIR.PendingDrive,
         target: LocalId,
-        result_desc: ?lir.LIR.BoxyDescRef,
-        out_desc: ?LocalId,
     ) Error!void {
         if (!drive.canDriveHere()) return;
         const builder = self.builder orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
-        const result_desc_ptr = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
-        // The descriptor a pending call returns replaces the statement's
-        // own, which stays in place when nothing is pending.
-        const out_desc_ptr = if (out_desc) |desc_local|
-            self.slot(desc_local).ptr
-        else
-            try self.boxyOutDescPtr("boxy_driven_result_desc");
-
         var done_block: ?LlvmBuilder.Function.Block.Index = null;
         if (drive == .unless_caller_drives) {
             const flag_ptr = self.caller_drives_flag orelse
                 llvmInvariantFmt("procedure reads a caller-drives flag it never recorded", .{});
-            const flag = wip.load(.normal, .i8, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const caller_drives = wip.icmp(.ne, flag, try self.boxyInt(.i8, 0), "") catch return error.OutOfMemory;
+            const caller_drives = wip.load(.normal, .i1, flag_ptr, LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
             const drive_block = wip.block(0, "drive_pending") catch return error.OutOfMemory;
             done_block = wip.block(0, "pending_done") catch return error.OutOfMemory;
             _ = wip.brCond(caller_drives, done_block.?, drive_block, .none) catch return error.OutOfMemory;
             wip.cursor = .{ .block = drive_block };
         }
-        const ret_ptr = if (self.slot(target).size == 0)
+        const ret_ptr = if (self.localDyn(target) != null)
+            try self.targetAddress(target)
+        else if (self.slot(target).size == 0)
             builder.nullValue(ptr_ty) catch return error.OutOfMemory
         else
             self.slot(target).ptr;
-        try self.callBoxyVoid(
-            "roc_boxy_drive_pending",
-            &.{ ptr_ty, ptr_ty, ptr_ty, .i32 },
-            &.{
-                ret_ptr,
-                out_desc_ptr,
-                result_desc_ptr,
-                try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(self.localLayout(target)))),
-            },
-        );
+        try self.callBuiltinVoid(.native_callable_drive, &.{ ptr_ty, ptr_ty }, &.{ try self.pendingCell(), ret_ptr });
         if (done_block) |block| {
             _ = wip.br(block) catch return error.OutOfMemory;
             wip.cursor = .{ .block = block };
@@ -5125,7 +5116,6 @@ pub const MonoLlvmCodeGen = struct {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: lir.LIR.ErasedCallableOnDrop,
-        result_desc: ?lir.LIR.BoxyDescRef,
         reuse: ?LocalId,
         reuse_unique: bool,
     ) Error!void {
@@ -5135,8 +5125,6 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const capture_size = if (capture_layout) |idx| self.layoutByteSize(idx) else 0;
-        const metadata_offset: u32 = @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size));
-        const total_capture_size: u32 = metadata_offset + @sizeOf(builtins.erased_callable.CompilerMetadata);
         const proc_fn = self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
         const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const on_drop_value = switch (on_drop) {
@@ -5150,17 +5138,12 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     null_ptr;
             },
-            .boxy_capture => |drop| blk: {
-                const helper = try self.declareBoxyCaptureDropHelper(drop.capture_layout, drop.desc_field_offset);
-                break :blk helper.toValue(builder);
-            },
         };
-        const metadata_desc = if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.boxyNullPtr();
 
         const data_ptr = if (reuse) |reuse_local| blk: {
             const capture_src = try self.allocEntryBlockSlot(
                 .i8,
-                total_capture_size,
+                capture_size,
                 LlvmBuilder.Alignment.fromByteUnits(builtins.erased_callable.capture_alignment),
                 "erased_repack_capture",
             );
@@ -5169,13 +5152,9 @@ pub const MonoLlvmCodeGen = struct {
                     try self.copyBytes(capture_src, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
-            try self.storePointer(
-                try self.offsetPtr(capture_src, metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-                metadata_desc,
-            );
             const update_mode = if (reuse_unique) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
             break :blk try self.callBuiltin(
-                builtinSymbol(.erased_callable_repack),
+                .erased_callable_repack,
                 ptr_ty,
                 &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, self.ptrSizedIntType(), .i8 },
                 &.{
@@ -5183,14 +5162,14 @@ pub const MonoLlvmCodeGen = struct {
                     proc_fn.toValue(builder),
                     on_drop_value,
                     capture_src,
-                    builder.intValue(self.ptrSizedIntType(), total_capture_size) catch return error.OutOfMemory,
+                    builder.intValue(self.ptrSizedIntType(), capture_size) catch return error.OutOfMemory,
                     builder.intValue(.i8, @backingInt(update_mode)) catch return error.OutOfMemory,
                 },
             );
         } else blk: {
-            const payload_size: u64 = builtins.erased_callable.compilerPayloadSize(capture_size);
+            const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
             const fresh_ptr = try self.callBuiltin(
-                builtinSymbol(.allocate_with_refcount),
+                .allocate_with_refcount,
                 ptr_ty,
                 &.{ self.ptrSizedIntType(), .i32, .i1 },
                 &.{
@@ -5207,139 +5186,9 @@ pub const MonoLlvmCodeGen = struct {
                     try self.copyBytes(capture_dst, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
-            try self.storePointer(
-                try self.offsetPtr(fresh_ptr, builtins.erased_callable.capture_offset + metadata_offset + @offsetOf(builtins.erased_callable.CompilerMetadata, "result_desc")),
-                metadata_desc,
-            );
             break :blk fresh_ptr;
         };
-        try self.emitErasedProcRegistration(proc_id, proc_fn, metadata_offset);
         try self.storePointer(self.slot(target).ptr, data_ptr);
-    }
-
-    /// Record an erased worker's return layout, argument layouts, and capture
-    /// metadata with the Boxy runtime under its code address, the value stored
-    /// at an erased callable's function-pointer field.
-    fn emitErasedProcRegistration(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc_fn: LlvmBuilder.Function.Index, metadata_offset: u32) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        const proc_spec = self.store.getProcSpec(proc_id);
-        try self.callBoxyVoid(
-            "roc_boxy_register_erased_proc",
-            &.{ try self.ptrType(), .i32, .i32, .i32, .i32, .i32, .i32, .i32, .i32 },
-            &.{
-                proc_fn.toValue(builder),
-                try self.boxyInt(.i32, @backingInt(proc_id)),
-                try self.boxyInt(.i32, @backingInt(self.layouts().runtimeRepresentationLayoutIdx(proc_spec.ret_layout))),
-                try self.boxyInt(.i32, metadata_offset),
-                try self.boxyInt(.i32, proc_spec.erased_arg_layouts.start),
-                try self.boxyInt(.i32, proc_spec.erased_arg_layouts.len),
-                try self.boxyInt(.i32, proc_spec.erased_arg_desc_offsets.start),
-                try self.boxyInt(.i32, proc_spec.erased_arg_desc_offsets.len),
-                try self.boxyInt(.i32, 0),
-            },
-        );
-    }
-
-    fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
-        return (@as(u64, @backingInt(capture_layout)) << 32) | desc_field_offset;
-    }
-
-    fn declareBoxyCaptureDropHelper(
-        self: *MonoLlvmCodeGen,
-        capture_layout: layout.Idx,
-        desc_field_offset: u32,
-    ) Error!LlvmBuilder.Function.Index {
-        const key = boxyCaptureDropKey(capture_layout, desc_field_offset);
-        if (self.boxy_capture_drop_helpers.get(key)) |entry| return entry.function;
-
-        const builder = self.builder orelse return error.CompilationFailed;
-        // A Boxy capture drop helper fills the published `Payload.on_drop` slot,
-        // so it carries the host-shaped adapter signature.
-        var param_buf: [builtins.rc_callback_abi.max_params]LlvmBuilder.Type = undefined;
-        const params = try self.rcHelperParamTypes(.host_drop, &param_buf);
-        const fn_ty = builder.fnType(.void, params, .normal) catch return error.OutOfMemory;
-        const name = builder.strtabStringFmt("roc_boxy_capture_drop_{x}", .{key}) catch return error.OutOfMemory;
-        const func = builder.addFunction(fn_ty, name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
-        var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
-        defer attrs.deinit(builder);
-        try self.addGeneratedFunctionStackProbeAttrs(&attrs);
-        func.setAttributes(attrs.finish(builder) catch return error.OutOfMemory, builder);
-        try self.boxy_capture_drop_helpers.put(key, .{
-            .capture_layout = capture_layout,
-            .desc_field_offset = desc_field_offset,
-            .function = func,
-        });
-        return func;
-    }
-
-    fn compilePendingBoxyCaptureDropHelpers(self: *MonoLlvmCodeGen) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        var it = self.boxy_capture_drop_helpers.iterator();
-        while (it.next()) |map_entry| {
-            if (map_entry.value_ptr.compiled) continue;
-            const entry = map_entry.value_ptr.*;
-
-            const outer_wip = self.wip;
-            const outer_ret = self.ret_ptr_arg;
-            const outer_args = self.args_ptr_arg;
-            const outer_capture = self.capture_ptr_arg;
-            const outer_ret_desc_ptr = self.ret_desc_ptr_arg;
-            const outer_runtime_ret_desc = self.current_runtime_ret_desc;
-            const outer_ret_layout = self.current_ret_layout;
-            const outer_slots = self.local_slots;
-            defer {
-                self.wip = outer_wip;
-                self.ret_ptr_arg = outer_ret;
-                self.args_ptr_arg = outer_args;
-                self.capture_ptr_arg = outer_capture;
-                self.ret_desc_ptr_arg = outer_ret_desc_ptr;
-                self.current_runtime_ret_desc = outer_runtime_ret_desc;
-                self.current_ret_layout = outer_ret_layout;
-                self.local_slots = outer_slots;
-            }
-
-            var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = entry.function, .strip = true }) catch return error.OutOfMemory;
-            defer wip.deinit();
-            self.wip = &wip;
-            self.ret_ptr_arg = null;
-            self.args_ptr_arg = null;
-            self.capture_ptr_arg = wip.arg(0);
-            self.ret_desc_ptr_arg = null;
-            self.current_runtime_ret_desc = null;
-            self.current_ret_layout = .zst;
-            self.local_slots = &.{};
-
-            const start = wip.block(0, "entry") catch return error.OutOfMemory;
-            const drop = wip.block(0, "drop") catch return error.OutOfMemory;
-            const done = wip.block(0, "done") catch return error.OutOfMemory;
-            wip.cursor = .{ .block = start };
-            const capture = wip.arg(0);
-            const is_null = wip.icmp(.eq, capture, try self.boxyNullPtr(), "") catch return error.OutOfMemory;
-            _ = wip.brCond(is_null, done, drop, .none) catch return error.OutOfMemory;
-
-            wip.cursor = .{ .block = drop };
-            const desc = try self.loadPointer(try self.offsetPtr(capture, entry.desc_field_offset));
-            const ptr_ty = try self.ptrType();
-            try self.callBoxyVoid(
-                "roc_boxy_drop",
-                &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
-                &.{
-                    capture,
-                    try self.boxyInt(.i32, @backingInt(entry.capture_layout)),
-                    desc,
-                    try self.boxyInt(.i8, @backingInt(layout.RcOp.decref)),
-                    try self.boxyInt(.i32, 1),
-                    try self.boxyInt(.i8, @backingInt(RcAtomicity.atomic)),
-                },
-            );
-            _ = wip.br(done) catch return error.OutOfMemory;
-
-            wip.cursor = .{ .block = done };
-            _ = wip.retVoid() catch return error.OutOfMemory;
-            try self.finishCurrentWipFunction();
-            map_entry.value_ptr.compiled = true;
-        }
     }
 
     fn emitListLiteral(self: *MonoLlvmCodeGen, target: LocalId, elems: LocalSpan) Error!void {
@@ -5348,7 +5197,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_locals = self.store.getLocalSpan(elems);
         try self.materializeLocalSpanIfDeferred(elem_locals);
         const target_layout = self.localLayout(target);
-        const abi = self.boxyAwareBuiltinListAbi(target_layout);
+        const abi = self.layouts().builtinListAbi(target_layout);
         const target_ptr = self.slot(target).ptr;
         if (elem_locals.len == 0) {
             try self.zeroBytes(target_ptr, self.layoutByteSize(target_layout));
@@ -5359,7 +5208,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.callBuiltinVoid(
-            builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)),
+            LowLevelBuiltins.listOp(.list_with_capacity),
             &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 },
             &.{
                 target_ptr,
@@ -5373,7 +5222,7 @@ pub const MonoLlvmCodeGen = struct {
         for (0..elem_locals.len) |i| {
             const elem_local = GuardedList.at(elem_locals, i);
             const dst = try self.offsetPtr(bytes_ptr, @as(u32, @intCast(i)) * abi.elem_size);
-            try self.copyBytes(dst, self.slot(elem_local).ptr, abi.elem_size, self.alignmentForLayout(abi.elem_layout_idx.?));
+            try self.storeLocalToMemory(dst, elem_local, abi.elem_size, self.alignmentForLayout(abi.elem_layout_idx.?));
         }
         try self.storeListLen(target_ptr, builder.intValue(self.ptrSizedIntType(), elem_locals.len) catch return error.OutOfMemory);
     }
@@ -5392,7 +5241,7 @@ pub const MonoLlvmCodeGen = struct {
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const dst = try self.offsetPtr(allocated.ptr, offset);
-            try self.copyBytes(dst, self.slot(field_local).ptr, field_size, self.alignmentForLayout(field_layout));
+            try self.storeLocalToMemory(dst, field_local, field_size, self.alignmentForLayout(field_layout));
         }
     }
 
@@ -5407,7 +5256,7 @@ pub const MonoLlvmCodeGen = struct {
             const payload_layout = self.tagPayloadLayout(allocated.layout_idx, discriminant);
             const payload_size = self.layoutByteSize(payload_layout);
             if (payload_size > 0) {
-                try self.copyBytes(allocated.ptr, self.slot(payload_local).ptr, payload_size, self.alignmentForLayout(payload_layout));
+                try self.storeLocalToMemory(allocated.ptr, payload_local, payload_size, self.alignmentForLayout(payload_layout));
             }
         }
     }
@@ -5428,7 +5277,7 @@ pub const MonoLlvmCodeGen = struct {
             if (field_size == 0) continue;
             const offset = self.layouts().getStructFieldOffsetByOriginalIndex(base_layout.getStruct().idx, @intCast(i));
             const field_dst = try self.offsetPtr(dst, offset);
-            try self.copyBytes(field_dst, self.slot(field_local).ptr, field_size, self.alignmentForLayout(field_layout));
+            try self.storeLocalToMemory(field_dst, field_local, field_size, self.alignmentForLayout(field_layout));
         }
     }
 
@@ -5444,7 +5293,7 @@ pub const MonoLlvmCodeGen = struct {
             const payload_layout = self.tagPayloadLayout(tag_layout, discriminant);
             const payload_size = self.layoutByteSize(payload_layout);
             if (payload_size > 0) {
-                try self.copyBytes(dst, self.slot(payload_local).ptr, payload_size, self.alignmentForLayout(payload_layout));
+                try self.storeLocalToMemory(dst, payload_local, payload_size, self.alignmentForLayout(payload_layout));
             }
         }
         try self.writeTagDiscriminant(dst, tag_layout, discriminant);
@@ -5458,7 +5307,7 @@ pub const MonoLlvmCodeGen = struct {
         if (layout_val.tag == .box) {
             const abi = self.layouts().builtinBoxAbi(target_layout);
             const data_ptr = try self.callBuiltin(
-                builtinSymbol(.allocate_with_refcount),
+                .allocate_with_refcount,
                 try self.ptrType(),
                 &.{ self.ptrSizedIntType(), .i32, .i1 },
                 &.{
@@ -5486,18 +5335,15 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
-            .num_plus, .num_minus, .num_times => unreachable,
-            // LIR lowering splits this into an alias and `list_prefetch`.
-            .list_prefetched => unreachable,
-            .list_sort_with => try self.emitListSortWith(target, arg_locals, unique_args),
+            .num_plus, .num_minus, .num_times => unreachable, // LIR lowering commits these to typed operations through CheckedArithmetic.lowerOp
+            .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .bool_not => {
-                const value = try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr);
+                const value = try self.loadLocalBool(GuardedList.at(arg_locals, 0));
                 const not_value = (self.wip orelse return error.CompilationFailed).not(value, "") catch return error.OutOfMemory;
-                try self.storeBool(self.slot(target).ptr, not_value);
+                try self.storeLocalBool(target, not_value);
             },
-            .bool_likely => try self.storeBool(self.slot(target).ptr, try self.loadBool(self.slot(GuardedList.at(arg_locals, 0)).ptr)),
-            .num_is_eq => try self.storeBool(self.slot(target).ptr, try self.emitValueEqual(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(GuardedList.at(arg_locals, 1)).ptr, self.localLayout(GuardedList.at(arg_locals, 0)))),
-            .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
+            .bool_likely => try self.storeLocalBool(target, try self.loadLocalBool(GuardedList.at(arg_locals, 0))),
+            .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte => try self.emitNumericCompare(target, op, arg_locals),
             .compare => try self.emitNumericOrderCompare(target, arg_locals),
             .num_int_add_wrap,
             .num_int_add_crash_on_overflow,
@@ -5598,11 +5444,11 @@ pub const MonoLlvmCodeGen = struct {
             .num_pow => if (self.localLayout(target) == .dec)
                 try self.emitDecPow(target, arg_locals)
             else
-                try self.emitNumericFloatPow(target, arg_locals),
+                try self.emitNumericFloatBinary(target, arg_locals, LowLevelBuiltins.floatPow),
             .num_atan2 => if (self.localLayout(target) == .dec)
                 try self.emitDecAtan2(target, arg_locals)
             else
-                try self.emitNumericFloatAtan2(target, arg_locals),
+                try self.emitNumericFloatBinary(target, arg_locals, LowLevelBuiltins.floatAtan2),
             .num_sqrt => try self.emitNumericSqrt(target, GuardedList.at(arg_locals, 0)),
             .num_sin => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_sin),
             .num_cos => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_cos),
@@ -5612,7 +5458,7 @@ pub const MonoLlvmCodeGen = struct {
             .num_atan => try self.emitNumericUnaryMath(target, GuardedList.at(arg_locals, 0), .num_atan),
             .num_floor => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .floor),
             .num_ceiling => try self.emitNumericFloatUnaryIntrinsic(target, GuardedList.at(arg_locals, 0), .ceil),
-            .list_len => try self.storeIntToLayout(self.slot(target).ptr, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
+            .list_len => try self.storeLocalInt(target, try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(arg_locals, 0)).ptr, self.rocListLenOffset())), self.localLayout(target)),
             .list_capacity => try self.emitListCapacity(target, GuardedList.at(arg_locals, 0)),
             .list_get_unsafe => try self.emitListGetUnsafe(target, arg_locals),
             .list_prefetch => try self.emitListPrefetch(arg_locals),
@@ -5624,10 +5470,11 @@ pub const MonoLlvmCodeGen = struct {
             .list_append_range_within_unsafe => try self.emitListAppendRangeWithinUnsafe(target, arg_locals),
             .list_append_sublist => try self.emitListAppendSublist(target, arg_locals, unique_args),
             .list_append_le_bytes => try self.emitListAppendLeBytes(target, arg_locals, unique_args),
+            .list_append_le_bytes_unsafe => try self.emitListAppendLeBytesUnsafe(target, arg_locals),
             .list_slack_unique => try self.emitListSlackUnique(target, arg_locals),
             .list_owned_unique => try self.emitListOwnedUnique(target, arg_locals, unique_args),
             .list_prepend => try self.emitListPrepend(target, arg_locals, unique_args),
-            .list_sublist, .list_sublist_borrowed, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_clear => try self.emitListSublist(target, op, arg_locals, unique_args),
+            .list_sublist, .list_sublist_borrowed, .list_take_first, .list_take_last, .list_clear => try self.emitListSublist(target, op, arg_locals, unique_args),
             .list_drop_at => try self.emitListDropAt(target, arg_locals, unique_args),
             .list_swap => try self.emitListSwap(target, arg_locals, unique_args),
             .list_set => try self.emitListSet(target, arg_locals, unique_args),
@@ -5637,14 +5484,14 @@ pub const MonoLlvmCodeGen = struct {
             .list_replace_unsafe => try self.emitListReplaceUnsafe(target, arg_locals, unique_args),
             .list_map_prepare_reuse => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
             .list_map_can_reuse => try self.emitListMapCanReuse(target, arg_locals, interchangeable),
+            .list_item_size_at_most => try self.emitListItemSizeAtMost(target, arg_locals),
             .list_map_cast_unsafe => try self.copyBytes(self.slot(target).ptr, self.slot(GuardedList.at(arg_locals, 0)).ptr, self.slot(target).size, self.slot(target).alignment),
-            .list_map_extract_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
+            .list_map_extract_unsafe, .list_move_out_unsafe => try self.emitListMapExtractUnsafe(target, arg_locals),
             .list_map_write_unsafe => try self.emitListMapWriteUnsafe(target, arg_locals),
             .list_reverse => try self.emitListReverse(target, arg_locals, unique_args),
-            .list_reserve => try self.emitListReserve(target, "roc_boxy_list_reserve", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve)), arg_locals, unique_args),
-            .list_reserve_for_append => try self.emitListReserve(target, "roc_boxy_list_reserve_for_append", builtinSymbol(LowLevelBuiltins.listOp(.list_reserve_for_append)), arg_locals, unique_args),
+            .list_reserve => try self.emitListReserve(target, LowLevelBuiltins.listOp(.list_reserve), arg_locals, unique_args),
+            .list_reserve_for_append => try self.emitListReserve(target, LowLevelBuiltins.listOp(.list_reserve_for_append), arg_locals, unique_args),
             .list_release_excess_capacity => try self.emitListReleaseExcess(target, arg_locals, unique_args),
-            .list_first, .list_last => try self.emitListFirstLast(target, op, arg_locals),
             .str_is_eq => try self.emitStrIsEq(target, arg_locals),
             .str_is_eq_static_small => try self.emitStrEqStaticSmall(target, arg_locals),
             .str_static_small_word_eq => try self.emitStrStaticSmallWordEq(target, arg_locals),
@@ -5656,23 +5503,24 @@ pub const MonoLlvmCodeGen = struct {
             .str_count_utf8_bytes => try self.emitStrCountUtf8Bytes(target, GuardedList.at(arg_locals, 0)),
             .str_get_utf8_byte_unsafe => try self.emitStrGetUtf8ByteUnsafe(target, arg_locals),
             .str_substring_unsafe => try self.emitStrSubstringUnsafe(target, arg_locals),
-            .str_split_first => try self.emitStrSplitFirst(target, arg_locals),
-            .str_split_last => try self.emitStrSplitLast(target, arg_locals),
+            .str_split_first => try self.emitStrSplit(target, arg_locals, .str_split_first, builtins.dev_wrappers.StrSplitFirstLayout),
+            .str_split_last => try self.emitStrSplit(target, arg_locals, .str_split_last, builtins.dev_wrappers.StrSplitLastLayout),
             .str_drop_prefix_caseless_ascii => try self.emitStrDropPrefixCaselessAscii(target, arg_locals),
-            .str_concat => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_concat)), arg_locals, unique_args),
-            .str_trim => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim_start)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_trim_end)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_with_ascii_lowercased)), GuardedList.at(arg_locals, 0), unique_args),
-            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_with_ascii_uppercased)), GuardedList.at(arg_locals, 0), unique_args),
+            .str_concat => try self.emitStrRetBuiltin(target, LowLevelBuiltins.strOp(.str_concat), arg_locals, unique_args),
+            .str_trim => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim), GuardedList.at(arg_locals, 0), unique_args),
+            .str_trim_start => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim_start), GuardedList.at(arg_locals, 0), unique_args),
+            .str_trim_end => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_trim_end), GuardedList.at(arg_locals, 0), unique_args),
+            .str_with_ascii_lowercased => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_with_ascii_lowercased), GuardedList.at(arg_locals, 0), unique_args),
+            .str_with_ascii_uppercased => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_with_ascii_uppercased), GuardedList.at(arg_locals, 0), unique_args),
             .str_drop_prefix => try self.emitStrDropEdge(target, arg_locals, .prefix),
             .str_drop_suffix => try self.emitStrDropEdge(target, arg_locals, .suffix),
-            .str_split_on => try self.emitStrRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_split_on)), arg_locals, null),
+            .str_split_on => try self.emitStrRetBuiltin(target, LowLevelBuiltins.strOp(.str_split_on), arg_locals, null),
             .str_join_with => try self.emitStrJoinWith(target, arg_locals),
+            .str_from_parts => try self.emitStrFromParts(target, arg_locals),
             .str_repeat => try self.emitStrRepeat(target, arg_locals),
             .str_with_capacity => try self.emitStrWithCapacity(target, GuardedList.at(arg_locals, 0)),
             .str_reserve => try self.emitStrReserve(target, arg_locals, unique_args),
-            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_release_excess_capacity)), GuardedList.at(arg_locals, 0), unique_args),
+            .str_release_excess_capacity => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_release_excess_capacity), GuardedList.at(arg_locals, 0), unique_args),
             .str_to_utf8 => try self.emitStrToUtf8(target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8_lossy => try self.emitStrFromByteList(.str_from_utf8_lossy, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8_validated => try self.emitStrFromByteList(.str_from_utf8_validated, target, GuardedList.at(arg_locals, 0)),
@@ -5681,7 +5529,7 @@ pub const MonoLlvmCodeGen = struct {
             .str_from_utf32_le_short => try self.emitStrFromByteList(.str_from_utf32_le_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf32_be_short => try self.emitStrFromByteList(.str_from_utf32_be_short, target, GuardedList.at(arg_locals, 0)),
             .str_from_utf8 => try self.emitStrFromUtf8(target, GuardedList.at(arg_locals, 0)),
-            .str_inspect => try self.emitStrUnaryRetBuiltin(target, builtinSymbol(LowLevelBuiltins.strOp(.str_inspect)), GuardedList.at(arg_locals, 0), null),
+            .str_inspect => try self.emitStrUnaryRetBuiltin(target, LowLevelBuiltins.strOp(.str_inspect), GuardedList.at(arg_locals, 0), null),
             .dict_pseudo_seed,
             .hasher_finish,
             .hasher_write_bool,
@@ -5755,11 +5603,8 @@ pub const MonoLlvmCodeGen = struct {
             .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits => try self.emitFloatBitCast(target, op, GuardedList.at(arg_locals, 0)),
             .dec_from_attos, .dec_to_attos => try self.emitDecAttosMove(target, GuardedList.at(arg_locals, 0)),
             .dec_to_str => try self.emitDecToStr(target, GuardedList.at(arg_locals, 0)),
-            .num_to_str => try self.emitNumToStr(target, GuardedList.at(arg_locals, 0)),
             .box_box => try self.emitBoxBox(target, GuardedList.at(arg_locals, 0)),
-            // Consuming Box.unbox is normalized by ARC into the borrowed load
-            // followed by explicit payload incref and box decref statements.
-            .box_unbox => unreachable,
+            .box_unbox => unreachable, // ARC normalizes consuming Box.unbox into box_unbox_borrowed plus explicit payload incref and box decref
             .box_unbox_borrowed => try self.emitBoxUnbox(target, GuardedList.at(arg_locals, 0)),
             .box_prepare_update => try self.emitBoxPrepareUpdate(target, GuardedList.at(arg_locals, 0), unique_args),
             .erased_capture_load => try self.emitErasedCaptureLoad(target, GuardedList.at(arg_locals, 0)),
@@ -5769,10 +5614,9 @@ pub const MonoLlvmCodeGen = struct {
             .ptr_load => try self.emitPtrLoad(target, GuardedList.at(arg_locals, 0)),
             .ptr_cast => try self.emitPtrCast(target, GuardedList.at(arg_locals, 0)),
             .crash => try self.emitCrashBytes("Roc crashed"),
-            // Not conversions, and not lowered by this backend.
-            .num_log,
-            => return error.UnsupportedLowLevel,
-            .u8_to_i8_wrap,
+            // Every remaining op is a numeric conversion; the comptime check keeps
+            // this switch exhaustive when a non-conversion op is added.
+            inline .u8_to_i8_wrap,
             .u8_to_i8_try,
             .u8_to_i16,
             .u8_to_i32,
@@ -6017,7 +5861,11 @@ pub const MonoLlvmCodeGen = struct {
             .dec_to_f32_wrap,
             .dec_to_f32_try_unsafe,
             .dec_to_f64,
-            => try self.emitNumericConversion(target, op, arg_locals),
+            => |conversion_op| try self.emitNumericConversion(
+                comptime numeric_conversion.getConversionSpec(conversion_op).?,
+                target,
+                arg_locals,
+            ),
         }
     }
 
@@ -6044,16 +5892,16 @@ pub const MonoLlvmCodeGen = struct {
             hasher_write_bytes = @backingInt(lir.LowLevel.hasher_write_bytes),
             hasher_write_str = @backingInt(lir.LowLevel.hasher_write_str),
         };
-        const hasher_op = narrowLowLevel(HasherOp, op) orelse return error.UnsupportedLowLevel;
+        const hasher_op = std.enums.fromInt(HasherOp, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         const result = switch (hasher_op) {
             .dict_pseudo_seed => blk: {
                 if (args.len != 0) return error.CompilationFailed;
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.dict_pseudo_seed)), .i64, &.{}, &.{});
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.dict_pseudo_seed), .i64, &.{}, &.{});
             },
             .hasher_finish => blk: {
                 if (args.len != 1) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_finish)), .i64, &.{.i64}, &.{seed});
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_finish), .i64, &.{.i64}, &.{seed});
             },
             .hasher_write_bool,
             .hasher_write_u8,
@@ -6068,9 +5916,9 @@ pub const MonoLlvmCodeGen = struct {
                 if (args.len != 2) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
                 const value_layout = self.localLayout(GuardedList.at(args, 1));
-                const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, value_layout), .i64, value_layout.isSigned());
+                const value = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), value_layout), .i64, value_layout.isSigned());
                 break :blk try self.callBuiltin(
-                    LowLevelBuiltins.hasherOp(op).symbolName(),
+                    LowLevelBuiltins.hasherOp(op),
                     .i64,
                     &.{ .i64, .i8, .i64, .i8 },
                     &.{
@@ -6084,17 +5932,17 @@ pub const MonoLlvmCodeGen = struct {
             .hasher_write_f32 => blk: {
                 if (args.len != 2) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
-                const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+                const value = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
                 const bits32 = wip.cast(.bitcast, value, .i32, "") catch return error.OutOfMemory;
                 const bits64 = try self.coerceScalar(bits32, .i64, false);
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_f32)), .i64, &.{ .i64, .i64 }, &.{ seed, bits64 });
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_write_f32), .i64, &.{ .i64, .i64 }, &.{ seed, bits64 });
             },
             .hasher_write_f64 => blk: {
                 if (args.len != 2) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
-                const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+                const value = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
                 const bits = wip.cast(.bitcast, value, .i64, "") catch return error.OutOfMemory;
-                break :blk try self.callBuiltin(builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_f64)), .i64, &.{ .i64, .i64 }, &.{ seed, bits });
+                break :blk try self.callBuiltin(LowLevelBuiltins.hasherOp(.hasher_write_f64), .i64, &.{ .i64, .i64 }, &.{ seed, bits });
             },
             .hasher_write_u128,
             .hasher_write_i128,
@@ -6102,10 +5950,10 @@ pub const MonoLlvmCodeGen = struct {
             => blk: {
                 if (args.len != 2) return error.CompilationFailed;
                 const seed = try self.loadHasherState(GuardedList.at(args, 0));
-                const value = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+                const value = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
                 const parts = try self.splitI128Value(value);
                 break :blk try self.callBuiltin(
-                    LowLevelBuiltins.hasherOp(op).symbolName(),
+                    LowLevelBuiltins.hasherOp(op),
                     .i64,
                     &.{ .i64, .i8, .i64, .i64 },
                     &.{
@@ -6122,7 +5970,7 @@ pub const MonoLlvmCodeGen = struct {
                 var list_args = try self.rocListArgs1(GuardedList.at(args, 1));
                 defer list_args.deinit(self.allocator);
                 break :blk try self.callBuiltin(
-                    builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_bytes)),
+                    LowLevelBuiltins.hasherOp(.hasher_write_bytes),
                     .i64,
                     &.{ .i64, .i8, try self.ptrType(), self.ptrSizedIntType() },
                     &.{
@@ -6139,7 +5987,7 @@ pub const MonoLlvmCodeGen = struct {
                 var str_args = try self.rocStrArgs1(GuardedList.at(args, 1));
                 defer str_args.deinit(self.allocator);
                 break :blk try self.callBuiltin(
-                    builtinSymbol(LowLevelBuiltins.hasherOp(.hasher_write_str)),
+                    LowLevelBuiltins.hasherOp(.hasher_write_str),
                     .i64,
                     &.{ .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() },
                     &.{ seed, str_args.values.items[0], str_args.values.items[1], str_args.values.items[2] },
@@ -6153,7 +6001,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitCryptoLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
         const Arity = enum { zero, one, two };
         const CryptoInfo = struct {
-            name: []const u8,
+            name: BuiltinSymbol,
             arity: Arity,
         };
         const CryptoOp = enum(u16) {
@@ -6166,16 +6014,16 @@ pub const MonoLlvmCodeGen = struct {
             crypto_blake3_hasher_write = @backingInt(lir.LowLevel.crypto_blake3_hasher_write),
             crypto_blake3_hasher_finish = @backingInt(lir.LowLevel.crypto_blake3_hasher_finish),
         };
-        const crypto_op = narrowLowLevel(CryptoOp, op) orelse return error.UnsupportedLowLevel;
+        const crypto_op = std.enums.fromInt(CryptoOp, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         const info: CryptoInfo = switch (crypto_op) {
-            .crypto_sha256_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes)), .arity = Arity.one },
-            .crypto_sha256_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty)), .arity = Arity.zero },
-            .crypto_sha256_hasher_write => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_write)), .arity = Arity.two },
-            .crypto_sha256_hasher_finish => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_finish)), .arity = Arity.one },
-            .crypto_blake3_hash_bytes => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hash_bytes)), .arity = Arity.one },
-            .crypto_blake3_hasher_empty => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_empty)), .arity = Arity.zero },
-            .crypto_blake3_hasher_write => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_write)), .arity = Arity.two },
-            .crypto_blake3_hasher_finish => .{ .name = builtinSymbol(LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_finish)), .arity = Arity.one },
+            .crypto_sha256_hash_bytes => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hash_bytes), .arity = Arity.one },
+            .crypto_sha256_hasher_empty => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_empty), .arity = Arity.zero },
+            .crypto_sha256_hasher_write => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_write), .arity = Arity.two },
+            .crypto_sha256_hasher_finish => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_sha256_hasher_finish), .arity = Arity.one },
+            .crypto_blake3_hash_bytes => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hash_bytes), .arity = Arity.one },
+            .crypto_blake3_hasher_empty => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_empty), .arity = Arity.zero },
+            .crypto_blake3_hasher_write => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_write), .arity = Arity.two },
+            .crypto_blake3_hasher_finish => .{ .name = LowLevelBuiltins.cryptoOp(.crypto_blake3_hasher_finish), .arity = Arity.one },
         };
 
         var call_args = CallArgs.init();
@@ -6233,10 +6081,19 @@ pub const MonoLlvmCodeGen = struct {
     fn emitNumericCompare(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const layout_idx = self.localLayout(GuardedList.at(args, 0));
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, layout_idx);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, layout_idx);
+        // Lowering decomposes structural equality, so `num_is_eq` only ever
+        // compares numbers.
+        const operand = self.layoutValue(layout_idx);
+        if (op == .num_is_eq and !(operand.tag == .scalar and (operand.getScalar().tag == .int or operand.getScalar().tag == .frac))) invariant(
+            "LLVM codegen invariant violated: num_is_eq received non-numeric operand layout {d}",
+            .{@backingInt(layout_idx)},
+        );
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), layout_idx);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), layout_idx);
         const cond: LlvmBuilder.Value = if (isFloatLayout(layout_idx)) blk: {
-            const cmp_cond: LlvmBuilder.FloatCondition = if (op == .num_is_gt)
+            const cmp_cond: LlvmBuilder.FloatCondition = if (op == .num_is_eq)
+                .oeq
+            else if (op == .num_is_gt)
                 .ogt
             else if (op == .num_is_gte)
                 .oge
@@ -6245,11 +6102,13 @@ pub const MonoLlvmCodeGen = struct {
             else if (op == .num_is_lte)
                 .ole
             else
-                unreachable;
+                unreachable; // emitLowLevel calls emitNumericCompare only for num_is_eq, num_is_gt, num_is_gte, num_is_lt, and num_is_lte
             break :blk wip.fcmp(.normal, cmp_cond, lhs, rhs, "") catch return error.OutOfMemory;
         } else blk: {
             const signed = layout_idx.isSigned();
-            const cmp_cond: LlvmBuilder.IntegerCondition = if (op == .num_is_gt)
+            const cmp_cond: LlvmBuilder.IntegerCondition = if (op == .num_is_eq)
+                .eq
+            else if (op == .num_is_gt)
                 if (signed) .sgt else .ugt
             else if (op == .num_is_gte)
                 if (signed) .sge else .uge
@@ -6258,17 +6117,17 @@ pub const MonoLlvmCodeGen = struct {
             else if (op == .num_is_lte)
                 if (signed) .sle else .ule
             else
-                unreachable;
+                unreachable; // emitLowLevel calls emitNumericCompare only for num_is_eq, num_is_gt, num_is_gte, num_is_lt, and num_is_lte
             break :blk wip.icmp(cmp_cond, lhs, rhs, "") catch return error.OutOfMemory;
         };
-        try self.storeBool(self.slot(target).ptr, cond);
+        try self.storeLocalBool(target, cond);
     }
 
     fn emitNumericOrderCompare(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder, const wip = try self.builderAndWip();
         const layout_idx = self.localLayout(GuardedList.at(args, 0));
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, layout_idx);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, layout_idx);
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), layout_idx);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), layout_idx);
         const signed = layout_idx.isSigned();
         const same_cond: LlvmBuilder.Value = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
         const lt_cond: LlvmBuilder.Value = wip.icmp(if (signed) .slt else .ult, lhs, rhs, "") catch return error.OutOfMemory;
@@ -6276,7 +6135,7 @@ pub const MonoLlvmCodeGen = struct {
         const lt = wip.conv(.unsigned, lt_cond, .i8, "") catch return error.OutOfMemory;
         const same_tag = wip.bin(.mul, same, builder.intValue(.i8, 2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const tag = wip.bin(.add, lt, same_tag, "") catch return error.OutOfMemory;
-        try self.storeIntToLayout(self.slot(target).ptr, tag, self.localLayout(target));
+        try self.storeLocalInt(target, tag, self.localLayout(target));
     }
 
     fn emitNumericBinary(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
@@ -6290,8 +6149,8 @@ pub const MonoLlvmCodeGen = struct {
 
         if (op == .num_float_add or op == .num_float_sub or op == .num_float_mul) {
             const lhs_layout = self.localLayout(GuardedList.at(args, 0));
-            var lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, lhs_layout);
-            var rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+            var lhs = try self.loadLocalScalar(GuardedList.at(args, 0), lhs_layout);
+            var rhs = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
             const result_ty = self.scalarType(target_layout);
             lhs = try self.coerceScalar(lhs, result_ty, lhs_layout.isSigned());
             rhs = try self.coerceScalar(rhs, result_ty, self.localLayout(GuardedList.at(args, 1)).isSigned());
@@ -6302,7 +6161,7 @@ pub const MonoLlvmCodeGen = struct {
             else
                 .fmul;
             const result = wip.bin(tag, lhs, rhs, "") catch return error.OutOfMemory;
-            try self.storeScalar(self.slot(target).ptr, target_layout, result);
+            try self.storeLocalScalar(target, target_layout, result);
             return;
         }
 
@@ -6318,8 +6177,8 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         const lhs_layout = self.localLayout(GuardedList.at(args, 0));
-        var lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, lhs_layout);
-        var rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+        var lhs = try self.loadLocalScalar(GuardedList.at(args, 0), lhs_layout);
+        var rhs = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
         const result_ty = self.scalarType(target_layout);
         lhs = try self.coerceScalar(lhs, result_ty, lhs_layout.isSigned());
         rhs = try self.coerceScalar(rhs, result_ty, self.localLayout(GuardedList.at(args, 1)).isSigned());
@@ -6348,7 +6207,7 @@ pub const MonoLlvmCodeGen = struct {
         } else blk: {
             if (plain_op == .num_shift_left_by or plain_op == .num_shift_right_by or plain_op == .num_shift_right_zf_by) {
                 const result = try self.emitIntegerShift(plain_op, lhs, rhs, target_layout);
-                try self.storeScalar(self.slot(target).ptr, target_layout, result);
+                try self.storeLocalScalar(target, target_layout, result);
                 return;
             }
 
@@ -6391,7 +6250,7 @@ pub const MonoLlvmCodeGen = struct {
             const adjusted_or_raw = wip.select(.normal, sign_differs, adjusted, raw, "") catch return error.OutOfMemory;
             break :blk wip.select(.normal, rem_is_zero, zero, adjusted_or_raw, "") catch return error.OutOfMemory;
         };
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     const IntegerOverflowResult = struct {
@@ -6409,8 +6268,8 @@ pub const MonoLlvmCodeGen = struct {
         const operand_layout = self.localLayout(GuardedList.at(args, 0));
         const rhs_layout = self.localLayout(GuardedList.at(args, 1));
         const result_ty = self.scalarType(operand_layout);
-        var lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, operand_layout);
-        var rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, rhs_layout);
+        var lhs = try self.loadLocalScalar(GuardedList.at(args, 0), operand_layout);
+        var rhs = try self.loadLocalScalar(GuardedList.at(args, 1), rhs_layout);
         lhs = try self.coerceScalar(lhs, result_ty, operand_layout.isSigned());
         rhs = try self.coerceScalar(rhs, result_ty, rhs_layout.isSigned());
 
@@ -6418,15 +6277,15 @@ pub const MonoLlvmCodeGen = struct {
             .wrap, .proven_cannot_overflow => {
                 const tag = integerFamilyInstruction(entry.operation, entry.mode, operand_layout.isSigned());
                 const result = wip.bin(tag, lhs, rhs, "") catch return error.OutOfMemory;
-                try self.storeScalar(self.slot(target).ptr, operand_layout, result);
+                try self.storeLocalScalar(target, operand_layout, result);
             },
             .crash_on_overflow, .overflows => {
                 const overflow_result = try self.emitIntegerOverflowBinary(entry.operation, lhs, rhs, operand_layout);
                 if (entry.mode == .crash_on_overflow) {
                     try self.emitCrashIf(overflow_result.overflowed, checkedOverflowMessage(entry.op));
-                    try self.storeScalar(self.slot(target).ptr, operand_layout, overflow_result.value);
+                    try self.storeLocalScalar(target, operand_layout, overflow_result.value);
                 } else {
-                    try self.storeBool(self.slot(target).ptr, overflow_result.overflowed);
+                    try self.storeLocalBool(target, overflow_result.overflowed);
                 }
             },
         }
@@ -6454,7 +6313,7 @@ pub const MonoLlvmCodeGen = struct {
                 .sub => .@"sub nuw",
                 .mul => .@"mul nuw",
             },
-            .crash_on_overflow, .overflows => unreachable,
+            .crash_on_overflow, .overflows => unreachable, // emitIntegerFamilyBinary calls this only for wrap and proven_cannot_overflow
         };
     }
 
@@ -6506,7 +6365,9 @@ pub const MonoLlvmCodeGen = struct {
         var safe_rhs = wip.select(.normal, rhs_is_zero, one, rhs, "") catch return error.OutOfMemory;
 
         if (target_layout.isSigned()) {
-            const lowest = builder.intValue(result_ty, CheckedArithmetic.signedLowestValue(target_layout) orelse unreachable) catch return error.OutOfMemory;
+            const lowest_value = CheckedArithmetic.signedLowestValue(target_layout) orelse
+                llvmInvariantFmt("checked integer denominator on signed layout {d} with no lowest value", .{@backingInt(target_layout)});
+            const lowest = builder.intValue(result_ty, lowest_value) catch return error.OutOfMemory;
             const neg_one = builder.intValue(result_ty, -1) catch return error.OutOfMemory;
             const lhs_is_lowest = wip.icmp(.eq, lhs, lowest, "") catch return error.OutOfMemory;
             const rhs_is_neg_one = wip.icmp(.eq, rhs, neg_one, "") catch return error.OutOfMemory;
@@ -6514,7 +6375,7 @@ pub const MonoLlvmCodeGen = struct {
             if (plain_op == .num_div_by or plain_op == .num_div_trunc_by) {
                 try self.emitCrashIf(min_div_neg_one, checkedOverflowMessage(checked_op));
             } else if (plain_op != .num_rem_by and plain_op != .num_mod_by) {
-                unreachable;
+                unreachable; // emitNumericBinary calls this only for div_by, div_trunc_by, rem_by, and mod_by
             }
             safe_rhs = wip.select(.normal, min_div_neg_one, one, safe_rhs, "") catch return error.OutOfMemory;
         }
@@ -6534,7 +6395,7 @@ pub const MonoLlvmCodeGen = struct {
         const lhs_parts = try self.splitI128Value(lhs);
         const rhs_parts = try self.splitI128Value(rhs);
         const overflowed_i32 = try self.callBuiltin(
-            LowLevelBuiltins.checkedMul128(unsigned).symbolName(),
+            LowLevelBuiltins.checkedMul128(unsigned),
             .i32,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64, .i64, .i64 },
             &.{ out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high },
@@ -6569,7 +6430,7 @@ pub const MonoLlvmCodeGen = struct {
             LowLevelBuiltins.i128Mod(unsigned)
         else
             return error.UnsupportedLowLevel;
-        return self.callI128BinaryBuiltin(builtin_fn.symbolName(), lhs, rhs);
+        return self.callI128BinaryBuiltin(builtin_fn, lhs, rhs);
     }
 
     fn emitIntegerShift(self: *MonoLlvmCodeGen, op: lir.LowLevel, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value, target_layout: layout.Idx) Error!LlvmBuilder.Value {
@@ -6591,46 +6452,46 @@ pub const MonoLlvmCodeGen = struct {
         else if (op == .num_shift_right_zf_by)
             .lshr
         else
-            unreachable;
+            unreachable; // emitNumericBinary calls this only for the three shift ops
         return wip.bin(tag, lhs, masked_amount, "") catch return error.OutOfMemory;
     }
 
     fn emitDecBinary(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), .dec);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), .dec);
         const result = if (op == .dec_mul)
             // Dec multiplication rescales its i128 payload and uses its dedicated
             // builtin overflow path; it is not an integer-family multiplication.
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.dec_mul)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.dec_mul), lhs, rhs)
         else if (op == .num_div_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_by)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_div_by), lhs, rhs)
         else if (op == .num_div_trunc_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_div_trunc_by), lhs, rhs)
             // A Dec's payload is a scaled i128; the truncating remainder and the
             // modulo of the raw payloads are the Dec remainder and modulo, so
             // these route through the same i128 wrappers the dev/wasm backends
             // use.
         else if (op == .num_rem_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128DivRem(true, false)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.i128DivRem(true, false), lhs, rhs)
         else if (op == .num_mod_by)
-            try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.i128Mod(false)), lhs, rhs)
+            try self.callI128BinaryBuiltin(LowLevelBuiltins.i128Mod(false), lhs, rhs)
         else
             return error.UnsupportedLowLevel;
-        try self.storeScalar(self.slot(target).ptr, .dec, result);
+        try self.storeLocalScalar(target, .dec, result);
     }
 
     /// Call a builtin that takes two 128-bit operands and writes a 128-bit
     /// result, passing each operand as a 64-bit low/high pair. Dec's payload is
     /// an i128, so its arithmetic wrappers share this shape with the plain i128
     /// ones.
-    fn callI128BinaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn callI128BinaryBuiltin(self: *MonoLlvmCodeGen, builtin_fn: BuiltinSymbol, lhs: LlvmBuilder.Value, rhs: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const out_low = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const out_high = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
         const lhs_parts = try self.splitI128Value(lhs);
         const rhs_parts = try self.splitI128Value(rhs);
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64, .i64, .i64 },
             &.{ out_low, out_high, lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high },
         );
@@ -6640,13 +6501,13 @@ pub const MonoLlvmCodeGen = struct {
         return self.combineI128Parts(low, high);
     }
 
-    fn callDecUnaryBuiltin(self: *MonoLlvmCodeGen, name: []const u8, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+    fn callDecUnaryBuiltin(self: *MonoLlvmCodeGen, builtin_fn: BuiltinSymbol, value: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const out_low = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const out_high = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
         const parts = try self.splitI128Value(value);
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), try self.ptrType(), .i64, .i64 },
             &.{ out_low, out_high, parts.low, parts.high },
         );
@@ -6682,7 +6543,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const target_layout = self.localLayout(target);
         const checked_op: ?lir.LowLevel = if (CheckedArithmetic.uncheckedOp(op) != null) op else null;
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const result = if (isFloatLayout(target_layout)) blk: {
             if (checked_op != null) return error.UnsupportedLowLevel;
             break :blk wip.un(.fneg, value, "") catch return error.OutOfMemory;
@@ -6704,15 +6565,15 @@ pub const MonoLlvmCodeGen = struct {
             }
             break :blk wip.neg(value, "") catch return error.OutOfMemory;
         };
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     fn emitNumericBitwiseNot(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const result = wip.not(value, "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     /// Lower a bit-counting op (`count_one_bits`/`count_leading_zero_bits`/
@@ -6724,7 +6585,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitNumericBitCount(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder, const wip = try self.builderAndWip();
         const target_layout = self.localLayout(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const value_ty = value.typeOfWip(wip);
         const zero_is_not_poison = builder.intValue(.i1, 0) catch return error.OutOfMemory;
         const result = if (op == .num_count_one_bits)
@@ -6755,8 +6616,8 @@ pub const MonoLlvmCodeGen = struct {
                 "",
             ) catch return error.OutOfMemory
         else
-            unreachable;
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+            unreachable; // the op is one of the bit-count low-level ops matched above
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     /// Whether the target machine has an x86 CPU feature.
@@ -6799,6 +6660,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn loadSimdLocal(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        if (self.isSsaLocal(local)) return self.ssaValue(local);
         const vector = self.simdVectorForLayout(self.localLayout(local)) orelse return error.CompilationFailed;
         const wip = self.wip orelse return error.CompilationFailed;
         return wip.load(.normal, try self.simdType(vector), self.slot(local).ptr, self.alignmentForLayout(self.localLayout(local)), "") catch return error.OutOfMemory;
@@ -6812,6 +6674,7 @@ pub const MonoLlvmCodeGen = struct {
             value
         else
             wip.cast(.bitcast, value, vector_ty, "") catch return error.OutOfMemory;
+        if (self.isSsaLocal(local)) return self.defineSsa(local, stored);
         _ = wip.store(.normal, stored, self.slot(local).ptr, self.alignmentForLayout(self.localLayout(local))) catch return error.OutOfMemory;
     }
 
@@ -6840,7 +6703,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.target.cpu.arch.endian() == .big) {
             value = wip.callIntrinsic(.normal, .none, .bswap, &.{value_ty}, &.{value}, "") catch return error.OutOfMemory;
         }
-        try self.storeScalar(self.slot(target).ptr, target_layout, value);
+        try self.storeLocalScalar(target, target_layout, value);
     }
 
     fn emitSimdLoad(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -6863,13 +6726,13 @@ pub const MonoLlvmCodeGen = struct {
         const parts = try self.splitI128Value(bits);
         const list = try self.rocListArgFields(self.slot(GuardedList.at(args, 1)).ptr);
         const index = try self.coerceScalar(
-            try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))),
+            try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))),
             .i64,
             false,
         );
         const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
         try self.callBuiltinVoid(
-            builtinSymbol(.simd_store_16),
+            .simd_store_16,
             &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i64, .i8 },
             &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], index, builder.intValue(.i8, @backingInt(mode)) catch return error.OutOfMemory },
         );
@@ -6883,7 +6746,7 @@ pub const MonoLlvmCodeGen = struct {
         const list = try self.rocListArgFields(self.slot(GuardedList.at(args, 1)).ptr);
         const mode = if ((unique_args & (@as(u64, 1) << 1)) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
         try self.callBuiltinVoid(
-            builtinSymbol(.simd_append_16),
+            .simd_append_16,
             &.{ try self.ptrType(), .i64, .i64, try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i8 },
             &.{ self.slot(target).ptr, parts.low, parts.high, list[0], list[1], list[2], builder.intValue(.i8, @backingInt(mode)) catch return error.OutOfMemory },
         );
@@ -6936,35 +6799,35 @@ pub const MonoLlvmCodeGen = struct {
         const vector_ty = try self.simdType(vector);
         const lane_ty = builder.intType(vector.laneBits()) catch return error.OutOfMemory;
 
-        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
+        const simd_op = std.enums.fromInt(SimdLowLevel, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_splat => {
                 const arg = GuardedList.at(args, 0);
-                const scalar = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), lane_ty, self.localLayout(arg).isSigned());
+                const scalar = try self.coerceScalar(try self.loadLocalScalar(arg, self.localLayout(arg)), lane_ty, self.localLayout(arg).isSigned());
                 try self.storeSimdLocal(target, wip.splatVector(try self.simdType(destination_vector.?), scalar, "") catch return error.OutOfMemory);
             },
             .simd_get_lane_unchecked => {
                 const value = try self.loadSimdLocal(GuardedList.at(args, 0));
                 const index_arg = GuardedList.at(args, 1);
-                const index = try self.coerceScalar(try self.loadScalar(self.slot(index_arg).ptr, self.localLayout(index_arg)), .i32, false);
+                const index = try self.coerceScalar(try self.loadLocalScalar(index_arg, self.localLayout(index_arg)), .i32, false);
                 const lane = wip.extractElement(value, index, "") catch return error.OutOfMemory;
-                try self.storeScalar(self.slot(target).ptr, target_layout, lane);
+                try self.storeLocalScalar(target, target_layout, lane);
             },
             .simd_with_lane_unchecked => {
                 const value = try self.loadSimdLocal(GuardedList.at(args, 0));
                 const index_arg = GuardedList.at(args, 1);
                 const lane_arg = GuardedList.at(args, 2);
-                const index = try self.coerceScalar(try self.loadScalar(self.slot(index_arg).ptr, self.localLayout(index_arg)), .i32, false);
-                const lane = try self.coerceScalar(try self.loadScalar(self.slot(lane_arg).ptr, self.localLayout(lane_arg)), lane_ty, self.localLayout(lane_arg).isSigned());
+                const index = try self.coerceScalar(try self.loadLocalScalar(index_arg, self.localLayout(index_arg)), .i32, false);
+                const lane = try self.coerceScalar(try self.loadLocalScalar(lane_arg, self.localLayout(lane_arg)), lane_ty, self.localLayout(lane_arg).isSigned());
                 try self.storeSimdLocal(target, wip.insertElement(value, lane, index, "") catch return error.OutOfMemory);
             },
             .simd_to_u128_bits => {
                 const value = try self.loadSimdLocal(GuardedList.at(args, 0));
-                try self.storeScalar(self.slot(target).ptr, target_layout, wip.cast(.bitcast, value, .i128, "") catch return error.OutOfMemory);
+                try self.storeLocalScalar(target, target_layout, wip.cast(.bitcast, value, .i128, "") catch return error.OutOfMemory);
             },
             .simd_from_u128_bits => {
                 const arg = GuardedList.at(args, 0);
-                const bits = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+                const bits = try self.loadLocalScalar(arg, self.localLayout(arg));
                 try self.storeSimdLocal(target, wip.cast(.bitcast, bits, try self.simdType(destination_vector.?), "") catch return error.OutOfMemory);
             },
             .simd_add_wrap, .simd_sub_wrap, .simd_mul_wrap, .simd_and, .simd_or, .simd_xor => {
@@ -6983,7 +6846,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_xor)
                     .xor
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these six ops
                 try self.storeSimdLocal(target, wip.bin(tag, lhs, rhs, "") catch return error.OutOfMemory);
             },
             .simd_add_sat, .simd_sub_sat => {
@@ -7037,7 +6900,7 @@ pub const MonoLlvmCodeGen = struct {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
                     const name = if (vector.laneBits() == 8) "llvm.x86.sse2.pavg.b" else "llvm.x86.sse2.pavg.w";
-                    try self.storeSimdLocal(target, try self.callBuiltin(name, vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic(name, vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const wide_bits: u16 = vector.laneBits() * 2;
@@ -7066,7 +6929,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_gte_lanes)
                     if (vector.isSigned()) .sge else .uge
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these three ops
                 const compared = wip.icmp(condition, lhs, rhs, "") catch return error.OutOfMemory;
                 try self.storeSimdLocal(target, wip.cast(.sext, compared, vector_ty, "") catch return error.OutOfMemory);
             },
@@ -7131,7 +6994,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const vector_ty = try self.simdType(vector);
 
-        const simd_op = narrowLowLevel(SimdLowLevel, op) orelse return error.UnsupportedLowLevel;
+        const simd_op = std.enums.fromInt(SimdLowLevel, @backingInt(op)) orelse return error.UnsupportedLowLevel;
         switch (simd_op) {
             .simd_mul_high => {
                 const wide_bits: u16 = vector.laneBits() * 2;
@@ -7145,7 +7008,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    const multiplied = try self.callBuiltin("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
+                    const multiplied = try self.callIntrinsic("llvm.x86.ssse3.pmul.hr.sw.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs });
                     const minimum = try self.simdRawSplat(16, 8, 0x8000);
                     const lhs_min = wip.icmp(.eq, lhs, minimum, "") catch return error.OutOfMemory;
                     const rhs_min = wip.icmp(.eq, rhs, minimum, "") catch return error.OutOfMemory;
@@ -7157,7 +7020,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isAarch64Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.aarch64.neon.sqrdmulh.v8i16", vector_ty, &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const lane_count = vector.laneCount();
@@ -7187,7 +7050,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.sse2.pmadd.wd", try self.simdRawType(32, 4), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 const lhs = try self.simdExtendVector(try self.loadSimdLocal(GuardedList.at(args, 0)), 32, 8, true);
@@ -7201,7 +7064,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd() and self.hasX86Feature(.ssse3)) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.ssse3.pmadd.ub.sw.128", try self.simdRawType(16, 8), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 // A u8*i8 product fits in i16, but the sum of two products
@@ -7221,7 +7084,7 @@ pub const MonoLlvmCodeGen = struct {
                 if (self.isX86Simd()) {
                     const lhs = try self.loadSimdLocal(GuardedList.at(args, 0));
                     const rhs = try self.loadSimdLocal(GuardedList.at(args, 1));
-                    try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
+                    try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.sse2.psad.bw", try self.simdRawType(64, 2), &.{ vector_ty, vector_ty }, &.{ lhs, rhs }));
                     return;
                 }
                 try self.emitSimdSad(target, args);
@@ -7230,7 +7093,7 @@ pub const MonoLlvmCodeGen = struct {
             .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap => {
                 const value = try self.loadSimdLocal(GuardedList.at(args, 0));
                 const count_arg = GuardedList.at(args, 1);
-                const raw_count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), builder.intType(vector.laneBits()) catch return error.OutOfMemory, false);
+                const raw_count = try self.coerceScalar(try self.loadLocalScalar(count_arg, self.localLayout(count_arg)), builder.intType(vector.laneBits()) catch return error.OutOfMemory, false);
                 const masked_count = wip.bin(.@"and", raw_count, builder.intValue(raw_count.typeOfWip(wip), vector.laneBits() - 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
                 const counts = wip.splatVector(vector_ty, masked_count, "") catch return error.OutOfMemory;
                 const tag: LlvmBuilder.Function.Instruction.Tag = if (op == .simd_shl_wrap)
@@ -7240,7 +7103,7 @@ pub const MonoLlvmCodeGen = struct {
                 else if (op == .simd_shr_zf_wrap)
                     .lshr
                 else
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these three ops
                 try self.storeSimdLocal(target, wip.bin(tag, value, counts, "") catch return error.OutOfMemory);
             },
             .simd_shr_rounded => try self.emitSimdRoundedShift(target, args, vector),
@@ -7269,7 +7132,7 @@ pub const MonoLlvmCodeGen = struct {
                         indices[i] = @intCast(count - 1 - i);
                     }
                 } else {
-                    unreachable;
+                    unreachable; // the enclosing prong matched only these five ops
                 }
                 try self.storeSimdLocal(target, wip.shuffleVector(lhs, rhs, try self.simdShuffleMask(indices[0..count]), "") catch return error.OutOfMemory);
             },
@@ -7355,14 +7218,14 @@ pub const MonoLlvmCodeGen = struct {
         const mask_ty = builder.intType(vector.laneCount()) catch return error.OutOfMemory;
         const mask = wip.cast(.bitcast, signs, mask_ty, "") catch return error.OutOfMemory;
         const result = try self.coerceScalar(mask, result_ty, false);
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+        try self.storeLocalScalar(target, self.localLayout(target), result);
     }
 
     fn emitSimdRoundedShift(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, vector: layout.Vector) Error!void {
         const builder, const wip = try self.builderAndWip();
         const value = try self.loadSimdLocal(GuardedList.at(args, 0));
         const count_arg = GuardedList.at(args, 1);
-        const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i32, false);
+        const count = try self.coerceScalar(try self.loadLocalScalar(count_arg, self.localLayout(count_arg)), .i32, false);
         const zero32 = builder.intValue(.i32, 0) catch return error.OutOfMemory;
         const is_zero = wip.icmp(.eq, count, zero32, "") catch return error.OutOfMemory;
         const out_of_range = wip.icmp(.uge, count, builder.intValue(.i32, vector.laneBits()) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -7396,12 +7259,12 @@ pub const MonoLlvmCodeGen = struct {
             // zeroes. That is one `paddusb`, and emitting it directly keeps the
             // guarantee independent of whether an optimizer is running.
             const biased = wip.callIntrinsic(.normal, .none, .@"uadd.sat", &.{vector_ty}, &.{ indices, try self.simdRawSplat(8, 16, 0x70) }, "") catch return error.OutOfMemory;
-            try self.storeSimdLocal(target, try self.callBuiltin("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
+            try self.storeSimdLocal(target, try self.callIntrinsic("llvm.x86.ssse3.pshuf.b.128", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, biased }));
             return;
         }
         // TBL is part of NEON, which Armv8.0-A makes mandatory.
         if (self.isAarch64Simd()) {
-            try self.storeSimdLocal(target, try self.callBuiltin("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
+            try self.storeSimdLocal(target, try self.callIntrinsic("llvm.aarch64.neon.tbl1.v16i8", vector_ty, &.{ vector_ty, vector_ty }, &.{ table, indices }));
             return;
         }
         var result = builder.zeroInitValue(vector_ty) catch return error.OutOfMemory;
@@ -7431,7 +7294,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         const count_arg = GuardedList.at(args, 2);
-        const count = try self.coerceScalar(try self.loadScalar(self.slot(count_arg).ptr, self.localLayout(count_arg)), .i128, false);
+        const count = try self.coerceScalar(try self.loadLocalScalar(count_arg, self.localLayout(count_arg)), .i128, false);
         const zero = builder.intValue(.i128, 0) catch return error.OutOfMemory;
         const sixteen = builder.intValue(.i128, 16) catch return error.OutOfMemory;
         const is_zero = wip.icmp(.eq, count, zero, "") catch return error.OutOfMemory;
@@ -7481,7 +7344,7 @@ pub const MonoLlvmCodeGen = struct {
         else
             try self.simdExtendVector(value, result_bits, vector.laneCount(), vector.isSigned());
         const result = wip.callIntrinsic(.normal, .none, .@"vector.reduce.add", &.{extended.typeOfWip(wip)}, &.{extended}, "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     fn emitSimdClmul(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, high: bool) Error!void {
@@ -7494,7 +7357,7 @@ pub const MonoLlvmCodeGen = struct {
         if (self.isX86Simd() and self.hasX86Feature(.pclmul)) {
             const vector_ty = try self.simdRawType(64, 2);
             const immediate: u8 = if (high) 0x11 else 0x00;
-            try self.storeSimdLocal(target, try self.callBuiltin(
+            try self.storeSimdLocal(target, try self.callIntrinsic(
                 "llvm.x86.pclmulqdq",
                 vector_ty,
                 &.{ vector_ty, vector_ty, .i8 },
@@ -7506,7 +7369,7 @@ pub const MonoLlvmCodeGen = struct {
         // Armv8.0-A target without it takes the bitwise path below.
         if (self.isAarch64Simd() and self.hasAarch64Feature(.aes)) {
             const byte_vector_ty = try self.simdRawType(8, 16);
-            const product = try self.callBuiltin("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
+            const product = try self.callIntrinsic("llvm.aarch64.neon.pmull64", byte_vector_ty, &.{ .i64, .i64 }, &.{ lhs64, rhs64 });
             try self.storeSimdLocal(target, product);
             return;
         }
@@ -7525,26 +7388,28 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const target_layout = self.localLayout(target);
         const checked_op: ?lir.LowLevel = if (CheckedArithmetic.uncheckedOp(op) != null) op else null;
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         if (!target_layout.isSigned() and !isFloatLayout(target_layout)) {
-            try self.storeScalar(self.slot(target).ptr, target_layout, value);
+            try self.storeLocalScalar(target, target_layout, value);
             return;
         }
         if (checked_op) |checked| {
             if (isFloatLayout(target_layout)) return error.UnsupportedLowLevel;
-            const lowest = builder.intValue(value.typeOfWip(wip), CheckedArithmetic.signedLowestValue(target_layout) orelse unreachable) catch return error.OutOfMemory;
+            const lowest_value = CheckedArithmetic.signedLowestValue(target_layout) orelse
+                llvmInvariantFmt("checked abs on signed layout {d} with no lowest value", .{@backingInt(target_layout)});
+            const lowest = builder.intValue(value.typeOfWip(wip), lowest_value) catch return error.OutOfMemory;
             const is_lowest = wip.icmp(.eq, value, lowest, "") catch return error.OutOfMemory;
-            try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable);
+            try self.emitCrashIf(is_lowest, CheckedArithmetic.overflowMessageForLayout(checked, target_layout) orelse unreachable); // checked is num_abs_checked, which overflowMessageForLayout always names
         }
         if (isFloatLayout(target_layout)) {
-            try self.storeScalar(self.slot(target).ptr, target_layout, try self.emitFloatAbs(value));
+            try self.storeLocalScalar(target, target_layout, try self.emitFloatAbs(value));
             return;
         }
         const zero = builder.zeroInitValue(value.typeOfWip(wip)) catch return error.OutOfMemory;
         const is_neg = wip.icmp(.slt, value, zero, "") catch return error.OutOfMemory;
         const neg = wip.neg(value, "") catch return error.OutOfMemory;
         const result = wip.select(.normal, is_neg, neg, value, "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     /// A float's magnitude: the value with its sign bit cleared, so the
@@ -7561,8 +7426,8 @@ pub const MonoLlvmCodeGen = struct {
     fn emitNumericAbsDiff(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const operand_layout = self.localLayout(GuardedList.at(args, 0));
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, operand_layout);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1)));
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), operand_layout);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1)));
 
         const result = if (isFloatLayout(operand_layout)) blk: {
             const diff = wip.bin(.fsub, lhs, rhs, "") catch return error.OutOfMemory;
@@ -7574,84 +7439,82 @@ pub const MonoLlvmCodeGen = struct {
             break :blk wip.select(.normal, lhs_ge_rhs, lhs_minus_rhs, rhs_minus_lhs, "") catch return error.OutOfMemory;
         };
 
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
-    }
-
-    /// Narrow `op` to a smaller enum whose variants carry `LowLevel`'s values.
-    /// Returns null when `op` is not one of them.
-    fn narrowLowLevel(comptime Narrow: type, op: lir.LowLevel) ?Narrow {
-        const raw = @backingInt(op);
-        inline for (@typeInfo(Narrow).@"enum".field_values) |field_value| {
-            if (raw == field_value) return @fromBackingInt(@intCast(field_value));
-        }
-        return null;
+        try self.storeLocalScalar(target, self.localLayout(target), result);
     }
 
     /// Lower a scalar numeric conversion. Delegates to a helper for each
     /// (source class, destination class) pair. Each helper switches on the mode.
-    fn emitNumericConversion(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        if (args.len < 1) return error.UnsupportedLowLevel;
+    /// The spec is comptime, so a conversion op this backend has no lowering
+    /// for fails the build.
+    fn emitNumericConversion(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, args: anytype) Error!void {
         const arg = GuardedList.at(args, 0);
-        const spec = numeric_conversion.getConversionSpec(op) orelse return error.UnsupportedLowLevel;
-        switch (spec.src.class()) {
-            .int => switch (spec.dst.class()) {
+        switch (comptime spec.src.class()) {
+            .int => switch (comptime spec.dst.class()) {
                 .int => try self.lowerIntToInt(spec, target, arg),
                 .float => try self.lowerIntToFloat(spec, target, arg),
                 .dec => try self.lowerIntToDec(spec, target, arg),
             },
-            .float => switch (spec.dst.class()) {
+            .float => switch (comptime spec.dst.class()) {
                 .int => try self.lowerFloatToInt(spec, target, arg),
                 .float => try self.lowerFloatToFloat(spec, target, arg),
-                .dec => return error.UnsupportedLowLevel,
+                .dec => noConversionLowering(spec),
             },
-            .dec => switch (spec.dst.class()) {
+            .dec => switch (comptime spec.dst.class()) {
                 .int => try self.lowerDecToInt(spec, target, arg),
                 .float => try self.lowerDecToFloat(spec, target, arg),
-                .dec => return error.UnsupportedLowLevel,
+                .dec => noConversionLowering(spec),
             },
         }
     }
 
-    fn lowerIntToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn noConversionLowering(comptime spec: numeric_conversion.Conversion) noreturn {
+        @compileError(std.fmt.comptimePrint("the LLVM backend has no lowering for the {s} to {s} conversion in {s} mode", .{
+            @tagName(spec.src),
+            @tagName(spec.dst),
+            @tagName(spec.mode),
+        }));
+    }
+
+    fn lowerIntToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitScalarCoercion(target, arg),
             .@"try" => try self.emitIntTryConversion(target, arg),
-            .trunc, .try_unsafe => return error.UnsupportedLowLevel,
+            .trunc, .try_unsafe => noConversionLowering(spec),
         }
     }
 
-    fn lowerIntToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerIntToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
-            .exact => if (spec.src.bits() == 128)
+            .exact => if (comptime spec.src.bits() == 128)
                 try self.emitInt128ToFloatConversion(target, arg, spec.src.isSigned(), spec.dst == .f32)
             else
                 try self.emitScalarCoercion(target, arg),
-            .wrap, .trunc, .@"try", .try_unsafe => return error.UnsupportedLowLevel,
+            .wrap, .trunc, .@"try", .try_unsafe => noConversionLowering(spec),
         }
     }
 
-    fn lowerIntToDec(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerIntToDec(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact => try self.emitIntToDec(target, arg),
             // The builtin takes the source as two 64-bit halves, so a narrower
             // source has no lowering here.
-            .try_unsafe => if (spec.src.bits() == 128)
+            .try_unsafe => if (comptime spec.src.bits() == 128)
                 try self.emitInt128ToDecTryUnsafeConversion(target, arg, spec.src.isSigned())
             else
-                return error.UnsupportedLowLevel,
-            .wrap, .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .wrap, .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerFloatToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerFloatToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .trunc => try self.emitFloatToIntTruncConversion(spec, target, arg),
             .try_unsafe => try self.emitFloatToIntTryUnsafeConversion(target, arg),
-            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
+            .exact, .wrap, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerFloatToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerFloatToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitScalarCoercion(target, arg),
             // The builtin is the f64 to f32 one, so the other direction has no
@@ -7659,20 +7522,20 @@ pub const MonoLlvmCodeGen = struct {
             .try_unsafe => if (spec.src == .f64 and spec.dst == .f32)
                 try self.emitF64ToF32TryUnsafeConversion(target, arg)
             else
-                return error.UnsupportedLowLevel,
-            .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerDecToInt(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerDecToInt(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .trunc => try self.emitDecToIntTruncConversion(target, arg),
             .try_unsafe => try self.emitDecToIntTryUnsafeConversion(target, arg),
-            .exact, .wrap, .@"try" => return error.UnsupportedLowLevel,
+            .exact, .wrap, .@"try" => noConversionLowering(spec),
         }
     }
 
-    fn lowerDecToFloat(self: *MonoLlvmCodeGen, spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
+    fn lowerDecToFloat(self: *MonoLlvmCodeGen, comptime spec: numeric_conversion.Conversion, target: LocalId, arg: LocalId) Error!void {
         switch (spec.mode) {
             .exact, .wrap => try self.emitDecToFloatConversion(target, arg, spec.dst == .f32),
             // The builtin is the Dec to f32 one, so a wider destination has no
@@ -7680,8 +7543,8 @@ pub const MonoLlvmCodeGen = struct {
             .try_unsafe => if (spec.dst == .f32)
                 try self.emitDecToF32TryUnsafeConversion(target, arg)
             else
-                return error.UnsupportedLowLevel,
-            .trunc, .@"try" => return error.UnsupportedLowLevel,
+                noConversionLowering(spec),
+            .trunc, .@"try" => noConversionLowering(spec),
         }
     }
 
@@ -7691,9 +7554,9 @@ pub const MonoLlvmCodeGen = struct {
     fn emitScalarCoercion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const src_layout = self.localLayout(arg);
         const target_layout = self.localLayout(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, src_layout);
+        const value = try self.loadLocalScalar(arg, src_layout);
         const coerced = try self.coerceScalar(value, self.scalarType(target_layout), src_layout.isSigned());
-        try self.storeScalar(self.slot(target).ptr, target_layout, coerced);
+        try self.storeLocalScalar(target, target_layout, coerced);
     }
 
     /// 128-bit integer to float conversion, routed through the same
@@ -7705,29 +7568,29 @@ pub const MonoLlvmCodeGen = struct {
     /// (`__floattidf`, `__floatuntisf`, ...). See `emitI128DivRem` for why
     /// the module must not contain one.
     fn emitInt128ToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_signed: bool, is_f32: bool) Error!void {
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const parts = try self.splitI128Value(value);
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
         const result = try self.callBuiltin(
-            LowLevelBuiltins.int128ToFloat(is_signed, is_f32).symbolName(),
+            LowLevelBuiltins.int128ToFloat(is_signed, is_f32),
             float_ty,
             &.{ .i64, .i64 },
             &.{ parts.low, parts.high },
         );
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+        try self.storeLocalScalar(target, self.localLayout(target), result);
     }
 
     fn emitDecToFloatConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_f32: bool) Error!void {
-        const dec_value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const dec_value = try self.loadLocalScalar(arg, .dec);
         const parts = try self.splitI128Value(dec_value);
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
         const result = try self.callBuiltin(
-            LowLevelBuiltins.decToFloat(is_f32).symbolName(),
+            LowLevelBuiltins.decToFloat(is_f32),
             float_ty,
             &.{ .i64, .i64 },
             &.{ parts.low, parts.high },
         );
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+        try self.storeLocalScalar(target, self.localLayout(target), result);
     }
 
     /// A Dec's payload is its value scaled by 10^18, so recovering the whole
@@ -7738,16 +7601,16 @@ pub const MonoLlvmCodeGen = struct {
     /// `emitI128DivRem` for why the module must not contain a 128-bit divide.
     fn emitDecToIntTruncConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const payload = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const payload = try self.loadLocalScalar(arg, .dec);
         const scale = builder.intValue(.i128, builtins.dec.RocDec.one_point_zero_i128) catch return error.OutOfMemory;
         const whole = try self.callI128BinaryBuiltin(
-            builtinSymbol(LowLevelBuiltins.i128DivRem(false, false)),
+            LowLevelBuiltins.i128DivRem(false, false),
             payload,
             scale,
         );
         const target_layout = self.localLayout(target);
         const wrapped = try self.coerceScalar(whole, self.scalarType(target_layout), true);
-        try self.storeScalar(self.slot(target).ptr, target_layout, wrapped);
+        try self.storeLocalScalar(target, target_layout, wrapped);
     }
 
     /// Wrapping float→int conversion: the builtin wrapper implements Roc's
@@ -7758,11 +7621,11 @@ pub const MonoLlvmCodeGen = struct {
         const src_is_f32 = spec.src == .f32;
         const target_bits: u32 = spec.dst.bits();
         const builder = self.builder orelse return error.CompilationFailed;
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-        const name = if (src_is_f32) builtinSymbol(.f32_to_int_wrap) else builtinSymbol(.f64_to_int_wrap);
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
+        const builtin_fn: BuiltinSymbol = if (src_is_f32) .f32_to_int_wrap else .f64_to_int_wrap;
         const float_ty: LlvmBuilder.Type = if (src_is_f32) .float else .double;
         try self.callBuiltinVoid(
-            name,
+            builtin_fn,
             &.{ try self.ptrType(), float_ty, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -7776,15 +7639,15 @@ pub const MonoLlvmCodeGen = struct {
     fn emitIntToDec(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const arg_layout = self.localLayout(arg);
-        const value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const value = try self.loadLocalScalar(arg, arg_layout);
         const value64 = try self.coerceScalar(value, .i64, arg_layout.isSigned());
         const low_ptr = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_low");
         const high_ptr = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "dec_high");
-        const fn_name = if (arg_layout.isSigned()) builtinSymbol(.i64_to_dec) else builtinSymbol(.u64_to_dec);
-        try self.callBuiltinVoid(fn_name, &.{ try self.ptrType(), try self.ptrType(), .i64 }, &.{ low_ptr, high_ptr, value64 });
+        const builtin_fn: BuiltinSymbol = if (arg_layout.isSigned()) .i64_to_dec else .u64_to_dec;
+        try self.callBuiltinVoid(builtin_fn, &.{ try self.ptrType(), try self.ptrType(), .i64 }, &.{ low_ptr, high_ptr, value64 });
         const low = wip.load(.normal, .i64, low_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
         const high = wip.load(.normal, .i64, high_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, .dec, try self.combineI128Parts(low, high));
+        try self.storeLocalScalar(target, .dec, try self.combineI128Parts(low, high));
     }
 
     fn emitIntTryConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -7803,7 +7666,7 @@ pub const MonoLlvmCodeGen = struct {
         // target bounds computed exactly as the dev/wasm backends do. Only
         // 128-bit sources need the range-checked i128 wrappers.
         if (self.intBits(source_layout) <= 64) {
-            const value = try self.loadScalar(self.slot(arg).ptr, source_layout);
+            const value = try self.loadLocalScalar(arg, source_layout);
             const value64 = try self.coerceScalar(value, .i64, source_signed);
             if (source_signed) {
                 const min_val: i64 = if (target_signed) blk: {
@@ -7821,7 +7684,7 @@ pub const MonoLlvmCodeGen = struct {
                     break :blk (@as(i64, 1) << shift) - 1;
                 };
                 try self.callBuiltinVoid(
-                    builtinSymbol(LowLevelBuiltins.intTryConvert(false, true)),
+                    LowLevelBuiltins.intTryConvert(false, true),
                     &.{ try self.ptrType(), .i64, .i64, .i64, .i32, .i32 },
                     &.{
                         allocated.ptr,
@@ -7843,7 +7706,7 @@ pub const MonoLlvmCodeGen = struct {
                     break :blk (@as(u64, 1) << shift) - 1;
                 };
                 try self.callBuiltinVoid(
-                    builtinSymbol(LowLevelBuiltins.intTryConvert(false, false)),
+                    LowLevelBuiltins.intTryConvert(false, false),
                     &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
                     &.{
                         allocated.ptr,
@@ -7857,11 +7720,11 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
 
-        const value = try self.loadScalar(self.slot(arg).ptr, source_layout);
+        const value = try self.loadLocalScalar(arg, source_layout);
         const value128 = try self.coerceScalar(value, .i128, source_signed);
         const parts = try self.splitI128Value(value128);
         try self.callBuiltinVoid(
-            LowLevelBuiltins.intTryConvert(true, source_signed).symbolName(),
+            LowLevelBuiltins.intTryConvert(true, source_signed),
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7921,12 +7784,12 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
         const arg_layout = self.localLayout(arg);
-        const value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const value = try self.loadLocalScalar(arg, arg_layout);
         const is_f32 = arg_layout == .f32;
         const float_ty: LlvmBuilder.Type = if (is_f32) .float else .double;
 
         try self.callBuiltinVoid(
-            if (is_f32) builtinSymbol(.f32_to_int_try_unsafe) else builtinSymbol(.f64_to_int_try_unsafe),
+            if (is_f32) .f32_to_int_try_unsafe else .f64_to_int_try_unsafe,
             &.{ try self.ptrType(), float_ty, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -7941,17 +7804,17 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn emitDecAttosMove(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), value);
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
+        try self.storeLocalScalar(target, self.localLayout(target), value);
     }
 
     fn emitF64ToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const allocated = try self.allocTryUnsafeTarget(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, .f64);
+        const value = try self.loadLocalScalar(arg, .f64);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.f64_to_f32_try_unsafe),
+            .f64_to_f32_try_unsafe,
             &.{ try self.ptrType(), .double, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7965,11 +7828,11 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDecToF32TryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const allocated = try self.allocTryUnsafeTarget(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const value = try self.loadLocalScalar(arg, .dec);
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.dec_to_f32_try_unsafe),
+            .dec_to_f32_try_unsafe,
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -7984,11 +7847,11 @@ pub const MonoLlvmCodeGen = struct {
     fn emitInt128ToDecTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, is_signed: bool) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const allocated = try self.allocTryUnsafeTarget(target);
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            LowLevelBuiltins.int128ToDec(is_signed).symbolName(),
+            LowLevelBuiltins.int128ToDec(is_signed),
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32 },
             &.{
                 allocated.ptr,
@@ -8003,11 +7866,11 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDecToIntTryUnsafeConversion(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const info = try self.tryUnsafeRecordInfo(self.localLayout(target));
-        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const value = try self.loadLocalScalar(arg, .dec);
         const parts = try self.splitI128Value(value);
 
         try self.callBuiltinVoid(
-            builtinSymbol(.dec_to_int_try_unsafe),
+            .dec_to_int_try_unsafe,
             &.{ try self.ptrType(), .i64, .i64, .i32, .i32, .i32, .i32, .i32 },
             &.{
                 self.slot(target).ptr,
@@ -8023,17 +7886,18 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// Emits the LLVM switch instruction and queues each branch body (and the
-    /// default body) as work items. The case blocks and branch slice are carried
-    /// to the continuations via a heap `SwitchState` freed by `.switch_free`.
+    /// default body) as work items. The case blocks are a run of
+    /// `switch_case_blocks` released by `.switch_free`.
     fn emitSwitch(self: *MonoLlvmCodeGen, sw: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         try self.materializeLocalIfDeferred(sw.cond);
         try self.materializeAllDeferredStrCaptures();
         const builder, const wip = try self.builderAndWip();
         const branches = self.store.getCFSwitchBranches(sw.branches);
         const default_block = wip.block(0, "switch_default") catch return error.OutOfMemory;
-        const branch_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, branches.len);
+        const blocks_start: u32 = @intCast(self.switch_case_blocks.items.len);
+        const branch_blocks = try self.switch_case_blocks.addManyAsSlice(self.allocator, branches.len);
         for (branch_blocks) |*block| block.* = wip.block(0, "switch_case") catch return error.OutOfMemory;
-        const cond = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
+        const cond = try self.readLocalSwitchValue(sw.cond, self.localLayout(sw.cond));
         if (sw.default_is_cold and branches.len == 1) {
             const branch = GuardedList.at(branches, 0);
             const expected = builder.intValue(cond.typeOfWip(wip), branch.value) catch return error.OutOfMemory;
@@ -8049,13 +7913,13 @@ pub const MonoLlvmCodeGen = struct {
             switch_inst.finish(wip);
         }
 
-        const state = try self.allocator.create(SwitchState);
-        state.* = .{
-            .branches = branches,
-            .branch_blocks = branch_blocks,
+        const state: SwitchState = .{
+            .branches = sw.branches,
+            .blocks_start = blocks_start,
             .default_block = default_block,
             .default_branch = sw.default_branch,
             .default_is_cold = sw.default_is_cold,
+            .mark = self.valueMark(),
         };
         if (branches.len == 0) {
             try work.append(wa, .{ .switch_default = state });
@@ -8068,20 +7932,19 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const initialized_block = wip.block(0, "payload_initialized") catch return error.OutOfMemory;
         const uninitialized_block = wip.block(0, "payload_uninitialized") catch return error.OutOfMemory;
-        const cond_value = try self.readSwitchValue(self.slot(sw.cond).ptr, self.localLayout(sw.cond));
+        const cond_value = try self.readLocalSwitchValue(sw.cond, self.localLayout(sw.cond));
         const mask = builder.intValue(cond_value.typeOfWip(wip), sw.cond_mask) catch return error.OutOfMemory;
         const masked = wip.bin(.@"and", cond_value, mask, "") catch return error.OutOfMemory;
         const is_initialized = wip.icmp(.eq, masked, mask, "") catch return error.OutOfMemory;
         _ = wip.brCond(is_initialized, initialized_block, uninitialized_block, if (sw.uninitialized_is_cold) .then_likely else .none) catch return error.OutOfMemory;
 
-        const state = try self.allocator.create(InitializedPayloadSwitchState);
-        state.* = .{
+        try work.append(wa, .{ .initialized_payload_branch = .{ .state = .{
             .initialized_block = initialized_block,
             .uninitialized_block = uninitialized_block,
             .initialized_branch = sw.initialized_branch,
             .uninitialized_branch = sw.uninitialized_branch,
-        };
-        try work.append(wa, .{ .initialized_payload_branch = .{ .state = state, .initialized = true } });
+            .mark = self.valueMark(),
+        }, .initialized = true } });
     }
 
     fn emitDecrefIfInitialized(
@@ -8095,14 +7958,18 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const release_block = wip.block(0, "payload_cond_decref") catch return error.OutOfMemory;
         const next_block = wip.block(0, "payload_cond_next") catch return error.OutOfMemory;
-        const cond_value = try self.readSwitchValue(self.slot(cond).ptr, self.localLayout(cond));
+        const cond_value = try self.readLocalSwitchValue(cond, self.localLayout(cond));
         const mask = builder.intValue(cond_value.typeOfWip(wip), cond_mask) catch return error.OutOfMemory;
         const masked = wip.bin(.@"and", cond_value, mask, "") catch return error.OutOfMemory;
         const is_initialized = wip.icmp(.eq, masked, mask, "") catch return error.OutOfMemory;
         _ = wip.brCond(is_initialized, release_block, next_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = release_block };
-        try self.emitExplicitRcStmt(helper, .decref, value, 1, atomicity);
+        if (self.localDyn(value) != null) {
+            try self.emitDynDecref(value);
+        } else {
+            try self.emitExplicitRcStmt(helper, value, 1, atomicity);
+        }
         if (!self.currentBlockHasTerminator()) {
             _ = wip.br(next_block) catch return error.OutOfMemory;
         }
@@ -8145,7 +8012,7 @@ pub const MonoLlvmCodeGen = struct {
         end_ptr: LlvmBuilder.Value,
     };
 
-    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
+    fn emitStrMatch(self: *MonoLlvmCodeGen, str_match: @FieldType(lir.LIR.CFStmt, "str_match"), wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
         try self.materializeAllDeferredStrCaptures();
@@ -8153,8 +8020,11 @@ pub const MonoLlvmCodeGen = struct {
 
         const on_miss_block = wip.block(0, "str_match_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match.source).ptr);
-        const match_body = try self.emitStrMatchArmTest(str_match.source, source, str_match, on_miss_block);
-        try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss } });
+        const pattern = self.store.stmtRow(str_match.data);
+        const arm = .{ .prefix = pattern.prefix, .steps = pattern.steps, .end = pattern.end, .on_match = str_match.on_match };
+        var match_body = try self.emitStrMatchArmTest(str_match.source, source, arm, on_miss_block);
+        match_body.mark = self.valueMark();
+        try work.append(wa, .{ .str_match_body = .{ .block = on_miss_block, .stmt = str_match.on_miss, .mark = self.valueMark() } });
         try work.append(wa, .{ .str_match_body = match_body });
     }
 
@@ -8168,13 +8038,11 @@ pub const MonoLlvmCodeGen = struct {
         const final_miss_block = wip.block(0, "str_match_set_miss") catch return error.OutOfMemory;
         const source = try self.emitStrMatchSourceShape(self.slot(str_match_set.source).ptr);
 
-        var match_bodies = std.ArrayList(StrMatchBody).empty;
-        errdefer {
-            for (match_bodies.items) |body| {
-                if (body.captures.len > 0) self.allocator.free(body.captures);
-            }
-            match_bodies.deinit(self.allocator);
-        }
+        // The miss body runs after every arm's body, so it sits below them on
+        // the work stack; the arm bodies are pushed in arm order as their
+        // tests are emitted.
+        const bodies_start = work.items.len;
+        try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
 
         var index: usize = 0;
         while (index < arms.len) {
@@ -8185,7 +8053,7 @@ pub const MonoLlvmCodeGen = struct {
                     final_miss_block
                 else
                     wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block));
+                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(str_match_set.source, source, arm, next_miss_block) });
                 if (index + 1 < arms.len) {
                     wip.cursor = .{ .block = next_miss_block };
                 }
@@ -8204,9 +8072,9 @@ pub const MonoLlvmCodeGen = struct {
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
 
             if (self.strMatchSetDistinctFirstByteCount(arms, index, segment_end) > 1) {
-                try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms, index, segment_end, segment_miss_block, &match_bodies);
+                try self.emitStrMatchSetFirstByteDispatch(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
             } else {
-                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms, index, segment_end, segment_miss_block, &match_bodies);
+                try self.emitStrMatchSetLinearRange(str_match_set.source, source, arms, index, segment_end, segment_miss_block, wa, work);
             }
 
             if (segment_end < arms.len) {
@@ -8215,20 +8083,10 @@ pub const MonoLlvmCodeGen = struct {
             index = segment_end;
         }
 
-        try work.append(wa, .{ .str_match_body = .{ .block = final_miss_block, .stmt = str_match_set.on_miss } });
-        const owned_bodies = try match_bodies.toOwnedSlice(self.allocator);
-        var handed_off = false;
-        errdefer if (!handed_off) {
-            for (owned_bodies) |body| {
-                if (body.captures.len > 0) self.allocator.free(body.captures);
-            }
-            self.allocator.free(owned_bodies);
-        };
-        for (owned_bodies) |body| {
-            try work.append(wa, .{ .str_match_body = body });
-        }
-        handed_off = true;
-        self.allocator.free(owned_bodies);
+        // Every body starts from the values defined once all arm tests are
+        // emitted.
+        const mark = self.valueMark();
+        for (work.items[bodies_start..]) |*item| item.str_match_body.mark = mark;
     }
 
     fn strMatchSetDistinctFirstByteCount(self: *MonoLlvmCodeGen, arms: anytype, start: usize, end: usize) usize {
@@ -8255,7 +8113,8 @@ pub const MonoLlvmCodeGen = struct {
         start: usize,
         end: usize,
         miss_block: LlvmBuilder.Function.Block.Index,
-        match_bodies: *std.ArrayList(StrMatchBody),
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
     ) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
 
@@ -8265,7 +8124,7 @@ pub const MonoLlvmCodeGen = struct {
                 miss_block
             else
                 wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-            try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+            try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
             if (index + 1 < end) {
                 wip.cursor = .{ .block = next_miss_block };
             }
@@ -8280,7 +8139,8 @@ pub const MonoLlvmCodeGen = struct {
         start: usize,
         end: usize,
         miss_block: LlvmBuilder.Function.Block.Index,
-        match_bodies: *std.ArrayList(StrMatchBody),
+        wa: Allocator,
+        work: *std.ArrayList(StmtWork),
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
@@ -8331,7 +8191,7 @@ pub const MonoLlvmCodeGen = struct {
                     miss_block
                 else
                     wip.block(0, "str_match_set_next") catch return error.OutOfMemory;
-                try match_bodies.append(self.allocator, try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block));
+                try work.append(wa, .{ .str_match_body = try self.emitStrMatchArmTest(source_local, source, arm, next_miss_block) });
                 if (emitted_in_bucket < remaining_in_bucket) {
                     wip.cursor = .{ .block = next_miss_block };
                 }
@@ -8369,8 +8229,9 @@ pub const MonoLlvmCodeGen = struct {
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         try self.storeUsize(cursor_ptr, zero);
 
-        var captures = std.ArrayList(DeferredStrCaptureBinding).empty;
-        errdefer captures.deinit(self.allocator);
+        const captures = &self.str_match_captures;
+        const captures_start: u32 = @intCast(captures.items.len);
+        errdefer captures.shrinkRetainingCapacity(captures_start);
 
         const prefix = self.store.getStringLiteral(arm.prefix);
         if (prefix.len > 0) {
@@ -8427,19 +8288,21 @@ pub const MonoLlvmCodeGen = struct {
             .tail => _ = wip.br(on_match_block) catch return error.OutOfMemory,
         }
 
-        const match_captures = try captures.toOwnedSlice(self.allocator);
-        errdefer self.allocator.free(match_captures);
-        return .{ .block = on_match_block, .stmt = arm.on_match, .captures = match_captures };
+        return .{
+            .block = on_match_block,
+            .stmt = arm.on_match,
+            .captures_start = captures_start,
+            .captures_len = @intCast(captures.items.len - captures_start),
+        };
     }
 
     fn emitStrMatchSourceShape(self: *MonoLlvmCodeGen, source_ptr: LlvmBuilder.Value) Error!StrMatchSource {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
         const ptr_ty = try self.ptrType();
-        const word_size = self.targetWordSize();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrLenOffset()));
-        const small_bit = @as(u64, 1) << @intCast(self.target.ptrBitWidth() - 1);
+        const small_bit = self.rocStrSmallBit();
         const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
@@ -8449,8 +8312,8 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(source_ptr, 3 * word_size - 1), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, 0x7F) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(source_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
@@ -8458,10 +8321,10 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = heap_block };
         const heap_bytes = try self.loadPointer(source_ptr);
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(source_ptr, self.rocStrCapacityOffset()));
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const heap_bytes_int = wip.cast(.ptrtoint, heap_bytes, usize_ty, "") catch return error.OutOfMemory;
-        const encoded_heap_ptr = wip.bin(.@"or", heap_bytes_int, builder.intValue(usize_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const encoded_heap_ptr = wip.bin(.@"or", heap_bytes_int, builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const heap_alloc = wip.select(.normal, is_slice, cap_or_alloc, encoded_heap_ptr, "") catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
@@ -8484,15 +8347,14 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRocStrLen(self: *MonoLlvmCodeGen, str_ptr: LlvmBuilder.Value) Error!LlvmBuilder.Value {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
-        const word_size = self.targetWordSize();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const small_bit = @as(u64, 1) << @intCast(self.target.ptrBitWidth() - 1);
+        const small_bit = self.rocStrSmallBit();
         const small_mask = wip.bin(.@"and", raw_len, builder.intValue(usize_ty, small_bit) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const is_small = wip.icmp(.ne, small_mask, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
 
-        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, 3 * word_size - 1), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, 0x7F) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_masked = wip.bin(.@"and", small_len_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_masked, usize_ty, false);
 
         return wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
@@ -8768,7 +8630,7 @@ pub const MonoLlvmCodeGen = struct {
         return switch (self.target.ptrBitWidth()) {
             64 => 8,
             32 => 4,
-            else => unreachable,
+            else => llvmInvariantFmt("string match scan on unsupported pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -8904,7 +8766,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(source.is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        try self.zeroBytes(target_ptr, 3 * self.targetWordSize());
+        try self.zeroBytes(target_ptr, self.rocStrSize());
         const small_src = try self.offsetPtrValue(source.bytes, start);
         _ = wip.callMemCpy(
             target_ptr,
@@ -8916,8 +8778,8 @@ pub const MonoLlvmCodeGen = struct {
             false,
         ) catch return error.OutOfMemory;
         const len_byte = try self.coerceScalar(capture_len, .i8, false);
-        const tagged_len = wip.bin(.@"or", len_byte, builder.intValue(.i8, 0x80) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const small_len_ptr = try self.offsetPtr(target_ptr, 3 * self.targetWordSize() - 1);
+        const tagged_len = wip.bin(.@"or", len_byte, builder.intValue(.i8, RocStr.small_str_flag) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_ptr = try self.offsetPtr(target_ptr, self.rocStrFlagByteOffset());
         _ = wip.store(.normal, tagged_len, small_len_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
@@ -8931,36 +8793,21 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn clearDeferredStrCaptures(self: *MonoLlvmCodeGen) void {
-        for (self.deferred_str_capture_actives.items) |index| {
-            if (builtin.is_test) self.local_scratch_rows_visited += 1;
-            self.deferred_str_captures[index] = null;
-        }
-        self.deferred_str_capture_count = 0;
-        self.deferred_str_capture_actives.clearRetainingCapacity();
+        self.deferred_str_captures.clearRetainingCapacity();
     }
 
     fn installDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId, capture: DeferredStrCapture) Error!void {
         if (!self.isStrLocal(local)) return error.CompilationFailed;
         try self.prepareLocalWrite(local);
-        const capture_slot = &self.deferred_str_captures[@backingInt(local)];
-        if (capture_slot.* == null) {
-            self.deferred_str_capture_actives.append(self.allocator, @backingInt(local)) catch return error.OutOfMemory;
-            self.deferred_str_capture_count += 1;
-        }
-        capture_slot.* = capture;
+        self.deferred_str_captures.put(local, capture) catch return error.OutOfMemory;
     }
 
     fn deferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) ?DeferredStrCapture {
-        if (self.deferred_str_captures.len == 0) return null;
-        return self.deferred_str_captures[@backingInt(local)];
+        return self.deferred_str_captures.get(local);
     }
 
     fn clearDeferredStrCapture(self: *MonoLlvmCodeGen, local: LocalId) void {
-        if (self.deferred_str_captures.len == 0) return;
-        if (self.deferred_str_captures[@backingInt(local)] != null) {
-            self.deferred_str_captures[@backingInt(local)] = null;
-            self.deferred_str_capture_count -= 1;
-        }
+        _ = self.deferred_str_captures.remove(local);
     }
 
     fn materializeLocalIfDeferred(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -8985,13 +8832,25 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeAllDeferredStrCaptures(self: *MonoLlvmCodeGen) Error!void {
-        if (self.deferred_str_capture_count == 0) return;
-        var index: usize = 0;
-        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
-            const local_index = self.deferred_str_capture_actives.items[index];
-            if (self.deferred_str_captures[local_index] != null) {
-                try self.materializeLocalIfDeferred(@fromBackingInt(@intCast(local_index)));
+        try self.materializeDeferredStrCapturesWhere(null);
+    }
+
+    /// Materialize every deferred capture, or only those reading `source`
+    /// other than `source` itself.
+    fn materializeDeferredStrCapturesWhere(self: *MonoLlvmCodeGen, source: ?LocalId) Error!void {
+        if (self.deferred_str_captures.count() == 0) return;
+        const scratch_start = self.deferred_str_capture_scratch.items.len;
+        defer self.deferred_str_capture_scratch.shrinkRetainingCapacity(scratch_start);
+        var captures = self.deferred_str_captures.iterator();
+        while (captures.next()) |entry| {
+            if (source) |reader_source| {
+                if (entry.value_ptr.source_local != reader_source or entry.key_ptr.* == reader_source) continue;
             }
+            self.deferred_str_capture_scratch.append(self.allocator, entry.key_ptr.*) catch return error.OutOfMemory;
+        }
+        var index = scratch_start;
+        while (index < self.deferred_str_capture_scratch.items.len) : (index += 1) {
+            try self.materializeLocalIfDeferred(self.deferred_str_capture_scratch.items[index]);
         }
     }
 
@@ -9005,15 +8864,7 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn materializeDeferredCapturesUsingSource(self: *MonoLlvmCodeGen, source: LocalId) Error!void {
-        if (self.deferred_str_capture_count == 0) return;
-        var index: usize = 0;
-        while (index < self.deferred_str_capture_actives.items.len) : (index += 1) {
-            const local_index = self.deferred_str_capture_actives.items[index];
-            const capture = self.deferred_str_captures[local_index] orelse continue;
-            if (capture.source_local == source and local_index != @backingInt(source)) {
-                try self.materializeLocalIfDeferred(@fromBackingInt(@intCast(local_index)));
-            }
-        }
+        try self.materializeDeferredStrCapturesWhere(source);
     }
 
     fn prepareLocalWrite(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
@@ -9043,7 +8894,7 @@ pub const MonoLlvmCodeGen = struct {
         if (total > std.math.maxInt(u32)) return error.OutOfMemory;
         capture.pending_rc_count = @intCast(total);
         capture.pending_rc_atomicity = atomicity;
-        self.deferred_str_captures[@backingInt(local)] = capture;
+        self.deferred_str_captures.putAssumeCapacity(local, capture);
     }
 
     fn offsetPtrValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, offset: LlvmBuilder.Value) Error!LlvmBuilder.Value {
@@ -9053,68 +8904,79 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Registers the join point, queues the remainder subtree, and lets
     /// `.join_after_remainder`/`.join_after_body` emit the branch-back glue and
-    /// the join body. Heap `JoinState` is freed by the final continuation.
+    /// the join body.
     fn emitJoin(self: *MonoLlvmCodeGen, join_stmt: anytype, wa: Allocator, work: *std.ArrayList(StmtWork)) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const key = @backingInt(join_stmt.id);
-        const join_block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        const join_block = try self.joinBodyBlock(key, join_stmt.body);
         const after_block = wip.block(0, "join_after") catch return error.OutOfMemory;
         try self.join_points.put(key, .{ .block = join_block, .params = join_stmt.params, .body = join_stmt.body });
 
-        const state = try self.allocator.create(JoinState);
-        state.* = .{
+        try work.append(wa, .{ .join_after_remainder = .{
             .key = key,
             .join_block = join_block,
             .after_block = after_block,
             .body = join_stmt.body,
-        };
-        try work.append(wa, .{ .join_after_remainder = state });
+            .mark = self.valueMark(),
+        } });
         try work.append(wa, .{ .node = join_stmt.remainder });
+    }
+
+    /// The block a join's jumps enter. A body other paths also arrive at
+    /// without a jump has one block for all of them, so that every edge reaches
+    /// the same merge. A body such a path already emitted is not emitted again.
+    fn joinBodyBlock(self: *MonoLlvmCodeGen, key: u32, body: CFStmtId) Error!LlvmBuilder.Function.Block.Index {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const body_key = @backingInt(body);
+        if ((self.stmt_incoming_counts.get(body_key) orelse 0) <= 1) {
+            return wip.block(0, "join_body") catch return error.OutOfMemory;
+        }
+        if (self.stmt_entry_blocks.get(body_key)) |block| {
+            try self.compiled_joins.put(key, {});
+            return block;
+        }
+        const block = wip.block(0, "join_body") catch return error.OutOfMemory;
+        try self.stmt_entry_blocks.put(body_key, block);
+        return block;
     }
 
     fn emitJump(self: *MonoLlvmCodeGen, jump_stmt: anytype) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         const info = self.join_points.get(@backingInt(jump_stmt.target)) orelse return error.CompilationFailed;
         try self.materializeDeferredStrCaptureParams(info.params);
+        try self.noteMergeEdge(info.body);
         _ = wip.br(info.block) catch return error.OutOfMemory;
-    }
-
-    fn emitLoopContinue(self: *MonoLlvmCodeGen) Error!void {
-        try self.materializeAllDeferredStrCaptures();
-        const wip = self.wip orelse return error.CompilationFailed;
-        const dest = self.loop_continue_blocks.items[self.loop_continue_blocks.items.len - 1];
-        _ = wip.br(dest) catch return error.OutOfMemory;
-    }
-
-    fn emitLoopBreak(self: *MonoLlvmCodeGen) Error!void {
-        try self.materializeAllDeferredStrCaptures();
-        const wip = self.wip orelse return error.CompilationFailed;
-        const dest = self.loop_break_blocks.items[self.loop_break_blocks.items.len - 1];
-        _ = wip.br(dest) catch return error.OutOfMemory;
     }
 
     fn emitReturn(self: *MonoLlvmCodeGen, value: LocalId) Error!void {
         try self.materializeLocalIfDeferred(value);
-        const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
-        const size = self.layoutDataSize(self.current_ret_layout);
-        if (size > 0) {
-            try self.copyBytes(ret_ptr, self.slot(value).ptr, size, self.alignmentForLayout(self.current_ret_layout));
+        if (self.current_dyn_result) |result| {
+            // A dynamic result is written to the caller's result storage,
+            // unless the procedure built it there.
+            if (value != result) try self.emitDescCopy(self.localDyn(result).?.desc, try self.dynAddress(result), try self.bytesAddress(value));
+            try self.emitFreeCarry();
+            const wip = self.wip orelse return error.CompilationFailed;
+            _ = wip.retVoid() catch return error.OutOfMemory;
+            return;
         }
-        if (self.ret_desc_ptr_arg) |out_desc| {
-            const runtime_desc: ?lir.LIR.BoxyDescRef = if (self.current_runtime_ret_desc) |desc_local|
-                .{ .local = desc_local }
-            else
-                self.store.getLocal(value).boxy_desc;
-            if (runtime_desc) |desc_ref| {
-                try self.storePointer(out_desc, try self.resolveBoxyDesc(desc_ref));
+        // A by-value result is read straight from the returned local; any
+        // other result is written through the result pointer.
+        if (self.fast_ret_registers == null) {
+            const size = self.layoutDataSize(self.current_ret_layout);
+            if (size > 0) {
+                const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
+                try self.storeLocalToMemory(ret_ptr, value, size, self.alignmentForLayout(self.current_ret_layout));
             }
         }
         const wip = self.wip orelse return error.CompilationFailed;
         if (self.fast_ret_registers) |registers| {
             const builder = self.builder orelse return error.CompilationFailed;
-            _ = wip.ret(try self.loadCAbiRegisterResult(builder, registers, ret_ptr, self.current_ret_layout)) catch return error.OutOfMemory;
+            const returned = try self.loadCAbiRegisterResult(builder, registers, try self.localPieceSource(value), self.current_ret_layout);
+            try self.emitFreeCarry();
+            _ = wip.ret(returned) catch return error.OutOfMemory;
             return;
         }
+        try self.emitFreeCarry();
         _ = wip.retVoid() catch return error.OutOfMemory;
     }
 
@@ -9123,7 +8985,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const ok_block = wip.block(0, "expect_ok") catch return error.OutOfMemory;
         const fail_block = wip.block(0, "expect_fail") catch return error.OutOfMemory;
-        const cond = try self.loadBool(self.slot(condition).ptr);
+        const cond = try self.loadLocalBool(condition);
         _ = wip.brCond(cond, ok_block, fail_block, .then_likely) catch return error.OutOfMemory;
         wip.cursor = .{ .block = fail_block };
         if (site) |observed_site| {
@@ -9151,14 +9013,70 @@ pub const MonoLlvmCodeGen = struct {
         }, "") catch return error.OutOfMemory;
     }
 
+    /// Crash with `msg` when `condition` holds. Every checked operation of a
+    /// function that fails with one message branches to one shared crash
+    /// block; a site's source frames reach it as phi operands. A crash block
+    /// per operation would give each its own call site, and LLVM's live-range
+    /// analysis is quadratic in such a chain of blocks.
     fn emitCrashIf(self: *MonoLlvmCodeGen, condition: LlvmBuilder.Value, msg: []const u8) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        const frames = try self.defaultPlatformCrashFrames();
+        const shared_index = try self.sharedCrash(msg, frames != null);
         const ok_block = wip.block(0, "checked_ok") catch return error.OutOfMemory;
-        const crash_block = wip.block(0, "checked_crash") catch return error.OutOfMemory;
-        _ = wip.brCond(condition, crash_block, ok_block, .else_likely) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = crash_block };
-        try self.emitCrashBytes(msg);
+        const from_block = wip.cursor.block;
+        _ = wip.brCond(condition, self.shared_crashes.items[shared_index].block, ok_block, .else_likely) catch return error.OutOfMemory;
+        if (frames) |site_frames| {
+            const shared = &self.shared_crashes.items[shared_index];
+            try shared.frames_ptrs.append(self.allocator, site_frames.ptr);
+            try shared.frames_lens.append(self.allocator, site_frames.len);
+            try shared.from_blocks.append(self.allocator, from_block);
+        }
         wip.cursor = .{ .block = ok_block };
+    }
+
+    /// The index in `shared_crashes` of the current function's crash block for
+    /// `msg`, built on first use. A framed block reads its frames from phis
+    /// that `finishSharedCrashes` completes once every branch into it exists.
+    fn sharedCrash(self: *MonoLlvmCodeGen, msg: []const u8, framed: bool) Error!usize {
+        const builder, const wip = try self.builderAndWip();
+        for (self.shared_crashes.items, 0..) |shared, index| {
+            if (shared.wip == wip and shared.framed == framed and std.mem.eql(u8, shared.msg, msg)) return index;
+        }
+        const saved_cursor = wip.cursor;
+        defer wip.cursor = saved_cursor;
+        const block = wip.block(0, "checked_crash") catch return error.OutOfMemory;
+        wip.cursor = .{ .block = block };
+        var entry: SharedCrash = .{ .wip = wip, .msg = msg, .framed = framed, .block = block };
+        const msg_bytes = try self.staticBytes(msg);
+        const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
+        if (framed) {
+            entry.frames_ptr_phi = wip.openPhi(try self.ptrType(), "") catch return error.OutOfMemory;
+            entry.frames_len_phi = wip.openPhi(self.ptrSizedIntType(), "") catch return error.OutOfMemory;
+            try self.emitDefaultPlatformCrashCall(msg_bytes, msg_len, entry.frames_ptr_phi.?.toValue(), entry.frames_len_phi.?.toValue());
+        } else {
+            try self.emitStaticRocOpsMessageCall(.crashed, msg);
+        }
+        try self.emitCrashTerminator();
+        try self.shared_crashes.append(self.allocator, entry);
+        return self.shared_crashes.items.len - 1;
+    }
+
+    /// Complete the frames phis of the current function's shared crash
+    /// blocks and forget them.
+    fn finishSharedCrashes(self: *MonoLlvmCodeGen) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        var index: usize = 0;
+        while (index < self.shared_crashes.items.len) {
+            var shared = &self.shared_crashes.items[index];
+            if (shared.wip != wip) {
+                index += 1;
+                continue;
+            }
+            if (shared.frames_ptr_phi) |phi| phi.finishOpen(shared.frames_ptrs.items, shared.from_blocks.items, wip) catch return error.OutOfMemory;
+            if (shared.frames_len_phi) |phi| phi.finishOpen(shared.frames_lens.items, shared.from_blocks.items, wip) catch return error.OutOfMemory;
+            shared.deinit(self.allocator);
+            _ = self.shared_crashes.swapRemove(index);
+        }
     }
 
     /// End the block after a call that hands a crash to the host. The host
@@ -9190,7 +9108,7 @@ pub const MonoLlvmCodeGen = struct {
         const msg_len = builder.intValue(self.ptrSizedIntType(), msg.len) catch return error.OutOfMemory;
         if (!try self.emitDefaultPlatformCrashWithFrames(msg_ptr, msg_len)) {
             try self.callBuiltinVoid(
-                builtinSymbol(.checked_error_crashed),
+                .checked_error_crashed,
                 &.{ try self.ptrType(), self.ptrSizedIntType() },
                 &.{ msg_ptr, msg_len },
             );
@@ -9198,27 +9116,15 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitCrashTerminator();
     }
 
-    /// Crash at code checking rejected with a runtime message, through the
-    /// builtin that records the fact before crashing.
-    fn emitCheckedErrorCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
+    /// Crash with a runtime message, through `builtin_fn` (`crash_str`, or
+    /// `checked_error_crash_str` for code checking rejected, which records
+    /// the fact before crashing).
+    fn emitCrashLocal(self: *MonoLlvmCodeGen, message: LocalId, comptime builtin_fn: BuiltinSymbol) Error!void {
         try self.materializeLocalIfDeferred(message);
         const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
         if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
             try self.callBuiltinVoid(
-                builtinSymbol(.checked_error_crash_str),
-                &.{try self.ptrType()},
-                &.{self.slot(message).ptr},
-            );
-        }
-        try self.emitCrashTerminator();
-    }
-
-    fn emitCrashLocal(self: *MonoLlvmCodeGen, message: LocalId) Error!void {
-        try self.materializeLocalIfDeferred(message);
-        const msg = try self.emitStrMatchSourceShape(self.slot(message).ptr);
-        if (!try self.emitDefaultPlatformCrashWithFrames(msg.bytes, msg.len)) {
-            try self.callBuiltinVoid(
-                builtinSymbol(.crash_str),
+                builtin_fn,
                 &.{try self.ptrType()},
                 &.{self.slot(message).ptr},
             );
@@ -9235,12 +9141,42 @@ pub const MonoLlvmCodeGen = struct {
         msg_bytes: LlvmBuilder.Value,
         msg_len: LlvmBuilder.Value,
     ) Error!bool {
-        if (!self.enable_default_platform_diagnostics) return false;
-        const stmt_id = self.current_source_stmt orelse return false;
-        var scope_id = self.store.stmtInlineScope(stmt_id);
-        if (scope_id == lir.LIR.InlineScopeId.none) return false;
+        const frames = try self.defaultPlatformCrashFrames() orelse return false;
+        try self.emitDefaultPlatformCrashCall(msg_bytes, msg_len, frames.ptr, frames.len);
+        return true;
+    }
 
+    /// Hand a crash and its source frames to the default platform.
+    fn emitDefaultPlatformCrashCall(
+        self: *MonoLlvmCodeGen,
+        msg_bytes: LlvmBuilder.Value,
+        msg_len: LlvmBuilder.Value,
+        frames_ptr: LlvmBuilder.Value,
+        frames_len: LlvmBuilder.Value,
+    ) Error!void {
         const builder, const wip = try self.builderAndWip();
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
+        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
+        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
+            msg_bytes,
+            msg_len,
+            frames_ptr,
+            frames_len,
+        }, "") catch return error.OutOfMemory;
+    }
+
+    /// The source frames the default platform reports for a crash at the
+    /// current statement: a constant global and its length, or null when the
+    /// statement carries no inline scope or diagnostics are off.
+    fn defaultPlatformCrashFrames(self: *MonoLlvmCodeGen) Error!?struct { ptr: LlvmBuilder.Value, len: LlvmBuilder.Value } {
+        if (!self.enable_default_platform_diagnostics) return null;
+        const stmt_id = self.current_source_stmt orelse return null;
+        var scope_id = self.store.stmtInlineScope(stmt_id);
+        if (scope_id == lir.LIR.InlineScopeId.none) return null;
+
+        const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = try self.ptrType();
         const usize_ty = self.ptrSizedIntType();
         const frame_ty = builder.structType(.normal, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty, .i32, .i32 }) catch return error.OutOfMemory;
@@ -9263,15 +9199,10 @@ pub const MonoLlvmCodeGen = struct {
         frames_var.setMutability(.constant, builder);
         frames_var.setInitializer(builder.arrayConst(frames_ty, frames.items) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
 
-        const fn_ty = builder.fnType(.void, &.{ ptr_ty, usize_ty, ptr_ty, usize_ty }, .normal) catch return error.OutOfMemory;
-        const callback = try self.declareExternSymbol(shim_symbols.roc_default_crashed_with_frames, fn_ty);
-        _ = wip.call(.normal, .ccc, .none, fn_ty, callback.toValue(builder), &.{
-            msg_bytes,
-            msg_len,
-            frames_var.toValue(builder),
-            builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
-        }, "") catch return error.OutOfMemory;
-        return true;
+        return .{
+            .ptr = frames_var.toValue(builder),
+            .len = builder.intValue(usize_ty, frames.items.len) catch return error.OutOfMemory,
+        };
     }
 
     fn defaultPlatformSourceFrameConst(
@@ -9281,13 +9212,11 @@ pub const MonoLlvmCodeGen = struct {
         loc: SourceLoc,
     ) Error!LlvmBuilder.Constant {
         const builder = self.builder orelse return error.CompilationFailed;
-        var allocated_name: ?[]u8 = null;
-        defer if (allocated_name) |name| self.allocator.free(name);
-        const name = if (scope.source_name.isNone()) blk: {
-            const generated = try std.fmt.allocPrint(self.allocator, "{s}{x}", .{ lir.ProcIdentity.symbol_name_prefix, scope.source_symbol.raw() });
-            allocated_name = generated;
-            break :blk generated;
-        } else self.store.getString(scope.source_name);
+        var symbol_name: [lir.ProcIdentity.symbol_name_len]u8 = undefined;
+        const name = if (scope.source_name.isNone())
+            scope.source_identity.writeSymbolName(&symbol_name)
+        else
+            self.store.getString(scope.source_name);
         const file = if (loc.file == SourceLoc.no_file or loc.file >= self.store.sourceFileCount())
             ""
         else
@@ -9323,6 +9252,23 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn copyLocal(self: *MonoLlvmCodeGen, target: LocalId, source: LocalId) Error!void {
+        if (self.isSsaLocal(target)) {
+            const target_ty = self.local_values[@backingInt(target)].ty;
+            if (self.isSsaLocal(source)) {
+                const value = try self.ssaValue(source);
+                const wip = self.wip orelse return error.CompilationFailed;
+                if (value.typeOfWip(wip) == target_ty) return self.defineSsa(target, value);
+                return self.defineSsa(target, try self.toSsaType(try self.ssaMemoryValue(source), target_ty, false));
+            }
+            try self.materializeLocalIfDeferred(source);
+            const target_layout = self.localLayout(target);
+            return self.defineLocalFromMemory(target, self.slot(source).ptr, self.layoutDataSize(target_layout), self.alignmentForLayout(target_layout));
+        }
+        if (self.isSsaLocal(source)) {
+            try self.prepareLocalWrite(target);
+            const target_slot = self.slot(target);
+            return self.storeLocalToMemory(target_slot.ptr, source, self.layoutDataSize(self.localLayout(target)), target_slot.alignment);
+        }
         const target_slot = self.slot(target);
         if (target_slot.size == 0) return;
         if (try self.propagateDeferredStrCapture(target, source)) return;
@@ -9334,7 +9280,6 @@ pub const MonoLlvmCodeGen = struct {
     fn emitStrLiteral(self: *MonoLlvmCodeGen, out: LlvmBuilder.Value, literal: StrLiteral) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const bytes = self.store.getStringLiteral(literal);
-        const RocStr = builtins.str.RocStr;
         if (bytes.len < RocStr.word_count * self.targetWordSize()) {
             // Construct the complete value here. Inlining the runtime constructor
             // makes LLVM rediscover these constants through partial-byte stores
@@ -9351,7 +9296,7 @@ pub const MonoLlvmCodeGen = struct {
             return;
         }
         try self.callBuiltinVoid(
-            builtinSymbol(.str_from_literal),
+            .str_from_literal,
             &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType() },
             &.{
                 out,
@@ -9388,7 +9333,9 @@ pub const MonoLlvmCodeGen = struct {
         if (self.static_data_globals.get(raw_id)) |value| return value;
 
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.static_data_export_rows.get(raw_id)) |row| {
+        // A pack's object reads its own definition of every export.
+        const export_row = self.static_data_export_rows.get(raw_id);
+        if (export_row) |row| {
             const data_export = self.static_data_exports[row];
             if (data_export.symbol_offset == 0 and data_export.bytes.len >= size) {
                 if (try self.frozenExportConstant(data_export)) |initializer| {
@@ -9405,26 +9352,48 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
-        defer self.allocator.free(symbol_name);
-        const value = (try self.staticDataSymbol(symbol_name)).toValue();
+        // The export defines the symbol under its own name; a slot without
+        // an export row (one the static data object defines by slot) is
+        // named by its slot.
+        const value = if (export_row) |row|
+            (try self.staticDataSymbol(self.static_data_exports[row].symbol_name)).toValue()
+        else blk: {
+            const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
+            defer self.allocator.free(symbol_name);
+            break :blk (try self.staticDataSymbol(symbol_name)).toValue();
+        };
         try self.static_data_globals.put(raw_id, value);
         return value;
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// address relocation replaced by the target symbol's address plus the
-    /// addend. Null when a relocation has no constant expression here: a
-    /// function pointer, or a pointer field the target's word alignment
+    /// relocation replaced by the target's address plus the addend. Null when
+    /// a relocation has no constant expression here: a function pointer
+    /// outside an object-cache pack, whose object defines every function its
+    /// constants point at, or a pointer field the target's word alignment
     /// cannot place in a packed struct.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
+        const image = (try self.frozenExportImage(data_export, true)) orelse return null;
+        return image.value;
+    }
+
+    /// The type and, with `with_value`, the constant of a frozen export's
+    /// image: its bytes as chunks, with each address relocation a
+    /// pointer-sized field. The type depends only on where the relocations
+    /// sit, so it is known before any relocation target is declared.
+    fn frozenExportImage(
+        self: *MonoLlvmCodeGen,
+        data_export: lir.Program.StaticDataExport,
+        comptime with_value: bool,
+    ) Error!?struct { ty: LlvmBuilder.Type, value: if (with_value) LlvmBuilder.Constant else void } {
         const builder = self.builder orelse return error.CompilationFailed;
         if (data_export.relocations.len == 0) {
-            return builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            const bytes = builder.stringConst(builder.string(data_export.bytes) catch return error.OutOfMemory) catch return error.OutOfMemory;
+            return .{ .ty = bytes.typeOf(builder), .value = if (with_value) bytes else {} };
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (relocation.kind != .address or relocation.rc_helper != null) return null;
+            if (relocation.kind == .function_pointer) return null;
             if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
@@ -9447,22 +9416,30 @@ pub const MonoLlvmCodeGen = struct {
             if (offset > cursor) {
                 const chunk = builder.stringConst(builder.string(data_export.bytes[cursor..offset]) catch return error.OutOfMemory) catch return error.OutOfMemory;
                 try field_types.append(self.allocator, chunk.typeOf(builder));
-                try field_values.append(self.allocator, chunk);
+                if (with_value) try field_values.append(self.allocator, chunk);
             }
-            const target = try self.staticDataSymbol(relocation.target_symbol_name);
-            const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
-            const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+            if (with_value) {
+                const target = switch (relocation.kind) {
+                    .address => try self.staticDataSymbol(relocation.target_symbol_name),
+                    .function_pointer => unreachable, // Rejected above.
+                };
+                const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
+                const address = builder.gepConst(.normal, .i8, target, null, &.{addend}) catch return error.OutOfMemory;
+                try field_values.append(self.allocator, address);
+            }
             try field_types.append(self.allocator, try self.ptrType());
-            try field_values.append(self.allocator, address);
             cursor = offset + word;
         }
         if (cursor < data_export.bytes.len) {
             const tail = builder.stringConst(builder.string(data_export.bytes[cursor..]) catch return error.OutOfMemory) catch return error.OutOfMemory;
             try field_types.append(self.allocator, tail.typeOf(builder));
-            try field_values.append(self.allocator, tail);
+            if (with_value) try field_values.append(self.allocator, tail);
         }
         const struct_ty = builder.structType(.@"packed", field_types.items) catch return error.OutOfMemory;
-        return builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory;
+        return .{
+            .ty = struct_ty,
+            .value = if (with_value) builder.structConst(struct_ty, field_values.items) catch return error.OutOfMemory else {},
+        };
     }
 
     /// Declares a readonly-object symbol once and returns its address.
@@ -9482,7 +9459,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const bytes = self.store.getStringLiteral(literal.bytes);
         if (bytes.len == 0) {
-            try self.storeListFields(out, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, literal.len, @as(u64, literal.len) << 1);
+            try self.storeListFields(out, builder.nullValue(try self.ptrType()) catch return error.OutOfMemory, literal.len, @as(u64, literal.len) << RocList.capacity_shift);
             return;
         }
 
@@ -9497,10 +9474,10 @@ pub const MonoLlvmCodeGen = struct {
         try self.storePointer(out, bytes_ptr);
         try self.storeListLen(out, builder.intValue(self.ptrSizedIntType(), literal.len) catch return error.OutOfMemory);
         if (whole_backing) {
-            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), @as(u64, literal.len) << 1) catch return error.OutOfMemory);
+            try self.storeListCapacity(out, builder.intValue(self.ptrSizedIntType(), @as(u64, literal.len) << RocList.capacity_shift) catch return error.OutOfMemory);
         } else {
             const backing_int = wip.cast(.ptrtoint, backing_ptr, self.ptrSizedIntType(), "") catch return error.OutOfMemory;
-            const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            const alloc_ptr = wip.bin(.add, backing_int, builder.intValue(self.ptrSizedIntType(), SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
             try self.storeListCapacity(out, alloc_ptr);
         }
     }
@@ -9525,6 +9502,22 @@ pub const MonoLlvmCodeGen = struct {
         return value;
     }
 
+    /// An embedded LIR image. Its arrays are read at their offsets' natural
+    /// alignment from the image base, which the image builders and the shared
+    /// mapping keep 16-aligned, so the global is too.
+    fn staticImageBytes(self: *MonoLlvmCodeGen, bytes: []const u8) Error!LlvmBuilder.Value {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const arr_ty = builder.arrayType(bytes.len, .i8) catch return error.OutOfMemory;
+        const name = builder.strtabStringFmt(".roc.image.{d}", .{self.string_counter}) catch return error.OutOfMemory;
+        self.string_counter += 1;
+        const variable = builder.addVariable(name, arr_ty, .default) catch return error.OutOfMemory;
+        variable.ptrConst(builder).global.setLinkage(.internal, builder);
+        variable.setMutability(.constant, builder);
+        variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(16), builder);
+        variable.setInitializer(builder.stringConst(builder.string(bytes) catch return error.OutOfMemory) catch return error.OutOfMemory, builder) catch return error.OutOfMemory;
+        return variable.toValue(builder);
+    }
+
     fn staticRefcountedBytes(self: *MonoLlvmCodeGen, backing: Base.StringLiteral.Idx) Error!LlvmBuilder.Value {
         const key: u32 = @backingInt(backing);
         const builder = self.builder orelse return error.CompilationFailed;
@@ -9539,10 +9532,18 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         const bytes = self.store.getString(backing);
-        const storage = self.allocator.alloc(u8, data_offset + bytes.len) catch return error.OutOfMemory;
-        defer self.allocator.free(storage);
+        self.refcounted_bytes_scratch.clearRetainingCapacity();
+        const storage = self.refcounted_bytes_scratch.addManyAsSlice(self.allocator, data_offset + bytes.len) catch return error.OutOfMemory;
 
         @memset(storage[0..data_offset], 0);
+        const rc_offset: usize = @intCast(@as(i64, @intCast(data_offset)) + builtins.utils.targetRefcountOffset(@intCast(word_size)));
+        const endian = self.target.cpu.arch.endian();
+        switch (word_size) {
+            2 => std.mem.writeInt(i16, storage[rc_offset..][0..2], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            4 => std.mem.writeInt(i32, storage[rc_offset..][0..4], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            8 => std.mem.writeInt(i64, storage[rc_offset..][0..8], builtins.utils.REFCOUNT_STATIC_DATA, endian),
+            else => unreachable, // targetWordSize returns 2, 4, or 8
+        }
         @memcpy(storage[data_offset..][0..bytes.len], bytes);
 
         const arr_ty = builder.arrayType(storage.len, .i8) catch return error.OutOfMemory;
@@ -9595,11 +9596,11 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
 
         wip.cursor = .{ .block = true_block };
-        try self.storeBool(self.slot(target).ptr, (self.builder orelse return error.CompilationFailed).intValue(.i1, 1) catch return error.OutOfMemory);
+        try self.storeLocalBool(target, (self.builder orelse return error.CompilationFailed).intValue(.i1, 1) catch return error.OutOfMemory);
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = false_block };
-        try self.storeBool(self.slot(target).ptr, (self.builder orelse return error.CompilationFailed).intValue(.i1, 0) catch return error.OutOfMemory);
+        try self.storeLocalBool(target, (self.builder orelse return error.CompilationFailed).intValue(.i1, 0) catch return error.OutOfMemory);
         _ = wip.br(after_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = after_block };
@@ -9890,26 +9891,26 @@ pub const MonoLlvmCodeGen = struct {
         const target_ptr = self.slot(target).ptr;
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const last_byte = wip.load(
             .normal,
             .i8,
-            try self.offsetPtr(str_ptr, self.targetWordSize() * 3 - 1),
+            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
             LlvmBuilder.Alignment.fromByteUnits(1),
             "",
         ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
 
         const heap_ptr = try self.loadPointer(str_ptr);
         const data_ptr = wip.select(.normal, is_small, str_ptr, heap_ptr, "") catch return error.OutOfMemory;
 
-        const static_len = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), usize_ty, false);
+        const static_len = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), usize_ty, false);
         const words = [3]LlvmBuilder.Value{
-            try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false),
-            try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false),
-            try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 4)).ptr, self.localLayout(GuardedList.at(args, 4))), .i64, false),
+            try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false),
+            try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), .i64, false),
+            try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 4), self.localLayout(GuardedList.at(args, 4))), .i64, false),
         };
 
         try self.storeBool(target_ptr, builder.intValue(.i1, 0) catch return error.OutOfMemory);
@@ -9982,24 +9983,24 @@ pub const MonoLlvmCodeGen = struct {
         const target_ptr = self.slot(target).ptr;
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const last_byte = wip.load(
             .normal,
             .i8,
-            try self.offsetPtr(str_ptr, self.targetWordSize() * 3 - 1),
+            try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()),
             LlvmBuilder.Alignment.fromByteUnits(1),
             "",
         ) catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         const runtime_len = wip.select(.normal, is_small, small_len, raw_len, "") catch return error.OutOfMemory;
 
         const heap_ptr = try self.loadPointer(str_ptr);
         const data_ptr = wip.select(.normal, is_small, str_ptr, heap_ptr, "") catch return error.OutOfMemory;
 
-        const offset = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), usize_ty, false);
-        const active_len = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), usize_ty, false);
-        const static_word = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false);
+        const offset = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), usize_ty, false);
+        const active_len = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), usize_ty, false);
+        const static_word = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), .i64, false);
 
         try self.storeBool(target_ptr, builder.intValue(.i1, 0) catch return error.OutOfMemory);
 
@@ -10023,7 +10024,7 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.brCond(in_range, compare_block, done_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = compare_block };
-        const inline_bytes = self.targetWordSize() * 3;
+        const inline_bytes = self.rocStrSize();
         const small_last_full_offset = inline_bytes - @sizeOf(u64);
         const small_full_load_available = wip.icmp(.ule, offset, builder.intValue(usize_ty, small_last_full_offset) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const runtime_len_ge_word = wip.icmp(.uge, runtime_len, builder.intValue(usize_ty, 8) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -10221,23 +10222,23 @@ pub const MonoLlvmCodeGen = struct {
     /// `unique_args` is non-null for wrappers whose first argument carries the
     /// op's runtime uniqueness check; the update-mode argument is appended just
     /// before roc_ops.
-    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, args: anytype, unique_args: ?u64) Error!void {
+    fn emitStrRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, builtin_fn: BuiltinSymbol, args: anytype, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs2(GuardedList.at(args, 0), GuardedList.at(args, 1), true);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
-        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     /// `unique_args` is non-null for wrappers whose first argument carries the
     /// op's runtime uniqueness check; the update-mode argument is appended just
     /// before roc_ops.
-    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, name: []const u8, arg: LocalId, unique_args: ?u64) Error!void {
+    fn emitStrUnaryRetBuiltin(self: *MonoLlvmCodeGen, target: LocalId, builtin_fn: BuiltinSymbol, arg: LocalId, unique_args: ?u64) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         if (unique_args) |mask| try self.appendUpdateModeArg(&call_args, mask);
-        try self.callBuiltinOut(name, call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     fn emitStrCountUtf8Bytes(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10245,25 +10246,25 @@ pub const MonoLlvmCodeGen = struct {
             try self.deferredStrCaptureLen(capture)
         else
             try self.emitRocStrLen(self.slot(arg).ptr);
-        try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+        try self.storeLocalInt(target, result, self.localLayout(target));
     }
 
     fn emitStrGetUtf8ByteUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         const index = try self.coerceScalar(
-            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))),
             .i64,
             false,
         );
         try call_args.append(self.allocator, .i64, index);
         const result = try self.callBuiltin(
-            builtinSymbol(LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe)),
+            LowLevelBuiltins.strOp(.str_get_utf8_byte_unsafe),
             .i8,
             call_args.types.items,
             call_args.values.items,
         );
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), result);
+        try self.storeLocalScalar(target, self.localLayout(target), result);
     }
 
     fn emitStrSubstringUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10271,34 +10272,36 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         const start = try self.coerceScalar(
-            try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))),
+            try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))),
             .i64,
             false,
         );
         const length = try self.coerceScalar(
-            try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))),
+            try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))),
             .i64,
             false,
         );
         try call_args.append(self.allocator, .i64, start);
         try call_args.append(self.allocator, .i64, length);
         try self.callBuiltinVoid(
-            builtinSymbol(LowLevelBuiltins.strOp(.str_substring_unsafe)),
+            LowLevelBuiltins.strOp(.str_substring_unsafe),
             call_args.types.items,
             call_args.values.items,
         );
     }
 
-    fn emitStrSplitFirst(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    /// `Str.split_first` or `Str.split_last`: the builtin writes the
+    /// `{ after, before, found }` record through the field offsets it is given.
+    fn emitStrSplit(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, comptime op: lir.LowLevel, comptime Layout: type) Error!void {
         const target_slot = self.slot(target);
-        const info = try self.resolveStrSplitFirstLayout(target_slot.layout_idx);
+        const info = try self.resolveStrSplitLayout(target_slot.layout_idx);
         if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
 
         const layout_ptr = try self.allocEntryBlockSlot(
             .i8,
-            @sizeOf(builtins.dev_wrappers.StrSplitFirstLayout),
-            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitFirstLayout)),
-            "str_split_first_layout",
+            @sizeOf(Layout),
+            LlvmBuilder.Alignment.fromByteUnits(@alignOf(Layout)),
+            @tagName(op) ++ "_layout",
         );
 
         try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
@@ -10309,30 +10312,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_first)), call_args.types.items, call_args.values.items);
-    }
-
-    fn emitStrSplitLast(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const target_slot = self.slot(target);
-        const info = try self.resolveStrSplitLastLayout(target_slot.layout_idx);
-        if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
-
-        const layout_ptr = try self.allocEntryBlockSlot(
-            .i8,
-            @sizeOf(builtins.dev_wrappers.StrSplitLastLayout),
-            LlvmBuilder.Alignment.fromByteUnits(@alignOf(builtins.dev_wrappers.StrSplitLastLayout)),
-            "str_split_last_layout",
-        );
-
-        try self.storeRawInt(layout_ptr, 0, .i32, info.after_offset, 4);
-        try self.storeRawInt(layout_ptr, 4, .i32, info.before_offset, 4);
-        try self.storeRawInt(layout_ptr, 8, .i32, info.found_offset, 4);
-
-        var call_args = try self.rocStrArgs2(GuardedList.at(args, 0), GuardedList.at(args, 1), false);
-        defer call_args.deinit(self.allocator);
-        try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
-        try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_split_last)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(op), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrDropPrefixCaselessAscii(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10354,7 +10334,27 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_drop_prefix_caseless_ascii), call_args.types.items, call_args.values.items);
+    }
+
+    /// `str_from_parts(parts...)`: the parts copied into a stack array (an
+    /// entry-block slot of the procedure) for the builtin, which writes
+    /// them once into `target`.
+    fn emitStrFromParts(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const count: u32 = @intCast(args.len);
+        const str_size: u32 = 3 * self.targetWordSize();
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(self.targetWordSize());
+        const array = try self.allocEntryBlockSlot(.i8, count * str_size, alignment, "parts");
+        for (0..count) |i| {
+            const arg = GuardedList.at(args, i);
+            try self.materializeLocalIfDeferred(arg);
+            try self.copyBytes(try self.offsetPtr(array, @intCast(i * str_size)), self.slot(arg).ptr, str_size, alignment);
+        }
+        try self.callBuiltinVoid(
+            LowLevelBuiltins.strOp(.str_from_parts),
+            &.{ try self.ptrType(), try self.ptrType(), self.ptrSizedIntType() },
+            &.{ self.slot(target).ptr, array, try self.intValue(self.ptrSizedIntType(), count) },
+        );
     }
 
     fn emitStrJoinWith(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10368,44 +10368,44 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.types.appendSlice(self.allocator, sep_args.types.items);
         try call_args.values.appendSlice(self.allocator, sep_args.values.items);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_join_with)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_join_with), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrRepeat(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_repeat)), call_args.types.items, call_args.values.items);
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_repeat), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, capacity: LocalId) Error!void {
-        const cap = try self.coerceScalar(try self.loadScalar(self.slot(capacity).ptr, self.localLayout(capacity)), .i64, false);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_with_capacity)), &.{ try self.ptrType(), .i64 }, &.{ self.slot(target).ptr, cap });
+        const cap = try self.coerceScalar(try self.loadLocalScalar(capacity, self.localLayout(capacity)), .i64, false);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_with_capacity), &.{ try self.ptrType(), .i64 }, &.{ self.slot(target).ptr, cap });
     }
 
     fn emitStrReserve(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         var call_args = try self.rocStrArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const spare = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const spare = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i64, spare);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_reserve)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_reserve), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrToUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocStrArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_to_utf8)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_to_utf8), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromByteList(self: *MonoLlvmCodeGen, comptime op: lir.LowLevel, target: LocalId, arg: LocalId) Error!void {
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(op)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(op), call_args.types.items, call_args.values.items);
     }
 
     fn emitStrFromUtf8(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10420,21 +10420,16 @@ pub const MonoLlvmCodeGen = struct {
             "str_from_utf8_layout",
         );
 
-        try self.storeRawInt(layout_ptr, 0, .i64, info.ok_tag, 8);
-        try self.storeRawInt(layout_ptr, 8, .i64, info.err_tag, 8);
-        try self.storeRawInt(layout_ptr, 16, .i32, info.outer_disc_offset, 4);
-        try self.storeRawInt(layout_ptr, 20, .i32, info.outer_disc_size, 4);
-        try self.storeRawInt(layout_ptr, 24, .i32, info.err_index_offset, 4);
-        try self.storeRawInt(layout_ptr, 28, .i32, info.err_problem_offset, 4);
-        try self.storeRawInt(layout_ptr, 32, .i32, info.inner_disc_offset, 4);
-        try self.storeRawInt(layout_ptr, 36, .i32, info.inner_disc_size, 4);
-        try self.storeRawInt(layout_ptr, 40, .i32, info.inner_bad_utf8_tag, 4);
+        const ResultLayout = builtins.dev_wrappers.StrFromUtf8Layout;
+        inline for (.{ "disc_offset", "disc_size", "err_index_offset", "err_problem_offset" }) |field| {
+            try self.storeRawInt(layout_ptr, @offsetOf(ResultLayout, field), .i32, @field(info, field), 4);
+        }
 
         var call_args = try self.rocListArgs1(arg);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), target_slot.ptr);
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.strOp(.str_from_utf8)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.strOp(.str_from_utf8), call_args.types.items, call_args.values.items);
     }
 
     fn emitIntFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, width: u8, signed: bool) Error!void {
@@ -10447,7 +10442,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i8, builder.intValue(.i8, width) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(signed)) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.int)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.int), call_args.types.items, call_args.values.items);
     }
 
     fn emitDecFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -10458,7 +10453,7 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), allocated.ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.dec)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.dec), call_args.types.items, call_args.values.items);
     }
 
     fn emitFloatFromStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, width: u8) Error!void {
@@ -10470,12 +10465,12 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), allocated.ptr);
         try call_args.append(self.allocator, .i8, builder.intValue(.i8, width) catch return error.OutOfMemory);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, disc_offset) catch return error.OutOfMemory);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numFromStr(.float)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.numFromStr(.float), call_args.types.items, call_args.values.items);
     }
 
     fn emitNumFromStrPrefix(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const spec = numeric_conversion.getNumericPrefixParseSpec(op) orelse unreachable;
+        const spec = numeric_conversion.getNumericPrefixParseSpec(op) orelse unreachable; // emitLowLevel calls this only for *_from_str_prefix and *_from_utf8_prefix ops, which all have prefix parse specs
         const target_slot = self.slot(target);
         const info = try self.resolveNumPrefixParseLayout(target_slot.layout_idx);
         if (target_slot.size > 0) try self.zeroBytes(target_slot.ptr, target_slot.size);
@@ -10511,7 +10506,7 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, try self.ptrType(), layout_ptr);
         const symbol = switch (class) {
             inline .int, .float, .dec => |c| switch (spec.source) {
-                inline .str, .utf8 => |src| builtinSymbol(comptime LowLevelBuiltins.numFromStrPrefix(c, src)),
+                inline .str, .utf8 => |src| comptime LowLevelBuiltins.numFromStrPrefix(c, src),
             },
         };
         try self.callBuiltinVoid(symbol, call_args.types.items, call_args.values.items);
@@ -10521,12 +10516,12 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const arg_layout = self.localLayout(arg);
         const bits = self.intBits(arg_layout);
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, arg_layout), .i128, arg_layout.isSigned());
+        const value = try self.coerceScalar(try self.loadLocalScalar(arg, arg_layout), .i128, arg_layout.isSigned());
         const lo = try self.coerceScalar(value, .i64, false);
         const hi = (self.wip orelse return error.CompilationFailed).bin(.lshr, value, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const hi64 = try self.coerceScalar(hi, .i64, false);
         const byte_width: u8 = @intCast(bits / 8);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.int)), &.{ try self.ptrType(), .i64, .i64, .i8, .i1 }, &.{
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.int), &.{ try self.ptrType(), .i64, .i64, .i8, .i1 }, &.{
             self.slot(target).ptr,
             lo,
             hi64,
@@ -10538,12 +10533,12 @@ pub const MonoLlvmCodeGen = struct {
     fn emitFloatToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder, const wip = try self.builderAndWip();
         const arg_layout = self.localLayout(arg);
-        const value = try self.loadScalar(self.slot(arg).ptr, arg_layout);
+        const value = try self.loadLocalScalar(arg, arg_layout);
         const bits = if (arg_layout == .f32)
             try self.coerceScalar(wip.cast(.bitcast, value, .i32, "") catch return error.OutOfMemory, .i64, false)
         else
             wip.cast(.bitcast, value, .i64, "") catch return error.OutOfMemory;
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.float)), &.{ try self.ptrType(), .i64, .i1 }, &.{
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.float), &.{ try self.ptrType(), .i64, .i1 }, &.{
             self.slot(target).ptr,
             bits,
             builder.intValue(.i1, @intFromBool(arg_layout == .f32)) catch return error.OutOfMemory,
@@ -10552,7 +10547,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitFloatBitCast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, arg: LocalId) Error!void {
         const builder, const wip = try self.builderAndWip();
-        const value = try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg));
+        const value = try self.loadLocalScalar(arg, self.localLayout(arg));
         const target_ty: LlvmBuilder.Type = if (op == .f32_to_bits)
             .i32
         else if (op == .f32_from_bits)
@@ -10562,7 +10557,7 @@ pub const MonoLlvmCodeGen = struct {
         else if (op == .f64_from_bits)
             .double
         else
-            unreachable;
+            unreachable; // emitLowLevel calls this only for the four float bit-cast ops
         const raw_bits = wip.cast(.bitcast, value, target_ty, "") catch return error.OutOfMemory;
         const normalized = if (op == .f32_to_bits) blk: {
             const magnitude = wip.bin(
@@ -10607,15 +10602,15 @@ pub const MonoLlvmCodeGen = struct {
         } else if (op == .f32_from_bits or op == .f64_from_bits)
             raw_bits
         else
-            unreachable;
-        try self.storeScalar(self.slot(target).ptr, self.localLayout(target), normalized);
+            unreachable; // the op is one of the float-bits low-level ops matched above
+        try self.storeLocalScalar(target, self.localLayout(target), normalized);
     }
 
     fn emitNumericSqrt(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         if (self.localLayout(target) == .dec) {
-            const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(builtinSymbol(LowLevelBuiltins.unaryMathDec(.num_sqrt)), value);
-            try self.storeScalar(self.slot(target).ptr, .dec, result);
+            const value = try self.loadLocalScalar(arg, .dec);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(.num_sqrt), value);
+            try self.storeLocalScalar(target, .dec, result);
             return;
         }
         try self.emitNumericFloatUnaryIntrinsic(target, arg, .sqrt);
@@ -10623,9 +10618,9 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitNumericUnaryMath(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, op: lir.LowLevel) Error!void {
         if (self.localLayout(target) == .dec) {
-            const value = try self.loadScalar(self.slot(arg).ptr, .dec);
-            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op).symbolName(), value);
-            try self.storeScalar(self.slot(target).ptr, .dec, result);
+            const value = try self.loadLocalScalar(arg, .dec);
+            const result = try self.callDecUnaryBuiltin(LowLevelBuiltins.unaryMathDec(op), value);
+            try self.storeLocalScalar(target, .dec, result);
             return;
         }
 
@@ -10633,7 +10628,7 @@ pub const MonoLlvmCodeGen = struct {
         try self.emitNumericFloatUnaryBuiltin(
             target,
             arg,
-            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32).symbolName(),
+            LowLevelBuiltins.unaryMathFloat(op, target_layout == .f32),
         );
     }
 
@@ -10641,7 +10636,7 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const target_layout = self.localLayout(target);
         const target_ty = self.scalarType(target_layout);
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
+        const value = try self.coerceScalar(try self.loadLocalScalar(arg, self.localLayout(arg)), target_ty, false);
         const result = wip.callIntrinsic(
             .normal,
             .none,
@@ -10650,92 +10645,67 @@ pub const MonoLlvmCodeGen = struct {
             &.{value},
             "",
         ) catch return error.OutOfMemory;
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
-    fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, name: []const u8) Error!void {
+    fn emitNumericFloatUnaryBuiltin(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId, builtin_fn: BuiltinSymbol) Error!void {
         const target_layout = self.localLayout(target);
         const target_ty: LlvmBuilder.Type = switch (target_layout) {
             .f32 => .float,
             .f64 => .double,
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.UnsupportedLowLevel,
         };
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(arg).ptr, self.localLayout(arg)), target_ty, false);
+        const value = try self.coerceScalar(try self.loadLocalScalar(arg, self.localLayout(arg)), target_ty, false);
         const result = try self.callBuiltin(
-            name,
+            builtin_fn,
             target_ty,
             &.{target_ty},
             &.{value},
         );
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
-    fn emitNumericFloatPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+    /// A two-argument float builtin, `builtin_for(is_f32)`, on the target's
+    /// float layout.
+    fn emitNumericFloatBinary(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, comptime builtin_for: anytype) Error!void {
         const target_layout = self.localLayout(target);
         const target_ty: LlvmBuilder.Type = switch (target_layout) {
             .f32 => .float,
             .f64 => .double,
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.UnsupportedLowLevel,
         };
-        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
-        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
+        const lhs = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 0), self.localLayout(GuardedList.at(args, 0))), target_ty, false);
+        const rhs = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), target_ty, false);
         const result = try self.callBuiltin(
-            LowLevelBuiltins.floatPow(target_layout == .f32).symbolName(),
+            builtin_for(target_layout == .f32),
             target_ty,
             &.{ target_ty, target_ty },
             &.{ lhs, rhs },
         );
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
-    }
-
-    fn emitNumericFloatAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const target_layout = self.localLayout(target);
-        const target_ty: LlvmBuilder.Type = switch (target_layout) {
-            .f32 => .float,
-            .f64 => .double,
-            .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.UnsupportedLowLevel,
-        };
-        const lhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), target_ty, false);
-        const rhs = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), target_ty, false);
-        const result = try self.callBuiltin(
-            LowLevelBuiltins.floatAtan2(target_layout == .f32).symbolName(),
-            target_ty,
-            &.{ target_ty, target_ty },
-            &.{ lhs, rhs },
-        );
-        try self.storeScalar(self.slot(target).ptr, target_layout, result);
+        try self.storeLocalScalar(target, target_layout, result);
     }
 
     fn emitDecPow(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
-        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_pow)), lhs, rhs);
-        try self.storeScalar(self.slot(target).ptr, .dec, result);
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), .dec);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), .dec);
+        const result = try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_pow), lhs, rhs);
+        try self.storeLocalScalar(target, .dec, result);
     }
 
     fn emitDecAtan2(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const lhs = try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, .dec);
-        const rhs = try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, .dec);
-        const result = try self.callI128BinaryBuiltin(builtinSymbol(LowLevelBuiltins.decBinaryArith(.num_atan2)), lhs, rhs);
-        try self.storeScalar(self.slot(target).ptr, .dec, result);
+        const lhs = try self.loadLocalScalar(GuardedList.at(args, 0), .dec);
+        const rhs = try self.loadLocalScalar(GuardedList.at(args, 1), .dec);
+        const result = try self.callI128BinaryBuiltin(LowLevelBuiltins.decBinaryArith(.num_atan2), lhs, rhs);
+        try self.storeLocalScalar(target, .dec, result);
     }
 
     fn emitDecToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const value = try self.loadScalar(self.slot(arg).ptr, .dec);
+        const value = try self.loadLocalScalar(arg, .dec);
         const lo = try self.coerceScalar(value, .i64, false);
         const hi = (self.wip orelse return error.CompilationFailed).bin(.lshr, value, builder.intValue(.i128, 64) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const hi64 = try self.coerceScalar(hi, .i64, false);
-        try self.callBuiltinVoid(builtinSymbol(LowLevelBuiltins.numToStr(.dec)), &.{ try self.ptrType(), .i64, .i64 }, &.{ self.slot(target).ptr, lo, hi64 });
-    }
-
-    fn emitNumToStr(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
-        switch (self.localLayout(arg)) {
-            .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => try self.emitIntToStr(target, arg),
-            .dec => try self.emitDecToStr(target, arg),
-            .f32, .f64 => try self.emitFloatToStr(target, arg),
-            .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => return error.CompilationFailed,
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.numToStr(.dec), &.{ try self.ptrType(), .i64, .i64 }, &.{ self.slot(target).ptr, lo, hi64 });
     }
 
     const CallArgs = struct {
@@ -10793,45 +10763,6 @@ pub const MonoLlvmCodeGen = struct {
         return result;
     }
 
-    fn boxyListElementDescForLocals(
-        self: *MonoLlvmCodeGen,
-        abi: layout.Store.BuiltinListAbi,
-        list_locals: []const LocalId,
-        target_local: ?LocalId,
-    ) ?BoxyListElementDesc {
-        const elem_layout = abi.elem_layout_idx orelse return null;
-        const elem_layout_value = self.layoutValue(elem_layout);
-        const elem_is_erased_box = elem_layout_value.tag == .erased_box;
-        if (!self.layouts().layoutTakesBoxyStructuralDesc(elem_layout)) return null;
-
-        for (list_locals) |local| {
-            if (self.store.getLocal(local).boxy_desc) |desc| {
-                return .{ .elem_layout = elem_layout, .desc = desc };
-            }
-        }
-        if (target_local) |local| {
-            if (self.store.getLocal(local).boxy_desc) |desc| {
-                return .{ .elem_layout = elem_layout, .desc = desc };
-            }
-        }
-        if (elem_is_erased_box) {
-            llvmInvariantFmt(
-                "erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
-                .{@backingInt(elem_layout)},
-            );
-        }
-        return null;
-    }
-
-    fn appendBoxyListElementDescArgs(
-        self: *MonoLlvmCodeGen,
-        call_args: *CallArgs,
-        boxy_elem: BoxyListElementDesc,
-    ) Error!void {
-        try call_args.append(self.allocator, .i32, try self.boxyInt(.i32, @backingInt(boxy_elem.elem_layout)));
-        try call_args.append(self.allocator, try self.ptrType(), try self.resolveBoxyDesc(boxy_elem.desc));
-    }
-
     /// Appends element incref/decref callbacks for a runtime-checked list op.
     /// That RC is internal to the op, which serves both modes and makes no
     /// thread-confinement claim, so the callbacks are always the atomic
@@ -10856,7 +10787,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_incref) {
             const incref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                try self.declareRefcountedRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
             else
                 null;
             try call_args.append(
@@ -10868,7 +10799,7 @@ pub const MonoLlvmCodeGen = struct {
 
         if (needs_decref) {
             const decref_fn = if (enabled)
-                (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                try self.declareRefcountedRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
             else
                 null;
             try call_args.append(
@@ -10897,12 +10828,12 @@ pub const MonoLlvmCodeGen = struct {
     /// address is computed without an in-bounds claim, since the index need
     /// not lie inside the list and the hint never touches memory.
     fn emitListPrefetch(self: *MonoLlvmCodeGen, args: anytype) Error!void {
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         if (abi.elem_size == 0) return;
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
-        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const idx = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
         const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const addr = wip.gep(.normal, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
         // Arguments after the address: prepare for a write, keep in every
@@ -10924,15 +10855,27 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListGetUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const list_layout = self.localLayout(GuardedList.at(args, 0));
-        const abi = self.boxyAwareBuiltinListAbi(list_layout);
+        const abi = self.layouts().builtinListAbi(list_layout);
         if (abi.elem_size == 0) return;
         const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
-        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const idx = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const src = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
-        try self.copyBytes(self.slot(target).ptr, src, self.slot(target).size, self.slot(target).alignment);
+        const target_layout = self.localLayout(target);
+        try self.defineLocalFromMemory(target, src, self.layoutByteSize(target_layout), self.alignmentForLayout(target_layout));
+    }
+
+    /// `list_item_size_at_most(list, bound) -> U8`: whether this target's item
+    /// layout fits the bound.
+    fn emitListItemSizeAtMost(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const bound = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const elem_size = builder.intValue(.i64, abi.elem_size) catch return error.OutOfMemory;
+        const fits = wip.icmp(.ule, elem_size, bound, "") catch return error.OutOfMemory;
+        try self.storeLocalBool(target, fits);
     }
 
     fn emitListMapCanReuse(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, interchangeable: layout.WidthValues(bool)) Error!void {
@@ -10941,13 +10884,13 @@ pub const MonoLlvmCodeGen = struct {
             // in-place branch is statically dead: the result is a constant 0.
             const builder = self.builder orelse return error.CompilationFailed;
             const zero = builder.intValue(.i8, 0) catch return error.OutOfMemory;
-            try self.storeIntToLayout(self.slot(target).ptr, zero, self.localLayout(target));
+            try self.storeLocalInt(target, zero, self.localLayout(target));
             return;
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const result = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_map_can_reuse)), .i8, call_args.types.items, call_args.values.items);
-        try self.storeIntToLayout(self.slot(target).ptr, result, self.localLayout(target));
+        const result = try self.callBuiltin(LowLevelBuiltins.listOp(.list_map_can_reuse), .i8, call_args.types.items, call_args.values.items);
+        try self.storeLocalInt(target, result, self.localLayout(target));
     }
 
     fn emitListMapExtractUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -10957,7 +10900,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_size = self.slot(target).size;
         if (elem_size == 0) return;
         const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
-        const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+        const idx = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
         const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
         const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -10969,7 +10912,7 @@ pub const MonoLlvmCodeGen = struct {
         const elem_size = self.slot(GuardedList.at(args, 2)).size;
         if (elem_size != 0) {
             const bytes = try self.loadPointer(self.slot(GuardedList.at(args, 0)).ptr);
-            const idx = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
+            const idx = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), self.ptrSizedIntType(), false);
             const wip = self.wip orelse return error.CompilationFailed;
             const builder = self.builder orelse return error.CompilationFailed;
             const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
@@ -10982,7 +10925,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn emitListWithCapacity(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(target));
+        const abi = self.layouts().builtinListAbi(self.localLayout(target));
         // Reserving room for zero-sized elements needs no memory, and every
         // other zero-sized branch in this backend represents such a list as a
         // null pointer with zero capacity. Going to the builtin here would
@@ -10996,8 +10939,8 @@ pub const MonoLlvmCodeGen = struct {
             try self.storeListCapacity(out_ptr, zero);
             return;
         }
-        const cap = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 0)).ptr, self.localLayout(GuardedList.at(args, 0))), .i64, false);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_with_capacity)), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 }, &.{
+        const cap = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 0), self.localLayout(GuardedList.at(args, 0))), .i64, false);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_with_capacity), &.{ try self.ptrType(), .i64, .i32, self.ptrSizedIntType(), .i1 }, &.{
             self.slot(target).ptr,
             cap,
             builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory,
@@ -11009,20 +10952,21 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListCapacity(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
         const builder, const wip = try self.builderAndWip();
         const usize_ty = self.ptrSizedIntType();
-        const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
+        const capacity_shift = builder.intValue(usize_ty, RocList.capacity_shift) catch return error.OutOfMemory;
+        const seamless_slice_tag = builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         const list_ptr = self.slot(arg).ptr;
         const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
-        const decoded_capacity = wip.bin(.lshr, cap_or_alloc, one, "") catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, one, "") catch return error.OutOfMemory;
+        const decoded_capacity = wip.bin(.lshr, cap_or_alloc, capacity_shift, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, seamless_slice_tag, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
         const capacity = wip.select(.normal, is_slice, len, decoded_capacity, "") catch return error.OutOfMemory;
-        try self.storeIntToLayout(self.slot(target).ptr, capacity, self.localLayout(target));
+        try self.storeLocalInt(target, capacity, self.localLayout(target));
     }
 
     fn emitListAppendUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
+        const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A zero-sized element has no bytes to copy, so appending one only
         // bumps the length. Handled here for the same reason emitListConcat
         // handles it here: there is no data pointer to walk. The pointer and
@@ -11056,7 +11000,7 @@ pub const MonoLlvmCodeGen = struct {
         const capacity = try self.loadUsize(try self.offsetPtr(src_ptr, self.rocListCapacityOffset()));
         const offset = wip.bin(.mul, len, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const dst = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
-        try self.copyBytes(dst, self.slot(GuardedList.at(args, 1)).ptr, @intCast(abi.elem_size), LlvmBuilder.Alignment.fromByteUnits(abi.elem_alignment));
+        try self.storeLocalToMemory(dst, GuardedList.at(args, 1), @intCast(abi.elem_size), LlvmBuilder.Alignment.fromByteUnits(abi.elem_alignment));
         const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
         const new_len = wip.bin(.add, len, one, "") catch return error.OutOfMemory;
         try self.storePointer(out_ptr, bytes);
@@ -11068,16 +11012,11 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const lhs_local = GuardedList.at(args, 0);
         const rhs_local = GuardedList.at(args, 1);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(target));
+        const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
             const lhs_len = try self.loadUsize(try self.offsetPtr(self.slot(lhs_local).ptr, self.rocListLenOffset()));
             const rhs_len = try self.loadUsize(try self.offsetPtr(self.slot(rhs_local).ptr, self.rocListLenOffset()));
-            const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, lhs_len, rhs_len, "") catch return error.OutOfMemory;
-            const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
-            try self.storePointer(self.slot(target).ptr, null_ptr);
-            try self.storeListLen(self.slot(target).ptr, total_len);
-            try self.storeListCapacity(self.slot(target).ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
-            return;
+            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, lhs_len, rhs_len, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(lhs_local);
         defer call_args.deinit(self.allocator);
@@ -11091,45 +11030,32 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.values.appendSlice(self.allocator, rhs.values.items);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{ lhs_local, rhs_local }, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         // One bit per list argument (bit 0 = lhs, bit 1 = rhs), as one 8-byte
         // parameter so no two sub-8-byte parameters land adjacent on the stack.
         try call_args.append(self.allocator, .i64, builder.intValue(.i64, unique_args & 0b11) catch return error.OutOfMemory);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_concat", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_concat)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_concat), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
-            const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+            // Zero-width elements: only the length grows.
+            const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory;
-            const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
-            try self.storePointer(self.slot(target).ptr, null_ptr);
-            try self.storeListLen(self.slot(target).ptr, total_len);
-            try self.storeListCapacity(self.slot(target).ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
-            return;
+            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false));
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_range_within), call_args.types.items, call_args.values.items);
     }
 
     fn emitListCopyRangeWithin(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
@@ -11143,43 +11069,39 @@ pub const MonoLlvmCodeGen = struct {
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), .i64, false));
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_copy_range_within)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_copy_range_within), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendRangeWithinUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
-            const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+            // Zero-width elements: only the length grows.
+            const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory;
-            const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
-            try self.storePointer(self.slot(target).ptr, null_ptr);
-            try self.storeListLen(self.slot(target).ptr, total_len);
-            try self.storeListCapacity(self.slot(target).ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
-            return;
+            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, false);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_range_within_unsafe)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_range_within_unsafe), call_args.types.items, call_args.values.items);
     }
 
     fn emitListAppendLeBytes(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder, const wip = try self.builderAndWip();
         const list_local = GuardedList.at(args, 0);
-        const value = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
-        const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false);
+        const value = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false);
 
         // A list ARC proved unique and owned here, with a full word of spare
         // capacity, takes one unaligned little-endian store of the whole
@@ -11196,13 +11118,13 @@ pub const MonoLlvmCodeGen = struct {
             const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
             const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
             const word = self.ptrSizedIntType();
-            const one = builder.intValue(word, 1) catch return error.OutOfMemory;
+            const seamless_slice_tag = builder.intValue(word, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
             const zero = builder.intValue(word, 0) catch return error.OutOfMemory;
             const eight = builder.intValue(word, 8) catch return error.OutOfMemory;
-            const tag = wip.bin(.@"and", cap, one, "") catch return error.OutOfMemory;
+            const tag = wip.bin(.@"and", cap, seamless_slice_tag, "") catch return error.OutOfMemory;
             const is_plain = wip.icmp(.eq, tag, zero, "") catch return error.OutOfMemory;
             const needed = wip.bin(.add, len, eight, "") catch return error.OutOfMemory;
-            const capacity_shift = builder.intValue(word, builtins.list.RocList.capacity_shift) catch return error.OutOfMemory;
+            const capacity_shift = builder.intValue(word, RocList.capacity_shift) catch return error.OutOfMemory;
             const capacity = wip.bin(.lshr, cap, capacity_shift, "") catch return error.OutOfMemory;
             const fits = wip.icmp(.uge, capacity, needed, "") catch return error.OutOfMemory;
             const take_fast = wip.bin(.@"and", is_plain, fits, "") catch return error.OutOfMemory;
@@ -11233,24 +11155,59 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i64, count);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, 1) catch return error.OutOfMemory);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_le_bytes)), call_args.types.items, call_args.values.items);
         if (done) |join| {
+            self.enterInlineSlowArm();
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
+            self.leaveInlineSlowArm();
             try brAndEnter(wip, join);
+        } else {
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_le_bytes), call_args.types.items, call_args.values.items);
         }
+    }
+
+    /// Brackets the slow arm of a diamond this backend introduces itself: an
+    /// inline fast path whose fallback is the builtin. The arm is as cold as
+    /// a `default_is_cold` switch arm, and the builtin call in it takes the
+    /// same cold-path shim, so the result slot it would otherwise be handed
+    /// never escapes and the fast arm's three header stores stay in registers.
+    fn enterInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth += 1;
+    }
+
+    fn leaveInlineSlowArm(self: *MonoLlvmCodeGen) void {
+        self.cold_depth -= 1;
+    }
+
+    /// The loop-append promotion pass has discharged every check: the list
+    /// uniquely owns an unsliced allocation with a word of spare capacity.
+    /// The append is then one unaligned little-endian store of the whole
+    /// value at the length and a length bump by `count`; the bytes past
+    /// `count` land in capacity slack nothing can observe.
+    fn emitListAppendLeBytesUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
+        const value = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), self.ptrSizedIntType(), false);
+        const bytes = try self.loadPointer(list_ptr);
+        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
+        const cap = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListCapacityOffset()));
+        const dst = try self.offsetPtrValue(bytes, len);
+        _ = wip.store(.normal, value, dst, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
+        const new_len = wip.bin(.add, len, count, "") catch return error.OutOfMemory;
+        const out_ptr = self.slot(target).ptr;
+        try self.storePointer(out_ptr, bytes);
+        try self.storeListLen(out_ptr, new_len);
+        try self.storeListCapacity(out_ptr, cap);
     }
 
     fn emitListAppendSublist(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const abi = self.layouts().builtinListAbi(self.localLayout(target));
         if (abi.elem_size == 0) {
-            const count = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), self.ptrSizedIntType(), false);
+            // Zero-width elements: only the length grows.
+            const count = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), self.ptrSizedIntType(), false);
             const len = try self.loadUsize(try self.offsetPtr(self.slot(GuardedList.at(args, 0)).ptr, self.rocListLenOffset()));
-            const total_len = (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory;
-            const null_ptr = builder.nullValue(try self.ptrType()) catch return error.OutOfMemory;
-            try self.storePointer(self.slot(target).ptr, null_ptr);
-            try self.storeListLen(self.slot(target).ptr, total_len);
-            try self.storeListCapacity(self.slot(target).ptr, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory);
-            return;
+            return self.storeZstList(target, (self.wip orelse return error.CompilationFailed).bin(.add, len, count, "") catch return error.OutOfMemory);
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
@@ -11262,13 +11219,13 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.types.appendSlice(self.allocator, src.types.items);
         try call_args.values.appendSlice(self.allocator, src.values.items);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 3)).ptr, self.localLayout(GuardedList.at(args, 3))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 3), self.localLayout(GuardedList.at(args, 3))), .i64, false));
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_append_sublist)), call_args.types.items, call_args.values.items);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_append_sublist), call_args.types.items, call_args.values.items);
     }
 
     /// Store the canonical value for a list of zero-width elements into
@@ -11285,7 +11242,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListPrepend(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         // A zero-width element has no bytes to place at the front, so
         // prepending one only bumps the length.
         if (abi.elem_size == 0) {
@@ -11300,36 +11257,18 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 1)).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_prepend", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_prepend)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_prepend), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSublist(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         const len = try self.loadUsize(try self.offsetPtr(self.slot(list_local).ptr, self.rocListLenOffset()));
         const zero = builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory;
-        const one = builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory;
-        const max_count = builder.intValue(self.ptrSizedIntType(), -1) catch return error.OutOfMemory;
-        const slice = if (op == .list_drop_first)
-            ListSlice{ .start = one, .len = max_count }
-        else if (op == .list_drop_last) blk: {
-            const len_is_zero = (self.wip orelse return error.CompilationFailed).icmp(.eq, len, zero, "") catch return error.OutOfMemory;
-            const decremented = (self.wip orelse return error.CompilationFailed).bin(.sub, len, one, "") catch return error.OutOfMemory;
-            const safe_len = (self.wip orelse return error.CompilationFailed).select(.normal, len_is_zero, zero, decremented, "") catch return error.OutOfMemory;
-            break :blk ListSlice{ .start = zero, .len = safe_len };
-        } else if (op == .list_take_first)
+        const slice = if (op == .list_take_first)
             ListSlice{ .start = zero, .len = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1)) }
         else if (op == .list_take_last) blk: {
             const count = try self.loadIntegerLocalAsUsize(GuardedList.at(args, 1));
@@ -11364,24 +11303,15 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
             try call_args.append(self.allocator, .i1, builder.intValue(.i1, @intFromBool(abi.contains_refcounted)) catch return error.OutOfMemory);
-            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op), call_args.types.items, call_args.values.items);
         } else {
             try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
             try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.start, .i64, false));
             try call_args.append(self.allocator, .i64, try self.coerceScalar(slice.len, .i64, false));
-            const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-            if (boxy_elem) |elem| {
-                try self.appendBoxyListElementDescArgs(&call_args, elem);
-            } else {
-                try self.appendListElementRcArgs(&call_args, abi, false, true);
-            }
+            try self.appendListElementRcArgs(&call_args, abi, false, true);
             try self.appendUpdateModeArg(&call_args, unique_args);
-            if (boxy_elem != null) {
-                try self.callBoxyVoid("roc_boxy_list_sublist", call_args.types.items, call_args.values.items);
-            } else {
-                try self.callBuiltinVoid(LowLevelBuiltins.listOp(op).symbolName(), call_args.types.items, call_args.values.items);
-            }
+            try self.callBuiltinVoid(LowLevelBuiltins.listOp(op), call_args.types.items, call_args.values.items);
         }
     }
 
@@ -11406,20 +11336,23 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn loadIntegerLocalAsUsize(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
-        return self.loadIntegerPtrAsUsize(self.slot(local).ptr, self.localLayout(local));
+        const value_layout = self.localLayout(local);
+        return self.integerValueAsUsize(try self.loadLocalScalar(local, value_layout), value_layout);
     }
 
     fn loadIntegerPtrAsUsize(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value_layout: layout.Idx) Error!LlvmBuilder.Value {
+        return self.integerValueAsUsize(try self.loadScalar(ptr, value_layout), value_layout);
+    }
+
+    fn integerValueAsUsize(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, value_layout: layout.Idx) Error!LlvmBuilder.Value {
         switch (value_layout) {
             .dec => {
-                const value = try self.loadScalar(ptr, .dec);
                 const parts = try self.splitI128Value(value);
-                const truncated = try self.callBuiltin(builtinSymbol(.dec_to_i64_trunc), .i64, &.{ .i64, .i64 }, &.{ parts.low, parts.high });
+                const truncated = try self.callBuiltin(.dec_to_i64_trunc, .i64, &.{ .i64, .i64 }, &.{ parts.low, parts.high });
                 return self.coerceScalar(truncated, self.ptrSizedIntType(), true);
             },
             .f32, .f64 => return error.CompilationFailed,
             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
-                const value = try self.loadScalar(ptr, value_layout);
                 return self.coerceScalar(value, self.ptrSizedIntType(), value_layout.isSigned());
             },
         }
@@ -11428,7 +11361,7 @@ pub const MonoLlvmCodeGen = struct {
     fn emitListDropAt(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         // Zero-width elements have no bytes to move, so dropping one only
         // shortens the length, and only when the index is in bounds.
         if (abi.elem_size == 0) {
@@ -11446,50 +11379,32 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_drop_at", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_drop_at)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_drop_at), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSwap(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 2)).ptr, self.localLayout(GuardedList.at(args, 2))), .i64, false));
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 2), self.localLayout(GuardedList.at(args, 2))), .i64, false));
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_swap", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_swap)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_swap), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSet(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         if (abi.elem_size == 0) {
             try self.copyBytes(self.slot(target).ptr, self.slot(list_local).ptr, self.slot(target).size, self.slot(target).alignment);
             return;
@@ -11500,24 +11415,15 @@ pub const MonoLlvmCodeGen = struct {
 
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
         try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 2)).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            // `listSet` decrefs the element it displaces before overwriting it,
-            // so unlike `list_replace` it has no out_element parameter and the
-            // caller owes no drop afterwards.
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        // `listSet` decrefs the element it displaces before overwriting it,
+        // so unlike `list_replace` it has no out_element parameter and the
+        // caller owes no drop afterwards.
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_set", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_set)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_set), call_args.types.items, call_args.values.items);
     }
 
     fn emitListReplaceUnsafe(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11536,7 +11442,7 @@ pub const MonoLlvmCodeGen = struct {
         const list_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f0_offset else f1_offset);
         const value_out_ptr = try self.offsetPtr(self.slot(target).ptr, if (f0_is_list) f1_offset else f0_offset);
 
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         if (abi.elem_size == 0) {
             // listReplace would dereference a NULL element pointer for ZST
             // elements; the result list is the input unchanged and the prev
@@ -11549,29 +11455,20 @@ pub const MonoLlvmCodeGen = struct {
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), list_out_ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
         try call_args.append(self.allocator, try self.ptrType(), self.slot(GuardedList.at(args, 2)).ptr);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
         try call_args.append(self.allocator, try self.ptrType(), value_out_ptr);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, null);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_replace", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_replace_unsafe)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_replace_unsafe), call_args.types.items, call_args.values.items);
     }
 
     fn emitListSlackUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype) Error!void {
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const slack = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_slack_unique)), .i64, call_args.types.items, call_args.values.items);
-        try self.storeIntToLayout(self.slot(target).ptr, slack, self.localLayout(target));
+        const slack = try self.callBuiltin(LowLevelBuiltins.listOp(.list_slack_unique), .i64, call_args.types.items, call_args.values.items);
+        try self.storeLocalInt(target, slack, self.localLayout(target));
     }
 
     fn emitListOwnedUnique(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
@@ -11580,20 +11477,20 @@ pub const MonoLlvmCodeGen = struct {
         if ((unique_args & 1) != 0) {
             const builder = self.builder orelse return error.CompilationFailed;
             const one = builder.intValue(.i64, 1) catch return error.OutOfMemory;
-            try self.storeIntToLayout(self.slot(target).ptr, one, self.localLayout(target));
+            try self.storeLocalInt(target, one, self.localLayout(target));
             return;
         }
         var call_args = try self.rocListArgs1(GuardedList.at(args, 0));
         defer call_args.deinit(self.allocator);
-        const owned = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.listOp(.list_owned_unique)), .i64, call_args.types.items, call_args.values.items);
-        try self.storeIntToLayout(self.slot(target).ptr, owned, self.localLayout(target));
+        const owned = try self.callBuiltin(LowLevelBuiltins.listOp(.list_owned_unique), .i64, call_args.types.items, call_args.values.items);
+        try self.storeLocalInt(target, owned, self.localLayout(target));
     }
 
     /// Emit `list_reserve` or `list_reserve_for_append`. Both leave a list that
     /// already has the requested spare untouched; they differ only in the
-    /// capacity their builtin (`boxy_symbol` or `builtin_symbol`) picks when
+    /// capacity their builtin picks when
     /// the list has to grow.
-    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserve(self: *MonoLlvmCodeGen, target: LocalId, comptime builtin_fn: BuiltinSymbol, args: anytype, unique_args: u64) Error!void {
         const abi = self.layouts().builtinListAbi(self.localLayout(GuardedList.at(args, 0)));
         // A list of zero-sized elements owns no allocation, so it carries a
         // length and nothing else and a reserve cannot change anything
@@ -11624,13 +11521,15 @@ pub const MonoLlvmCodeGen = struct {
         // The spare count is a u64 regardless of target width; compare in 64
         // bits so a huge request on a 32-bit target is not truncated into a
         // satisfiable one.
-        const spare = try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false);
+        const spare = try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false);
 
         const zero = builder.intValue(usize_ty, 0) catch return error.OutOfMemory;
         const one = builder.intValue(usize_ty, 1) catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_word, one, "") catch return error.OutOfMemory;
+        const seamless_slice_tag = builder.intValue(usize_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory;
+        const capacity_shift = builder.intValue(usize_ty, RocList.capacity_shift) catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_word, seamless_slice_tag, "") catch return error.OutOfMemory;
         const is_slice = wip.icmp(.ne, slice_tag, zero, "") catch return error.OutOfMemory;
-        const decoded_cap = wip.bin(.lshr, cap_word, one, "") catch return error.OutOfMemory;
+        const decoded_cap = wip.bin(.lshr, cap_word, capacity_shift, "") catch return error.OutOfMemory;
         const capacity = wip.select(.normal, is_slice, len, decoded_cap, "") catch return error.OutOfMemory;
         const slack = wip.bin(.sub, capacity, len, "") catch return error.OutOfMemory;
         const slack_wide = try self.coerceScalar(slack, .i64, false);
@@ -11663,8 +11562,8 @@ pub const MonoLlvmCodeGen = struct {
             const bytes_int = wip.cast(.ptrtoint, bytes, usize_ty, "") catch return error.OutOfMemory;
             const alloc_int = wip.select(.normal, is_slice, untagged_alloc, bytes_int, "") catch return error.OutOfMemory;
             const alloc_ptr = wip.cast(.inttoptr, alloc_int, try self.ptrType(), "") catch return error.OutOfMemory;
-            const word_bytes: i64 = @intCast(self.rocListLenOffset());
-            const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, -word_bytes) catch return error.OutOfMemory);
+            const rc_offset = builtins.utils.targetRefcountOffset(self.targetWordSize());
+            const rc_ptr = try self.offsetPtrValue(alloc_ptr, builder.intValue(usize_ty, rc_offset) catch return error.OutOfMemory);
             const rc = try self.loadUsize(rc_ptr);
             const rc_is_one = wip.icmp(.eq, rc, one, "") catch return error.OutOfMemory;
             _ = wip.brCond(rc_is_one, fast_block, slow_block, .then_likely) catch return error.OutOfMemory;
@@ -11678,40 +11577,33 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = slow_block };
-        try self.emitListReserveCall(target, boxy_symbol, builtin_symbol, args, unique_args);
+        self.enterInlineSlowArm();
+        try self.emitListReserveCall(target, builtin_fn, args, unique_args);
+        self.leaveInlineSlowArm();
         _ = wip.br(merge_block) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = merge_block };
     }
 
-    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime boxy_symbol: []const u8, comptime builtin_symbol: []const u8, args: anytype, unique_args: u64) Error!void {
+    fn emitListReserveCall(self: *MonoLlvmCodeGen, target: LocalId, comptime builtin_fn: BuiltinSymbol, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         var call_args = try self.rocListArgs1(list_local);
         defer call_args.deinit(self.allocator);
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadScalar(self.slot(GuardedList.at(args, 1)).ptr, self.localLayout(GuardedList.at(args, 1))), .i64, false));
+        try call_args.append(self.allocator, .i64, try self.coerceScalar(try self.loadLocalScalar(GuardedList.at(args, 1), self.localLayout(GuardedList.at(args, 1))), .i64, false));
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid(boxy_symbol, call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtin_symbol, call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(builtin_fn, call_args.types.items, call_args.values.items);
     }
 
     fn emitListReleaseExcess(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         // A zero-width list holds no allocation, so it has no excess to release
         // and passes through unchanged.
         if (abi.elem_size == 0) {
@@ -11723,24 +11615,15 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_release_excess_capacity", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_release_excess_capacity)), call_args.types.items, call_args.values.items);
-        }
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_release_excess_capacity), call_args.types.items, call_args.values.items);
     }
 
     fn emitListReverse(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const list_local = GuardedList.at(args, 0);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
+        const abi = self.layouts().builtinListAbi(self.localLayout(list_local));
         if (abi.elem_size == 0) {
             try self.copyBytes(self.slot(target).ptr, self.slot(list_local).ptr, self.slot(target).size, self.slot(target).alignment);
             return;
@@ -11751,76 +11634,9 @@ pub const MonoLlvmCodeGen = struct {
         try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
         try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
         try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-        }
+        try self.appendListElementRcArgs(&call_args, abi, true, true);
         try self.appendUpdateModeArg(&call_args, unique_args);
-        if (boxy_elem != null) {
-            try self.callBoxyVoid("roc_boxy_list_reverse", call_args.types.items, call_args.values.items);
-        } else {
-            try self.callBuiltinOut(builtinSymbol(LowLevelBuiltins.listOp(.list_reverse)), call_args.types.items, call_args.values.items);
-        }
-    }
-
-    fn emitListSortWith(self: *MonoLlvmCodeGen, target: LocalId, args: anytype, unique_args: u64) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const list_local = GuardedList.at(args, 0);
-        const callable_local = GuardedList.at(args, 1);
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(list_local));
-        if (abi.elem_size == 0) {
-            try self.copyBytes(self.slot(target).ptr, self.slot(list_local).ptr, self.slot(target).size, self.slot(target).alignment);
-            return;
-        }
-        var call_args = try self.rocListArgs1(list_local);
-        defer call_args.deinit(self.allocator);
-        try call_args.prepend(self.allocator, try self.ptrType(), self.slot(target).ptr);
-        const callable = wip.load(.normal, try self.ptrType(), self.slot(callable_local).ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
-        try call_args.append(self.allocator, try self.ptrType(), callable);
-        try call_args.append(self.allocator, .i32, builder.intValue(.i32, abi.elem_alignment) catch return error.OutOfMemory);
-        try call_args.append(self.allocator, self.ptrSizedIntType(), builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory);
-        const boxy_elem = self.boxyListElementDescForLocals(abi, &.{list_local}, target);
-        if (boxy_elem) |elem| {
-            try call_args.append(self.allocator, .i1, builder.intValue(.i1, 1) catch return error.OutOfMemory);
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-            try self.appendBoxyListElementDescArgs(&call_args, elem);
-        } else {
-            try self.appendListElementRcArgs(&call_args, abi, true, true);
-            try call_args.append(self.allocator, .i32, try self.boxyInt(.i32, @backingInt(abi.elem_layout_idx orelse return error.CompilationFailed)));
-            try call_args.append(self.allocator, try self.ptrType(), try self.boxyNullPtr());
-        }
-        try self.appendUpdateModeArg(&call_args, unique_args);
-        try self.callBoxyVoid("roc_boxy_list_sort_with", call_args.types.items, call_args.values.items);
-    }
-
-    fn emitListFirstLast(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: anytype) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const list_ptr = self.slot(GuardedList.at(args, 0)).ptr;
-        const len = try self.loadUsize(try self.offsetPtr(list_ptr, self.rocListLenOffset()));
-        const non_empty = wip.icmp(.ne, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const empty_block = wip.block(0, "list_empty") catch return error.OutOfMemory;
-        const full_block = wip.block(0, "list_full") catch return error.OutOfMemory;
-        const after = wip.block(0, "list_first_after") catch return error.OutOfMemory;
-        _ = wip.brCond(non_empty, full_block, empty_block, .then_likely) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = empty_block };
-        try self.emitTagLiteral(target, 0, null);
-        _ = wip.br(after) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = full_block };
-        const abi = self.boxyAwareBuiltinListAbi(self.localLayout(GuardedList.at(args, 0)));
-        const bytes = try self.loadPointer(list_ptr);
-        const idx = if (op == .list_first)
-            builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory
-        else
-            wip.bin(.sub, len, builder.intValue(self.ptrSizedIntType(), 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const offset = wip.bin(.mul, idx, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-        const elem_src = wip.gep(.inbounds, .i8, bytes, &.{offset}, "") catch return error.OutOfMemory;
-        const payload_layout = self.tagPayloadLayout(self.localLayout(target), 1);
-        try self.emitTagLiteral(target, 1, null);
-        try self.copyBytes(self.slot(target).ptr, elem_src, self.layoutDataSize(payload_layout), self.alignmentForLayout(payload_layout));
-        try brAndEnter(wip, after);
+        try self.callBuiltinVoid(LowLevelBuiltins.listOp(.list_reverse), call_args.types.items, call_args.values.items);
     }
 
     fn emitBoxBox(self: *MonoLlvmCodeGen, target: LocalId, arg: LocalId) Error!void {
@@ -11843,19 +11659,19 @@ pub const MonoLlvmCodeGen = struct {
             },
             .box => {
                 const abi = self.layouts().builtinBoxAbi(target_layout);
-                const enabled = abi.contains_refcounted and abi.elem_layout_idx != null;
+                const enabled = abi.contains_refcounted;
                 const null_ptr = builder.nullValue(ptr_ty) catch return error.OutOfMemory;
                 const payload_incref = if (enabled)
-                    (try self.declareRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                    try self.declareRefcountedRcHelper(.{ .op = .incref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
                 else
                     null;
                 const payload_decref = if (enabled)
-                    (try self.declareRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic))
+                    try self.declareRefcountedRcHelper(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? }, .atomic)
                 else
                     null;
                 const mode = if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable;
                 const result = try self.callBuiltin(
-                    builtinSymbol(.box_prepare_update),
+                    .box_prepare_update,
                     ptr_ty,
                     &.{ ptr_ty, self.ptrSizedIntType(), .i32, .i1, ptr_ty, ptr_ty, .i8 },
                     &.{
@@ -11870,7 +11686,7 @@ pub const MonoLlvmCodeGen = struct {
                 );
                 try self.storePointer(self.slot(target).ptr, result);
             },
-            .scalar, .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr => return error.CompilationFailed,
+            .scalar, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole, .tag_union, .ptr, .dynamic => return error.CompilationFailed,
         }
     }
 
@@ -11917,389 +11733,700 @@ pub const MonoLlvmCodeGen = struct {
         try self.storePointer(self.slot(target).ptr, ptr_value);
     }
 
-    /// Heap-backed glue carried across the per-field children of one struct
-    /// equality. `acc` is the running AND of the field comparisons; `field_out`
-    /// receives each child's result before it is folded into `acc`.
-    const StructEqState = struct {
-        lhs_ptr: LlvmBuilder.Value,
-        rhs_ptr: LlvmBuilder.Value,
-        layout_idx: layout.Idx,
-        field_count: usize,
-        index: usize,
-        acc: LlvmBuilder.Value,
-        field_out: LlvmBuilder.Value,
-        out: *LlvmBuilder.Value,
+    // ── `.boxy` dynamic values (design.md "Dynamic Values In LIR") ──
+    //
+    // A dynamic local's slot holds the address of its bytes, which its
+    // descriptor describes. Descriptor, name, and type table locals hold one
+    // pointer-sized word. Every operation the descriptor decides is a call to
+    // a Boxy runtime `roc_desc_*` entry point, declared with its C signature:
+    // a `u32` is an `i32`, a `bool` argument is widened to an `i32`, and a
+    // `bool` result is read as an `i8`. The runtime's `extern` input and
+    // request structs are laid out for the target's word (`BoxyAbi`).
+
+    const BoxyTypeDesc = boxy_runtime.TypeDesc;
+    const BoxyListOp = boxy_runtime.compiled.ListOp;
+    const desc_size_offset: u32 = @offsetOf(BoxyTypeDesc, "size");
+
+    /// The layout of the Boxy runtime's `compiled.ListOpRequest` on a target
+    /// whose words are `word` bytes.
+    const BoxyAbi = struct {
+        word: u32,
+
+        /// A request's `op` and `unique_args` are at 0 and 4, and its
+        /// pointer fields follow from 8, in this order.
+        const RequestPointer = enum(u32) { elem, out, out_value, ret_desc, list, list2, element };
+
+        fn requestPointer(self: BoxyAbi, field: RequestPointer) u32 {
+            return 8 + @backingInt(field) * self.word;
+        }
+        fn requestN(self: BoxyAbi) u32 {
+            return std.mem.alignForward(u32, 8 + 7 * self.word, 8);
+        }
+        fn requestSize(self: BoxyAbi) u32 {
+            return self.requestN() + 3 * 8;
+        }
+
+        comptime {
+            const host: BoxyAbi = .{ .word = @sizeOf(usize) };
+            const Request = boxy_runtime.compiled.ListOpRequest;
+            std.debug.assert(@offsetOf(Request, "op") == 0 and @offsetOf(Request, "unique_args") == 4);
+            for (@typeInfo(RequestPointer).@"enum".field_names) |name| {
+                std.debug.assert(host.requestPointer(@field(RequestPointer, name)) == @offsetOf(Request, name));
+            }
+            std.debug.assert(host.requestN() == @offsetOf(Request, "n") and host.requestSize() == @sizeOf(Request) and @alignOf(Request) == 8);
+        }
     };
 
-    /// Heap-backed glue carried across the element child of one list equality.
-    /// The loop scaffolding is already emitted and the cursor sits in the body
-    /// block; `elem_out` receives the element comparison before the loop tail
-    /// and the post-loop result load are emitted.
-    const ListEqState = struct {
-        result_ptr: LlvmBuilder.Value,
-        idx_ptr: LlvmBuilder.Value,
-        idx: LlvmBuilder.Value,
-        header: LlvmBuilder.Function.Block.Index,
-        after: LlvmBuilder.Function.Block.Index,
-        elem_out: LlvmBuilder.Value,
-        out: *LlvmBuilder.Value,
+    fn boxyAbi(self: *const MonoLlvmCodeGen) BoxyAbi {
+        return .{ .word = self.targetWordSize() };
+    }
+
+    fn localDyn(self: *const MonoLlvmCodeGen, local: LocalId) ?lir.LIR.DynLocal {
+        return self.store.getLocal(local).dyn;
+    }
+
+    fn anyDynamic(self: *const MonoLlvmCodeGen, locals: anytype) bool {
+        for (0..locals.len) |i| {
+            if (self.localDyn(GuardedList.at(locals, i)) != null) return true;
+        }
+        return false;
+    }
+
+    /// The word an `opaque_ptr` local holds.
+    fn wordValue(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        return self.loadPointer(self.slot(local).ptr);
+    }
+
+    /// The address of a dynamic local's bytes.
+    fn dynAddress(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        return self.loadPointer(self.slot(local).ptr);
+    }
+
+    /// The address of a local's bytes: a dynamic local's address, or a
+    /// closed local's slot.
+    fn bytesAddress(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        if (self.localDyn(local) != null) return self.dynAddress(local);
+        try self.materializeLocalIfDeferred(local);
+        return self.slot(local).ptr;
+    }
+
+    /// Where a statement writes a target's bytes: a dynamic local's storage,
+    /// or a closed local's slot.
+    fn targetAddress(self: *MonoLlvmCodeGen, target: LocalId) Error!LlvmBuilder.Value {
+        if (self.localDyn(target)) |dyn| {
+            if (dyn.storage == .view) llvmInvariantFmt("a statement wrote the bytes of view local {d}", .{@backingInt(target)});
+            return self.dynAddress(target);
+        }
+        try self.prepareLocalWrite(target);
+        return self.slot(target).ptr;
+    }
+
+    /// The register pieces of an address passed to a dynamic parameter.
+    fn addressPieceSource(self: *MonoLlvmCodeGen, address: LlvmBuilder.Value) Error!PieceSource {
+        const wip = self.wip orelse return error.CompilationFailed;
+        return .{ .bits = wip.cast(.ptrtoint, address, self.ptrSizedIntType(), "") catch return error.OutOfMemory };
+    }
+
+    /// Write the address a dynamic parameter receives to its place in the
+    /// tail group's storage.
+    fn writeTailArgAddress(self: *MonoLlvmCodeGen, scratch: LlvmBuilder.Value, sig: *const FastSignature, index: usize, address: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const dst = try self.offsetPtr(scratch, sig.tail_args.offsets[index]);
+        try self.storePointer(dst, address);
+        return dst;
+    }
+
+    fn callBoxyRuntime(
+        self: *MonoLlvmCodeGen,
+        comptime name: []const u8,
+        ret_ty: LlvmBuilder.Type,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        comptime std.debug.assert(@hasDecl(boxy_runtime.exports, name));
+        const builder, const wip = try self.builderAndWip();
+        const fn_ty = builder.fnType(ret_ty, param_types, .normal) catch return error.OutOfMemory;
+        const func = try self.declareExternSymbol(name, fn_ty);
+        return wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), args, "") catch return error.OutOfMemory;
+    }
+
+    /// A `u32` field of the descriptor at `desc`, widened to a word.
+    fn loadDescField(self: *MonoLlvmCodeGen, desc: LlvmBuilder.Value, offset: u32) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const field = wip.load(.normal, .i32, try self.offsetPtr(desc, offset), LlvmBuilder.Alignment.fromByteUnits(4), "") catch return error.OutOfMemory;
+        return wip.conv(.unsigned, field, self.ptrSizedIntType(), "") catch return error.OutOfMemory;
+    }
+
+    /// Store a word to `local`'s slot.
+    fn bindWord(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value) Error!void {
+        if (builtin.mode == .debug and self.localDyn(local) != null) invariant("LLVM codegen invariant violated: dynamic local {d} received a word", .{@backingInt(local)});
+        try self.prepareLocalWrite(local);
+        try self.storePointer(self.slot(local).ptr, value);
+    }
+
+    /// A component address: a `view` target takes it, a closed target loads
+    /// the component's bytes.
+    fn bindComponentAddress(self: *MonoLlvmCodeGen, target: LocalId, address: LlvmBuilder.Value) Error!void {
+        if (self.localDyn(target)) |dyn| {
+            if (dyn.storage == .view) return self.storePointer(self.slot(target).ptr, address);
+            return self.emitDescCopy(dyn.desc, try self.targetAddress(target), address);
+        }
+        try self.prepareLocalWrite(target);
+        const target_layout = self.localLayout(target);
+        try self.defineLocalFromMemory(target, address, self.layoutDataSize(target_layout), self.alignmentForLayout(target_layout));
+    }
+
+    /// Copy a value's bytes from `src` to `dst` through the descriptor
+    /// `desc` holds. Reference counts are untouched.
+    fn emitDescCopy(self: *MonoLlvmCodeGen, desc: LocalId, dst: LlvmBuilder.Value, src: LlvmBuilder.Value) Error!void {
+        const ptr_ty = try self.ptrType();
+        _ = try self.callBoxyRuntime("roc_desc_copy", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{ try self.wordValue(desc), dst, src });
+    }
+
+    /// `set_local`, or a join parameter's initialization, where either side
+    /// is dynamic: the value's bytes are copied.
+    fn emitDynSetLocal(self: *MonoLlvmCodeGen, target: LocalId, value: LocalId) Error!void {
+        const desc = if (self.localDyn(target)) |dyn| dyn.desc else self.localDyn(value).?.desc;
+        const src = try self.bytesAddress(value);
+        try self.emitDescCopy(desc, try self.targetAddress(target), src);
+    }
+
+    fn emitDynIncref(self: *MonoLlvmCodeGen, local: LocalId, count: u32) Error!void {
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        _ = try self.callBoxyRuntime("roc_desc_incref", .void, &.{ ptr_ty, ptr_ty, usize_ty }, &.{
+            try self.wordValue(self.localDyn(local).?.desc),
+            try self.dynAddress(local),
+            try self.intValue(usize_ty, count),
+        });
+    }
+
+    fn emitDynDecref(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
+        const ptr_ty = try self.ptrType();
+        _ = try self.callBoxyRuntime("roc_desc_decref", .void, &.{ ptr_ty, ptr_ty }, &.{
+            try self.wordValue(self.localDyn(local).?.desc),
+            try self.dynAddress(local),
+        });
+    }
+
+    /// Release this procedure's tail carry, if it takes one.
+    fn emitFreeCarry(self: *MonoLlvmCodeGen) Error!void {
+        const carry = self.current_carry orelse return;
+        _ = try self.callBoxyRuntime("roc_desc_carry_free", .void, &.{try self.ptrType()}, &.{carry});
+    }
+
+    /// Copy the bytes of every argument a frame-replacing call to `callee`
+    /// passes to a dynamic parameter into one fresh carry, each at a 16-byte
+    /// aligned offset, and record each copy's address in `moved`. Returns
+    /// the carry.
+    fn emitTailCarry(self: *MonoLlvmCodeGen, callee: LirProcSpec, arg_locals: anytype, moved: []LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const usize_ty = self.ptrSizedIntType();
+        const params = self.store.getLocalSpan(callee.args);
+        const offsets = try self.allocator.alloc(LlvmBuilder.Value, arg_locals.len);
+        defer self.allocator.free(offsets);
+        var cursor = try self.intValue(usize_ty, 0);
+        for (0..arg_locals.len) |i| {
+            if (self.localDyn(GuardedList.at(params, i)) == null) continue;
+            const arg = GuardedList.at(arg_locals, i);
+            const size = if (self.localDyn(arg)) |dyn|
+                try self.loadDescField(try self.wordValue(dyn.desc), desc_size_offset)
+            else
+                try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(arg)));
+            offsets[i] = cursor;
+            const padded = wip.bin(.add, size, try self.intValue(usize_ty, 15), "") catch return error.OutOfMemory;
+            const rounded = wip.bin(.@"and", padded, try self.intValue(usize_ty, -16), "") catch return error.OutOfMemory;
+            cursor = wip.bin(.add, cursor, rounded, "") catch return error.OutOfMemory;
+        }
+        const carry = try self.callBoxyRuntime("roc_desc_carry_alloc", try self.ptrType(), &.{usize_ty}, &.{cursor});
+        for (0..arg_locals.len) |i| {
+            if (self.localDyn(GuardedList.at(params, i)) == null) continue;
+            const arg = GuardedList.at(arg_locals, i);
+            const address = try self.offsetPtrValue(carry, offsets[i]);
+            if (self.localDyn(arg)) |dyn| {
+                try self.emitDescCopy(dyn.desc, address, try self.dynAddress(arg));
+            } else {
+                const arg_layout = self.localLayout(arg);
+                try self.copyBytes(address, self.slot(arg).ptr, self.layoutByteSize(arg_layout), self.alignmentForLayout(arg_layout));
+            }
+            moved[i] = address;
+        }
+        return carry;
+    }
+
+    /// Reserve the procedure's dynamic frame region and set the address of
+    /// every `frame` dynamic local. The region's size is the sum of the
+    /// locals' aligned descriptor sizes; the procedure's return releases it.
+    /// Allocate the procedure's frame of dynamic locals: one region, placed
+    /// by the Boxy runtime one run at a time (`allocFrameSlots`), which
+    /// writes each local's address into its slot. The addresses live in
+    /// memory the procedure reads at each use; computing them here would hold
+    /// one per local in a register across the body, which LLVM's register
+    /// allocator handles quadratically in a large generic body.
+    fn emitDynFrameAlloc(self: *MonoLlvmCodeGen) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (self.frame_runs.items.len == 0) return;
+        const ptr_ty = try self.ptrType();
+        const usize_ty = self.ptrSizedIntType();
+        const word = self.targetWordSize();
+        var total = try self.intValue(usize_ty, 0);
+        for (self.frame_runs.items) |run| {
+            total = try self.callBoxyRuntime("roc_desc_frame_run_size", usize_ty, &.{ ptr_ty, .i32, usize_ty }, &.{ try self.wordValue(run.desc), try self.intValue(.i32, run.count), total });
+        }
+        const region = wip.alloca(.normal, .i8, total, LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), .default, "dyn_region") catch return error.OutOfMemory;
+        var offset = try self.intValue(usize_ty, 0);
+        for (self.frame_runs.items) |run| {
+            offset = try self.callBoxyRuntime("roc_desc_frame_place_run", usize_ty, &.{ ptr_ty, .i32, ptr_ty, usize_ty, ptr_ty }, &.{
+                try self.wordValue(run.desc),
+                try self.intValue(.i32, run.count),
+                region,
+                offset,
+                try self.offsetPtr(self.frame_slots, run.start * word),
+            });
+        }
+    }
+
+    const DynArrayKind = enum {
+        /// Each element is the word the local holds.
+        words,
+        /// Each element is the address of the local's bytes.
+        bytes,
     };
 
-    /// Heap-backed glue carried across the payload children of one tag-union
-    /// equality. One frame per variant case block emits the discriminant guard,
-    /// queues the payload comparison, stores it, and branches to `after`.
-    const TagEqState = struct {
-        lhs_ptr: LlvmBuilder.Value,
-        rhs_ptr: LlvmBuilder.Value,
-        layout_idx: layout.Idx,
-        lhs_disc: LlvmBuilder.Value,
-        result_ptr: LlvmBuilder.Value,
-        after: LlvmBuilder.Function.Block.Index,
-        case_blocks: []LlvmBuilder.Function.Block.Index,
-        index: usize,
-        payload_out: LlvmBuilder.Value,
-        out: *LlvmBuilder.Value,
-    };
+    /// Entry-block storage for `count` runtime input entries of `entry_size`
+    /// bytes.
+    fn dynInputArray(self: *MonoLlvmCodeGen, entry_size: u32, count: usize) Error!LlvmBuilder.Value {
+        return self.allocEntryBlockSlot(.i8, @intCast(@max(count, 1) * entry_size), self.targetPointerAlignment(), "dyn_inputs");
+    }
 
-    /// Work item for the explicit equality-emission stack. `.eval` computes the
-    /// structural equality of a value at `lhs_ptr`/`rhs_ptr` of layout
-    /// `layout_idx`, writing the resulting `i1` into `out`. The remaining
-    /// variants reproduce the post-children glue that recursion previously
-    /// interleaved for struct fields, list elements, and tag-union payloads.
-    const EqWork = union(enum) {
-        eval: struct {
-            lhs_ptr: LlvmBuilder.Value,
-            rhs_ptr: LlvmBuilder.Value,
-            layout_idx: layout.Idx,
-            out: *LlvmBuilder.Value,
-        },
-        struct_step: *StructEqState,
-        struct_combine: *StructEqState,
-        list_finish: *ListEqState,
-        tag_case: *TagEqState,
-        tag_case_after: *TagEqState,
-    };
+    /// One word per local of `span`, in an array.
+    fn dynLocalArray(self: *MonoLlvmCodeGen, span: LocalSpan, kind: DynArrayKind) Error!LlvmBuilder.Value {
+        const locals = self.store.getLocalSpan(span);
+        const word = self.targetWordSize();
+        const array = try self.dynInputArray(word, locals.len);
+        for (0..locals.len) |i| {
+            const local = GuardedList.at(locals, i);
+            const value = switch (kind) {
+                .words => try self.wordValue(local),
+                .bytes => try self.bytesAddress(local),
+            };
+            try self.storePointer(try self.offsetPtr(array, @intCast(i * word)), value);
+        }
+        return array;
+    }
 
-    /// Drives structural equality emission with an explicit heap-backed work
-    /// stack so deeply nested layouts cannot overflow the native stack. The
-    /// emission order matches the former recursion exactly: continuations are
-    /// pushed before their child so the child's whole subtree is emitted first,
-    /// and each value-returning child writes into a stable heap result slot the
-    /// parent reads in its continuation.
-    fn emitValueEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
-        var result: LlvmBuilder.Value = undefined;
-        var sfa_buffer: [64 * @sizeOf(EqWork)]u8 align(@alignOf(usize)) = undefined;
-        var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
-        const wa = sfa.allocator();
-        var work = std.ArrayList(EqWork).empty;
-        defer work.deinit(wa);
-        try work.append(wa, .{ .eval = .{ .lhs_ptr = lhs_ptr, .rhs_ptr = rhs_ptr, .layout_idx = layout_idx, .out = &result } });
-        while (work.pop()) |item| {
-            switch (item) {
-                .eval => |e| try self.emitValueEqualNode(e.lhs_ptr, e.rhs_ptr, e.layout_idx, e.out, wa, &work),
-                .struct_step => |state| {
-                    if (state.index == state.field_count) {
-                        state.out.* = state.acc;
-                        self.allocator.destroy(state);
-                    } else {
-                        const layout_val = self.layoutValue(state.layout_idx);
-                        const info = self.layouts().getStructInfo(layout_val);
-                        const field = info.fields.get(@intCast(state.index));
-                        if (field.is_padding) {
-                            // Padding spacers hold uninitialized bytes; never compare them.
-                            state.index += 1;
-                            try work.append(wa, .{ .struct_step = state });
-                        } else {
-                            const offset = self.layouts().getStructFieldOffset(layout_val.getStruct().idx, @intCast(state.index));
-                            try work.append(wa, .{ .struct_combine = state });
-                            try work.append(wa, .{ .eval = .{
-                                .lhs_ptr = try self.offsetPtr(state.lhs_ptr, offset),
-                                .rhs_ptr = try self.offsetPtr(state.rhs_ptr, offset),
-                                .layout_idx = field.layout,
-                                .out = &state.field_out,
-                            } });
-                        }
-                    }
-                },
-                .struct_combine => |state| {
-                    const wip = self.wip orelse return error.CompilationFailed;
-                    state.acc = wip.bin(.@"and", state.acc, state.field_out, "") catch return error.CompilationFailed;
-                    state.index += 1;
-                    try work.append(wa, .{ .struct_step = state });
-                },
-                .list_finish => |state| try self.emitListEqualFinish(state),
-                .tag_case => |state| try self.emitTagEqualCase(state, wa, &work),
-                .tag_case_after => |state| try self.emitTagEqualCaseAfter(state, wa, &work),
+    fn materializeDynOperand(self: *MonoLlvmCodeGen, local: LocalId) Error!void {
+        try self.materializeLocalIfDeferred(local);
+    }
+
+    /// An index operand's `i32` value: the immediate, or the `u32` local
+    /// holding it.
+    fn dynIndexValue(self: *MonoLlvmCodeGen, index: lir.LIR.DynIndex) Error!LlvmBuilder.Value {
+        return switch (index) {
+            .immediate => |value| try self.intValue(.i32, value),
+            .local => |local| try self.loadLocalScalar(local, .u32),
+        };
+    }
+
+    fn emitDyn(self: *MonoLlvmCodeGen, target_or_null: ?LocalId, op: lir.LIR.DynOp) Error!void {
+        try lir.DynOps.Operands.of(op).each(self.store, self, materializeDynOperand);
+        if (op == .frame_alloc) return self.emitDynFrameAlloc();
+        const target = target_or_null orelse llvmInvariantFmt("dyn {s} has no target", .{@tagName(op)});
+        const builder, const wip = try self.builderAndWip();
+        const ptr_ty = try self.ptrType();
+        switch (op) {
+            .frame_alloc => unreachable, // handled above
+            .table_entry => |entry| {
+                const table = try self.wordValue(entry.table);
+                const word_ptr = try self.offsetPtr(table, lir.LIR.tableEntryOffset(entry.index, self.targetWordSize()));
+                if (self.localLayout(target) == .u32) {
+                    // A field's or variant's position: the word's low 32 bits.
+                    const position = wip.load(.normal, .i32, word_ptr, LlvmBuilder.Alignment.fromByteUnits(4), "") catch return error.OutOfMemory;
+                    try self.prepareLocalWrite(target);
+                    try self.storeLocalInt(target, position, .u32);
+                } else {
+                    try self.bindWord(target, try self.loadPointer(word_ptr));
+                }
+            },
+            .copy => |c| try self.emitDescCopy(c.desc, try self.targetAddress(target), try self.bytesAddress(c.src)),
+            .field_addr => |f| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_field_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{
+                try self.wordValue(f.desc),
+                try self.bytesAddress(f.base),
+                try self.dynIndexValue(f.field_index),
+            })),
+            .list_item_addr => |e| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_list_item_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i64 }, &.{
+                try self.wordValue(e.elem_desc),
+                try self.bytesAddress(e.list),
+                try self.loadLocalScalar(e.index, .u64),
+            })),
+            .box_payload_addr => |b| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_box_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty }, &.{
+                try self.wordValue(b.desc),
+                try self.bytesAddress(b.box),
+            })),
+            .tag_discriminant => |t| {
+                const discriminant = try self.callBoxyRuntime("roc_desc_tag_discriminant", .i32, &.{ ptr_ty, ptr_ty }, &.{ try self.wordValue(t.desc), try self.bytesAddress(t.base) });
+                try self.prepareLocalWrite(target);
+                try self.storeLocalInt(target, discriminant, self.localLayout(target));
+            },
+            .tag_payload_addr => |t| try self.bindComponentAddress(target, try self.callBoxyRuntime("roc_desc_tag_payload_addr", ptr_ty, &.{ ptr_ty, ptr_ty, .i32 }, &.{
+                try self.wordValue(t.desc),
+                try self.bytesAddress(t.base),
+                try self.intValue(.i32, t.payload_index),
+            })),
+            .record => |r| {
+                const fields = try self.dynLocalArray(r.fields, .bytes);
+                _ = try self.callBoxyRuntime("roc_desc_build_record", .void, &.{ ptr_ty, ptr_ty, .i32, ptr_ty }, &.{
+                    try self.wordValue(r.desc),
+                    try self.targetAddress(target),
+                    try self.intValue(.i32, r.fields.len),
+                    fields,
+                });
+            },
+            .record_update => |u| {
+                const values = try self.dynLocalArray(u.values, .bytes);
+                _ = try self.callBoxyRuntime("roc_desc_update_record", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty, .i32, ptr_ty }, &.{
+                    try self.wordValue(u.base_desc),
+                    try self.bytesAddress(u.base),
+                    try self.wordValue(u.desc),
+                    try self.targetAddress(target),
+                    try self.wordValue(u.plan),
+                    try self.intValue(.i32, u.values.len),
+                    values,
+                });
+            },
+            .tag => |t| {
+                const payloads = try self.dynLocalArray(t.payloads, .bytes);
+                _ = try self.callBoxyRuntime("roc_desc_build_tag", .void, &.{ ptr_ty, .i32, ptr_ty, .i32, ptr_ty }, &.{
+                    try self.wordValue(t.desc),
+                    try self.dynIndexValue(t.discriminant),
+                    try self.targetAddress(target),
+                    try self.intValue(.i32, t.payloads.len),
+                    payloads,
+                });
+            },
+            .list => |l| {
+                const elems = try self.dynLocalArray(l.elems, .bytes);
+                _ = try self.callBoxyRuntime("roc_desc_build_list", .void, &.{ ptr_ty, ptr_ty, .i32, ptr_ty }, &.{
+                    try self.wordValue(l.elem_desc),
+                    try self.targetAddress(target),
+                    try self.intValue(.i32, l.elems.len),
+                    elems,
+                });
+            },
+            .slot_alloc => |s| _ = try self.callBoxyRuntime("roc_desc_slot_alloc", .void, &.{ ptr_ty, ptr_ty }, &.{
+                try self.wordValue(s.desc),
+                try self.targetAddress(target),
+            }),
+            .slot_store => |s| _ = try self.callBoxyRuntime("roc_desc_slot_store", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(s.desc),
+                try self.bytesAddress(s.slot),
+                try self.bytesAddress(s.value),
+                try self.targetAddress(target),
+            }),
+            .box => |b| _ = try self.callBoxyRuntime("roc_desc_build_box", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(b.desc),
+                try self.targetAddress(target),
+                try self.bytesAddress(b.payload),
+            }),
+            .eq => |e| {
+                const equal = try self.callBoxyRuntime("roc_desc_eq", .i8, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                    try self.wordValue(e.desc),
+                    try self.bytesAddress(e.lhs),
+                    try self.bytesAddress(e.rhs),
+                });
+                try self.prepareLocalWrite(target);
+                try self.storeLocalBool(target, wip.icmp(.ne, equal, try self.intValue(.i8, 0), "") catch return error.OutOfMemory);
+            },
+            .hash => |h| {
+                // The hasher's state is its first word.
+                const seed = wip.load(.normal, .i64, try self.bytesAddress(h.hasher), LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
+                const hashed = try self.callBoxyRuntime("roc_desc_hash", .i64, &.{ ptr_ty, .i64, ptr_ty }, &.{
+                    try self.wordValue(h.desc),
+                    seed,
+                    try self.bytesAddress(h.value),
+                });
+                _ = wip.store(.normal, hashed, try self.targetAddress(target), LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
+            },
+            .inspect => |i| _ = try self.callBoxyRuntime("roc_desc_inspect", .void, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.targetAddress(target),
+                try self.wordValue(i.desc),
+                try self.wordValue(i.names),
+                try self.bytesAddress(i.value),
+            }),
+            .call_erased => |c| {
+                const closure_ptr = try self.loadPointer(try self.bytesAddress(c.closure));
+                const fn_ptr = try self.loadPointer(closure_ptr);
+                const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+                const args_ptr = if (c.args) |args| try self.bytesAddress(args) else try self.nullPtr();
+                if (c.deferred) {
+                    // The pending call owns the closure reference ARC
+                    // moved or retained for it and a copy of the argument
+                    // record; an owned call's reference is passed on to the
+                    // callee as its reuse input.
+                    const usize_ty = self.ptrSizedIntType();
+                    const args_len = if (c.args) |args|
+                        if (self.localDyn(args)) |dyn|
+                            try self.loadDescField(try self.wordValue(dyn.desc), desc_size_offset)
+                        else
+                            try self.intValue(usize_ty, self.layoutByteSize(self.localLayout(args)))
+                    else
+                        try self.intValue(usize_ty, 0);
+                    try self.callBuiltinVoid(.native_callable_defer, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, usize_ty, .i8 }, &.{ try self.pendingCell(), fn_ptr, closure_ptr, args_ptr, args_len, try self.intValue(.i8, @intFromBool(c.reuse_closure)) });
+                } else {
+                    const ret_ptr = if (self.localDyn(target) == null and self.layoutByteSize(self.localLayout(target)) == 0)
+                        try self.nullPtr()
+                    else
+                        try self.targetAddress(target);
+                    // The runtime makes every call the callee leaves pending
+                    // before it returns. An owned call transfers the closure
+                    // allocation as the callee's reuse input.
+                    const reuse_ptr = if (c.reuse_closure) closure_ptr else try self.nullPtr();
+                    try self.callBuiltinVoid(.native_callable_call, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{ fn_ptr, ret_ptr, args_ptr, capture_ptr, reuse_ptr });
+                }
+                try self.emitDrivePending(c.drive, target);
+            },
+            .closure => |c| {
+                const worker = self.proc_registry.get(@backingInt(c.proc)) orelse return error.CompilationFailed;
+                // Generated code reserves no hot-reload header before an
+                // erased callable's captures.
+                if (c.reuse) |reuse| {
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty }, &.{
+                        worker.toValue(builder),
+                        try self.bytesAddress(c.capture),
+                        try self.wordValue(reuse),
+                        try self.intValue(.i8, @intFromBool(c.reuse_unique)),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
+                    }));
+                } else {
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                        worker.toValue(builder),
+                        try self.bytesAddress(c.capture),
+                        try self.nullPtr(),
+                        try self.nullPtr(),
+                    }));
+                }
+            },
+            .view => |v| try self.bindComponentAddress(target, try self.wordValue(v.address)),
+            .adapt => |a| _ = try self.callBoxyRuntime("roc_desc_adapt", .void, &.{ ptr_ty, ptr_ty, ptr_ty }, &.{
+                try self.wordValue(a.plan),
+                try self.targetAddress(target),
+                try self.bytesAddress(a.src),
+            }),
+        }
+    }
+
+    /// The runtime list operation a list low-level a `.boxy` generic body
+    /// emits maps to.
+    fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
+        return switch (op) {
+            .list_capacity => .capacity,
+            .list_slack_unique => .slack_unique,
+            .list_owned_unique => .owned_unique,
+            .list_get_unsafe => .get_unsafe,
+            .list_append_unsafe => .append_unsafe,
+            .list_concat => .concat,
+            .list_append_range_within => .append_range_within,
+            .list_copy_range_within => .copy_range_within,
+            .list_append_range_within_unsafe => .append_range_within_unsafe,
+            .list_append_sublist => .append_sublist,
+            .list_prepend => .prepend,
+            .list_swap => .swap,
+            .list_map_can_reuse => .map_can_reuse,
+            .list_item_size_at_most => .item_size_at_most,
+            .list_map_cast_unsafe => .map_cast_unsafe,
+            .list_map_extract_unsafe, .list_move_out_unsafe => .map_extract_unsafe,
+            .list_map_write_unsafe => .map_write_unsafe,
+            .list_sublist => .sublist,
+            .list_sublist_borrowed => .sublist_borrowed,
+            .list_drop_at => .drop_at,
+            .list_replace_unsafe => .replace_unsafe,
+            .list_set => .set,
+            .list_set_in_place_unsafe => .set_in_place_unsafe,
+            .list_with_capacity => .with_capacity,
+            .list_reserve => .reserve,
+            .list_reserve_for_append => .reserve_for_append,
+            .list_clear => .clear,
+            .list_release_excess_capacity => .release_excess_capacity,
+            .list_take_first => .take_first,
+            .list_take_last => .take_last,
+            .list_reverse => .reverse,
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetched, .list_prefetch, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_map_prepare_reuse, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => null,
+        };
+    }
+
+    /// A list operation a `.boxy` generic body emits: its last argument is
+    /// the element descriptor, and its list, element, and result operands
+    /// may be dynamic locals, read and written through their addresses.
+    fn emitDynElemLowLevel(self: *MonoLlvmCodeGen, target: LocalId, op: lir.LowLevel, args: LocalSpan, extra: lir.LIR.LowLevelExtra) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        const all_args = self.store.getLocalSpan(args);
+        if (all_args.len == 0) llvmInvariantFmt("{s} with an element descriptor has no arguments", .{@tagName(op)});
+        try self.materializeLocalSpanIfDeferred(all_args);
+        const elem_desc = GuardedList.at(all_args, all_args.len - 1);
+        const list_size = RocList.word_count * self.targetWordSize();
+
+        switch (op) {
+            .list_prefetch => return,
+            .list_len => {
+                const len = try self.loadUsize(try self.offsetPtr(try self.bytesAddress(GuardedList.at(all_args, 0)), self.rocListLenOffset()));
+                try self.prepareLocalWrite(target);
+                return self.storeLocalScalar(target, self.localLayout(target), len);
+            },
+            .list_map_prepare_reuse => {
+                const src = try self.bytesAddress(GuardedList.at(all_args, 0));
+                return self.copyBytes(try self.targetAddress(target), src, list_size, self.targetPointerAlignment());
+            },
+            .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_capacity, .list_get_unsafe, .list_prefetched, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_box, .box_unbox, .box_unbox_borrowed, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
+        }
+        const list_op = boxyListOp(op) orelse llvmInvariantFmt("low-level {s} has no element-descriptor form", .{@tagName(op)});
+        if (list_op == .map_can_reuse and !extra.interchangeable.get(self.layouts().targetUsize())) {
+            // The in-place branch is statically dead on this width.
+            try self.prepareLocalWrite(target);
+            return self.storeLocalInt(target, try self.intValue(.i8, 0), self.localLayout(target));
+        }
+
+        const abi = self.boxyAbi();
+        const req = try self.allocEntryBlockSlot(.i8, abi.requestSize(), LlvmBuilder.Alignment.fromByteUnits(8), "list_op");
+        const i32_align = LlvmBuilder.Alignment.fromByteUnits(4);
+        _ = wip.store(.normal, try self.intValue(.i32, @backingInt(list_op)), req, i32_align) catch return error.OutOfMemory;
+        _ = wip.store(.normal, try self.intValue(.i32, extra.unique_args & 3), try self.offsetPtr(req, 4), i32_align) catch return error.OutOfMemory;
+        try self.storePointer(try self.offsetPtr(req, abi.requestPointer(.elem)), try self.wordValue(elem_desc));
+        inline for (.{ .out_value, .ret_desc, .list, .list2, .element }) |field| {
+            try self.storePointer(try self.offsetPtr(req, abi.requestPointer(field)), try self.nullPtr());
+        }
+
+        const Operands = struct { list: ?u32 = 0, list2: ?u32 = null, element: ?u32 = null, n: [3]?u32 = .{ null, null, null } };
+        const operands: Operands = switch (list_op) {
+            .capacity, .slack_unique, .owned_unique, .map_can_reuse, .map_cast_unsafe, .clear, .release_excess_capacity, .reverse => .{},
+            .get_unsafe, .map_extract_unsafe, .item_size_at_most, .drop_at, .reserve, .reserve_for_append, .take_first, .take_last => .{ .n = .{ 1, null, null } },
+            .append_unsafe, .prepend => .{ .element = 1 },
+            .concat => .{ .list2 = 1 },
+            .append_range_within, .append_range_within_unsafe, .swap => .{ .n = .{ 1, 2, null } },
+            .copy_range_within => .{ .n = .{ 1, 2, 3 } },
+            .append_sublist => .{ .list2 = 1, .n = .{ 2, 3, null } },
+            .map_write_unsafe, .replace_unsafe, .set, .set_in_place_unsafe => .{ .element = 2, .n = .{ 1, null, null } },
+            .with_capacity => .{ .list = null, .n = .{ 0, null, null } },
+            // The `{ len, start }` record argument is read below.
+            .sublist, .sublist_borrowed => .{},
+        };
+        inline for (.{ "list", "list2", "element" }) |field| {
+            if (@field(operands, field)) |index| {
+                try self.storePointer(try self.offsetPtr(req, abi.requestPointer(@field(BoxyAbi.RequestPointer, field))), try self.bytesAddress(GuardedList.at(all_args, index)));
             }
         }
-        return result;
-    }
-
-    /// Handles one `.eval` work item: emits the leaf comparison directly, or, for
-    /// composite layouts, emits the per-layout scaffolding and queues child
-    /// comparisons plus the continuation that consumes them.
-    fn emitValueEqualNode(
-        self: *MonoLlvmCodeGen,
-        lhs_ptr: LlvmBuilder.Value,
-        rhs_ptr: LlvmBuilder.Value,
-        layout_idx: layout.Idx,
-        out: *LlvmBuilder.Value,
-        wa: Allocator,
-        work: *std.ArrayList(EqWork),
-    ) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const layout_val = self.layoutValue(layout_idx);
-        if (self.layoutByteSize(layout_idx) == 0) {
-            out.* = builder.intValue(.i1, 1) catch return error.OutOfMemory;
-            return;
+        const n_align = LlvmBuilder.Alignment.fromByteUnits(8);
+        for (operands.n, 0..) |maybe_index, n| {
+            const index = maybe_index orelse continue;
+            const value = try self.loadLocalScalar(GuardedList.at(all_args, index), .u64);
+            _ = wip.store(.normal, value, try self.offsetPtr(req, abi.requestN() + @as(u32, @intCast(n * 8))), n_align) catch return error.OutOfMemory;
         }
-        switch (layout_val.tag) {
-            .scalar => switch (layout_val.getScalar().tag) {
-                .str => {
-                    const lhs_fields = try self.rocStrArgFields(lhs_ptr);
-                    const rhs_fields = try self.rocStrArgFields(rhs_ptr);
-                    out.* = try self.callBuiltin(builtinSymbol(LowLevelBuiltins.strOp(.str_is_eq)), .i1, &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{ lhs_fields[0], lhs_fields[1], lhs_fields[2], rhs_fields[0], rhs_fields[1], rhs_fields[2] });
-                },
-                .int, .frac, .opaque_ptr, .vector => {
-                    const lhs = try self.loadScalar(lhs_ptr, layout_idx);
-                    const rhs = try self.loadScalar(rhs_ptr, layout_idx);
-                    out.* = if (isFloatLayout(layout_idx))
-                        wip.fcmp(.normal, .oeq, lhs, rhs, "") catch return error.OutOfMemory
-                    else
-                        wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
-                },
-            },
-            .box, .erased_callable => {
-                const lhs = try self.loadPointer(lhs_ptr);
-                const rhs = try self.loadPointer(rhs_ptr);
-                out.* = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
-            },
-            .erased_box => return error.CompilationFailed,
-            .list, .list_of_zst => try self.emitListEqual(lhs_ptr, rhs_ptr, layout_idx, out, wa, work),
-            .struct_ => {
-                const info = self.layouts().getStructInfo(layout_val);
-                const state = try self.allocator.create(StructEqState);
-                state.* = .{
-                    .lhs_ptr = lhs_ptr,
-                    .rhs_ptr = rhs_ptr,
-                    .layout_idx = layout_idx,
-                    .field_count = info.fields.len,
-                    .index = 0,
-                    .acc = builder.intValue(.i1, 1) catch return error.OutOfMemory,
-                    .field_out = undefined,
-                    .out = out,
-                };
-                try work.append(wa, .{ .struct_step = state });
-            },
-            .tag_union => try self.emitTagEqual(lhs_ptr, rhs_ptr, layout_idx, out, wa, work),
-            .box_of_zst, .closure, .zst, .ptr => out.* = try self.emitMemoryEqual(lhs_ptr, rhs_ptr, self.layoutByteSize(layout_idx)),
-        }
-    }
-
-    fn emitMemoryEqual(self: *MonoLlvmCodeGen, lhs_ptr: LlvmBuilder.Value, rhs_ptr: LlvmBuilder.Value, size: u32) Error!LlvmBuilder.Value {
-        const builder, const wip = try self.builderAndWip();
-        var result = builder.intValue(.i1, 1) catch return error.OutOfMemory;
-        var offset: u32 = 0;
-        while (offset < size) : (offset += 1) {
-            const lhs = wip.load(.normal, .i8, try self.offsetPtr(lhs_ptr, offset), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const rhs = wip.load(.normal, .i8, try self.offsetPtr(rhs_ptr, offset), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-            const eq = wip.icmp(.eq, lhs, rhs, "") catch return error.OutOfMemory;
-            result = wip.bin(.@"and", result, eq, "") catch return error.OutOfMemory;
-        }
-        return result;
-    }
-
-    /// Emits the list-equality length check and loop scaffolding, then queues the
-    /// element comparison and the `.list_finish` continuation. For empty/ZST
-    /// element layouts the length comparison is the whole result.
-    fn emitListEqual(
-        self: *MonoLlvmCodeGen,
-        lhs_ptr: LlvmBuilder.Value,
-        rhs_ptr: LlvmBuilder.Value,
-        list_layout: layout.Idx,
-        out: *LlvmBuilder.Value,
-        wa: Allocator,
-        work: *std.ArrayList(EqWork),
-    ) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const abi = self.boxyAwareBuiltinListAbi(list_layout);
-        const lhs_len = try self.loadUsize(try self.offsetPtr(lhs_ptr, self.rocListLenOffset()));
-        const rhs_len = try self.loadUsize(try self.offsetPtr(rhs_ptr, self.rocListLenOffset()));
-        const len_eq = wip.icmp(.eq, lhs_len, rhs_len, "") catch return error.OutOfMemory;
-        if (abi.elem_size == 0) {
-            out.* = len_eq;
-            return;
+        if (list_op == .sublist or list_op == .sublist_borrowed) {
+            const record = GuardedList.at(all_args, 1);
+            const record_layout = self.layoutValue(self.localLayout(record));
+            if (record_layout.tag != .struct_) llvmInvariantFmt("list_sublist's second argument is not a {{ len, start }} record", .{});
+            const record_idx = record_layout.getStruct().idx;
+            const record_ptr = try self.bytesAddress(record);
+            const len_ptr = try self.offsetPtr(record_ptr, self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0));
+            const start_ptr = try self.offsetPtr(record_ptr, self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1));
+            const start = wip.load(.normal, .i64, start_ptr, n_align, "") catch return error.OutOfMemory;
+            const len = wip.load(.normal, .i64, len_ptr, n_align, "") catch return error.OutOfMemory;
+            _ = wip.store(.normal, start, try self.offsetPtr(req, abi.requestN()), n_align) catch return error.OutOfMemory;
+            _ = wip.store(.normal, len, try self.offsetPtr(req, abi.requestN() + 8), n_align) catch return error.OutOfMemory;
         }
 
-        const result_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "list_eq");
-        try self.storeBool(result_ptr, len_eq);
-        const header = wip.block(0, "list_eq_header") catch return error.OutOfMemory;
-        const body = wip.block(0, "list_eq_body") catch return error.OutOfMemory;
-        const after = wip.block(0, "list_eq_after") catch return error.OutOfMemory;
-        const idx_ptr = try self.allocEntryBlockSlot(.i64, 1, LlvmBuilder.Alignment.fromByteUnits(8), "list_eq_idx");
-        _ = wip.store(.normal, builder.intValue(.i64, 0) catch return error.OutOfMemory, idx_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.OutOfMemory;
-        try brAndEnter(wip, header);
-        const so_far = try self.loadBool(result_ptr);
-        const idx = wip.load(.normal, .i64, idx_ptr, LlvmBuilder.Alignment.fromByteUnits(8), "") catch return error.OutOfMemory;
-        const idx_usize = try self.coerceScalar(idx, self.ptrSizedIntType(), false);
-        const in_range = wip.icmp(.ult, idx_usize, lhs_len, "") catch return error.OutOfMemory;
-        const continue_loop = wip.bin(.@"and", so_far, in_range, "") catch return error.OutOfMemory;
-        _ = wip.brCond(continue_loop, body, after, .none) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = body };
-        const lhs_bytes = try self.loadPointer(lhs_ptr);
-        const rhs_bytes = try self.loadPointer(rhs_ptr);
-        const offset = wip.bin(.mul, idx_usize, builder.intValue(self.ptrSizedIntType(), abi.elem_size) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-
-        const state = try self.allocator.create(ListEqState);
-        state.* = .{
-            .result_ptr = result_ptr,
-            .idx_ptr = idx_ptr,
-            .idx = idx,
-            .header = header,
-            .after = after,
-            .elem_out = undefined,
-            .out = out,
+        // An element, or a dynamic record, is written straight to its target;
+        // every other result to fresh storage first.
+        const dynamic_target = self.localDyn(target) != null;
+        const direct = list_op == .get_unsafe or list_op == .map_extract_unsafe or (list_op == .replace_unsafe and dynamic_target);
+        const staged: ?LlvmBuilder.Value = if (direct) null else blk: {
+            const size: u32 = if (dynamic_target) list_size else self.layoutByteSize(self.localLayout(target));
+            break :blk try self.allocEntryBlockSlot(.i8, @max(size, 1), LlvmBuilder.Alignment.fromByteUnits(collections.max_roc_alignment.toByteUnits()), "list_op_out");
         };
-        try work.append(wa, .{ .list_finish = state });
-        try work.append(wa, .{ .eval = .{
-            .lhs_ptr = wip.gep(.inbounds, .i8, lhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
-            .rhs_ptr = wip.gep(.inbounds, .i8, rhs_bytes, &.{offset}, "") catch return error.OutOfMemory,
-            .layout_idx = abi.elem_layout_idx orelse .zst,
-            .out = &state.elem_out,
-        } });
-    }
-
-    /// Stores the element comparison, emits the loop-tail increment, and loads
-    /// the final list-equality result after the loop.
-    fn emitListEqualFinish(self: *MonoLlvmCodeGen, state: *ListEqState) Error!void {
-        defer self.allocator.destroy(state);
-        const builder, const wip = try self.builderAndWip();
-        try self.storeBool(state.result_ptr, state.elem_out);
-        const next = wip.bin(.add, state.idx, builder.intValue(.i64, 1) catch return error.OutOfMemory, "") catch return error.CompilationFailed;
-        _ = wip.store(.normal, next, state.idx_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
-        _ = wip.br(state.header) catch return error.CompilationFailed;
-        wip.cursor = .{ .block = state.after };
-        state.out.* = try self.loadBool(state.result_ptr);
-    }
-
-    /// Emits the tag-equality discriminant check and case-block scaffolding, then
-    /// queues processing of the first variant case.
-    fn emitTagEqual(
-        self: *MonoLlvmCodeGen,
-        lhs_ptr: LlvmBuilder.Value,
-        rhs_ptr: LlvmBuilder.Value,
-        tag_layout: layout.Idx,
-        out: *LlvmBuilder.Value,
-        wa: Allocator,
-        work: *std.ArrayList(EqWork),
-    ) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const lhs_disc = try self.readTagDiscriminant(lhs_ptr, tag_layout);
-        const rhs_disc = try self.readTagDiscriminant(rhs_ptr, tag_layout);
-        const disc_eq = wip.icmp(.eq, lhs_disc, rhs_disc, "") catch return error.OutOfMemory;
-        const data = self.layouts().getTagUnionData(self.layoutValue(tag_layout).getTagUnion().idx);
-        const variants = self.layouts().getTagUnionVariants(data);
-        const result_ptr = try self.allocEntryBlockSlot(.i8, 1, LlvmBuilder.Alignment.fromByteUnits(1), "tag_eq");
-        try self.storeBool(result_ptr, disc_eq);
-        const after = wip.block(0, "tag_eq_after") catch return error.OutOfMemory;
-        const mismatch = wip.block(0, "tag_eq_mismatch") catch return error.OutOfMemory;
-        const case_blocks = try self.allocator.alloc(LlvmBuilder.Function.Block.Index, variants.len);
-        for (case_blocks) |*block| block.* = wip.block(0, "tag_eq_case") catch return error.OutOfMemory;
-        _ = wip.brCond(disc_eq, case_blocks[0], mismatch, .then_likely) catch return error.OutOfMemory;
-        wip.cursor = .{ .block = mismatch };
-        try self.storeBool(result_ptr, builder.intValue(.i1, 0) catch return error.OutOfMemory);
-        _ = wip.br(after) catch return error.OutOfMemory;
-
-        const state = try self.allocator.create(TagEqState);
-        state.* = .{
-            .lhs_ptr = lhs_ptr,
-            .rhs_ptr = rhs_ptr,
-            .layout_idx = tag_layout,
-            .lhs_disc = lhs_disc,
-            .result_ptr = result_ptr,
-            .after = after,
-            .case_blocks = case_blocks,
-            .index = 0,
-            .payload_out = undefined,
-            .out = out,
-        };
-        try work.append(wa, .{ .tag_case = state });
-    }
-
-    /// Emits the discriminant guard for one variant case block and queues the
-    /// payload comparison plus the `.tag_case_after` continuation.
-    fn emitTagEqualCase(self: *MonoLlvmCodeGen, state: *TagEqState, wa: Allocator, work: *std.ArrayList(EqWork)) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const i = state.index;
-        wip.cursor = .{ .block = state.case_blocks[i] };
-        if (i + 1 < state.case_blocks.len) {
-            const is_case = wip.icmp(.eq, state.lhs_disc, builder.intValue(state.lhs_disc.typeOfWip(wip), i) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
-            const next_case = state.case_blocks[i + 1];
-            const do_case = wip.block(0, "tag_eq_do_case") catch return error.OutOfMemory;
-            _ = wip.brCond(is_case, do_case, next_case, .none) catch return error.OutOfMemory;
-            wip.cursor = .{ .block = do_case };
+        const out = staged orelse try self.targetAddress(target);
+        try self.storePointer(try self.offsetPtr(req, abi.requestPointer(.out)), out);
+        if (list_op == .replace_unsafe) {
+            if (dynamic_target) {
+                try self.storePointer(try self.offsetPtr(req, abi.requestPointer(.ret_desc)), try self.wordValue(self.localDyn(target).?.desc));
+            } else {
+                const record_layout = self.layoutValue(self.localLayout(target));
+                if (record_layout.tag != .struct_) llvmInvariantFmt("list_replace_unsafe result is not a record", .{});
+                const record_idx = record_layout.getStruct().idx;
+                const first = self.layoutValue(self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0));
+                const first_is_list = first.tag == .list or first.tag == .list_of_zst;
+                const first_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0);
+                const second_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1);
+                try self.storePointer(try self.offsetPtr(req, abi.requestPointer(.out)), try self.offsetPtr(out, if (first_is_list) first_offset else second_offset));
+                try self.storePointer(try self.offsetPtr(req, abi.requestPointer(.out_value)), try self.offsetPtr(out, if (first_is_list) second_offset else first_offset));
+            }
         }
-        const data = self.layouts().getTagUnionData(self.layoutValue(state.layout_idx).getTagUnion().idx);
-        const variants = self.layouts().getTagUnionVariants(data);
-        const payload_layout = variants.get(@intCast(i)).payload_layout;
-        try work.append(wa, .{ .tag_case_after = state });
-        try work.append(wa, .{ .eval = .{
-            .lhs_ptr = state.lhs_ptr,
-            .rhs_ptr = state.rhs_ptr,
-            .layout_idx = payload_layout,
-            .out = &state.payload_out,
-        } });
+
+        _ = try self.callBoxyRuntime("roc_desc_list_op", .void, &.{try self.ptrType()}, &.{req});
+
+        const result = staged orelse return;
+        if (dynamic_target) {
+            // A list result of a dynamic target: move the list's words into
+            // its storage.
+            return self.copyBytes(try self.targetAddress(target), result, list_size, self.targetPointerAlignment());
+        }
+        try self.prepareLocalWrite(target);
+        const target_layout = self.localLayout(target);
+        try self.defineLocalFromMemory(target, result, self.layoutDataSize(target_layout), self.alignmentForLayout(target_layout));
     }
 
-    /// Stores one variant's payload comparison and branches to `after`, then
-    /// either queues the next case or finishes the tag equality by loading the
-    /// accumulated result.
-    fn emitTagEqualCaseAfter(self: *MonoLlvmCodeGen, state: *TagEqState, wa: Allocator, work: *std.ArrayList(EqWork)) Error!void {
-        const wip = self.wip orelse return error.CompilationFailed;
-        try self.storeBool(state.result_ptr, state.payload_out);
-        _ = wip.br(state.after) catch return error.OutOfMemory;
-        if (state.index + 1 < state.case_blocks.len) {
-            state.index += 1;
-            try work.append(wa, .{ .tag_case = state });
-        } else {
-            wip.cursor = .{ .block = state.after };
-            state.out.* = try self.loadBool(state.result_ptr);
-            self.allocator.free(state.case_blocks);
-            self.allocator.destroy(state);
+    /// Bind the parameters of a procedure entered through the uniform
+    /// erased-callable ABI as a `.boxy` worker receives it
+    /// (`ProcAbi.erased_record`): its dynamic result is the result pointer,
+    /// its one explicit parameter is the argument record (a dynamic
+    /// parameter is that record's address), its capture parameter holds
+    /// the capture pointer, and its reuse parameter the transferred
+    /// allocation.
+    fn bindErasedRecordParams(self: *MonoLlvmCodeGen, proc: LirProcSpec) Error!void {
+        const ret_ptr = self.ret_ptr_arg orelse return error.CompilationFailed;
+        const args_ptr = self.args_ptr_arg orelse return error.CompilationFailed;
+        const capture_ptr = self.capture_ptr_arg orelse return error.CompilationFailed;
+        if (proc.dyn_result) |result| try self.storePointer(self.slot(result).ptr, ret_ptr);
+        const capture_param = proc.erased_capture_arg orelse llvmInvariantFmt("erased_record proc has no capture parameter", .{});
+        const params = self.store.getLocalSpan(proc.args);
+        var explicit_count: usize = 0;
+        for (0..params.len) |i| {
+            const param = GuardedList.at(params, i);
+            if (param == capture_param) {
+                try self.storePointer(self.slot(param).ptr, capture_ptr);
+                continue;
+            }
+            if (proc.erased_reuse_arg != null and param == proc.erased_reuse_arg.?) {
+                try self.storePointer(self.slot(param).ptr, self.reuse_ptr_arg orelse return error.CompilationFailed);
+                continue;
+            }
+            explicit_count += 1;
+            if (self.localDyn(param) != null) {
+                try self.storePointer(self.slot(param).ptr, args_ptr);
+                continue;
+            }
+            const param_layout = self.localLayout(param);
+            if (self.layoutByteSize(param_layout) == 0) continue;
+            try self.defineLocalFromMemory(param, args_ptr, self.layoutDataSize(param_layout), self.alignmentForLayout(param_layout));
         }
+        if (explicit_count > 1) llvmInvariantFmt("erased_record proc has {d} explicit parameters", .{explicit_count});
     }
 
     fn emitExplicitRcStmt(
         self: *MonoLlvmCodeGen,
         helper: lir.LIR.RcHelper,
-        op: layout.RcOp,
         local: LocalId,
         count: u32,
         atomicity: RcAtomicity,
     ) Error!void {
-        switch (helper) {
-            .concrete => |helper_key| try self.emitConcreteRcForLocal(helper_key, local, count, atomicity),
-            .boxy => |desc| {
-                const ptr_ty = try self.ptrType();
-                try self.callBoxyVoid(
-                    "roc_boxy_drop",
-                    &.{ ptr_ty, .i32, ptr_ty, .i8, .i32, .i8 },
-                    &.{
-                        try self.boxyValuePtr(local),
-                        try self.boxyInt(.i32, @backingInt(self.localLayout(local))),
-                        try self.resolveBoxyDesc(desc),
-                        try self.boxyInt(.i8, @backingInt(op)),
-                        try self.boxyInt(.i32, count),
-                        try self.boxyInt(.i8, @backingInt(atomicity)),
-                    },
-                );
-            },
-        }
+        try self.emitConcreteRcForLocal(helper.concrete, local, count, atomicity);
     }
 
     /// Byte size of the shared scratch slot for RC-helper arguments; values
     /// wider than this pass their own slot pointer as before.
     const rc_arg_scratch_size = 64;
+
+    fn rcUsesLocalSlot(size: u32) bool {
+        return size > rc_arg_scratch_size;
+    }
 
     fn emitRcForLocal(self: *MonoLlvmCodeGen, op: layout.RcOp, local: LocalId, count: u32, atomicity: RcAtomicity) Error!void {
         const slot_v = self.slot(local);
@@ -12338,7 +12465,7 @@ pub const MonoLlvmCodeGen = struct {
         // hot iteration. Copying into a shared per-function scratch slot at
         // the call site keeps those stores next to the (usually cold) call,
         // and the helpers only read through the pointer.
-        const rc_ptr = if (slot_v.size <= rc_arg_scratch_size) blk: {
+        const rc_ptr = if (!rcUsesLocalSlot(slot_v.size)) blk: {
             if (self.rc_arg_scratch == null) {
                 self.rc_arg_scratch = try self.allocEntryBlockSlot(
                     .i8,
@@ -12398,8 +12525,14 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn declareRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!?LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
         if (self.layouts().rcHelperPlan(helper_key) == .noop) return null;
+        return try self.declareRefcountedRcHelper(helper_key, atomicity);
+    }
+
+    /// Declare the RC helper for a layout that contains refcounted data.
+    fn declareRefcountedRcHelper(self: *MonoLlvmCodeGen, helper_key: layout.RcHelperKey, atomicity: RcAtomicity) Error!LlvmBuilder.Function.Index {
+        const builder = self.builder orelse return error.CompilationFailed;
+        std.debug.assert(self.layouts().rcHelperPlan(helper_key) != .noop);
 
         const cache_key = rcHelperCacheKey(helper_key, atomicity);
         if (self.rc_helpers.get(cache_key)) |entry| return entry.function;
@@ -12422,8 +12555,9 @@ pub const MonoLlvmCodeGen = struct {
             },
         }) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(if (is_static_data_helper) .external else .internal, builder);
-        if (is_static_data_helper and self.target.os.tag == .windows) {
+        const helper_exported = is_static_data_helper;
+        func.setLinkage(if (helper_exported) .external else .internal, builder);
+        if (helper_exported and self.target.os.tag == .windows) {
             func.ptrConst(builder).global.setDllStorageClass(.dllexport, builder);
         }
         var attrs: LlvmBuilder.FunctionAttributes.Wip = .{};
@@ -12485,8 +12619,6 @@ pub const MonoLlvmCodeGen = struct {
         const outer_args = self.args_ptr_arg;
         const outer_capture = self.capture_ptr_arg;
         const outer_reuse = self.reuse_ptr_arg;
-        const outer_ret_desc_ptr = self.ret_desc_ptr_arg;
-        const outer_runtime_ret_desc = self.current_runtime_ret_desc;
         const outer_ret_layout = self.current_ret_layout;
         const outer_slots = self.local_slots;
         defer {
@@ -12496,8 +12628,6 @@ pub const MonoLlvmCodeGen = struct {
             self.args_ptr_arg = outer_args;
             self.capture_ptr_arg = outer_capture;
             self.reuse_ptr_arg = outer_reuse;
-            self.ret_desc_ptr_arg = outer_ret_desc_ptr;
-            self.current_runtime_ret_desc = outer_runtime_ret_desc;
             self.current_ret_layout = outer_ret_layout;
             self.local_slots = outer_slots;
         }
@@ -12510,8 +12640,6 @@ pub const MonoLlvmCodeGen = struct {
         self.args_ptr_arg = null;
         self.capture_ptr_arg = null;
         self.reuse_ptr_arg = null;
-        self.ret_desc_ptr_arg = null;
-        self.current_runtime_ret_desc = null;
         self.current_ret_layout = .zst;
         self.local_slots = &.{};
 
@@ -12519,6 +12647,10 @@ pub const MonoLlvmCodeGen = struct {
         const body = wip.block(0, "rc_body") catch return error.OutOfMemory;
         const done = wip.block(0, "rc_done") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
+        // Teardown recurses through the structure it frees; an increment
+        // only reaches the refcounts the value holds directly, so it never
+        // lies on a cycle.
+        if (self.stack_checks and helper_key.op != .incref) try self.emitStackCheck(func);
 
         const value_ptr = wip.arg(0);
         const count_value: ?LlvmBuilder.Value = switch (helper_key.op) {
@@ -12552,17 +12684,17 @@ pub const MonoLlvmCodeGen = struct {
         switch (self.layouts().rcHelperPlan(helper_key)) {
             .noop => {},
             .str_incref => try self.emitRcHelperStrIncref(value_ptr, count_value.?, atomicity),
-            .str_decref => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_decref, tableAtomicity(atomicity)).symbolName()),
-            .str_free => try self.emitRcHelperStrDrop(value_ptr, builtinSymbol(LowLevelBuiltins.rcHelper(.data_ptr_free, .atomic))),
+            .str_decref => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_decref, tableAtomicity(atomicity))),
+            .str_free => try self.emitRcHelperStrDrop(value_ptr, LowLevelBuiltins.rcHelper(.data_ptr_free, .atomic)),
             .list_incref => |list_plan| try self.emitRcHelperListIncref(list_plan, value_ptr, count_value.?, atomicity),
-            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_decref, tableAtomicity(atomicity)).symbolName()),
-            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, builtinSymbol(LowLevelBuiltins.rcHelper(.list_free, .atomic))),
+            .list_decref => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_decref, tableAtomicity(atomicity))),
+            .list_free => |list_plan| try self.emitRcHelperListDrop(list_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.list_free, .atomic)),
             .box_incref => try self.emitRcHelperBoxIncref(value_ptr, count_value.?, atomicity),
-            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_decref, tableAtomicity(atomicity)).symbolName()),
-            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, builtinSymbol(LowLevelBuiltins.rcHelper(.box_free, .atomic))),
+            .box_decref => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_decref, tableAtomicity(atomicity))),
+            .box_free => |box_plan| try self.emitRcHelperBoxDrop(box_plan, value_ptr, atomicity, LowLevelBuiltins.rcHelper(.box_free, .atomic)),
             .erased_callable_incref => try self.emitRcHelperErasedCallableIncref(value_ptr, count_value.?, atomicity),
-            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_decref, tableAtomicity(atomicity)).symbolName()),
-            .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, builtinSymbol(LowLevelBuiltins.rcHelper(.erased_callable_free, .atomic))),
+            .erased_callable_decref => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_decref, tableAtomicity(atomicity))),
+            .erased_callable_free => try self.emitRcHelperErasedCallableDrop(value_ptr, LowLevelBuiltins.rcHelper(.erased_callable_free, .atomic)),
             .struct_ => |struct_plan| try self.emitRcHelperStruct(struct_plan, value_ptr, count_value, atomicity),
             .tag_union => |tag_plan| try self.emitRcHelperTagUnion(tag_plan, value_ptr, count_value, atomicity),
             .closure => |child_key| {
@@ -12587,40 +12719,40 @@ pub const MonoLlvmCodeGen = struct {
         const cap_or_alloc = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrCapacityOffset()));
         const ptr_int_ty = self.ptrSizedIntType();
         const bytes_int = wip.cast(.ptrtoint, bytes, ptr_int_ty, "") catch return error.OutOfMemory;
-        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, 1) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_tag = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, SEAMLESS_SLICE_TAG) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const slice_mask = wip.bin(.sub, builder.intValue(ptr_int_ty, 0) catch return error.OutOfMemory, slice_tag, "") catch return error.OutOfMemory;
         const owned_mask = wip.not(slice_mask, "") catch return error.OutOfMemory;
         const owned_ptr = wip.bin(.@"and", bytes_int, owned_mask, "") catch return error.OutOfMemory;
-        const slice_alloc = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, -2) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const slice_alloc = wip.bin(.@"and", cap_or_alloc, builder.intValue(ptr_int_ty, ~@as(i64, SEAMLESS_SLICE_TAG)) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const slice_ptr = wip.bin(.@"and", slice_alloc, slice_mask, "") catch return error.OutOfMemory;
         const data_ptr = wip.bin(.@"or", owned_ptr, slice_ptr, "") catch return error.OutOfMemory;
         return wip.cast(.inttoptr, data_ptr, try self.ptrType(), "") catch return error.OutOfMemory;
     }
 
-    fn increfDataPtrBuiltinName(atomicity: RcAtomicity) []const u8 {
-        return LowLevelBuiltins.rcHelper(.data_ptr_incref, tableAtomicity(atomicity)).symbolName();
+    fn increfDataPtrBuiltin(atomicity: RcAtomicity) BuiltinSymbol {
+        return LowLevelBuiltins.rcHelper(.data_ptr_incref, tableAtomicity(atomicity));
     }
 
     fn emitRcHelperStrIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
-        const builder, const wip = try self.builderAndWip();
+        const wip = self.wip orelse return error.CompilationFailed;
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(len);
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = heap_str };
         const data_ptr = try self.loadStrDataPtrForRc(value_ptr);
-        try self.callBuiltinVoid(increfDataPtrBuiltinName(atomicity), &.{ try self.ptrType(), self.ptrSizedIntType() }, &.{ data_ptr, count_value });
+        try self.callBuiltinVoid(increfDataPtrBuiltin(atomicity), &.{ try self.ptrType(), self.ptrSizedIntType() }, &.{ data_ptr, count_value });
         _ = wip.br(after) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = after };
     }
 
-    fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperStrDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_fn: BuiltinSymbol) Error!void {
         const builder, const wip = try self.builderAndWip();
         const len = try self.loadUsize(try self.offsetPtr(value_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(len);
         const heap_str = wip.block(0, "str_heap") catch return error.OutOfMemory;
         const after = wip.block(0, "str_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, after, heap_str, .else_likely) catch return error.OutOfMemory;
@@ -12628,7 +12760,7 @@ pub const MonoLlvmCodeGen = struct {
         wip.cursor = .{ .block = heap_str };
         const data_ptr = try self.loadStrDataPtrForRc(value_ptr);
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), .i32, .i1 },
             &.{
                 data_ptr,
@@ -12645,7 +12777,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
         try self.callBuiltinVoid(
-            LowLevelBuiltins.rcHelper(.list_incref, tableAtomicity(atomicity)).symbolName(),
+            LowLevelBuiltins.rcHelper(.list_incref, tableAtomicity(atomicity)),
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i1 },
             &.{
                 fields[0],
@@ -12657,7 +12789,7 @@ pub const MonoLlvmCodeGen = struct {
         );
     }
 
-    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
+    fn emitRcHelperListDrop(self: *MonoLlvmCodeGen, list_plan: layout.RcListPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_fn: BuiltinSymbol) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const fields = try self.rocListArgFields(value_ptr);
         // The element callback's C ABI carries no atomicity parameter, so the
@@ -12670,7 +12802,7 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), self.ptrSizedIntType(), self.ptrSizedIntType(), .i32, self.ptrSizedIntType(), try self.ptrType() },
             &.{
                 fields[0],
@@ -12686,13 +12818,13 @@ pub const MonoLlvmCodeGen = struct {
     fn emitRcHelperBoxIncref(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, count_value: LlvmBuilder.Value, atomicity: RcAtomicity) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
         try self.callBuiltinVoid(
-            increfDataPtrBuiltinName(atomicity),
+            increfDataPtrBuiltin(atomicity),
             &.{ try self.ptrType(), self.ptrSizedIntType() },
             &.{ payload_ptr, count_value },
         );
     }
 
-    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_name: []const u8) Error!void {
+    fn emitRcHelperBoxDrop(self: *MonoLlvmCodeGen, box_plan: layout.RcBoxPlan, value_ptr: LlvmBuilder.Value, atomicity: RcAtomicity, builtin_fn: BuiltinSymbol) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const payload_ptr = try self.loadPointer(value_ptr);
         // The payload callback's C ABI carries no atomicity parameter, so the
@@ -12703,7 +12835,7 @@ pub const MonoLlvmCodeGen = struct {
         else
             null;
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{ try self.ptrType(), .i32, try self.ptrType() },
             &.{
                 payload_ptr,
@@ -12719,16 +12851,16 @@ pub const MonoLlvmCodeGen = struct {
         // payload allocation, so the single-thread mode uses the data-pointer
         // entry directly.
         try self.callBuiltinVoid(
-            LowLevelBuiltins.rcHelper(.erased_callable_incref, tableAtomicity(atomicity)).symbolName(),
+            LowLevelBuiltins.rcHelper(.erased_callable_incref, tableAtomicity(atomicity)),
             &.{ try self.ptrType(), self.ptrSizedIntType() },
             &.{ payload_ptr, count_value },
         );
     }
 
-    fn emitRcHelperErasedCallableDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_name: []const u8) Error!void {
+    fn emitRcHelperErasedCallableDrop(self: *MonoLlvmCodeGen, value_ptr: LlvmBuilder.Value, builtin_fn: BuiltinSymbol) Error!void {
         const payload_ptr = try self.loadPointer(value_ptr);
         try self.callBuiltinVoid(
-            builtin_name,
+            builtin_fn,
             &.{try self.ptrType()},
             &.{payload_ptr},
         );
@@ -12805,12 +12937,7 @@ pub const MonoLlvmCodeGen = struct {
             16 => .i16,
             32 => .i32,
             64 => .i64,
-            else => {
-                if (builtin.mode == .debug) {
-                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
-                }
-                unreachable;
-            },
+            else => invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -12819,12 +12946,7 @@ pub const MonoLlvmCodeGen = struct {
             16 => 2,
             32 => 4,
             64 => 8,
-            else => {
-                if (builtin.mode == .debug) {
-                    invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()});
-                }
-                unreachable;
-            },
+            else => invariant("LLVM codegen invariant violated: unsupported target pointer width {d}", .{self.target.ptrBitWidth()}),
         };
     }
 
@@ -12833,27 +12955,44 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn rocListLenOffset(self: *const MonoLlvmCodeGen) u32 {
-        return self.targetWordSize();
+        return RocList.targetFieldOffset(.length, self.targetWordSize());
     }
 
     fn rocListCapacityOffset(self: *const MonoLlvmCodeGen) u32 {
-        return 2 * self.targetWordSize();
+        return RocList.targetFieldOffset(.capacity_or_alloc_ptr, self.targetWordSize());
     }
 
     fn rocStrCapacityOffset(self: *const MonoLlvmCodeGen) u32 {
-        return self.targetWordSize();
+        return RocStr.targetFieldOffset(.capacity_or_alloc_ptr, self.targetWordSize());
     }
 
     fn rocStrLenOffset(self: *const MonoLlvmCodeGen) u32 {
-        return 2 * self.targetWordSize();
+        return RocStr.targetFieldOffset(.length, self.targetWordSize());
+    }
+
+    fn rocStrSize(self: *const MonoLlvmCodeGen) u32 {
+        return RocStr.word_count * self.targetWordSize();
+    }
+
+    /// Offset of a small RocStr's final byte, which holds its flag and length.
+    fn rocStrFlagByteOffset(self: *const MonoLlvmCodeGen) u32 {
+        return RocStr.targetFlagByteOffset(self.targetWordSize());
+    }
+
+    /// The small-string flag as a bit of a RocStr's `length` word.
+    fn rocStrSmallBit(self: *const MonoLlvmCodeGen) u64 {
+        return RocStr.targetSmallStrBit(self.targetWordSize());
+    }
+
+    /// Whether a RocStr whose `length` word is `raw_len` is small. The flag is
+    /// the sign bit of `length`, so this is a signed comparison against zero.
+    fn emitRocStrLenIsSmall(self: *MonoLlvmCodeGen, raw_len: LlvmBuilder.Value) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        return wip.icmp(.slt, raw_len, builder.intValue(self.ptrSizedIntType(), 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
     }
 
     fn layouts(self: *MonoLlvmCodeGen) *const layout.Store {
         return self.layout_store orelse invariant("{s}", .{"LLVM codegen missing layout_store"});
-    }
-
-    fn boxyAwareBuiltinListAbi(self: *MonoLlvmCodeGen, list_layout: layout.Idx) layout.Store.BuiltinListAbi {
-        return self.layouts().builtinListAbi(list_layout);
     }
 
     fn layoutValue(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) layout.Layout {
@@ -12872,12 +13011,341 @@ pub const MonoLlvmCodeGen = struct {
     fn slot(self: *MonoLlvmCodeGen, local: LocalId) LocalSlot {
         const local_slot = self.local_slots[@backingInt(local)];
         if (!local_slot.allocated) {
-            if (builtin.mode == .debug) {
-                invariant("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@backingInt(local)});
+            if (self.value_plan.rep(local) != .memory) {
+                invariant("LLVM codegen invariant violated: local {d} is planned as SSA values, but its address was requested", .{@backingInt(local)});
             }
-            unreachable;
+            invariant("LLVM codegen invariant violated: local {d} was not in the current proc frame", .{@backingInt(local)});
         }
         return local_slot;
+    }
+
+    /// Whether a local of `layout_idx` can be carried as SSA values: a Bool,
+    /// an integer, a float, a Dec, or a SIMD vector.
+    fn hasSsaCarrier(layout_idx: layout.Idx) bool {
+        return switch (layout_idx) {
+            .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64 => true,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+            .str, .zst, .opaque_ptr, _ => false,
+        };
+    }
+
+    /// The LLVM type an SSA local of `layout_idx` carries. A Bool is an `i1`;
+    /// every other carrier is the layout's own memory type.
+    fn ssaTypeForLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!LlvmBuilder.Type {
+        if (layout_idx == .bool) return .i1;
+        if (self.simdVectorForLayout(layout_idx)) |vector| return self.simdType(vector);
+        return self.scalarType(layout_idx);
+    }
+
+    fn isSsaLocal(self: *const MonoLlvmCodeGen, local: LocalId) bool {
+        return self.value_plan.rep(local) != .memory;
+    }
+
+    /// The type an SSA local's value has when stored to memory.
+    fn ssaMemoryType(self: *const MonoLlvmCodeGen, local: LocalId) LlvmBuilder.Type {
+        const ty = self.local_values[@backingInt(local)].ty;
+        return if (ty == .i1) .i8 else ty;
+    }
+
+    fn typeByteSize(builder: *const LlvmBuilder, ty: LlvmBuilder.Type) u32 {
+        const lanes: u32 = if (ty.isVector(builder)) ty.vectorLen(builder) else 1;
+        return @divExact(@as(u32, ty.scalarBits(builder)) * lanes, 8);
+    }
+
+    /// The definition of the SSA local `local` that reaches the emitter.
+    fn ssaValue(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        const entry = self.local_values[@backingInt(local)];
+        if (entry.value != .none) return entry.value;
+        // No definition reaches this read: the read is in code no path
+        // reaches, or LIR guards it as possibly uninitialized and never uses
+        // what it reads. Its value is unspecified, and zero is its defined one.
+        const builder = self.builder orelse return error.CompilationFailed;
+        return builder.zeroInitValue(entry.ty) catch return error.OutOfMemory;
+    }
+
+    /// Make `value`, of the local's SSA type, the definition of `local` from
+    /// the emitter's position on.
+    fn defineSsa(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value) Error!void {
+        const entry = &self.local_values[@backingInt(local)];
+        if (builtin.mode == .debug) {
+            const wip = self.wip orelse return error.CompilationFailed;
+            if (value.typeOfWip(wip) != entry.ty) invariant("LLVM codegen invariant violated: SSA local {d} defined with a value of the wrong type", .{@backingInt(local)});
+            if (self.value_plan.rep(local) == .dominating and entry.value != .none) {
+                invariant("LLVM codegen invariant violated: dominating SSA local {d} defined twice", .{@backingInt(local)});
+            }
+        }
+        try self.setSsaValue(local, value);
+        if (entry.debug_variable.unwrap()) |variable| try self.emitDebugValue(value, variable);
+    }
+
+    fn setSsaValue(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value) Error!void {
+        const entry = &self.local_values[@backingInt(local)];
+        if (self.value_plan.rep(local) == .merged) {
+            try self.value_journal.append(self.allocator, .{ .local = local, .old = entry.value });
+        }
+        entry.value = value;
+    }
+
+    fn valueMark(self: *const MonoLlvmCodeGen) u32 {
+        return @intCast(self.value_journal.items.len);
+    }
+
+    /// Restore every merged local's definition to what it was when the
+    /// journal had `mark` entries.
+    fn rollbackValues(self: *MonoLlvmCodeGen, mark: u32) void {
+        while (self.value_journal.items.len > mark) {
+            const entry = self.value_journal.pop().?;
+            self.local_values[@backingInt(entry.local)].value = entry.old;
+        }
+    }
+
+    /// `value` as an SSA value of type `ty`: the same bits, with a byte
+    /// tested against zero for an `i1`, and an integer widened or narrowed as
+    /// `signed` says.
+    fn toSsaType(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, ty: LlvmBuilder.Type, signed: bool) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const value_ty = value.typeOfWip(wip);
+        if (value_ty == ty) return value;
+        if (ty == .i1) {
+            return wip.icmp(.ne, value, builder.zeroInitValue(value_ty) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        }
+        return self.reinterpretScalar(value, ty, signed);
+    }
+
+    /// `value` as type `ty`: integers widen or narrow as `signed` says, and
+    /// every other pair of equally wide types shares its bits.
+    fn reinterpretScalar(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, ty: LlvmBuilder.Type, signed: bool) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const value_ty = value.typeOfWip(wip);
+        if (value_ty == ty) return value;
+        if (value_ty.isInteger(builder) and ty.isInteger(builder) and !value_ty.isVector(builder) and !ty.isVector(builder)) {
+            return self.coerceScalar(value, ty, signed);
+        }
+        return wip.cast(.bitcast, value, ty, "") catch return error.OutOfMemory;
+    }
+
+    /// An SSA local's current value in its memory type.
+    fn ssaMemoryValue(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        const value = try self.ssaValue(local);
+        const memory_ty = self.ssaMemoryType(local);
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (value.typeOfWip(wip) == memory_ty) return value;
+        return wip.conv(.unsigned, value, memory_ty, "") catch return error.OutOfMemory;
+    }
+
+    /// Read `local` as the scalar memory type of `layout_idx`.
+    fn loadLocalScalar(self: *MonoLlvmCodeGen, local: LocalId, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        if (!self.isSsaLocal(local)) return self.loadScalar(self.slot(local).ptr, layout_idx);
+        const value = try self.ssaMemoryValue(local);
+        if (self.simdVectorForLayout(layout_idx) != null) return value;
+        return self.reinterpretScalar(value, self.scalarType(layout_idx), self.localLayout(local).isSigned());
+    }
+
+    /// Write `value` to `local` as `storeScalar` writes it as `layout_idx`.
+    fn storeLocalScalar(self: *MonoLlvmCodeGen, local: LocalId, layout_idx: layout.Idx, value: LlvmBuilder.Value) Error!void {
+        if (!self.isSsaLocal(local)) return self.storeScalar(self.slot(local).ptr, layout_idx, value);
+        const wip = self.wip orelse return error.CompilationFailed;
+        const ty = self.local_values[@backingInt(local)].ty;
+        if (value.typeOfWip(wip) == ty) return self.defineSsa(local, value);
+        const stored = try self.coerceScalar(value, self.scalarType(layout_idx), layout_idx.isSigned());
+        try self.defineSsa(local, try self.toSsaType(stored, ty, layout_idx.isSigned()));
+    }
+
+    fn loadLocalBool(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        if (!self.isSsaLocal(local)) return self.loadBool(self.slot(local).ptr);
+        return self.toSsaType(try self.ssaValue(local), .i1, false);
+    }
+
+    fn storeLocalBool(self: *MonoLlvmCodeGen, local: LocalId, cond: LlvmBuilder.Value) Error!void {
+        if (!self.isSsaLocal(local)) return self.storeBool(self.slot(local).ptr, cond);
+        try self.defineSsa(local, try self.toSsaType(cond, self.local_values[@backingInt(local)].ty, false));
+    }
+
+    fn storeLocalInt(self: *MonoLlvmCodeGen, local: LocalId, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!void {
+        // A Bool's layout is a tag union whose discriminant is its whole value.
+        if (self.isSsaLocal(local)) {
+            return self.defineSsa(local, try self.toSsaType(value, self.local_values[@backingInt(local)].ty, layout_idx.isSigned()));
+        }
+        if (self.layoutValue(layout_idx).tag == .tag_union) {
+            try self.storeTagDiscriminant(self.slot(local).ptr, layout_idx, value);
+            return;
+        }
+        try self.storeLocalScalar(local, layout_idx, value);
+    }
+
+    fn readLocalSwitchValue(self: *MonoLlvmCodeGen, local: LocalId, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
+        if (self.layoutValue(layout_idx).tag == .tag_union and !self.isSsaLocal(local)) return self.readTagDiscriminant(self.slot(local).ptr, layout_idx);
+        const value = if (layout_idx == .bool)
+            try self.coerceScalar(try self.loadLocalBool(local), .i64, false)
+        else
+            try self.loadLocalScalar(local, layout_idx);
+        return self.coerceScalar(value, .i64, false);
+    }
+
+    /// Write `local`'s `size` bytes to `dst`, from either representation.
+    fn storeLocalToMemory(self: *MonoLlvmCodeGen, dst: LlvmBuilder.Value, local: LocalId, size: u32, alignment: LlvmBuilder.Alignment) Error!void {
+        if (!self.isSsaLocal(local)) {
+            if (size > 0) try self.copyBytes(dst, self.slot(local).ptr, size, alignment);
+            return;
+        }
+        const builder, const wip = try self.builderAndWip();
+        if (builtin.mode == .debug and size != typeByteSize(builder, self.ssaMemoryType(local))) {
+            invariant("LLVM codegen invariant violated: SSA local {d} stored as {d} bytes", .{ @backingInt(local), size });
+        }
+        _ = wip.store(.normal, try self.ssaMemoryValue(local), dst, alignment) catch return error.OutOfMemory;
+    }
+
+    /// Define `local` from `size` bytes at `src`, in either representation.
+    fn defineLocalFromMemory(self: *MonoLlvmCodeGen, local: LocalId, src: LlvmBuilder.Value, size: u32, alignment: LlvmBuilder.Alignment) Error!void {
+        if (!self.isSsaLocal(local)) {
+            if (size > 0) try self.copyBytes(self.slot(local).ptr, src, size, alignment);
+            return;
+        }
+        const builder, const wip = try self.builderAndWip();
+        const memory_ty = self.ssaMemoryType(local);
+        if (builtin.mode == .debug and size != typeByteSize(builder, memory_ty)) {
+            invariant("LLVM codegen invariant violated: SSA local {d} loaded from {d} bytes", .{ @backingInt(local), size });
+        }
+        const loaded = wip.load(.normal, memory_ty, src, alignment, "") catch return error.OutOfMemory;
+        try self.defineSsa(local, try self.toSsaType(loaded, self.local_values[@backingInt(local)].ty, false));
+    }
+
+    fn emitDebugValue(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, variable: LlvmBuilder.Metadata) Error!void {
+        const builder, const wip = try self.builderAndWip();
+        if (wip.strip) return;
+        const scope = self.current_subprogram.unwrap() orelse return;
+        // The variable belongs to the physical procedure, so its location
+        // does too, whatever inline scope the defining statement is in.
+        const previous_debug_location = wip.debug_location;
+        defer wip.debug_location = previous_debug_location;
+        const line = switch (previous_debug_location) {
+            .location => |location| if (location.inlined_at.unwrap() == null) location.line else self.current_proc_line,
+            .no_location => self.current_proc_line,
+        };
+        wip.debug_location = .{ .location = .{
+            .line = line,
+            .column = 0,
+            .scope = scope.toOptional(),
+            .inlined_at = .none,
+        } };
+        _ = wip.callIntrinsic(
+            .normal,
+            .none,
+            .@"dbg.value",
+            &.{},
+            &.{
+                (wip.debugValue(value) catch return error.OutOfMemory).toValue(),
+                variable.toValue(),
+                (builder.debugExpression(&.{}) catch return error.OutOfMemory).toValue(),
+            },
+            "",
+        ) catch return error.OutOfMemory;
+    }
+
+    /// Record the edge from the current block to the merge point `stmt`: the
+    /// definitions of its live merged locals that reach the edge.
+    fn noteMergeEdge(self: *MonoLlvmCodeGen, stmt: CFStmtId) Error!void {
+        const state = self.merge_states.getPtr(@backingInt(stmt)) orelse return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        const arena = self.merge_arena.allocator();
+        try state.blocks.append(arena, wip.cursor.block);
+        for (state.locals) |local| try state.values.append(arena, try self.ssaValue(local));
+    }
+
+    /// Enter the merge point `stmt` at the start of its block: each live
+    /// merged local gets a phi of the definitions its edges record, and the
+    /// phi becomes its definition.
+    fn enterMerge(self: *MonoLlvmCodeGen, stmt: CFStmtId) Error!void {
+        const state = self.merge_states.getPtr(@backingInt(stmt)) orelse return;
+        const wip = self.wip orelse return error.CompilationFailed;
+        std.debug.assert(wip.cursor.block.ptrConst(wip).instructions.items.len == 0);
+        if (state.blocks.items.len == 0) {
+            // No edge from the procedure's entry reaches the merge point, so
+            // neither does any read below it.
+            for (state.locals) |local| try self.setSsaValue(local, .none);
+            return;
+        }
+        const phis = try self.merge_arena.allocator().alloc(LlvmBuilder.WipFunction.WipPhi, state.locals.len);
+        for (state.locals, phis) |local, *phi| {
+            phi.* = wip.openPhi(self.local_values[@backingInt(local)].ty, "") catch return error.OutOfMemory;
+        }
+        state.phis = phis;
+        for (state.locals, phis) |local, phi| try self.defineSsa(local, phi.toValue());
+    }
+
+    /// Give every phi its incoming edges, once all of them are emitted.
+    fn finishMerges(self: *MonoLlvmCodeGen) Error!void {
+        const wip = self.wip orelse return error.CompilationFailed;
+        var states = self.merge_states.valueIterator();
+        while (states.next()) |state| {
+            if (state.phis.len == 0) continue;
+            const edges = state.blocks.items.len;
+            const values = try self.merge_arena.allocator().alloc(LlvmBuilder.Value, edges);
+            for (state.phis, 0..) |phi, i| {
+                for (values, 0..) |*value, edge| value.* = state.values.items[edge * state.locals.len + i];
+                phi.finishOpen(values, state.blocks.items, wip) catch return error.OutOfMemory;
+            }
+        }
+    }
+
+    /// The bytes `[offset, offset + size(chunk_ty))` of a scalar whose bits
+    /// are the integer `bits`, as `chunk_ty`.
+    fn scalarChunk(self: *MonoLlvmCodeGen, bits: LlvmBuilder.Value, offset: u32, chunk_ty: LlvmBuilder.Type) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const bits_ty = bits.typeOfWip(wip);
+        const total = typeByteSize(builder, bits_ty);
+        const size = typeByteSize(builder, chunk_ty);
+        const shift_bytes = switch (self.target.cpu.arch.endian()) {
+            .little => offset,
+            .big => total -| (offset + size),
+        };
+        var part = bits;
+        if (shift_bytes != 0) {
+            part = wip.bin(.lshr, part, builder.intValue(bits_ty, @as(u64, shift_bytes) * 8) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        }
+        const part_ty = builder.intType(@intCast(size * 8)) catch return error.OutOfMemory;
+        if (part_ty != bits_ty) part = try self.coerceScalar(part, part_ty, false);
+        if (part_ty == chunk_ty) return part;
+        return wip.cast(.bitcast, part, chunk_ty, "") catch return error.OutOfMemory;
+    }
+
+    const ScalarChunk = struct { value: LlvmBuilder.Value, offset: u32 };
+
+    /// Combine chunks of a scalar's bytes into a value of the scalar's
+    /// memory type `memory_ty`.
+    fn assembleScalar(self: *MonoLlvmCodeGen, chunks: []const ScalarChunk, memory_ty: LlvmBuilder.Type) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        if (chunks.len == 1 and chunks[0].offset == 0 and chunks[0].value.typeOfWip(wip) == memory_ty) return chunks[0].value;
+        const total = typeByteSize(builder, memory_ty);
+        const bits_ty = builder.intType(@intCast(total * 8)) catch return error.OutOfMemory;
+        var bits = builder.intValue(bits_ty, 0) catch return error.OutOfMemory;
+        for (chunks) |chunk| {
+            const chunk_ty = chunk.value.typeOfWip(wip);
+            const size = typeByteSize(builder, chunk_ty);
+            const int_ty = builder.intType(@intCast(size * 8)) catch return error.OutOfMemory;
+            var part = if (chunk_ty == int_ty) chunk.value else wip.cast(.bitcast, chunk.value, int_ty, "") catch return error.OutOfMemory;
+            if (int_ty != bits_ty) part = try self.coerceScalar(part, bits_ty, false);
+            const shift_bytes = switch (self.target.cpu.arch.endian()) {
+                .little => chunk.offset,
+                .big => total -| (chunk.offset + size),
+            };
+            if (shift_bytes != 0) {
+                part = wip.bin(.shl, part, builder.intValue(bits_ty, @as(u64, shift_bytes) * 8) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+            }
+            bits = wip.bin(.@"or", bits, part, "") catch return error.OutOfMemory;
+        }
+        if (bits_ty == memory_ty) return bits;
+        return wip.cast(.bitcast, bits, memory_ty, "") catch return error.OutOfMemory;
+    }
+
+    /// An SSA local's bits as an integer of its byte size.
+    fn ssaBits(self: *MonoLlvmCodeGen, local: LocalId) Error!LlvmBuilder.Value {
+        const builder, const wip = try self.builderAndWip();
+        const value = try self.ssaMemoryValue(local);
+        const value_ty = value.typeOfWip(wip);
+        const bits_ty = builder.intType(@intCast(typeByteSize(builder, value_ty) * 8)) catch return error.OutOfMemory;
+        if (value_ty == bits_ty) return value;
+        return wip.cast(.bitcast, value, bits_ty, "") catch return error.OutOfMemory;
     }
 
     fn sizeAlignOf(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) layout.SizeAlign {
@@ -12999,48 +13467,42 @@ pub const MonoLlvmCodeGen = struct {
         _ = wip.store(.normal, store_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
     }
 
-    fn storeIntToLayout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, value: LlvmBuilder.Value, layout_idx: layout.Idx) Error!void {
-        if (self.layoutValue(layout_idx).tag == .tag_union) {
-            try self.storeTagDiscriminant(ptr, layout_idx, value);
-            return;
-        }
-        try self.storeScalar(ptr, layout_idx, value);
+    fn storeIntLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i64) Error!void {
+        return self.storeI128Literal(ptr, layout_idx, i64LiteralBits(value));
     }
 
-    fn storeIntLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i64) Error!void {
-        const builder = self.builder orelse return error.CompilationFailed;
-        if (self.simdVectorForLayout(layout_idx)) |vector| {
-            const wip = self.wip orelse return error.CompilationFailed;
-            const bits = builder.intValue(.i128, @as(u128, @as(u64, @bitCast(value)))) catch return error.OutOfMemory;
-            const vector_value = wip.cast(.bitcast, bits, try self.simdType(vector), "") catch return error.OutOfMemory;
-            _ = wip.store(.normal, vector_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
-            return;
-        }
-        const ty = self.scalarType(layout_idx);
-        const bits: u64 = @bitCast(value);
-        const literal = switch (self.intBits(layout_idx)) {
-            8 => builder.intValue(ty, @as(u8, @truncate(bits))) catch return error.OutOfMemory,
-            16 => builder.intValue(ty, @as(u16, @truncate(bits))) catch return error.OutOfMemory,
-            32 => builder.intValue(ty, @as(u32, @truncate(bits))) catch return error.OutOfMemory,
-            64 => builder.intValue(ty, bits) catch return error.OutOfMemory,
-            128 => builder.intValue(ty, @as(u128, bits)) catch return error.OutOfMemory,
-            else => return error.CompilationFailed,
-        };
-        try self.storeScalar(ptr, layout_idx, literal);
+    /// An `i64_literal`'s bits as a 128-bit literal: zero-extended, so a
+    /// wider layout receives exactly the literal's 64 bits.
+    fn i64LiteralBits(value: i64) i128 {
+        return @as(u64, @bitCast(value));
     }
 
     fn storeI128Literal(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: i128) Error!void {
+        const literal = try self.i128LiteralValue(layout_idx, value);
+        if (self.simdVectorForLayout(layout_idx) != null) {
+            const wip = self.wip orelse return error.CompilationFailed;
+            _ = wip.store(.normal, literal, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
+            return;
+        }
+        try self.storeScalar(ptr, layout_idx, literal);
+    }
+
+    fn storeFloatLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: anytype) Error!void {
+        try self.storeScalar(ptr, layout_idx, try self.floatLiteralValue(layout_idx, value));
+    }
+
+    /// An integer literal as a value of `layout_idx`'s memory type: its low
+    /// bits for an integer, and its 128 bits for a vector or a Dec.
+    fn i128LiteralValue(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, value: i128) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
         if (self.simdVectorForLayout(layout_idx)) |vector| {
             const wip = self.wip orelse return error.CompilationFailed;
             const bits = builder.intValue(.i128, @as(u128, @bitCast(value))) catch return error.OutOfMemory;
-            const vector_value = wip.cast(.bitcast, bits, try self.simdType(vector), "") catch return error.OutOfMemory;
-            _ = wip.store(.normal, vector_value, ptr, self.alignmentForLayout(layout_idx)) catch return error.OutOfMemory;
-            return;
+            return wip.cast(.bitcast, bits, try self.simdType(vector), "") catch return error.OutOfMemory;
         }
         const ty = self.scalarType(layout_idx);
         const bits: u128 = @bitCast(value);
-        const literal = switch (self.intBits(layout_idx)) {
+        return switch (self.intBits(layout_idx)) {
             8 => builder.intValue(ty, @as(u8, @truncate(bits))) catch return error.OutOfMemory,
             16 => builder.intValue(ty, @as(u16, @truncate(bits))) catch return error.OutOfMemory,
             32 => builder.intValue(ty, @as(u32, @truncate(bits))) catch return error.OutOfMemory,
@@ -13048,16 +13510,14 @@ pub const MonoLlvmCodeGen = struct {
             128 => builder.intValue(ty, bits) catch return error.OutOfMemory,
             else => return error.CompilationFailed,
         };
-        try self.storeScalar(ptr, layout_idx, literal);
     }
 
-    fn storeFloatLiteral(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx, value: anytype) Error!void {
+    fn floatLiteralValue(self: *MonoLlvmCodeGen, layout_idx: layout.Idx, value: anytype) Error!LlvmBuilder.Value {
         const builder = self.builder orelse return error.CompilationFailed;
-        const llvm_value = if (layout_idx == .f32)
+        return if (layout_idx == .f32)
             builder.floatValue(@floatCast(value)) catch return error.OutOfMemory
         else
             builder.doubleValue(@floatCast(value)) catch return error.OutOfMemory;
-        try self.storeScalar(ptr, layout_idx, llvm_value);
     }
 
     fn coerceScalar(self: *MonoLlvmCodeGen, value: LlvmBuilder.Value, target_ty: LlvmBuilder.Type, signed: bool) Error!LlvmBuilder.Value {
@@ -13085,18 +13545,6 @@ pub const MonoLlvmCodeGen = struct {
         const wip = self.wip orelse return error.CompilationFailed;
         const byte = try self.coerceScalar(cond, .i8, false);
         _ = wip.store(.normal, byte, ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.OutOfMemory;
-    }
-
-    fn readSwitchValue(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
-        const layout_val = self.layoutValue(layout_idx);
-        if (layout_val.tag == .tag_union) {
-            return self.readTagDiscriminant(ptr, layout_idx);
-        }
-        const value = if (layout_idx == .bool) blk: {
-            const b = try self.loadBool(ptr);
-            break :blk try self.coerceScalar(b, .i64, false);
-        } else try self.loadScalar(ptr, layout_idx);
-        return self.coerceScalar(value, .i64, false);
     }
 
     fn readTagDiscriminant(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, layout_idx: layout.Idx) Error!LlvmBuilder.Value {
@@ -13151,96 +13599,25 @@ pub const MonoLlvmCodeGen = struct {
         return variants.get(discriminant).payload_layout;
     }
 
+    /// Where `str_from_utf8` writes into its `Try(Str, { index : U64, problem :
+    /// Utf8Problem })` result, whose `Err` is discriminant 0.
     fn resolveStrFromUtf8Layout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrFromUtf8LayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .tag_union) return error.CompilationFailed;
         const tu_data = self.layouts().getTagUnionData(ret_layout_val.getTagUnion().idx);
-        const variants = self.layouts().getTagUnionVariants(tu_data);
-
-        var ok_disc: ?u32 = null;
-        var err_disc: ?u32 = null;
-        var err_record_idx: ?layout.StructIdx = null;
-        var inner_disc_offset: u32 = 0;
-        var inner_disc_size: u32 = 0;
-        var inner_bad_utf8_disc: u32 = 0;
-
-        for (0..variants.len) |i| {
-            const payload = variants.get(@intCast(i)).payload_layout;
-            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-            if (candidate == .str) {
-                ok_disc = @intCast(i);
-                continue;
-            }
-
-            err_disc = @intCast(i);
-            const err_layout = self.layoutValue(candidate);
-            if (err_layout.tag == .struct_) {
-                err_record_idx = err_layout.getStruct().idx;
-            } else if (err_layout.tag == .tag_union) {
-                const inner_tu = self.layouts().getTagUnionData(err_layout.getTagUnion().idx);
-                if (self.findBadUtf8Variant(inner_tu)) |info| {
-                    err_record_idx = info.struct_idx;
-                    inner_disc_offset = inner_tu.discriminant_offset.get(self.layouts().targetUsize());
-                    inner_disc_size = inner_tu.discriminant_size;
-                    inner_bad_utf8_disc = info.disc;
-                }
-            }
-        }
-
-        const rec_idx = err_record_idx orelse return error.CompilationFailed;
-        const struct_data = self.layouts().getStructData(rec_idx);
-        const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
-        var index_offset: ?u32 = null;
-        var problem_offset: ?u32 = null;
-        for (0..fields.len) |i| {
-            const field = fields.get(i);
-            const field_layout = self.layoutValue(field.layout);
-            const field_size = self.layoutByteSize(field.layout);
-            const field_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, field.index);
-            const is_index = field_layout.tag == .scalar and
-                field_layout.getScalar().tag == .int and
-                (field_layout.getScalar().getInt() == .u64 or field_layout.getScalar().getInt() == .i64);
-            if (is_index and field_size == 8) {
-                index_offset = field_offset;
-            } else if (field_size == 1) {
-                problem_offset = field_offset;
-            }
-        }
-
+        const err_payload = self.layouts().getTagUnionVariants(tu_data).get(0).payload_layout;
+        const err_layout = self.layoutValue(self.unwrapSingleFieldPayloadLayout(err_payload) orelse err_payload);
+        if (err_layout.tag != .struct_) return error.CompilationFailed;
+        const rec_idx = err_layout.getStruct().idx;
         return .{
-            .ok_tag = ok_disc orelse return error.CompilationFailed,
-            .err_tag = err_disc orelse return error.CompilationFailed,
-            .outer_disc_offset = tu_data.discriminant_offset.get(self.layouts().targetUsize()),
-            .outer_disc_size = tu_data.discriminant_size,
-            .err_index_offset = index_offset orelse return error.CompilationFailed,
-            .err_problem_offset = problem_offset orelse return error.CompilationFailed,
-            .inner_disc_offset = inner_disc_offset,
-            .inner_disc_size = inner_disc_size,
-            .inner_bad_utf8_tag = inner_bad_utf8_disc,
+            .disc_offset = tu_data.discriminant_offset.get(self.layouts().targetUsize()),
+            .disc_size = tu_data.discriminant_size,
+            .err_index_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 0),
+            .err_problem_offset = self.layouts().getStructFieldOffsetByOriginalIndex(rec_idx, 1),
         };
     }
 
-    fn resolveStrSplitFirstLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitFirstLayoutInfo {
-        const ret_layout_val = self.layoutValue(layout_idx);
-        if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
-
-        const record_idx = ret_layout_val.getStruct().idx;
-        const record_data = self.layouts().getStructData(record_idx);
-        const fields = self.layouts().struct_fields.sliceRange(record_data.getFields());
-        if (fields.len != 3) return error.CompilationFailed;
-
-        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 0) != .str) return error.CompilationFailed;
-        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 1) != .str) return error.CompilationFailed;
-        if (self.layouts().getStructFieldLayoutByOriginalIndex(record_idx, 2) != .bool) return error.CompilationFailed;
-
-        return .{
-            .after_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 0),
-            .before_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 1),
-            .found_offset = self.layouts().getStructFieldOffsetByOriginalIndex(record_idx, 2),
-        };
-    }
-
-    fn resolveStrSplitLastLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitLastLayoutInfo {
+    fn resolveStrSplitLayout(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) Error!StrSplitLayoutInfo {
         const ret_layout_val = self.layoutValue(layout_idx);
         if (ret_layout_val.tag != .struct_) return error.CompilationFailed;
 
@@ -13310,38 +13687,6 @@ pub const MonoLlvmCodeGen = struct {
         return field.layout;
     }
 
-    fn findBadUtf8Variant(self: *MonoLlvmCodeGen, inner_tu: *const layout.TagUnionData) ?struct { disc: u32, struct_idx: layout.StructIdx } {
-        const variants = self.layouts().getTagUnionVariants(inner_tu);
-        for (0..variants.len) |i| {
-            const payload = variants.get(@intCast(i)).payload_layout;
-            const candidate = self.unwrapSingleFieldPayloadLayout(payload) orelse payload;
-            const payload_layout = self.layoutValue(candidate);
-            if (payload_layout.tag != .struct_) continue;
-
-            const struct_idx = payload_layout.getStruct().idx;
-            const struct_data = self.layouts().getStructData(struct_idx);
-            const fields = self.layouts().struct_fields.sliceRange(struct_data.getFields());
-            if (fields.len != 2) continue;
-
-            var has_index_field = false;
-            var has_problem_field = false;
-            for (0..fields.len) |field_i| {
-                const field = fields.get(field_i);
-                const field_size = self.layoutByteSize(field.layout);
-                switch (field.index) {
-                    0 => has_index_field = field_size == 8,
-                    1 => has_problem_field = field_size == 1,
-                    else => {},
-                }
-            }
-            if (has_index_field and has_problem_field) {
-                return .{ .disc = @intCast(i), .struct_idx = struct_idx };
-            }
-        }
-
-        return null;
-    }
-
     fn resolveStructBase(self: *MonoLlvmCodeGen, source: LocalId) Error!ResolvedBase {
         const source_layout = self.localLayout(source);
         const layout_val = self.layoutValue(source_layout);
@@ -13356,14 +13701,6 @@ pub const MonoLlvmCodeGen = struct {
 
     fn resolveTagBase(self: *MonoLlvmCodeGen, source: LocalId) Error!ResolvedBase {
         return self.resolveStructBase(source);
-    }
-
-    fn rocStrArgFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error![3]LlvmBuilder.Value {
-        return .{
-            try self.loadPointer(ptr),
-            try self.loadUsize(try self.offsetPtr(ptr, self.rocStrLenOffset())),
-            try self.loadUsize(try self.offsetPtr(ptr, self.rocStrCapacityOffset())),
-        };
     }
 
     fn rocListArgFields(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value) Error![3]LlvmBuilder.Value {
@@ -13382,35 +13719,21 @@ pub const MonoLlvmCodeGen = struct {
         try self.storeListCapacity(ptr, builder.intValue(self.ptrSizedIntType(), cap) catch return error.OutOfMemory);
     }
 
-    fn entrypointParamSlotSize(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) u32 {
-        const runtime_layout_idx = self.layouts().runtimeRepresentationLayoutIdx(layout_idx);
-        if (runtime_layout_idx == .str) return 3 * self.targetWordSize();
-        if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
-        const layout_val = self.layoutValue(runtime_layout_idx);
-        const size = self.layoutByteSize(runtime_layout_idx);
-        if (layout_val.tag == .zst or size == 0) return 0;
-        // Internal Roc procedure arguments use fixed-size slots in a shared
-        // byte buffer. A vector occupies its full 16-byte value; rounding it
-        // down to the ordinary scalar slot size makes the following argument
-        // overlap the vector's upper half.
-        if (layout_val.tag == .scalar and layout_val.getScalar().tag == .vector) return 16;
-        if (layout_val.tag == .list or layout_val.tag == .list_of_zst) return 24;
-        if (layout_val.tag == .struct_ or layout_val.tag == .tag_union) {
-            if (size > 8) return @intCast(std.mem.alignForward(u32, size, 8));
-        }
-        return 8;
-    }
-
     fn computeArgOffsets(self: *MonoLlvmCodeGen, arg_layouts: []const layout.Idx, rounded_slots: bool) Error![]u32 {
+        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
+        errdefer self.allocator.free(offsets);
+        if (rounded_slots) {
+            layout.entrypoint_args.computeOffsets(self.layouts(), arg_layouts, offsets);
+            return offsets;
+        }
         const ordered = try self.allocator.alloc(ArgOrder, arg_layouts.len);
         defer self.allocator.free(ordered);
-        const offsets = try self.allocator.alloc(u32, arg_layouts.len);
         for (arg_layouts, 0..) |arg_layout, i| {
             const sa = self.sizeAlignOf(arg_layout);
             ordered[i] = .{
                 .index = i,
                 .alignment = @intCast(@max(sa.alignment.toByteUnits(), 1)),
-                .size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else sa.size,
+                .size = sa.size,
             };
         }
         const SortCtx = struct {
@@ -13435,7 +13758,7 @@ pub const MonoLlvmCodeGen = struct {
         defer self.allocator.free(offsets);
         var total: u32 = 0;
         for (arg_layouts, offsets) |arg_layout, offset| {
-            const slot_size = if (rounded_slots) self.entrypointParamSlotSize(arg_layout) else self.layoutByteSize(arg_layout);
+            const slot_size = if (rounded_slots) layout.entrypoint_args.slotSize(self.layouts(), arg_layout) else self.layoutByteSize(arg_layout);
             total = @max(total, offset + slot_size);
         }
         return @max(total, 8);
@@ -13468,7 +13791,7 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalIfDeferred(arg);
             const size = self.layoutByteSize(arg_layout);
             if (size == 0) continue;
-            try self.copyBytes(try self.offsetPtr(dst_args, offset), self.slot(arg).ptr, size, self.alignmentForLayout(arg_layout));
+            try self.storeLocalToMemory(try self.offsetPtr(dst_args, offset), arg, size, self.alignmentForLayout(arg_layout));
         }
     }
 
@@ -13498,7 +13821,9 @@ pub const MonoLlvmCodeGen = struct {
         } else if (arch == .x86_64) {
             return if (self.target.os.tag == .windows) .x86_64_windows else .x86_64_sysv;
         } else if (arch == .wasm32) {
-            return .wasm32;
+            // WebAssembly 1.0 has no vector values, so a target without
+            // simd128 passes vectors by lane, as the other backends do.
+            return if (std.Target.wasm.featureSetHas(self.target.cpu.features, .simd128)) .wasm32 else .wasm32v1;
         } else if (arch == .wasm64) {
             return .wasm64;
         } else {
@@ -13530,7 +13855,7 @@ pub const MonoLlvmCodeGen = struct {
     /// and returns travel as i32 values with explicit extension/truncation at
     /// the ABI boundary.
     fn cAbiPieceLlvmType(self: *MonoLlvmCodeGen, builder: *LlvmBuilder, piece: layout.abi.RegPiece) Error!LlvmBuilder.Type {
-        if ((self.abiTarget() == .wasm32 or self.abiTarget() == .wasm64) and
+        if ((self.abiTarget() == .wasm32 or self.abiTarget() == .wasm32v1 or self.abiTarget() == .wasm64) and
             piece.class == .integer and piece.size < 4)
         {
             return .i32;
@@ -13540,7 +13865,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn cAbiPieceIsSigned(self: *MonoLlvmCodeGen, layout_idx: layout.Idx) bool {
         const abi_target = self.abiTarget();
-        const direct_idx = if (abi_target == .wasm32 or abi_target == .wasm64)
+        const direct_idx = if (abi_target == .wasm32 or abi_target == .wasm32v1 or abi_target == .wasm64)
             switch (layout.abi.wasm.classifyType(self.layouts(), layout_idx)) {
                 .direct => |idx| idx,
                 .indirect => layout_idx,
@@ -13555,8 +13880,8 @@ pub const MonoLlvmCodeGen = struct {
                 .frac => direct_idx == .dec,
                 .vector, .opaque_ptr, .str => false,
             },
-            .tag_union, .box, .box_of_zst, .erased_box, .ptr => false,
-            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst => direct_idx.isSigned(),
+            .tag_union, .box, .box_of_zst, .ptr, .dynamic => false,
+            .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .hole => direct_idx.isSigned(),
         };
     }
 
@@ -13683,6 +14008,96 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Where the bytes of a register-passed value come from: memory, or the
+    /// bits of an SSA scalar as an integer of the scalar's byte size.
+    const PieceSource = union(enum) {
+        memory: LlvmBuilder.Value,
+        bits: LlvmBuilder.Value,
+    };
+
+    fn localPieceSource(self: *MonoLlvmCodeGen, local: LocalId) Error!PieceSource {
+        if (self.isSsaLocal(local)) return .{ .bits = try self.ssaBits(local) };
+        return .{ .memory = self.slot(local).ptr };
+    }
+
+    fn loadPiece(self: *MonoLlvmCodeGen, source: PieceSource, offset: u32, ty: LlvmBuilder.Type, value_layout: layout.Idx) Error!LlvmBuilder.Value {
+        switch (source) {
+            .memory => |ptr| {
+                const wip = self.wip orelse return error.CompilationFailed;
+                return wip.load(.normal, ty, try self.offsetPtr(ptr, offset), self.alignmentForLayoutOffset(value_layout, offset), "") catch return error.OutOfMemory;
+            },
+            .bits => |bits| return self.scalarChunk(bits, offset, ty),
+        }
+    }
+
+    /// The most register pieces a scalar splits into: a 16-byte vector of
+    /// 1-byte lanes, which the WebAssembly 1.0 C ABI passes one lane per
+    /// parameter.
+    const max_scalar_pieces = 16;
+
+    /// The memory-typed scalar a register-passed parameter arrives as,
+    /// consuming its parameters from `param_cursor`.
+    fn scalarFromCAbiParams(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+        param_cursor: *u32,
+        arg_layout: layout.Idx,
+        memory_ty: LlvmBuilder.Type,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        var chunks: [max_scalar_pieces]ScalarChunk = undefined;
+        if (registers.pieces.len > chunks.len) llvmInvariantFmt("scalar parameter split into {d} register pieces", .{registers.pieces.len});
+        switch (registers.carrier) {
+            .piecewise => for (registers.pieces, 0..) |piece, i| {
+                const val = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                chunks[i] = .{ .value = try self.coerceCAbiPiece(val, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(arg_layout)), .offset = piece.offset };
+            },
+            .integer => {
+                const val = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                return self.assembleScalar(&.{.{ .value = val, .offset = registers.pieces[0].offset }}, memory_ty);
+            },
+            .structure, .array => {
+                const aggregate = wip.arg(param_cursor.*);
+                param_cursor.* += 1;
+                for (registers.pieces, 0..) |piece, i| {
+                    const field = wip.extractValue(aggregate, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+                    chunks[i] = .{ .value = try self.coerceCAbiPiece(field, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(arg_layout)), .offset = piece.offset };
+                }
+            },
+        }
+        return self.assembleScalar(chunks[0..registers.pieces.len], memory_ty);
+    }
+
+    /// The memory-typed scalar a by-value call result carries.
+    fn scalarFromCAbiResult(
+        self: *MonoLlvmCodeGen,
+        builder: *LlvmBuilder,
+        registers: layout.abi.RegisterPlacement,
+        result: LlvmBuilder.Value,
+        ret_layout: layout.Idx,
+        memory_ty: LlvmBuilder.Type,
+    ) Error!LlvmBuilder.Value {
+        const wip = self.wip orelse return error.CompilationFailed;
+        if (registers.carrier == .integer) {
+            return self.assembleScalar(&.{.{ .value = result, .offset = registers.pieces[0].offset }}, memory_ty);
+        }
+        if (registers.carrier == .piecewise and registers.pieces.len == 1) {
+            const piece = registers.pieces[0];
+            const value = try self.coerceCAbiPiece(result, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(ret_layout));
+            return self.assembleScalar(&.{.{ .value = value, .offset = piece.offset }}, memory_ty);
+        }
+        var chunks: [max_scalar_pieces]ScalarChunk = undefined;
+        if (registers.pieces.len > chunks.len) llvmInvariantFmt("scalar result split into {d} register pieces", .{registers.pieces.len});
+        for (registers.pieces, 0..) |piece, i| {
+            const field = wip.extractValue(result, &.{@intCast(i)}, "") catch return error.OutOfMemory;
+            chunks[i] = .{ .value = try self.coerceCAbiPiece(field, try pieceLlvmType(builder, piece), piece, self.cAbiPieceIsSigned(ret_layout)), .offset = piece.offset };
+        }
+        return self.assembleScalar(chunks[0..registers.pieces.len], memory_ty);
+    }
+
     fn appendCAbiRegisterCallArg(
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
@@ -13690,15 +14105,14 @@ pub const MonoLlvmCodeGen = struct {
         param_types: *std.ArrayList(LlvmBuilder.Type),
         call_args: *std.ArrayList(LlvmBuilder.Value),
         registers: layout.abi.RegisterPlacement,
-        arg_ptr: LlvmBuilder.Value,
+        source: PieceSource,
         arg_layout: layout.Idx,
     ) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
         switch (registers.carrier) {
             .piecewise => for (registers.pieces) |piece| {
                 const piece_ty = try pieceLlvmType(builder, piece);
-                const src = try self.offsetPtr(arg_ptr, piece.offset);
-                const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                const val = try self.loadPiece(source, piece.offset, piece_ty, arg_layout);
                 const carrier_ty = try self.cAbiPieceLlvmType(builder, piece);
                 // A narrow C scalar owes its argument register a promotion, and
                 // LLVM performs it only for a parameter marked with it. A
@@ -13714,8 +14128,7 @@ pub const MonoLlvmCodeGen = struct {
             },
             .integer => {
                 const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
-                const src = try self.offsetPtr(arg_ptr, registers.pieces[0].offset);
-                const val = wip.load(.normal, carrier_ty, src, self.alignmentForLayoutOffset(arg_layout, registers.pieces[0].offset), "") catch return error.OutOfMemory;
+                const val = try self.loadPiece(source, registers.pieces[0].offset, carrier_ty, arg_layout);
                 try param_types.append(self.allocator, carrier_ty);
                 try call_args.append(self.allocator, val);
             },
@@ -13724,8 +14137,7 @@ pub const MonoLlvmCodeGen = struct {
                 var aggregate = builder.poisonValue(carrier_ty) catch return error.OutOfMemory;
                 for (registers.pieces, 0..) |piece, i| {
                     const piece_ty = try pieceLlvmType(builder, piece);
-                    const src = try self.offsetPtr(arg_ptr, piece.offset);
-                    const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const val = try self.loadPiece(source, piece.offset, piece_ty, arg_layout);
                     const field_ty = try self.cAbiPieceLlvmType(builder, piece);
                     const field = try self.coerceCAbiPiece(val, field_ty, piece, self.cAbiPieceIsSigned(arg_layout));
                     aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
@@ -13744,8 +14156,7 @@ pub const MonoLlvmCodeGen = struct {
                 const array_elem_ty = try self.cAbiPieceLlvmType(builder, registers.pieces[0]);
                 for (registers.pieces, 0..) |piece, i| {
                     const piece_ty = try pieceLlvmType(builder, piece);
-                    const src = try self.offsetPtr(arg_ptr, piece.offset);
-                    const val = wip.load(.normal, piece_ty, src, self.alignmentForLayoutOffset(arg_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const val = try self.loadPiece(source, piece.offset, piece_ty, arg_layout);
                     const field = try self.coerceCAbiPiece(val, array_elem_ty, piece, self.cAbiPieceIsSigned(arg_layout));
                     aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
                 }
@@ -13791,21 +14202,19 @@ pub const MonoLlvmCodeGen = struct {
         self: *MonoLlvmCodeGen,
         builder: *LlvmBuilder,
         registers: layout.abi.RegisterPlacement,
-        ret_ptr: LlvmBuilder.Value,
+        source: PieceSource,
         ret_layout: layout.Idx,
     ) Error!LlvmBuilder.Value {
         const wip = self.wip orelse return error.CompilationFailed;
         const carrier_ty = try self.cAbiRegisterCarrierType(builder, registers);
         switch (registers.carrier) {
             .integer => {
-                const src = try self.offsetPtr(ret_ptr, registers.pieces[0].offset);
-                return wip.load(.normal, carrier_ty, src, self.alignmentForLayoutOffset(ret_layout, registers.pieces[0].offset), "") catch return error.OutOfMemory;
+                return self.loadPiece(source, registers.pieces[0].offset, carrier_ty, ret_layout);
             },
             .piecewise, .structure, .array => {
                 if (registers.carrier == .piecewise and registers.pieces.len == 1) {
                     const piece = registers.pieces[0];
-                    const src = try self.offsetPtr(ret_ptr, piece.offset);
-                    const val = wip.load(.normal, try pieceLlvmType(builder, piece), src, self.alignmentForLayoutOffset(ret_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const val = try self.loadPiece(source, piece.offset, try pieceLlvmType(builder, piece), ret_layout);
                     return self.coerceCAbiPiece(val, carrier_ty, piece, self.cAbiPieceIsSigned(ret_layout));
                 }
                 var aggregate = builder.poisonValue(carrier_ty) catch return error.OutOfMemory;
@@ -13814,8 +14223,7 @@ pub const MonoLlvmCodeGen = struct {
                 else
                     null;
                 for (registers.pieces, 0..) |piece, i| {
-                    const src = try self.offsetPtr(ret_ptr, piece.offset);
-                    const val = wip.load(.normal, try pieceLlvmType(builder, piece), src, self.alignmentForLayoutOffset(ret_layout, piece.offset), "") catch return error.OutOfMemory;
+                    const val = try self.loadPiece(source, piece.offset, try pieceLlvmType(builder, piece), ret_layout);
                     const field_ty = array_elem_ty orelse try self.cAbiPieceLlvmType(builder, piece);
                     const field = try self.coerceCAbiPiece(val, field_ty, piece, self.cAbiPieceIsSigned(ret_layout));
                     aggregate = wip.insertValue(aggregate, field, &.{@intCast(i)}, "") catch return error.OutOfMemory;
@@ -13849,7 +14257,10 @@ pub const MonoLlvmCodeGen = struct {
         if (!std.mem.eql(u8, self.store.getString(hosted.symbol), shim_symbols.roc_default_echo_line)) return false;
 
         switch (self.target.os.tag) {
-            .linux, .macos, .windows, .freebsd, .netbsd => {},
+            .linux, .freebsd, .netbsd => {},
+            // Without a system call ABI to inline, the line goes through the
+            // `roc_default_echo_line` the default platform's runtime exports.
+            .macos, .windows => return false,
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
         if (arg_ptrs.len != 1 or arg_layouts.len != 1 or arg_layouts[0] != .str or ret_layout != .zst) {
@@ -13866,16 +14277,15 @@ pub const MonoLlvmCodeGen = struct {
         const usize_ty = self.ptrSizedIntType();
 
         const raw_len = try self.loadUsize(try self.offsetPtr(str_ptr, self.rocStrLenOffset()));
-        const is_small = wip.icmp(.slt, raw_len, builder.intValue(usize_ty, 0) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const is_small = try self.emitRocStrLenIsSmall(raw_len);
         const small_block = wip.block(0, "echo_small_str") catch return error.OutOfMemory;
         const heap_block = wip.block(0, "echo_heap_str") catch return error.OutOfMemory;
         const after = wip.block(0, "echo_after") catch return error.OutOfMemory;
         _ = wip.brCond(is_small, small_block, heap_block, .then_likely) catch return error.OutOfMemory;
 
         wip.cursor = .{ .block = small_block };
-        const last_byte_offset = self.targetWordSize() * 3 - 1;
-        const last_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, last_byte_offset), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
-        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, 0x7f) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
+        const last_byte = wip.load(.normal, .i8, try self.offsetPtr(str_ptr, self.rocStrFlagByteOffset()), LlvmBuilder.Alignment.fromByteUnits(1), "") catch return error.OutOfMemory;
+        const small_len_byte = wip.bin(.@"and", last_byte, builder.intValue(.i8, RocStr.small_str_len_mask) catch return error.OutOfMemory, "") catch return error.OutOfMemory;
         const small_len = try self.coerceScalar(small_len_byte, usize_ty, false);
         try self.emitDefaultPlatformWriteStdout(str_ptr, small_len);
         _ = wip.br(after) catch return error.OutOfMemory;
@@ -13891,39 +14301,15 @@ pub const MonoLlvmCodeGen = struct {
     fn emitDefaultPlatformWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         switch (self.target.os.tag) {
             .linux => try self.emitLinuxWriteStdout(ptr, len),
-            .freebsd, .netbsd => try self.emitX86_64BsdWriteStdout(ptr, len),
-            .macos, .windows => try self.emitCWriteStdout(ptr, len),
+            .freebsd, .netbsd => try self.emitX86_64WriteStdout(ptr, len, 4),
+            .macos, .windows => unreachable, // emitDefaultPlatformHostedCall leaves these to the hosted call
             .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .plan9, .rtems, .serenity, .dragonfly, .openbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => return error.CompilationFailed,
         }
     }
 
-    fn emitCWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const ptr_ty = try self.ptrType();
-        const len_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const ret_ty: LlvmBuilder.Type = if (self.target.os.tag == .windows) .i32 else self.ptrSizedIntType();
-        const symbol = if (self.target.os.tag == .windows) "_write" else "write";
-        const fn_ty = builder.fnType(ret_ty, &.{ .i32, ptr_ty, len_ty }, .normal) catch return error.OutOfMemory;
-        const write_fn = try self.declareExternSymbol(symbol, fn_ty);
-
-        _ = wip.call(
-            .normal,
-            .ccc,
-            .none,
-            fn_ty,
-            write_fn.toValue(builder),
-            &.{
-                builder.intValue(.i32, 1) catch return error.OutOfMemory,
-                ptr,
-                try self.coerceScalar(len, len_ty, false),
-            },
-            "",
-        ) catch return error.OutOfMemory;
-    }
-
     fn emitLinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
         if (self.target.cpu.arch == .x86_64) {
-            try self.emitX86_64LinuxWriteStdout(ptr, len);
+            try self.emitX86_64WriteStdout(ptr, len, 1);
         } else if (self.target.cpu.arch == .aarch64) {
             try self.emitAarch64LinuxWriteStdout(ptr, len);
         } else {
@@ -13931,28 +14317,9 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn emitX86_64LinuxWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
-        const builder, const wip = try self.builderAndWip();
-        const usize_ty = self.ptrSizedIntType();
-        const fn_ty = builder.fnType(.i64, &.{ .i64, .i64, try self.ptrType(), usize_ty }, .normal) catch return error.OutOfMemory;
-
-        _ = wip.callAsm(
-            .none,
-            fn_ty,
-            .{ .sideeffect = true },
-            builder.string("syscall") catch return error.OutOfMemory,
-            builder.string("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
-            &.{
-                builder.intValue(.i64, 1) catch return error.OutOfMemory,
-                builder.intValue(.i64, 1) catch return error.OutOfMemory,
-                ptr,
-                len,
-            },
-            "",
-        ) catch return error.OutOfMemory;
-    }
-
-    fn emitX86_64BsdWriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value) Error!void {
+    /// Write to stdout with the x86-64 `syscall` instruction; `write_syscall`
+    /// is the target OS's `write` syscall number.
+    fn emitX86_64WriteStdout(self: *MonoLlvmCodeGen, ptr: LlvmBuilder.Value, len: LlvmBuilder.Value, write_syscall: u64) Error!void {
         if (self.target.cpu.arch != .x86_64) return error.CompilationFailed;
 
         const builder, const wip = try self.builderAndWip();
@@ -13966,7 +14333,7 @@ pub const MonoLlvmCodeGen = struct {
             builder.string("syscall") catch return error.OutOfMemory,
             builder.string("={rax},{rax},{rdi},{rsi},{rdx},~{rcx},~{r11},~{memory}") catch return error.OutOfMemory,
             &.{
-                builder.intValue(.i64, 4) catch return error.OutOfMemory,
+                builder.intValue(.i64, write_syscall) catch return error.OutOfMemory,
                 builder.intValue(.i64, 1) catch return error.OutOfMemory,
                 ptr,
                 len,
@@ -14015,9 +14382,8 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const ptr_ty = try self.ptrType();
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
-        defer arena_state.deinit();
-        const arena = arena_state.allocator();
+        _ = self.hosted_abi_arena.reset(.retain_capacity);
+        const arena = self.hosted_abi_arena.allocator();
 
         // The host reaches its own runtime operations directly, so hosted
         // functions never take a leading host pointer.
@@ -14067,7 +14433,7 @@ pub const MonoLlvmCodeGen = struct {
                     &param_types,
                     &call_args,
                     registers,
-                    arg_ptr,
+                    .{ .memory = arg_ptr },
                     arg_layout,
                 ),
             }
@@ -14084,9 +14450,46 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
+    /// Call a builtin that returns a value. Builtins that return void go
+    /// through `callBuiltinVoid`.
     fn callBuiltin(
         self: *MonoLlvmCodeGen,
-        name: []const u8,
+        f: BuiltinSymbol,
+        ret_type: LlvmBuilder.Type,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        std.debug.assert(ret_type != .void);
+        return self.emitBuiltinCall(f, ret_type, param_types, args);
+    }
+
+    /// Call a builtin that returns void. On a cold path, a builtin that writes
+    /// a list or string result through its first parameter
+    /// (`writesResultWordTriple`) is called through a shim that returns the
+    /// three words by value instead: handing the caller's result slot to a
+    /// never-inlined call would make the slot's address escape, and an escaped
+    /// slot pins the local to memory for every hot-path update too. On hot
+    /// paths the call is ordinary; the builtin inlines and the store through
+    /// the pointer dissolves. The slow arm of a backend-emitted inline fast
+    /// path counts as a cold path (`enterInlineSlowArm`).
+    fn callBuiltinVoid(self: *MonoLlvmCodeGen, f: BuiltinSymbol, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
+        if (self.cold_depth == 0 or !f.writesResultWordTriple()) {
+            _ = try self.emitBuiltinCall(f, .void, param_types, args);
+            return;
+        }
+        const wip = self.wip orelse return error.CompilationFailed;
+        const builder = self.builder orelse return error.CompilationFailed;
+        const shim = try self.declareColdShim(f, .void, param_types);
+        const result = wip.call(.normal, .preserve_mostcc, .none, shim.shim.typeOf(builder), shim.shim.toValue(builder), args[1..], "") catch return error.OutOfMemory;
+        const out_ptr = args[0];
+        try self.storePointer(out_ptr, wip.extractValue(result, &.{0}, "") catch return error.OutOfMemory);
+        try self.storeListLen(out_ptr, wip.extractValue(result, &.{1}, "") catch return error.OutOfMemory);
+        try self.storeListCapacity(out_ptr, wip.extractValue(result, &.{2}, "") catch return error.OutOfMemory);
+    }
+
+    fn emitBuiltinCall(
+        self: *MonoLlvmCodeGen,
+        f: BuiltinSymbol,
         ret_type: LlvmBuilder.Type,
         param_types: []const LlvmBuilder.Type,
         args: []const LlvmBuilder.Value,
@@ -14100,23 +14503,47 @@ pub const MonoLlvmCodeGen = struct {
             // cold arm. Routing the call through a noinline preserve_most
             // wrapper moves those saves into the wrapper, so the hot loop
             // keeps its values in registers.
-            const shim = try self.declareColdShim(name, ret_type, param_types);
-            // An out-parameter builtin must go through callBuiltinOut, whose
-            // shims drop the out parameter; a full-signature call against one
-            // would corrupt the stack.
-            std.debug.assert(!shim.by_value_out);
-            return wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
+            const shim = try self.declareColdShim(f, ret_type, param_types);
+            return wip.call(.normal, .preserve_mostcc, .none, shim.shim.typeOf(builder), shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
         }
-        const func = try self.declareBuiltin(name, ret_type, param_types);
+        const func = try self.declareBuiltin(f, ret_type, param_types);
         return wip.call(.normal, .ccc, .none, func.typeOf(builder), func.toValue(builder), args, "") catch return error.OutOfMemory;
     }
 
-    fn declareColdShim(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+    /// Call an LLVM intrinsic. Intrinsics lower to instructions rather than
+    /// calls, so they are never routed through cold shims.
+    fn callIntrinsic(
+        self: *MonoLlvmCodeGen,
+        name: []const u8,
+        ret_type: LlvmBuilder.Type,
+        param_types: []const LlvmBuilder.Type,
+        args: []const LlvmBuilder.Value,
+    ) Error!LlvmBuilder.Value {
+        std.debug.assert(std.mem.startsWith(u8, name, "llvm."));
+        const wip = self.wip orelse return error.CompilationFailed;
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.cold_shims.get(name)) |shim| return shim;
-        const target = try self.declareBuiltin(name, ret_type, param_types);
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
-        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
+        const func = self.symbol_functions.get(name) orelse blk: {
+            const declared = builder.addFunction(fn_ty, builder.strtabString(name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
+            try self.symbol_functions.put(name, declared);
+            break :blk declared;
+        };
+        return wip.call(.normal, .ccc, .none, fn_ty, func.toValue(builder), args, "") catch return error.OutOfMemory;
+    }
+
+    /// Declare (once) the cold-path shim for `f`. A builtin that writes a list
+    /// or string result through its first parameter gets a shim without that
+    /// parameter that returns the three words by value; every other builtin's
+    /// shim has the builtin's own signature.
+    fn declareColdShim(self: *MonoLlvmCodeGen, f: BuiltinSymbol, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+        const builder = self.builder orelse return error.CompilationFailed;
+        const target = try self.declareBuiltin(f, ret_type, param_types);
+        if (self.cold_shims[@backingInt(f)]) |shim| return shim;
+        const fn_ty = if (f.writesResultWordTriple())
+            builder.fnType(try self.listValueType(), param_types[1..], .normal) catch return error.OutOfMemory
+        else
+            target.typeOf(builder);
+        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{f.symbolName()});
         defer self.allocator.free(shim_name);
         const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
         func.setLinkage(.internal, builder);
@@ -14128,8 +14555,8 @@ pub const MonoLlvmCodeGen = struct {
             try attrs_wip.addFnAttr(.cold, builder);
             func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
         }
-        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = fn_ty, .by_value_out = false, .compiled = false };
-        try self.cold_shims.put(name, shim);
+        const shim = ColdShim{ .shim = func, .target = target, .compiled = false };
+        self.cold_shims[@backingInt(f)] = shim;
         return shim;
     }
 
@@ -14138,17 +14565,21 @@ pub const MonoLlvmCodeGen = struct {
     /// when no function is mid-emission.
     fn compilePendingColdShims(self: *MonoLlvmCodeGen) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
-        var iter = self.cold_shims.valueIterator();
-        while (iter.next()) |shim| {
+        for (&self.cold_shims, 0..) |*entry, index| {
+            const shim = if (entry.*) |*shim| shim else continue;
             if (shim.compiled) continue;
             shim.compiled = true;
+            const f: BuiltinSymbol = @fromBackingInt(@intCast(index));
 
             var wip = LlvmBuilder.WipFunction.init(builder, .{ .function = shim.shim, .strip = true }) catch return error.OutOfMemory;
             defer wip.deinit();
-            const entry = wip.block(0, "entry") catch return error.OutOfMemory;
-            wip.cursor = .{ .block = entry };
+            const entry_block = wip.block(0, "entry") catch return error.OutOfMemory;
+            wip.cursor = .{ .block = entry_block };
 
-            if (shim.by_value_out) {
+            const shim_ty = shim.shim.typeOf(builder);
+            const param_count = shim_ty.functionParameters(builder).len;
+
+            if (f.writesResultWordTriple()) {
                 // Adapt the builtin's out-parameter ABI inside the shim: give
                 // the builtin a slot that is private to this cold function,
                 // then hand the three words back by value.
@@ -14162,75 +14593,47 @@ pub const MonoLlvmCodeGen = struct {
                     "out",
                 ) catch return error.OutOfMemory;
 
-                const param_count = shim.fn_ty.functionParameters(builder).len;
                 const args = try self.allocator.alloc(LlvmBuilder.Value, param_count + 1);
                 defer self.allocator.free(args);
                 args[0] = out_slot;
                 for (args[1..], 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
 
-                _ = wip.call(.normal, .ccc, .none, shim.target_fn_ty, shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
+                _ = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
 
                 // `self.wip` is null between procs, so read the slot with
-                // this shim's own instruction builder.
+                // this shim's own instruction builder. The result is a RocStr
+                // or RocList; both are `bytes` followed by two words, which
+                // travel back positionally.
+                comptime std.debug.assert(RocStr.word_count == RocList.word_count);
                 const word = self.targetWordSize();
-                const len_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                const cap_ptr = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, 2 * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
-                const fields = [_]LlvmBuilder.Value{
-                    wip.load(.normal, try self.ptrType(), out_slot, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                    wip.load(.normal, self.ptrSizedIntType(), len_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                    wip.load(.normal, self.ptrSizedIntType(), cap_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory,
-                };
+                var word_ptrs: [RocList.word_count]LlvmBuilder.Value = undefined;
+                word_ptrs[0] = out_slot;
+                for (word_ptrs[1..], 1..) |*word_ptr, word_index| {
+                    word_ptr.* = wip.gep(.inbounds, .i8, out_slot, &.{builder.intValue(.i32, word_index * word) catch return error.OutOfMemory}, "") catch return error.OutOfMemory;
+                }
+                var fields: [RocList.word_count]LlvmBuilder.Value = undefined;
+                for (&fields, word_ptrs, 0..) |*field, word_ptr, word_index| {
+                    const field_ty = if (word_index == 0) try self.ptrType() else self.ptrSizedIntType();
+                    field.* = wip.load(.normal, field_ty, word_ptr, self.targetPointerAlignment(), "") catch return error.OutOfMemory;
+                }
                 const aggregate = wip.buildAggregate(slot_ty, &fields, "") catch return error.OutOfMemory;
                 _ = wip.ret(aggregate) catch return error.OutOfMemory;
                 wip.finish() catch return error.OutOfMemory;
                 continue;
             }
 
-            const param_count = shim.fn_ty.functionParameters(builder).len;
             const args = try self.allocator.alloc(LlvmBuilder.Value, param_count);
             defer self.allocator.free(args);
             for (args, 0..) |*arg, i| arg.* = wip.arg(@intCast(i));
 
             const result = wip.call(.normal, .ccc, .none, shim.target.typeOf(builder), shim.target.toValue(builder), args, "") catch return error.OutOfMemory;
-            if (shim.fn_ty.functionReturn(builder) == .void) {
+            if (shim_ty.functionReturn(builder) == .void) {
                 _ = wip.retVoid() catch return error.OutOfMemory;
             } else {
                 _ = wip.ret(result) catch return error.OutOfMemory;
             }
             wip.finish() catch return error.OutOfMemory;
         }
-    }
-
-    fn callBuiltinVoid(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
-        _ = try self.callBuiltin(name, .void, param_types, args);
-    }
-
-    /// Call a void builtin whose first argument is a pointer it writes a
-    /// three-word list or string result through. On hot paths this is an
-    /// ordinary call: the builtin inlines and the store through the pointer
-    /// dissolves. On cold paths the call becomes a shim that returns the
-    /// three words by value instead, because handing the out pointer to a
-    /// never-inlined call would make the result slot's address escape, and an
-    /// escaped slot pins the local to memory for every hot-path update too.
-    fn callBuiltinOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type, args: []const LlvmBuilder.Value) Error!void {
-        if (self.cold_depth == 0) {
-            _ = try self.callBuiltin(name, .void, param_types, args);
-            return;
-        }
-        const wip = self.wip orelse return error.CompilationFailed;
-        const builder = self.builder orelse return error.CompilationFailed;
-        const shim = try self.declareColdShimOut(name, param_types);
-        if (!shim.by_value_out) {
-            // The shim was first declared by a caller that keeps the full
-            // out-parameter signature; match it.
-            _ = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args, "") catch return error.OutOfMemory;
-            return;
-        }
-        const result = wip.call(.normal, .preserve_mostcc, .none, shim.fn_ty, shim.shim.toValue(builder), args[1..], "") catch return error.OutOfMemory;
-        const out_ptr = args[0];
-        try self.storePointer(out_ptr, wip.extractValue(result, &.{0}, "") catch return error.OutOfMemory);
-        try self.storeListLen(out_ptr, wip.extractValue(result, &.{1}, "") catch return error.OutOfMemory);
-        try self.storeListCapacity(out_ptr, wip.extractValue(result, &.{2}, "") catch return error.OutOfMemory);
     }
 
     /// Three-word list/string value as an aggregate returned in registers.
@@ -14240,53 +14643,45 @@ pub const MonoLlvmCodeGen = struct {
         return builder.structType(.normal, &.{ try self.ptrType(), usize_ty, usize_ty }) catch return error.OutOfMemory;
     }
 
-    fn declareColdShimOut(self: *MonoLlvmCodeGen, name: []const u8, param_types: []const LlvmBuilder.Type) Error!ColdShim {
+    /// Declare (once) the builtin `f`. Every call site states the same
+    /// signature for a given builtin: it is the wrapper's C ABI.
+    fn declareBuiltin(self: *MonoLlvmCodeGen, f: BuiltinSymbol, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.cold_shims.get(name)) |shim| return shim;
-        const target = try self.declareBuiltin(name, .void, param_types);
-        const target_fn_ty = builder.fnType(.void, param_types, .normal) catch return error.OutOfMemory;
-        const fn_ty = builder.fnType(try self.listValueType(), param_types[1..], .normal) catch return error.OutOfMemory;
-        const shim_name = try std.fmt.allocPrint(self.allocator, "roc_cold_shim.{s}", .{name});
-        defer self.allocator.free(shim_name);
-        const func = builder.addFunction(fn_ty, builder.strtabString(shim_name) catch return error.OutOfMemory, .default) catch return error.OutOfMemory;
-        func.setLinkage(.internal, builder);
-        func.setCallConv(.preserve_mostcc, builder);
-        {
-            var attrs_wip: LlvmBuilder.FunctionAttributes.Wip = .{};
-            defer attrs_wip.deinit(builder);
-            try attrs_wip.addFnAttr(.@"noinline", builder);
-            try attrs_wip.addFnAttr(.cold, builder);
-            func.setAttributes(attrs_wip.finish(builder) catch return error.OutOfMemory, builder);
+        if (self.builtin_functions[@backingInt(f)]) |func| {
+            if (std.debug.runtime_safety and func.typeOf(builder) != (builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory)) {
+                llvmInvariantFmt("builtin {s} called with two different signatures", .{f.symbolName()});
+            }
+            return func;
         }
-        const shim = ColdShim{ .shim = func, .target = target, .fn_ty = fn_ty, .target_fn_ty = target_fn_ty, .by_value_out = true, .compiled = false };
-        try self.cold_shims.put(name, shim);
-        return shim;
-    }
-
-    fn declareBuiltin(self: *MonoLlvmCodeGen, name: []const u8, ret_type: LlvmBuilder.Type, param_types: []const LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
-        const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
         const fn_ty = builder.fnType(ret_type, param_types, .normal) catch return error.OutOfMemory;
         // Always use the plain builtin name so the IR global matches the symbol in
         // the builtin bitcode linked in for inlining. LLVM still applies the target's
         // symbol mangling (e.g. the macOS leading underscore) when emitting the final
         // object, so non-inlined calls still resolve against roc_builtins.o at link.
-        const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
+        const fn_name = builder.strtabString(f.symbolName()) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        try self.builtin_functions.put(name, func);
+        self.builtin_functions[@backingInt(f)] = func;
         return func;
     }
 
+    /// The linkage of a reference to a host-provided function. Weak linkage
+    /// breaks the app/host reference cycle: the symbol resolves at the end of
+    /// the link against whichever host object defines it. COFF has no
+    /// equivalent weak external and needs none, since one link pass resolves
+    /// references in both directions.
+    fn hostReferenceLinkage(self: *const MonoLlvmCodeGen) LlvmBuilder.Linkage {
+        return if (self.target.ofmt == .coff) .external else .extern_weak;
+    }
+
     /// Declare (once) a host-provided function under its literal linker symbol.
-    /// Weak linkage breaks the app/host reference cycle: the symbol resolves at
-    /// the end of the link against whichever host object defines it.
     fn declareHostSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
+        std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
+        if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        func.setLinkage(.extern_weak, builder);
-        try self.builtin_functions.put(name, func);
+        func.setLinkage(self.hostReferenceLinkage(), builder);
+        try self.symbol_functions.put(name, func);
         return func;
     }
 
@@ -14294,10 +14689,11 @@ pub const MonoLlvmCodeGen = struct {
     /// pull their archive members at link time, which weak references do not.
     fn declareExternSymbol(self: *MonoLlvmCodeGen, name: []const u8, fn_ty: LlvmBuilder.Type) Error!LlvmBuilder.Function.Index {
         const builder = self.builder orelse return error.CompilationFailed;
-        if (self.builtin_functions.get(name)) |func| return func;
+        std.debug.assert(BuiltinSymbol.fromSymbolName(name) == null);
+        if (self.symbol_functions.get(name)) |func| return func;
         const fn_name = builder.strtabString(name) catch return error.OutOfMemory;
         const func = builder.addFunction(fn_ty, fn_name, .default) catch return error.OutOfMemory;
-        try self.builtin_functions.put(name, func);
+        try self.symbol_functions.put(name, func);
         return func;
     }
 
@@ -14322,6 +14718,7 @@ pub const MonoLlvmCodeGen = struct {
 
     fn finishCurrentWipFunction(self: *MonoLlvmCodeGen) Error!void {
         const wip = self.wip orelse return error.CompilationFailed;
+        try self.finishSharedCrashes();
 
         for (wip.blocks.items, 0..) |*block, block_idx| {
             if (block.instructions.items.len == 0 or !block.instructions.items[block.instructions.items.len - 1].isTerminatorWip(wip)) {
@@ -14332,9 +14729,15 @@ pub const MonoLlvmCodeGen = struct {
 
         for (wip.blocks.items, 0..) |*block, block_idx| {
             for (block.instructions.items) |instruction| {
-                const tag = wip.instructions.get(@backingInt(instruction)).tag;
+                const inst = wip.instructions.get(@backingInt(instruction));
+                const tag = inst.tag;
                 if (builtin.mode == .debug and block_idx != 0) {
-                    if (tag == .alloca or tag == .@"alloca inalloca") {
+                    // A procedure's dynamic frame region is sized by its
+                    // descriptors, so its alloca follows their reads; a
+                    // fixed-size alloca belongs in the entry block.
+                    const fixed_size = (tag == .alloca or tag == .@"alloca inalloca") and
+                        wip.extraData(LlvmBuilder.Function.Instruction.Alloca, inst.data).len.toConst() != null;
+                    if (fixed_size) {
                         const builder = self.builder orelse return error.CompilationFailed;
                         const instruction_index = @backingInt(instruction);
                         const instruction_name = if (wip.strip)
@@ -14382,11 +14785,12 @@ fn isIntegerLayout(layout_idx: layout.Idx) bool {
 }
 
 fn checkedOverflowMessage(op: lir.LowLevel) []const u8 {
-    return CheckedArithmetic.overflowMessage(op) orelse unreachable;
+    return CheckedArithmetic.overflowMessage(op) orelse llvmInvariantFmt("checked op {t} has no overflow message", .{op});
 }
 
 fn checkedZeroDenominatorMessage(op: lir.LowLevel, layout_idx: layout.Idx) []const u8 {
-    return CheckedArithmetic.zeroDenominatorMessage(op, layout_idx) orelse unreachable;
+    return CheckedArithmetic.zeroDenominatorMessage(op, layout_idx) orelse
+        llvmInvariantFmt("checked op {t} has no zero-denominator message for layout {d}", .{ op, @backingInt(layout_idx) });
 }
 
 fn intTypeForBytes(size: u8) LlvmBuilder.Type {
@@ -14396,7 +14800,7 @@ fn intTypeForBytes(size: u8) LlvmBuilder.Type {
         4 => .i32,
         8 => .i64,
         16 => .i128,
-        else => unreachable,
+        else => llvmInvariantFmt("no integer type for {d} bytes", .{size}),
     };
 }
 
@@ -14420,8 +14824,7 @@ fn repeatedByte(byte: u8, width: u8) u128 {
 
 /// Encode the runtime's inline RocStr layout as target-width integer constants.
 /// The final byte is the length/flag byte regardless of target endianness.
-fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [builtins.str.RocStr.word_count]u64 {
-    const RocStr = builtins.str.RocStr;
+fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.Endian) [RocStr.word_count]u64 {
     std.debug.assert(word_size == 2 or word_size == 4 or word_size == 8);
     const str_size = RocStr.word_count * word_size;
     std.debug.assert(bytes.len < str_size);
@@ -14435,14 +14838,13 @@ fn smallStrLiteralWords(bytes: []const u8, word_size: u32, endian: std.builtin.E
             2 => std.mem.readInt(u16, encoded[offset..][0..2], endian),
             4 => std.mem.readInt(u32, encoded[offset..][0..4], endian),
             8 => std.mem.readInt(u64, encoded[offset..][0..8], endian),
-            else => unreachable,
+            else => unreachable, // word_size is 2, 4, or 8, asserted on entry
         };
     }
     return words;
 }
 
 test "LLVM small string constants match the runtime constructor" {
-    const RocStr = builtins.str.RocStr;
     // Include embedded NUL and UTF-8 in partial and full words.
     const contents = "a\x00é🙂bc\x00é🙂defghijkl";
     for (0..@sizeOf(RocStr)) |len| {
@@ -14457,7 +14859,7 @@ test "LLVM small string constants match the runtime constructor" {
 test "LLVM small string constants preserve target layout at every length" {
     const contents = "a\x00é🙂bc\x00é🙂defghijkl";
     inline for (.{ u16, u32, u64 }) |Word| {
-        const size = builtins.str.RocStr.word_count * @sizeOf(Word);
+        const size = RocStr.word_count * @sizeOf(Word);
         inline for (.{ std.builtin.Endian.little, std.builtin.Endian.big }) |endian| {
             for (0..size) |len| {
                 const words = smallStrLiteralWords(contents[0..len], @sizeOf(Word), endian);
@@ -14467,7 +14869,7 @@ test "LLVM small string constants preserve target layout at every length" {
                 }
                 try std.testing.expectEqualSlices(u8, contents[0..len], memory[0..len]);
                 for (memory[len .. size - 1]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
-                try std.testing.expectEqual(@as(u8, 0x80) | @as(u8, @intCast(len)), memory[size - 1]);
+                try std.testing.expectEqual(RocStr.small_str_flag | @as(u8, @intCast(len)), memory[size - 1]);
             }
         }
     }
@@ -14484,7 +14886,7 @@ test "LLVM erased capture and reuse parameters may alias" {
         .ret_layout = .zst,
         .abi = .erased_callable,
     }, .none);
-    var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
+    var codegen = MonoLlvmCodeGen.init(allocator, &store);
     defer codegen.deinit();
     codegen.proc_symbol_mode = .lir_symbol;
     var builder = try codegen.createBuilder("erased_aliasing");
@@ -14521,7 +14923,7 @@ test "LLVM crash exits trap on every target and result type" {
     defer store.deinit();
     inline for (.{ std.Target.Cpu.Arch.aarch64, .x86_64 }) |arch| {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
-        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
         defer codegen.deinit();
         var builder = try codegen.createBuilder("crash_exits");
         defer builder.deinit();
@@ -14578,7 +14980,7 @@ test "LLVM fixed stack slots dominate entry and loop uses" {
     const byte_alignment = LlvmBuilder.Alignment.fromByteUnits(@alignOf(u8));
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
-    var codegen = MonoLlvmCodeGen.init(allocator, &store, &.{}, &.{}, &.{});
+    var codegen = MonoLlvmCodeGen.init(allocator, &store);
     defer codegen.deinit();
     var builder = try codegen.createBuilder("stack_slots");
     defer builder.deinit();
@@ -14638,7 +15040,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
             .ret_layout = .i64,
         }, .none);
     }
-    var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, &.{}, &.{}, &.{}, builtin.target);
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, builtin.target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
 
@@ -14647,17 +15049,15 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     // Each column is initialized once; each proc invalidates its argument and
     // frame inventory. No clearing work may scale with procs * global locals.
     const proc_work = 2 * proc_count;
-    try std.testing.expectEqual(2 * store.localCount() + proc_work, codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(store.localCount() + proc_work, codegen.local_scratch_rows_visited);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
     const slots_ptr = codegen.local_slot_storage.items.ptr;
-    const captures_ptr = codegen.deferred_str_capture_storage.items.ptr;
 
     const before = codegen.local_scratch_rows_visited;
     var second = try codegen.generateEntrypointModule("scratch_reuse", &.{});
     defer second.deinit();
     try std.testing.expectEqual(proc_work, codegen.local_scratch_rows_visited - before);
     try std.testing.expectEqual(slots_ptr, codegen.local_slot_storage.items.ptr);
-    try std.testing.expectEqual(captures_ptr, codegen.deferred_str_capture_storage.items.ptr);
     try std.testing.expectEqualSlices(u32, first.bitcode, second.bitcode);
 
     // A failure after slots were allocated must leave the instance reusable.
@@ -14665,7 +15065,7 @@ test "issue 11132: scratch clearing follows proc inventories and survives module
     try std.testing.expectError(error.CompilationFailed, codegen.generateEntrypointModule("scratch_reuse", &.{}));
     try std.testing.expect(codegen.local_slots.len == 0);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_captures.count());
     store.setProcSpecBody(procs[0], body);
     var after_failure = try codegen.generateEntrypointModule("scratch_reuse", &.{});
     defer after_failure.deinit();
@@ -14677,21 +15077,19 @@ test "issue 11132: scratch allocation failure and store growth initialize only n
     var store = lir.LirStore.init(gpa);
     defer store.deinit();
     _ = try store.addLocal(.{ .layout_idx = .str });
-    // Fail the capture table allocation after the slot table succeeds.
-    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 1 });
-    var codegen = MonoLlvmCodeGen.init(failing.allocator(), &store, &.{}, &.{}, &.{});
+    // Fail the slot table allocation.
+    var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = 0 });
+    var codegen = MonoLlvmCodeGen.init(failing.allocator(), &store);
     defer codegen.deinit();
     try std.testing.expectError(error.OutOfMemory, codegen.ensureLocalScratch());
-    try std.testing.expectEqual(@as(usize, 1), codegen.local_scratch_rows_visited);
-    try std.testing.expect(!codegen.local_slot_storage.items[0].allocated);
+    try std.testing.expectEqual(@as(usize, 0), codegen.local_scratch_rows_visited);
     failing.fail_index = std.math.maxInt(usize);
     try codegen.ensureLocalScratch();
-    try std.testing.expectEqual(@as(usize, 2), codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(@as(usize, 1), codegen.local_scratch_rows_visited);
     _ = try store.addLocal(.{ .layout_idx = .str });
     try codegen.ensureLocalScratch();
-    try std.testing.expectEqual(@as(usize, 4), codegen.local_scratch_rows_visited);
+    try std.testing.expectEqual(@as(usize, 2), codegen.local_scratch_rows_visited);
     for (codegen.local_slot_storage.items) |slot_value| try std.testing.expect(!slot_value.allocated);
-    for (codegen.deferred_str_capture_storage.items) |capture| try std.testing.expect(capture == null);
 }
 
 test "issue 11132: installed and propagated deferred captures are counted and cleared" {
@@ -14703,11 +15101,10 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
     const source = try store.addLocal(.{ .layout_idx = .str });
     const first = try store.addLocal(.{ .layout_idx = .str });
     const second = try store.addLocal(.{ .layout_idx = .str });
-    var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
     try codegen.ensureLocalScratch();
-    codegen.deferred_str_captures = codegen.deferred_str_capture_storage.items;
     const capture = MonoLlvmCodeGen.DeferredStrCapture{
         .source_local = source,
         // No materialization occurs here; only the source identity is read.
@@ -14718,24 +15115,22 @@ test "issue 11132: installed and propagated deferred captures are counted and cl
         .pending_rc_atomicity = .atomic,
     };
     try codegen.installDeferredStrCapture(first, capture);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     try std.testing.expect(try codegen.propagateDeferredStrCapture(second, first));
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     try std.testing.expect(try codegen.propagateDeferredStrCapture(first, first));
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCapture(first);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     try codegen.installDeferredStrCapture(first, capture);
-    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 2), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCaptures();
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_count);
-    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_capture_actives.items.len);
+    try std.testing.expectEqual(@as(usize, 0), codegen.deferred_str_captures.count());
     try std.testing.expect(codegen.deferredStrCapture(first) == null);
     try std.testing.expect(codegen.deferredStrCapture(second) == null);
     // Reusing the same IDs in another procedure starts with empty capture state.
     try codegen.installDeferredStrCapture(second, capture);
-    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_capture_count);
+    try std.testing.expectEqual(@as(usize, 1), codegen.deferred_str_captures.count());
     codegen.clearDeferredStrCaptures();
 }
 
@@ -14746,7 +15141,7 @@ test "static-data slots with constant images are internal constants and function
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
     const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
-    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
     const address = [_]lir.Program.StaticDataRelocation{.{ .offset = 8, .target_symbol_name = "roc__d1_1", .addend = 16 }};
@@ -14795,7 +15190,7 @@ test "frozen relocation offsets are bounded before host indexing for either targ
         var store = lir.LirStore.init(allocator);
         defer store.deinit();
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = if (arch == .wasm32) .freestanding else .linux });
-        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
         defer codegen.deinit();
         var builder = try codegen.createBuilder("frozen_relocation_bounds");
         defer builder.deinit();
@@ -14833,7 +15228,7 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
     const helper: layout.RcHelperKey = .{ .op = .decref, .layout_idx = .str };
     inline for (.{ std.Target.Os.Tag.windows, .linux }) |os| {
         const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = os });
-        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
         defer codegen.deinit();
         codegen.layout_store = &layouts;
         codegen.proc_symbol_mode = .lir_symbol;
@@ -14866,6 +15261,383 @@ test "frozen callable procedures and explicit drop helpers are DLL exports on Wi
 /// forced-inline attribute group. Textual IR names each distinct attribute
 /// group once and refers to it by index, so the forced groups are collected
 /// first and the call sites referring to them counted second.
+/// The text of the function `name` in printed IR, from its `define` line
+/// through its closing brace.
+fn printedFunction(ir: []const u8, name: []const u8) ?[]const u8 {
+    var start: usize = 0;
+    while (std.mem.findPos(u8, ir, start, "\ndefine ")) |at| {
+        const line_end = std.mem.findScalarPos(u8, ir, at + 1, '\n') orelse return null;
+        const line = ir[at + 1 .. line_end];
+        const at_name = std.mem.find(u8, line, name);
+        if (at_name) |offset| {
+            const before = line[offset - 1];
+            const after = line[offset + name.len];
+            if ((before == '@' or before == '"') and (after == '(' or after == '"')) {
+                const end = std.mem.findPos(u8, ir, line_end, "\n}\n") orelse return null;
+                return ir[at + 1 .. end + 2];
+            }
+        }
+        start = line_end;
+    }
+    return null;
+}
+
+test "issue 12505: addressed Bool alias materializes its SSA source" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const input = try store.addLocal(.{ .layout_idx = .bool });
+    const alias = try store.addLocal(.{ .layout_idx = .bool });
+    const result = try store.addLocal(.{ .layout_idx = .u32 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const read = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = .{ .kind = .discriminant, .source = alias }, .next = ret } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = .local(input), .next = read } }, .test_fixture);
+    _ = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{input}),
+        .frame_locals = try store.addLocalSpan(&.{ alias, result }),
+        .body = body,
+        .ret_layout = .u32,
+    }, .none);
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("addressed_bool_alias");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "alloca"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "store i8"));
+}
+
+test "issue 12505: large record tuple and tag payload projections borrow storage" {
+    const gpa = std.testing.allocator;
+    const Shape = enum { record, tuple, tag_payload, tag_payload_struct };
+    inline for (.{ std.Target.Cpu.Arch.x86_64, .aarch64 }) |arch| {
+        inline for ([_]Shape{ .record, .tuple, .tag_payload, .tag_payload_struct }) |shape| {
+            var store = lir.LirStore.init(gpa);
+            defer store.deinit();
+            var layouts = try layout.Store.init(gpa, .u64);
+            defer layouts.deinit();
+            var fields: [64]layout.StructField = undefined;
+            for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .u64 };
+            const wide = try layouts.putStructFields(&fields);
+            const wrapper = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = wide } });
+            const outer = switch (shape) {
+                .record => wrapper,
+                .tuple => try layouts.putTuple(&.{ layouts.getLayout(.u64), layouts.getLayout(wide) }),
+                .tag_payload, .tag_payload_struct => try layouts.putTagUnion(&.{ .zst, wrapper }),
+            };
+            const input = try store.addLocal(.{ .layout_idx = outer });
+            const alias = try store.addLocal(.{ .layout_idx = outer });
+            const payload = try store.addLocal(.{ .layout_idx = wrapper });
+            const projected = try store.addLocal(.{ .layout_idx = wide });
+            const copied = try store.addLocal(.{ .layout_idx = wide });
+            const result = try store.addLocal(.{ .layout_idx = .u64 });
+            var body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = lir.LIR.RefOp.field(copied, 63), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = copied, .op = lir.LIR.RefOp.local(projected), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{
+                .assign_ref = .{
+                    .target = projected,
+                    .op = switch (shape) {
+                        .record, .tuple => lir.LIR.RefOp.field(alias, 1),
+                        .tag_payload => lir.LIR.RefOp.tagPayload(alias, 1, 1, 1),
+                        .tag_payload_struct => lir.LIR.RefOp.field(payload, 1),
+                    },
+                    .next = body,
+                },
+            }, .test_fixture);
+            if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(input), .next = body } }, .test_fixture);
+            const proc = try store.addProcSpec(.{
+                .name = .fromRaw(1),
+                .identity = lir.LIR.ProcIdentity.forTest(1),
+                .args = try store.addLocalSpan(&.{input}),
+                .frame_locals = try store.addLocalSpan(if (shape == .tag_payload_struct) &.{ alias, payload, projected, copied, result } else &.{ alias, projected, copied, result }),
+                .body = body,
+                .ret_layout = .u64,
+            }, .none);
+            const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+            var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+            defer codegen.deinit();
+            codegen.layout_store = &layouts;
+            codegen.proc_symbol_mode = .local_index;
+            var builder = try codegen.createBuilder("aggregate_views");
+            defer builder.deinit();
+            codegen.builder = &builder;
+            defer codegen.builder = null;
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            var ir: std.Io.Writer.Allocating = .init(gpa);
+            defer ir.deinit();
+            try builder.print(&ir.writer);
+            const name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(proc)});
+            defer gpa.free(name);
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            // Before LLVM optimization: the input stays a pointer, projections
+            // are offsets, and only the requested scalar is loaded.
+            try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
+            for ([_][]const u8{ "alloca", "memcpy", "store " }) |op| try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, function, op));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
+        }
+    }
+}
+
+test "issue 12819: RC helper arguments have bounded slot lifetimes" {
+    const gpa = std.testing.allocator;
+    inline for (.{ .incref, .decref, .decref_if_initialized, .free }) |kind| {
+        var store = lir.LirStore.init(gpa);
+        defer store.deinit();
+        var layouts = try layout.Store.init(gpa, .u64);
+        defer layouts.deinit();
+        var fields: [8]layout.StructField = undefined;
+        for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .str };
+        const wide = try layouts.putStructFields(&fields);
+        const input = try store.addLocal(.{ .layout_idx = wide });
+        const value = try store.addLocal(.{ .layout_idx = wide });
+        const result = try store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const helper: lir.LIR.RcHelper = .{ .concrete = .{
+            .op = if (kind == .decref_if_initialized) .decref else kind,
+            .layout_idx = wide,
+        } };
+        const release = try store.addCFStmt(if (kind == .decref_if_initialized)
+            .{ .decref_if_initialized = .{ .cond = result, .value = value, .data = try store.addStmtRow(lir.LIR.DecrefIfInitializedData, .{ .rc = helper }), .next = ret } }
+        else
+            @unionInit(lir.LIR.CFStmt, @tagName(kind), .{ .value = value, .rc = try store.addRcHelperRef(helper), .next = ret }), .test_fixture);
+        const body = try store.addCFStmt(.{ .set_local = .{
+            .target = value,
+            .value = input,
+            .mode = .initialize_join_param,
+            .next = release,
+        } }, .test_fixture);
+        _ = try store.addProcSpec(.{
+            .name = .fromRaw(1),
+            .identity = lir.LIR.ProcIdentity.forTest(1),
+            .args = try store.addLocalSpan(&.{ input, result }),
+            .frame_locals = try store.addLocalSpan(&.{value}),
+            .body = body,
+            .ret_layout = .u64,
+        }, .none);
+        var codegen = MonoLlvmCodeGen.init(gpa, &store);
+        defer codegen.deinit();
+        codegen.layout_store = &layouts;
+        var builder = try codegen.createBuilder("rc_slot_lifetime");
+        defer builder.deinit();
+        codegen.builder = &builder;
+        defer codegen.builder = null;
+        try codegen.compileAllProcSpecs(store.getProcSpecs());
+        var ir: std.Io.Writer.Allocating = .init(gpa);
+        defer ir.deinit();
+        try builder.print(&ir.writer);
+        const function = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.start"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "call void @llvm.lifetime.end"));
+    }
+}
+
+test "issue 12819: large join parameter reads share storage" {
+    const gpa = std.testing.allocator;
+    const Shape = enum { record, tuple, tag_payload, tag_payload_struct };
+    inline for (.{ std.Target.Cpu.Arch.x86_64, .aarch64 }) |arch| {
+        inline for ([_]Shape{ .record, .tuple, .tag_payload, .tag_payload_struct }) |shape| {
+            var store = lir.LirStore.init(gpa);
+            defer store.deinit();
+            var layouts = try layout.Store.init(gpa, .u64);
+            defer layouts.deinit();
+            var fields: [64]layout.StructField = undefined;
+            for (&fields, 0..) |*field, i| field.* = .{ .index = @intCast(i), .layout = .u64 };
+            const wide = try layouts.putStructFields(&fields);
+            const wrapper = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .u64 }, .{ .index = 1, .layout = wide } });
+            const outer = switch (shape) {
+                .record => wrapper,
+                .tuple => try layouts.putTuple(&.{ layouts.getLayout(.u64), layouts.getLayout(wide) }),
+                .tag_payload, .tag_payload_struct => try layouts.putTagUnion(&.{ .zst, wrapper }),
+            };
+            const input = try store.addLocal(.{ .layout_idx = outer });
+            const joined = try store.addLocal(.{ .layout_idx = outer });
+            const alias = try store.addLocal(.{ .layout_idx = outer });
+            const payload = try store.addLocal(.{ .layout_idx = wrapper });
+            const projected = try store.addLocal(.{ .layout_idx = wide });
+            const copied = try store.addLocal(.{ .layout_idx = wide });
+            const result = try store.addLocal(.{ .layout_idx = .u64 });
+            var body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = result, .op = lir.LIR.RefOp.field(copied, 63), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = copied, .op = lir.LIR.RefOp.local(projected), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{
+                .assign_ref = .{
+                    .target = projected,
+                    .op = switch (shape) {
+                        .record, .tuple => lir.LIR.RefOp.field(alias, 1),
+                        .tag_payload => lir.LIR.RefOp.tagPayload(alias, 1, 1, 1),
+                        .tag_payload_struct => lir.LIR.RefOp.field(payload, 1),
+                    },
+                    .next = body,
+                },
+            }, .test_fixture);
+            if (shape == .tag_payload_struct) body = try store.addCFStmt(.{ .assign_ref = .{ .target = payload, .op = lir.LIR.RefOp.tagPayloadStruct(alias, 1, 1), .next = body } }, .test_fixture);
+            body = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = lir.LIR.RefOp.local(joined), .next = body } }, .test_fixture);
+            var join_points = ValuePlan.JoinPointIds{};
+            const join_id = join_points.fresh();
+            const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+            const initialize = try store.addCFStmt(.{ .set_local = .{
+                .target = joined,
+                .value = input,
+                .mode = .initialize_join_param,
+                .next = jump,
+            } }, .test_fixture);
+            body = try store.addCFStmt(.{ .join = .{
+                .id = join_id,
+                .params = try store.addLocalSpan(&.{joined}),
+                .body = body,
+                .remainder = initialize,
+            } }, .test_fixture);
+            const proc = try store.addProcSpec(.{
+                .name = .fromRaw(1),
+                .identity = lir.LIR.ProcIdentity.forTest(1),
+                .args = try store.addLocalSpan(&.{input}),
+                .frame_locals = try store.addLocalSpan(if (shape == .tag_payload_struct) &.{ joined, alias, payload, projected, copied, result } else &.{ joined, alias, projected, copied, result }),
+                .body = body,
+                .ret_layout = .u64,
+            }, .none);
+            const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = arch, .os_tag = .linux });
+            var codegen = MonoLlvmCodeGen.initForLinkedObject(gpa, &store, target);
+            defer codegen.deinit();
+            codegen.layout_store = &layouts;
+            codegen.proc_symbol_mode = .local_index;
+            var builder = try codegen.createBuilder("aggregate_views");
+            defer builder.deinit();
+            codegen.builder = &builder;
+            defer codegen.builder = null;
+            try codegen.compileAllProcSpecs(store.getProcSpecs());
+            var ir: std.Io.Writer.Allocating = .init(gpa);
+            defer ir.deinit();
+            try builder.print(&ir.writer);
+            const name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(proc)});
+            defer gpa.free(name);
+            const function = printedFunction(ir.written(), name) orelse return error.TestUnexpectedResult;
+            // The join owns one snapshot. Reading it, including through chains
+            // of aggregate projections, needs no additional slots or copies.
+            try std.testing.expect(std.mem.find(u8, function, ".fast(ptr ") != null);
+            for ([_][]const u8{ "alloca", "call void @llvm.memcpy" }) |op| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, op));
+            try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, function, "load i64"));
+        }
+    }
+}
+
+test "issue 11500: an out-of-line scalar helper passes and returns values without slots" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+
+    // helper(x) = x + 1
+    const x = try store.addLocal(.{ .layout_idx = .i64 });
+    const one = try store.addLocal(.{ .layout_idx = .i64 });
+    const sum = try store.addLocal(.{ .layout_idx = .i64 });
+    var helper_body = try store.addCFStmt(.{ .ret = .{ .value = sum } }, .test_fixture);
+    helper_body = try store.addLowLevelStmt(sum, .num_int_add_wrap, &.{ x, one }, helper_body, .test_fixture);
+    helper_body = try store.addCFStmt(.{ .assign_literal = .{ .target = one, .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .i64 } }, .next = helper_body } }, .test_fixture);
+    const helper = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = try store.addLocalSpan(&.{x}),
+        .frame_locals = try store.addLocalSpan(&.{ one, sum }),
+        .body = helper_body,
+        .ret_layout = .i64,
+    }, .none);
+
+    // caller(a) = helper(a): the argument is a runtime parameter, so nothing
+    // folds the call away.
+    const a = try store.addLocal(.{ .layout_idx = .i64 });
+    const result = try store.addLocal(.{ .layout_idx = .i64 });
+    var caller_body = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    caller_body = try store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = helper, .args = try store.addLocalSpan(&.{a}), .next = caller_body } }, .test_fixture);
+    const caller = try store.addProcSpec(.{
+        .name = .fromRaw(2),
+        .identity = lir.LIR.ProcIdentity.forTest(2),
+        .args = try store.addLocalSpan(&.{a}),
+        .frame_locals = try store.addLocalSpan(&.{result}),
+        .body = caller_body,
+        .ret_layout = .i64,
+    }, .none);
+
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("scalar_helper");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const helper_name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(helper)});
+    defer gpa.free(helper_name);
+    const caller_name = try std.fmt.allocPrint(gpa, "roc_proc_{d}.fast", .{@backingInt(caller)});
+    defer gpa.free(caller_name);
+    const helper_ir = printedFunction(ir.written(), helper_name) orelse return error.TestUnexpectedResult;
+    const caller_ir = printedFunction(ir.written(), caller_name) orelse return error.TestUnexpectedResult;
+
+    // The helper takes and returns an i64 and touches no memory.
+    try std.testing.expect(std.mem.find(u8, helper_ir, "fastcc i64 @") != null);
+    try std.testing.expect(std.mem.find(u8, helper_ir, ".fast(i64 ") != null);
+    try std.testing.expect(std.mem.find(u8, helper_ir, "ret i64 ") != null);
+    for ([_][]const u8{ "alloca", "load ", "store ", "memcpy" }) |memory_op| {
+        try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, helper_ir, memory_op));
+        try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, caller_ir, memory_op));
+    }
+    // The caller passes its parameter and returns the call's value.
+    try std.testing.expect(std.mem.find(u8, caller_ir, "call fastcc i64 ") != null);
+    try std.testing.expect(std.mem.find(u8, caller_ir, "ret i64 ") != null);
+}
+
+test "issue 11500: loop-carried scalars become phis at the loop header" {
+    const gpa = std.testing.allocator;
+    var store = lir.LirStore.init(gpa);
+    defer store.deinit();
+    var layouts = try layout.Store.init(gpa, .u64);
+    defer layouts.deinit();
+    const program = try ValuePlan.SwapLoop.build(&store);
+    _ = try store.addProcSpec(.{
+        .name = .fromRaw(1),
+        .identity = lir.LIR.ProcIdentity.forTest(1),
+        .args = program.params,
+        .frame_locals = program.frame,
+        .body = program.body,
+        .ret_layout = .i64,
+    }, .none);
+
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    var builder = try codegen.createBuilder("swap_loop");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.compileAllProcSpecs(store.getProcSpecs());
+
+    var ir: std.Io.Writer.Allocating = .init(gpa);
+    defer ir.deinit();
+    try builder.print(&ir.writer);
+    const loop_ir = printedFunction(ir.written(), "roc_proc_0.fast") orelse return error.TestUnexpectedResult;
+    // One phi each for the swapped pair and the counter, and no frame slots.
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, loop_ir, " = phi "));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, loop_ir, "alloca"));
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, loop_ir, "store "));
+}
+
 fn forcedInlineCallSites(gpa: Allocator, ir: []const u8, function_name: []const u8) (Allocator.Error || error{FunctionNotPrinted})!usize {
     var forced_groups = std.AutoHashMap(u32, void).init(gpa);
     defer forced_groups.deinit();
@@ -14987,7 +15759,7 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .ret_layout = .i64,
     }, .none);
 
-    var codegen = MonoLlvmCodeGen.init(gpa, &store, &.{}, &.{}, &.{});
+    var codegen = MonoLlvmCodeGen.init(gpa, &store);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
     var builder = try codegen.createBuilder("inline_budget");
@@ -15013,4 +15785,20 @@ test "issue 11451: forced inlining at deep call sites is capped per caller" {
         .{ forced_sites, deep_sites, callee_stmts + 1 },
     );
     try std.testing.expect(forced_sites <= max_forced_sites);
+}
+
+test "wasm C-ABI classification follows the target's SIMD support" {
+    const allocator = std.testing.allocator;
+    const cases = [_]struct { target: roc_target.RocTarget, abi: layout.abi.Target }{
+        .{ .target = .wasm32, .abi = .wasm32 },
+        .{ .target = .wasm32v1, .abi = .wasm32v1 },
+    };
+    for (cases) |case| {
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        const target = try std.zig.system.resolveTargetQuery(std.testing.io, case.target.llvmTargetQuery());
+        var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+        defer codegen.deinit();
+        try std.testing.expectEqual(case.abi, codegen.abiTarget());
+    }
 }

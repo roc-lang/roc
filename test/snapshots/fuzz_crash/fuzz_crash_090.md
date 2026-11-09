@@ -149,7 +149,6 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 e = {
-	
 }
 ~~~
 # CANONICALIZE

@@ -59,7 +59,12 @@ MISSING METHOD - derived_eq_tag_union_nominal_component_issue_11575.md:12:5:12:1
 			(reflow " ")
 			(annotated code "frob")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "associated with it in the type's declaration.")
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "derived_eq_tag_union_nominal_component_issue_11575.md") (start 4 23) (end 4 31) (annotation error) (line-text "        NotNull(v) => v.frob()")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -182,7 +187,7 @@ y = x == x
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "frob") (constraint-fn-var 298)
+								(e-dispatch-call (method "frob") (constraint-fn-var 303)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "v"))))

@@ -17,6 +17,15 @@ const backend = @import("backend");
 const linker = @import("linker.zig");
 const lir = @import("lir");
 const unbundle = @import("unbundle");
+const cli_args = @import("cli_args.zig");
+
+/// A symbol a wasm image needs that nothing it may resolve to defines.
+pub const WasmMissingSymbol = struct {
+    name: []const u8,
+    kind: enum { data, table },
+    /// The image that needs it.
+    needed_by: enum { host, support, unit },
+};
 
 /// Errors that can be attached to structured CLI problem reports.
 pub const ReportedError =
@@ -48,12 +57,12 @@ pub const ReportedError =
     std.process.SpawnError ||
     error{
         ArchiveWriteFailed,
+        ImportLibraryWriteFailed,
         BrokenDocLinks,
         BuiltinsExtractionFailed,
         CheckFailed,
         CliError,
         CompilationFailed,
-        ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
         DocsFailed,
@@ -63,7 +72,6 @@ pub const ReportedError =
         ExpectErr,
         ExpectedAppHeader,
         ExpectedPlatformString,
-        ExpectedString,
         FailedToCreateUniqueTempDir,
         FdConfigFailed,
         FileNotFound,
@@ -118,6 +126,22 @@ pub const ReportedError =
 
 /// Structured CLI errors with context for helpful error messages
 pub const CliProblem = union(enum) {
+    // Command Line Problems
+
+    /// The command line arguments could not be parsed
+    invalid_arguments: cli_args.ArgProblem,
+
+    // Target Limit Problems
+
+    /// A platform boundary function takes more wasm parameters than an engine
+    /// loads, and the host fixes its signature
+    wasm_host_parameter_limit: struct {
+        symbol: []const u8,
+        direction: WasmHostDirection,
+        param_count: u32,
+        limit: u32,
+    },
+
     // File I/O Problems
 
     /// File was not found at the specified path
@@ -211,6 +235,16 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// A stack-first wasm platform's maximum memory reaches the addresses a
+    /// stack pointer wrapped below 0 lands on, so an overflow could write
+    /// memory instead of trapping.
+    wasm_maximum_memory_too_large: struct {
+        target: []const u8,
+        maximum_memory: usize,
+        limit: usize,
+        stack_size: usize,
+    },
+
     /// The requested optimization level is not implemented for this command
     unsupported_opt_level: struct {
         command: []const u8,
@@ -236,9 +270,73 @@ pub const CliProblem = union(enum) {
         target: []const u8,
     },
 
+    /// The link needed symbols in the compiler's own namespace that nothing
+    /// defined, which only a compiler bug can cause
+    undefined_compiler_symbols: struct {
+        symbols: []const []const u8,
+        target_format: []const u8,
+    },
+
     /// The platform's host inputs do not define symbols the app references
     missing_host_symbols: struct {
         symbols: []const []const u8,
+        target: []const u8,
+    },
+
+    /// A value the app provides to the host is larger than the room a dev
+    /// executable keeps for one
+    provided_value_too_large: struct {
+        symbol: []const u8,
+        size: u64,
+        limit: u64,
+        target: []const u8,
+    },
+
+    /// The app's code and data do not fit the addresses a dev executable
+    /// keeps for them
+    dev_program_too_large: struct {
+        target: []const u8,
+    },
+
+    /// A wasm module would exceed a limit every WebAssembly engine enforces
+    wasm_engine_limit: struct {
+        what: []const u8,
+        count: u64,
+        limit: u64,
+        target: []const u8,
+    },
+
+    /// The platform's wasm `exports:` name symbols nothing defines
+    wasm_exports_undefined: struct {
+        symbols: []const []const u8,
+        target: []const u8,
+    },
+
+    /// Parts of a wasm program need data symbols or tables nothing that
+    /// may define them defines
+    wasm_symbols_undefined: struct {
+        symbols: []const WasmMissingSymbol,
+        target: []const u8,
+    },
+
+    /// Two parts of a wasm program import one host function with
+    /// different signatures
+    wasm_import_conflict: struct {
+        symbol: []const u8,
+        target: []const u8,
+    },
+
+    /// The platform's wasm memory configuration does not fit the program
+    wasm_memory_layout: struct {
+        what: []const u8,
+        needed: u64,
+        configured: u64,
+        target: []const u8,
+    },
+
+    /// A wasm host input holds something a dev build cannot link
+    wasm_host_unsupported: struct {
+        reason: []const u8,
         target: []const u8,
     },
 
@@ -384,16 +482,28 @@ pub const CliProblem = union(enum) {
     pub fn severity(self: CliProblem) Severity {
         return switch (self) {
             // Fatal errors - cannot continue
+            .invalid_arguments,
+            .wasm_host_parameter_limit,
             .file_not_found,
             .no_platform_found,
             .platform_requires_app,
             .build_not_supported_for_headerless,
             .unsupported_default_platform_target,
             .unsupported_opt_level,
+            .wasm_maximum_memory_too_large,
             .compilation_failed,
             .unreported_error,
             .linker_failed,
+            .undefined_compiler_symbols,
             .missing_host_symbols,
+            .provided_value_too_large,
+            .dev_program_too_large,
+            .wasm_engine_limit,
+            .wasm_exports_undefined,
+            .wasm_symbols_undefined,
+            .wasm_import_conflict,
+            .wasm_memory_layout,
+            .wasm_host_unsupported,
             => .fatal,
 
             // Runtime errors - operation failed
@@ -437,6 +547,8 @@ pub const CliProblem = union(enum) {
     /// Generate a Report from this problem
     pub fn toReport(self: CliProblem, allocator: Allocator) Allocator.Error!Report {
         return switch (self) {
+            .invalid_arguments => |problem| try createInvalidArgumentsReport(allocator, problem),
+            .wasm_host_parameter_limit => |info| try createWasmHostParameterLimitReport(allocator, info),
             .file_not_found => |info| try createFileNotFoundReport(allocator, info),
             .file_read_failed => |info| try createFileReadFailedReport(allocator, info),
             .file_write_failed => |info| try createFileWriteFailedReport(allocator, info),
@@ -454,10 +566,20 @@ pub const CliProblem = union(enum) {
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
             .unsupported_opt_level => |info| try createUnsupportedOptLevelReport(allocator, info),
+            .wasm_maximum_memory_too_large => |info| try createWasmMaximumMemoryTooLargeReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .unreported_error => |info| try createUnreportedErrorReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
+            .undefined_compiler_symbols => |info| try createUndefinedCompilerSymbolsReport(allocator, info),
             .missing_host_symbols => |info| try createMissingHostSymbolsReport(allocator, info),
+            .provided_value_too_large => |info| try createProvidedValueTooLargeReport(allocator, info),
+            .dev_program_too_large => |info| try createDevProgramTooLargeReport(allocator, info),
+            .wasm_engine_limit => |info| try createWasmEngineLimitReport(allocator, info),
+            .wasm_exports_undefined => |info| try createWasmExportsUndefinedReport(allocator, info),
+            .wasm_symbols_undefined => |info| try createWasmSymbolsUndefinedReport(allocator, info),
+            .wasm_import_conflict => |info| try createWasmImportConflictReport(allocator, info),
+            .wasm_memory_layout => |info| try createWasmMemoryLayoutReport(allocator, info),
+            .wasm_host_unsupported => |info| try createWasmHostUnsupportedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
             .shim_generation_failed => |info| try createShimGenerationFailedReport(allocator, info),
             .invalid_url => |info| try createInvalidUrlReport(allocator, info),
@@ -484,6 +606,13 @@ pub const CliProblem = union(enum) {
     }
 };
 
+/// Which side of a platform boundary defines a function the host calls or
+/// provides.
+pub const WasmHostDirection = enum {
+    provided_to_host,
+    hosted,
+};
+
 /// Context for file operations - helps generate better error messages
 pub const FileContext = enum {
     source_file,
@@ -507,6 +636,131 @@ pub const FileContext = enum {
 
 // Report Generation Functions
 
+fn createInvalidArgumentsReport(allocator: Allocator, problem: cli_args.ArgProblem) Allocator.Error!Report {
+    return switch (problem) {
+        .missing_flag_value => |info| try createMissingFlagValueReport(allocator, info),
+        .unexpected_argument => |info| try createUnexpectedArgumentReport(allocator, info),
+        .unknown_flag => |info| try createUnknownFlagReport(allocator, info),
+        .shorthand_requires_run => |info| try createShorthandRequiresRunReport(allocator, info),
+        .invalid_flag_value => |info| try createInvalidFlagValueReport(allocator, info),
+    };
+}
+
+fn createMissingFlagValueReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "No value was supplied for the {s} flag.", .{info.flag});
+    defer allocator.free(headline);
+    return Report.init(allocator, "Missing Flag Value", headline, .fatal);
+}
+
+fn createUnexpectedArgumentReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const separator = if (info.cmd.len == 0) "" else " ";
+    const headline = try std.fmt.allocPrint(allocator, "roc{s}{s} received an unexpected argument: `{s}`.", .{ separator, info.cmd, info.arg });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unexpected Argument", headline, .fatal);
+
+    const help_hint = try std.fmt.allocPrint(allocator, "Run `roc{s}{s} --help` to see the arguments it accepts.", .{ separator, info.cmd });
+    defer allocator.free(help_hint);
+    try report.document.addSuggestion(help_hint);
+
+    return report;
+}
+
+/// Explains a dash-prefixed argument that names none of the command's flags,
+/// and how to write it when it was meant for the app or as a file name.
+fn createUnknownFlagReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const separator = if (info.cmd.len == 0) "" else " ";
+    const flag = info.arg[0 .. std.mem.findScalar(u8, info.arg, '=') orelse info.arg.len];
+    const headline = try std.fmt.allocPrint(allocator, "roc{s}{s} does not have a `{s}` flag.", .{ separator, info.cmd, flag });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unknown Flag", headline, .fatal);
+
+    if (info.suggestion) |suggestion| {
+        try report.document.addText("Did you mean `");
+        try report.document.addAnnotated(suggestion, .suggestion);
+        try report.document.addText("`?");
+        try report.document.addLineBreaks(2);
+    }
+    if (info.passes_args_to_app) {
+        const app_hint = try std.fmt.allocPrint(allocator, "To pass `{s}` to the app, write it after the app's file, as in `roc{s}{s} app.roc {s}`.", .{ info.arg, separator, info.cmd, info.arg });
+        defer allocator.free(app_hint);
+        try report.document.addSuggestion(app_hint);
+        try report.document.addLineBreak();
+    }
+    const path_hint = try std.fmt.allocPrint(allocator, "To use a file named `{s}`, write it as `./{s}`.", .{ info.arg, info.arg });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+    try report.document.addLineBreak();
+    const help_hint = try std.fmt.allocPrint(allocator, "Run `roc{s}{s} --help` to see the flags it accepts.", .{ separator, info.cmd });
+    defer allocator.free(help_hint);
+    try report.document.addSuggestion(help_hint);
+
+    return report;
+}
+
+fn createShorthandRequiresRunReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` looks like an installed shorthand, and running one requires the `run` subcommand.", .{info.name});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Shorthand Requires Run", headline, .fatal);
+
+    const run_hint = try std.fmt.allocPrint(allocator, "To run the installed shorthand, use: roc run {s}", .{info.name});
+    defer allocator.free(run_hint);
+    try report.document.addSuggestion(run_hint);
+    try report.document.addLineBreak();
+    const path_hint = try std.fmt.allocPrint(allocator, "If you meant a local file named `{s}`, write it as `./{s}` instead.", .{ info.name, info.name });
+    defer allocator.free(path_hint);
+    try report.document.addSuggestion(path_hint);
+
+    return report;
+}
+
+fn createInvalidFlagValueReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "`{s}` is not a valid value for the {s} flag.", .{ info.value, info.flag });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Invalid Flag Value", headline, .fatal);
+
+    switch (info.expected) {
+        .stated => |sentence| try report.document.addText(sentence),
+        .choices => |choices| {
+            const names = try allocator.alloc([]const u8, choices.len);
+            defer allocator.free(names);
+            for (choices, names) |choice, *name| name.* = choice.name;
+
+            if (try reporting.suggestion.closestCandidate(allocator, info.value, names)) |suggested| {
+                try report.document.addText("Did you mean `");
+                try report.document.addAnnotated(names[suggested], .suggestion);
+                try report.document.addText("`?");
+                const others = names.len - 1;
+                if (others > 0) {
+                    try report.document.addLineBreaks(2);
+                    try report.document.addText(if (others == 1) "The other valid value is " else "The other valid values are ");
+                    var written: usize = 0;
+                    for (names, 0..) |name, index| {
+                        if (index == suggested) continue;
+                        if (written > 0) try report.document.addText(if (written + 1 < others) ", " else if (others == 2) " and " else ", and ");
+                        try report.document.addAnnotated(name, .emphasized);
+                        written += 1;
+                    }
+                    try report.document.addText(".");
+                }
+            } else {
+                try report.document.addText("These are the valid values:");
+                try report.document.addLineBreak();
+                var width: usize = 0;
+                for (names) |name| width = @max(width, name.len);
+                for (choices) |choice| {
+                    try report.document.addLineBreak();
+                    try report.document.addText("    ");
+                    try report.document.addAnnotated(choice.name, .emphasized);
+                    try report.document.addSpace(@intCast(width - choice.name.len + 3));
+                    try report.document.addText(choice.description);
+                }
+            }
+        },
+    }
+
+    return report;
+}
+
 fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     const headline = try std.fmt.allocPrint(allocator, "I could not find the {s}.", .{info.context.description()});
     defer allocator.free(headline);
@@ -516,6 +770,25 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
     try report.document.addAnnotated(info.path, .path);
     try report.document.addLineBreaks(2);
     try report.document.addText("Please check that the path is correct and the file exists.");
+
+    return report;
+}
+
+/// A report whose headline names the file at `path` and whose body names the
+/// error that caused it.
+fn createPathErrorNameReport(
+    allocator: Allocator,
+    title: []const u8,
+    before: []const u8,
+    path: []const u8,
+    after: []const u8,
+    severity: reporting.Severity,
+    err_name: []const u8,
+) Allocator.Error!Report {
+    var report = try Report.initWithPath(allocator, title, before, path, after, severity);
+
+    try report.document.addText("Error: ");
+    try report.document.addText(err_name);
 
     return report;
 }
@@ -541,15 +814,196 @@ fn createErrorNameReport(
 }
 
 fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "File Read Failed", "I could not read the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "File Read Failed", "I could not read the file ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "File Write Failed", "I could not write to the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    var report = try createPathErrorNameReport(allocator, "File Write Failed", "I could not write to the file ", info.path, ".", .runtime_error, @errorName(info.err));
+    errdefer report.deinit();
+
+    const directory_missing = switch (info.err) {
+        error.FileNotFound => true,
+        error.InvalidHash,
+        error.AccessDenied,
+        error.AmbiguousVersion,
+        error.AntivirusInterference,
+        error.ApiLevelQueryFailed,
+        error.ArchiveWriteFailed,
+        error.ImportLibraryWriteFailed,
+        error.BadPathName,
+        error.BrokenDocLinks,
+        error.BrokenPipe,
+        error.BuiltinsExtractionFailed,
+        error.Canceled,
+        error.CheckFailed,
+        error.ChecksumFailure,
+        error.CliError,
+        error.CompilationFailed,
+        error.ConcurrencyUnavailable,
+        error.ConnectionResetByPeer,
+        error.Crash,
+        error.CrossDevice,
+        error.DecompressionFailed,
+        error.DeviceBusy,
+        error.DictionaryIdFlagUnsupported,
+        error.DirNotEmpty,
+        error.DirectoryCreateFailed,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.DocsFailed,
+        error.DuplicateSymbol,
+        error.EmptyArchive,
+        error.EndOfStream,
+        error.EntrypointNotFound,
+        error.ExpandedSizeLimitExceeded,
+        error.ExpectErr,
+        error.ExpectedAppHeader,
+        error.ExpectedPlatformString,
+        error.FailedToCreateUniqueTempDir,
+        error.FdConfigFailed,
+        error.FileBusy,
+        error.FileCreateFailed,
+        error.FileError,
+        error.FileLocksUnsupported,
+        error.FileSystem,
+        error.FileTooBig,
+        error.FileTooLarge,
+        error.FileWriteFailed,
+        error.FormattingFailed,
+        error.FunctionTypeMismatch,
+        error.HandleInheritanceFailed,
+        error.HardwareFailure,
+        error.HasInternalGlobals,
+        error.HashMismatch,
+        error.HttpError,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidArguments,
+        error.InvalidBatchScriptArg,
+        error.InvalidDependency,
+        error.InvalidExe,
+        error.InvalidFileName,
+        error.InvalidFilename,
+        error.InvalidLinkingVersion,
+        error.InvalidLirImage,
+        error.InvalidMagic,
+        error.InvalidName,
+        error.InvalidPackageName,
+        error.InvalidPath,
+        error.InvalidProcessGroupId,
+        error.InvalidProxyUrl,
+        error.InvalidSection,
+        error.InvalidTarHeader,
+        error.InvalidTarget,
+        error.InvalidUrl,
+        error.InvalidUserId,
+        error.InvalidUtf8,
+        error.InvalidVersion,
+        error.InvalidWtf8,
+        error.IsDir,
+        error.LLVMCompilationFailed,
+        error.LLVMNotAvailable,
+        error.LinkFailed,
+        error.LinkQuotaExceeded,
+        error.LocalhostWasNotLoopback,
+        error.LockViolation,
+        error.MalformedBlock,
+        error.MalformedFrame,
+        error.MissingBundleFiles,
+        error.MissingFilesDirectory,
+        error.MissingLinkingSection,
+        error.MissingTargetFile,
+        error.MissingTargetsSection,
+        error.NameTooLong,
+        error.NativeCompilationFailed,
+        error.NetworkError,
+        error.NetworkNotFound,
+        error.NoCacheDir,
+        error.NoDataExtracted,
+        error.NoDevice,
+        error.NoHashInUrl,
+        error.NoHomeDirectory,
+        error.NoPlatformSource,
+        error.NoSpaceLeft,
+        error.NotAnAppHeader,
+        error.SourceTokenizationFailed,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OSVersionDetectionFail,
+        error.OperationUnsupported,
+        error.OutOfMemory,
+        error.Overflow,
+        error.PathAlreadyExists,
+        error.PathOutsideWorkspace,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.PlatformNotSupported,
+        error.ProcessAlreadyExec,
+        error.ProcessCreationFailed,
+        error.ProcessExitCodeFailed,
+        error.ProcessFdQuotaExceeded,
+        error.ProcessWaitFailed,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.ResolutionFailed,
+        error.ResourceLimitReached,
+        error.RuntimeError,
+        error.SocketUnconnected,
+        error.StreamTooLong,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempDirCreation,
+        error.TestsFailed,
+        error.Timeout,
+        error.TypeCheckingFailed,
+        error.UnbundleFailed,
+        error.UndefinedCompilerSymbols,
+        error.Unexpected,
+        error.UnexpectedEnd,
+        error.UnexpectedEndOfStream,
+        error.UnexpectedResult,
+        error.UnrecognizedVolume,
+        error.Unseekable,
+        error.UnsupportedCrossCompilation,
+        error.UnsupportedHeader,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLowLevel,
+        error.UnsupportedTarget,
+        error.UnsupportedWatchMode,
+        error.WasmOutputWriteFailed,
+        error.WouldBlock,
+        error.WriteFailed,
+        => false,
+    };
+    if (directory_missing) {
+        try report.document.addLineBreaks(2);
+        try report.document.addText("A directory in this path does not exist. Create the missing directory and try again.");
+    }
+
+    return report;
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory ", info.path, ".", .runtime_error, @errorName(info.err));
+}
+
+fn createWasmHostParameterLimitReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.init(allocator, "Too Many Wasm Parameters", "A platform function has more wasm parameters than an engine will load.", .runtime_error);
+
+    try report.document.addText(switch (info.direction) {
+        .provided_to_host => "The platform provides ",
+        .hosted => "The platform's host defines ",
+    });
+    try report.document.addAnnotated(info.symbol, .path);
+    try report.document.addText(try std.fmt.allocPrint(allocator, " with {d} wasm parameters, and WebAssembly engines reject a function with more than {d}.", .{ info.param_count, info.limit }));
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Roc passes extra arguments in memory between its own functions, but the host fixes this function's signature. Grouping arguments into a record crosses the boundary as a single parameter.");
+
+    return report;
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -575,9 +1029,7 @@ fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocato
 }
 
 fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The app file {s} does not specify a platform.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "No Platform Found", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "No Platform Found", "The app file ", info.app_path, " does not specify a platform.", .fatal);
 
     try report.document.addText("Add a platform to your app header, for example:");
     try report.document.addLineBreak();
@@ -589,13 +1041,7 @@ fn createNoPlatformFoundReport(allocator: Allocator, info: anytype) Allocator.Er
 }
 
 fn createPlatformRequiresAppReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(
-        allocator,
-        "The platform file {s} declares app requirements, so it cannot be built by itself.",
-        .{info.platform_path},
-    );
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Platform Requires an App", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "Platform Requires an App", "The platform file ", info.platform_path, " declares app requirements, so it cannot be built by itself.", .fatal);
 
     try report.document.addText("Build an app that uses this platform, or use `roc glue` to generate its host interface.");
 
@@ -619,9 +1065,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createMissingPlatformModuleReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The platform at {s}.", .{info.platform_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Missing Platform Module", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Missing Platform Module", "The platform at ", info.platform_path, ".", .runtime_error);
 
     try report.document.addText("is missing the required module: ");
     try report.document.addAnnotated(info.module_name, .emphasized);
@@ -653,9 +1097,7 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
 }
 
 fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The file {s} does not have a valid app header with a platform declaration.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Invalid App Header", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Invalid App Header", "The file ", info.app_path, " does not have a valid app header with a platform declaration.", .runtime_error);
 
     try report.document.addText("Expected an app header like:");
     try report.document.addLineBreaks(2);
@@ -671,9 +1113,7 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
 }
 
 fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The file {s} is a headerless app, which uses a simple builtin platform.", .{info.app_path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
+    var report = try Report.initWithPath(allocator, "Build Not Supported", "The file ", info.app_path, " is a headerless app, which uses a simple builtin platform.", .fatal);
 
     try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
     try report.document.addLineBreaks(2);
@@ -720,10 +1160,29 @@ fn createUnsupportedOptLevelReport(allocator: Allocator, info: anytype) Allocato
     return report;
 }
 
-fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Compilation of {s} failed.", .{info.path});
+fn createWasmMaximumMemoryTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(
+        allocator,
+        "The {s} target's maximum memory of {d} bytes is larger than the {d} bytes its stack layout allows.",
+        .{ info.target, info.maximum_memory, info.limit },
+    );
     defer allocator.free(headline);
-    var report = try Report.init(allocator, "Compilation Failed", headline, .fatal);
+    var report = try Report.init(allocator, "Invalid Target Configuration", headline, .fatal);
+    errdefer report.deinit();
+
+    const explanation = try std.fmt.allocPrint(
+        allocator,
+        "The platform sets no `global_base`, so the stack starts at address 0 and a stack overflow wraps the stack pointer to just below 4 GiB, where the first write traps. Memory must stay below 4 GiB minus the {d}-byte stack for that write to trap instead of overwriting memory.",
+        .{info.stack_size},
+    );
+    defer allocator.free(explanation);
+    try report.document.addReflowingTextWithBackticks(explanation);
+
+    return report;
+}
+
+fn createCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    var report = try Report.initWithPath(allocator, "Compilation Failed", "Compilation of ", info.path, " failed.", .fatal);
 
     var buf: [32]u8 = undefined;
     const count_str = std.fmt.bufPrint(&buf, "{}", .{info.error_count}) catch "?";
@@ -771,12 +1230,146 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
     return report;
 }
 
+fn createProvidedValueTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The value the application provides to the host as {s} is {d} bytes, and a dev executable for target {s} keeps room for at most {d} bytes per provided value.", .{ info.symbol, info.size, info.target, info.limit });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Provided Value Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("A dev build places each value named in the platform header's ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" section at a fixed address the host is linked against. Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(", or provide the value behind a pointer (for example in a List or a Box).");
+    return report;
+}
+
+fn createDevProgramTooLargeReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The application's code and data are too large for a dev executable for target {s}, which keeps them within 2 GiB of the host.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Dev Program Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("--opt=speed", .emphasized);
+    try report.document.addText(".");
+    return report;
+}
+
+fn createWasmEngineLimitReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm module for target {s} would have {d} {s}, and WebAssembly engines reject a module with more than {d}.", .{ info.target, info.count, info.what, info.limit });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Wasm Module Too Large", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--opt=size", .emphasized);
+    try report.document.addText(", whose optimizer removes and merges code, or split the program.");
+    return report;
+}
+
+fn createWasmExportsUndefinedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The platform's exports for target {s} name these symbols, and neither the host nor the application defines them.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Undefined Wasm Exports", headline, .fatal);
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Every name in the platform header's ");
+    try report.document.addAnnotated("exports", .emphasized);
+    try report.document.addText(" list must be defined by the host inputs or provided by the application.");
+    return report;
+}
+
+fn createWasmSymbolsUndefinedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm program for target {s} needs these symbols, and nothing that may define them does.", .{info.target});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Undefined Wasm Symbols", headline, .fatal);
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol.name, .emphasized);
+        try report.document.addText(switch (symbol.kind) {
+            .data => ", a data symbol ",
+            .table => ", a table ",
+        });
+        try report.document.addText(switch (symbol.needed_by) {
+            .host => "the platform's host needs, which only a name the application provides to the host can define",
+            .support => "the compiler's support code needs, which the application or the platform's host inputs must define",
+            .unit => "the application needs, which the application or the platform's host inputs must define",
+        });
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("The host inputs are the ones listed in the platform header's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section, and the names the application provides to the host are its ");
+    try report.document.addAnnotated("provides", .emphasized);
+    try report.document.addText(" and the data it exports.");
+    return report;
+}
+
+fn createWasmImportConflictReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm program for target {s} imports {s} from its embedder with two different signatures.", .{ info.target, info.symbol });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Conflicting Wasm Imports", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Every declaration of a function the embedder provides must agree on its parameters and results.");
+    return report;
+}
+
+fn createWasmMemoryLayoutReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The wasm memory configuration for target {s} does not fit the program: {s} (needs {d}, configured {d}).", .{ info.target, info.what, info.needed, info.configured });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Wasm Memory Configuration", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Adjust the memory and stack settings in the platform header's ");
+    try report.document.addAnnotated("targets", .emphasized);
+    try report.document.addText(" section, or the --wasm-memory and --wasm-stack-size options.");
+    return report;
+}
+
+fn createWasmHostUnsupportedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "A dev build cannot link the platform's wasm host for target {s}: {s}.", .{ info.target, info.reason });
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Unsupported Wasm Host", headline, .fatal);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Build with ");
+    try report.document.addAnnotated("--no-cache", .emphasized);
+    try report.document.addText(", which links the host with LLD, or rebuild the host without it.");
+    return report;
+}
+
+fn createUndefinedCompilerSymbolsReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, "The {s} link needed these symbols, which only the Roc compiler defines, and nothing defined them.", .{info.target_format});
+    defer allocator.free(headline);
+    var report = try Report.init(allocator, "Compiler Bug", headline, .fatal);
+
+    for (info.symbols) |symbol| {
+        try report.document.addLineBreak();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(symbol, .emphasized);
+    }
+    try report.document.addLineBreaks(2);
+    try report.document.addText("This is a bug in the Roc compiler, not in your program. Please report it at:");
+    try report.document.addLineBreak();
+    try report.document.addText("  ");
+    try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
+    try report.document.addLineBreaks(2);
+    try report.document.addText("Including the linker output above and the command you ran will help.");
+
+    return report;
+}
+
 fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     return createErrorNameReport(allocator, "Linker Failed", "The linker failed while building for target {s}.", .{info.target}, .fatal, @errorName(info.err));
 }
 
 fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Object Compilation Failed", "Failed to compile object file for {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Object Compilation Failed", "Failed to compile object file for ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -810,6 +1403,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.AntivirusInterference,
         error.ApiLevelQueryFailed,
         error.ArchiveWriteFailed,
+        error.ImportLibraryWriteFailed,
         error.BadPathName,
         error.BrokenDocLinks,
         error.BrokenPipe,
@@ -819,7 +1413,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.ChecksumFailure,
         error.CliError,
         error.CompilationFailed,
-        error.ComptimeExhaustiveness,
         error.ConcurrencyUnavailable,
         error.ConnectionResetByPeer,
         error.Crash,
@@ -840,7 +1433,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.ExpectErr,
         error.ExpectedAppHeader,
         error.ExpectedPlatformString,
-        error.ExpectedString,
         error.FailedToCreateUniqueTempDir,
         error.FdConfigFailed,
         error.FileBusy,
@@ -943,6 +1535,7 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.Timeout,
         error.TypeCheckingFailed,
         error.UnbundleFailed,
+        error.UndefinedCompilerSymbols,
         error.Unexpected,
         error.UnexpectedEnd,
         error.UnexpectedEndOfStream,
@@ -1137,9 +1730,7 @@ fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected an app header in {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Expected App Header", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Expected App Header", "Expected an app header in ", info.path, ".", .runtime_error);
 
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
@@ -1160,9 +1751,7 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Expected a platform string in the app header of {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Expected Platform String", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "Expected Platform String", "Expected a platform string in the app header of ", info.path, ".", .runtime_error);
 
     try report.document.addText("Example:");
     try report.document.addLineBreak();
@@ -1174,13 +1763,11 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    return createErrorNameReport(allocator, "Module Initialization Failed", "Failed to initialize module {s}.", .{info.path}, .runtime_error, @errorName(info.err));
+    return createPathErrorNameReport(allocator, "Module Initialization Failed", "Failed to initialize module ", info.path, ".", .runtime_error, @errorName(info.err));
 }
 
 fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "No exports were found in {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "No Exports Found", headline, .runtime_error);
+    var report = try Report.initWithPath(allocator, "No Exports Found", "No exports were found in ", info.path, ".", .runtime_error);
 
     try report.document.addText("Ensure the module exports at least one definition.");
 
@@ -1271,4 +1858,113 @@ test "severity returns correct values" {
         Severity.runtime_error,
         (CliProblem{ .file_read_failed = .{ .path = "", .err = error.OutOfMemory } }).severity(),
     );
+}
+
+fn renderPlainForTest(problem: CliProblem) (Allocator.Error || error{WriteFailed})![]u8 {
+    const allocator = std.testing.allocator;
+    var report = try problem.toReport(allocator);
+    defer report.deinit();
+    var writer: std.Io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    try reporting.renderReportToPlain(&report, &writer.writer, reporting.ReportingConfig.initForTesting());
+    return writer.toOwnedSlice();
+}
+
+const test_opt_choices = [_]cli_args.Choice{
+    .{ .name = "dev", .description = "native dev backend, fast compilation" },
+    .{ .name = "interpreter", .description = "interpreted, no code generation" },
+    .{ .name = "speed", .description = "LLVM, optimized for execution speed" },
+    .{ .name = "size", .description = "LLVM, optimized for binary size" },
+};
+
+test "invalid_flag_value lists every valid value when none is close" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--opt",
+        .value = "less_nice",
+        .expected = .{ .choices = &test_opt_choices },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`less_nice` is not a valid value for the --opt flag.
+        \\
+        \\These are the valid values:
+        \\
+        \\    dev           native dev backend, fast compilation
+        \\    interpreter   interpreted, no code generation
+        \\    speed         LLVM, optimized for execution speed
+        \\    size          LLVM, optimized for binary size
+        \\
+        \\
+    , rendered);
+}
+
+test "invalid_flag_value suggests the closest valid value" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--opt",
+        .value = "sped",
+        .expected = .{ .choices = &test_opt_choices },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`sped` is not a valid value for the --opt flag.
+        \\
+        \\Did you mean `speed`?
+        \\
+        \\The other valid values are dev, interpreter, and size.
+        \\
+        \\
+    , rendered);
+}
+
+test "invalid_flag_value names the one other value of a two-value flag" {
+    const choices = [_]cli_args.Choice{
+        .{ .name = "yes", .description = "lambda-set specialization (default)" },
+        .{ .name = "no", .description = "experimental boxy lowering" },
+    };
+    const rendered = try renderPlainForTest(.{
+        .invalid_arguments = .{
+            .invalid_flag_value = .{
+                .flag = "--specialize",
+                // spellchecker:ignore-next-line
+                .value = "yse",
+                .expected = .{ .choices = &choices },
+            },
+        },
+    });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.find(u8, rendered, "Did you mean `yes`?\n\nThe other valid value is no.\n") != null);
+}
+
+test "invalid_flag_value states what a free-form value must be" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .invalid_flag_value = .{
+        .flag = "--jobs",
+        .value = "abc",
+        .expected = .{ .stated = "The value must be a positive integer." },
+    } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings(
+        \\── ✗ invalid flag value ────────────────────────────────────────────────────────
+        \\
+        \\`abc` is not a valid value for the --jobs flag.
+        \\
+        \\The value must be a positive integer.
+        \\
+        \\
+    , rendered);
+}
+
+test "unexpected_argument names the command and points at its help" {
+    const rendered = try renderPlainForTest(.{ .invalid_arguments = .{ .unexpected_argument = .{ .cmd = "check", .arg = "--bogus" } } });
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expect(std.mem.find(u8, rendered, "roc check received an unexpected argument: `--bogus`") != null);
+    try std.testing.expect(std.mem.find(u8, rendered, "Run `roc check --help`") != null);
+
+    const bare = try renderPlainForTest(.{ .invalid_arguments = .{ .unexpected_argument = .{ .cmd = "", .arg = "x" } } });
+    defer std.testing.allocator.free(bare);
+    try std.testing.expect(std.mem.find(u8, bare, "roc received an unexpected argument: `x`") != null);
+    try std.testing.expect(std.mem.find(u8, bare, "Run `roc --help`") != null);
 }

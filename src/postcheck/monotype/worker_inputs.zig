@@ -1,6 +1,7 @@
 //! Snapshot storage for specialization inputs. The coordinator is the sole
 //! writer; workers borrow captured prefixes until their task completes.
 const std = @import("std");
+const collections = @import("collections");
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
 const checked = @import("check");
@@ -43,19 +44,19 @@ fn Prefix(comptime T: type) type {
 
 const NamePrefix = struct {
     bytes: Prefix(u8) = .{},
-    ranges: Prefix(names.NameInterner.Range) = .{},
+    ends: Prefix(u32) = .{},
 
     fn capture(self: *NamePrefix, allocator: Allocator, source: *const names.NameInterner) Allocator.Error!names.NameInterner {
         return .{
             .bytes = .{ .items = std.ArrayList(u8).fromOwnedSlice(try self.bytes.capture(allocator, source.bytes.items.items)) },
-            .ranges = .{ .items = std.ArrayList(names.NameInterner.Range).fromOwnedSlice(try self.ranges.capture(allocator, source.ranges.items.items)) },
+            .ends = .{ .items = std.ArrayList(u32).fromOwnedSlice(try self.ends.capture(allocator, source.ends.items.items)) },
             .supports_inserts = false,
         };
     }
 
     fn deinit(self: *NamePrefix, allocator: Allocator) void {
         self.bytes.deinit(allocator);
-        self.ranges.deinit(allocator);
+        self.ends.deinit(allocator);
     }
 };
 
@@ -65,6 +66,8 @@ pub const Snapshot = struct {
     types: Type.Store,
     names: names.NameStore,
     const_fn_evidence: []const checked.ConstStore.ConstFnEvidence,
+    const_fn_evidence_targets: []const checked.ConstStore.ConstFnTargetEvidence,
+    const_fn_evidence_structurals: []const checked.ConstStore.ConstFnStructuralEvidence,
     const_fn_evidence_frames: []const checked.ConstStore.ConstFnEvidenceFrame,
     current_loc: @import("base").SourceLoc,
     current_region: @import("base").Region,
@@ -74,14 +77,14 @@ pub const Snapshot = struct {
     /// caches and all output tables belong to the lane's private workspace.
     pub fn workerProgram(self: *const Snapshot, allocator: Allocator) Ast.Program {
         var program = Ast.Program.init(allocator);
-        inline for (.{ "types", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
             @field(program.types, field) = @field(self.types, field);
         }
         program.types.freeze();
         program.names = self.names;
         program.names.allocator = allocator;
         program.names.proc_base_by_key = std.StringHashMap(names.ProcBaseKeyRef).init(allocator);
-        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(program, field) = @TypeOf(@field(program, field)).fromOwnedSlice(@constCast(@field(self, field)));
         }
         program.current_loc = self.current_loc;
@@ -93,7 +96,9 @@ pub const Snapshot = struct {
 /// The complete captured read set. Final syntax and mutable reservation rows
 /// never enter a worker snapshot. Snapshots borrow this owner's allocations.
 pub const ProgramInputs = struct {
-    types: Prefix(Type.Content) = .{},
+    types: Prefix(Type.StoredNode) = .{},
+    named_nodes: Prefix(Type.NamedContent) = .{},
+    erased_digests: Prefix(names.TypeDigest) = .{},
     constructing: Prefix(bool) = .{},
     spans: Prefix(Type.TypeId) = .{},
     fields: Prefix(Type.Field) = .{},
@@ -109,6 +114,8 @@ pub const ProgramInputs = struct {
     external_symbol_names: NamePrefix = .{},
     proc_bases: Prefix(names.ProcBaseKey) = .{},
     const_fn_evidence: Prefix(checked.ConstStore.ConstFnEvidence) = .{},
+    const_fn_evidence_targets: Prefix(checked.ConstStore.ConstFnTargetEvidence) = .{},
+    const_fn_evidence_structurals: Prefix(checked.ConstStore.ConstFnStructuralEvidence) = .{},
     const_fn_evidence_frames: Prefix(checked.ConstStore.ConstFnEvidenceFrame) = .{},
 
     pub fn capture(self: *ProgramInputs, allocator: Allocator, source: *const Ast.Program) Allocator.Error!Snapshot {
@@ -117,11 +124,13 @@ pub const ProgramInputs = struct {
             .types = Type.Store.init(allocator),
             .names = names.NameStore.init(allocator),
             .const_fn_evidence = &.{},
+            .const_fn_evidence_targets = &.{},
+            .const_fn_evidence_structurals = &.{},
             .const_fn_evidence_frames = &.{},
             .current_loc = source.current_loc,
             .current_region = source.current_region,
         };
-        inline for (.{ "types", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
+        inline for (.{ "types", "named_nodes", "erased_digests", "constructing", "spans", "fields", "tags", "declared_fields" }) |field| {
             const values = try @field(self, field).capture(allocator, @field(source.types, field).unsafeRawItemsForView());
             @field(view.types, field) = @TypeOf(@field(view.types, field)).fromOwnedSlice(values);
         }
@@ -131,7 +140,7 @@ pub const ProgramInputs = struct {
         }
         view.names.proc_bases.items = std.ArrayList(names.ProcBaseKey).fromOwnedSlice(try self.proc_bases.capture(allocator, source.names.proc_bases.items.items));
         view.names.serialized = true;
-        inline for (.{ "const_fn_evidence", "const_fn_evidence_frames" }) |field| {
+        inline for (.{ "const_fn_evidence", "const_fn_evidence_targets", "const_fn_evidence_structurals", "const_fn_evidence_frames" }) |field| {
             @field(view, field) = try @field(self, field).capture(allocator, @field(source, field).unsafeRawItemsForView());
         }
         return view;
@@ -167,12 +176,12 @@ fn AppendIndexHashed(comptime K: type, comptime V: type, comptime hashKey: fn (K
             branch: struct { bit: u6, children: [2]Link },
             leaf: struct { hash: u64, entries: std.atomic.Value(?*const Entry) },
         };
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         root: Link = .init(null),
         count: usize = 0,
 
         pub fn init(allocator: Allocator) Self {
-            return .{ .arena = std.heap.ArenaAllocator.init(allocator) };
+            return .{ .arena = collections.SingleThreadArena.init(allocator) };
         }
 
         pub fn deinit(self: *Self) void {

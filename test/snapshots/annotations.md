@@ -266,7 +266,7 @@ NO CHANGE
 					(ty-rigid-var-lookup (ty-rigid-var (name "a")))))))
 	(d-let
 		(p-assign (ident "succeedPairSameType"))
-		(e-call (constraint-fn-var 410)
+		(e-call (constraint-fn-var 415)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-num (value "1"))
@@ -276,11 +276,11 @@ NO CHANGE
 				(ty-lookup (name "U8") (builtin)))))
 	(d-let
 		(p-assign (ident "failPairDiffTypes"))
-		(e-call (constraint-fn-var 431)
+		(e-call (constraint-fn-var 436)
 			(e-lookup-local
 				(p-assign (ident "mkPair")))
 			(e-runtime-error (tag "erroneous_value_expr"))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-num (value "2")))
 		(annotation
 			(ty-apply (name "Pair") (local)
 				(ty-lookup (name "U8") (builtin)))))
@@ -289,7 +289,7 @@ NO CHANGE
 		(e-nominal (nominal "Pair")
 			(e-tag (name "Pair")
 				(args
-					(e-runtime-error (tag "erroneous_value_expr"))
+					(e-num (value "1"))
 					(e-runtime-error (tag "erroneous_value_expr")))))
 		(annotation
 			(ty-apply (name "Pair") (local)

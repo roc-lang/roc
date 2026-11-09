@@ -107,6 +107,38 @@ my @RULES = (
     { category => 'text-identity-glue-def-probe', regex => qr/\bfindTopLevelDefByName\b/, allowed => {} },
     { category => 'text-identity-artifact-env-match', regex => qr/\bmoduleEnvNameMatches\b/, allowed => {} },
     { category => 'body-const-global-type-owner', regex => qr/\bconstBuilder\b/, allowed => {} },
+    # Checked types are read in place from each module's sealed solver store.
+    # Nothing copies source types into a published table, verifies a view
+    # against such a copy, chooses representative closed occurrences, or
+    # releases a solver store before its consumers are done.
+    { category => 'source-type-publication', regex => qr/\bCheckedTypePublisher\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverifyAgainstPublication\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverifyModulePublication\b/, allowed => {} },
+    { category => 'sealed-view-gate', regex => qr/\bverify_sealed_type_view\b/, allowed => {} },
+    { category => 'closed-occurrence-representative', regex => qr/\bClosedOccurrenceIndex\b/, allowed => {} },
+    { category => 'closed-occurrence-representative', regex => qr/\bcanonicalNamedOccurrence\b/, allowed => {} },
+    { category => 'solver-store-release', regex => qr/\breleaseCheckedSolverTypes\b/, allowed => {} },
+    { category => 'solver-store-release', regex => qr/\brelease_checked_solver_types\b/, allowed => {} },
+    # Lowering reads bodies from the canonical IR through the checked body
+    # reader, keyed by CIR ids. Nothing copies a body after checking, so the
+    # frozen body store, its id spaces, its source-to-copy maps, and its
+    # synthetic nodes stay gone; a row coercion is a lowering-side construct,
+    # never a checked expression variant.
+    { category => 'checked-body-store', regex => qr/\bCheckedBodyStore\w*\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedExprId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bCheckedPatternId\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bexprIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bpatternIdForSource\b/, allowed => {} },
+    { category => 'checked-body-store', regex => qr/\bSyntheticExprOrigin\b/, allowed => {} },
+    { category => 'checked-row-coerce-variant', regex => qr/\brow_coerce\b/, scope => qr{\Asrc/check/}, allowed => {} },
+    # Post-check code reads sealed solver stores through the checked type
+    # reader and never writes one.
+    {
+        category => 'postcheck-solver-store-write',
+        regex => qr/(?:typeStore(?:Const)?\(\)|\.types|types_store|type_store)\.(?:setVarContent|dangerousSetVarDesc|dangerousSetVarRedirect|fresh\w*|append(?:Vars|RecordFields|Tags|StaticDispatchConstraints\w*|InterpolationParts)|canonicalizeAndSeal|seal|setNominalDecl|markNominalDeclInvalid|setDerivedMapPlan|union_|setRank|resolveVarAndCompressPath)\(/,
+        scope => qr{\Asrc/postcheck/},
+        allowed => {},
+    },
 );
 
 sub iter_zig_files {
@@ -147,6 +179,7 @@ for my $rel (iter_zig_files()) {
 
         for my $rule (@RULES) {
             next if $rule->{allowed}{$rel};
+            next if $rule->{scope} && $rel !~ $rule->{scope};
             # Architecture rules constrain Zig tokens, not prose or fixture
             # strings. A rule must opt in explicitly if raw source text matters.
             my $subject;
@@ -305,9 +338,7 @@ sub check_body_context_output_access {
     my %allowed_global_name_access = map { $_ => 1 } qw(
         importProgramType
         commitGraphType
-        lookupMethodTargetByName
-        lookupInspectOverride
-        importInterfaceSummary
+        programSummaryDomain
     );
     my %allowed_graph_type_egress = map { $_ => 1 } qw(
         completeDeferredIteratorResult
@@ -317,7 +348,11 @@ sub check_body_context_output_access {
     my $global_type_access = qr/(?:\.builder\.program\.(?:fnSource|types)|self\.builder\.(?:constBoxPayloadType|constListElemType|constRecordFields|errorRowIsIncludedIn|functionShape|namedBackingType|nominalConstructionLayer|nominalExprBackingType|optionalFieldSlot|optionalSlotInfo|recordField|recordFieldByTextOptional|recordFieldType|recordFieldsSpan|shapeContent|singleTypeArg|specializationTypeDigest|tagByName|tagPayloadTypes|tagUnionTags|tupleItemTypes|typeHasBuiltinOwner|typeIsProvenUninhabited))\b/;
     my $global_type_ingress = qr/self\.builder\.(?:lowerType|primitiveType)\b/;
     my $global_type_cache = qr/\.builder\.(?:type_cache|parse_result_ok_types|generated_try_types|uninhabited_type_cache)\.(?:get|getPtr|getOrPut|put|remove)\b/;
-    my $global_name_access = qr/(?:self\.builder\.program\.names|self\.builder\.(?:moduleIdentity|recordFieldName|tagName|typeName|typeDef|lookupMethodTarget|lookupMethodTargetByName))\b/;
+    my $global_name_access = qr/self\.builder\.program\.names\b/;
+    # Method lookup lives on `Builder` and resolves an owner in the name store
+    # it is given; a body passes its graph's.
+    my $method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(/;
+    my $graph_method_lookup = qr/self\.builder\.(?:lookupMethodTarget|lookupMethodTargetByName|lookupInspectOverride)\(self\.nameStore\(\),/;
     my $graph_type_egress = qr/self\.commitGraphType\b/;
     my $coordinator_static_data = qr/self\.builder\.commitStaticDataValue\b/;
 
@@ -361,6 +396,9 @@ sub check_body_context_output_access {
         }
         if ($code =~ $global_name_access && !$allowed_global_name_access{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-name-store: $line";
+        }
+        if ($code =~ $method_lookup && $code !~ $graph_method_lookup) {
+            push @violations, "$rel:$line_no: body-context-method-lookup-name-store: $line";
         }
         if ($code =~ $graph_type_egress && !$allowed_graph_type_egress{$current_fn // ''}) {
             push @violations, "$rel:$line_no: body-context-global-type-egress: $line";
@@ -596,6 +634,65 @@ sub check_iterator_lowering_uses_explicit_ids {
 }
 
 check_iterator_lowering_uses_explicit_ids();
+
+# Lift capture analysis has exactly one free-variable walk: `CaptureWalk` in
+# lift.zig. The capture dependency graph and the Lifter's inline-lambda and
+# operand fill-in collection supply only its actions, so binder scoping, the
+# traversal, and which locals count as free-variable occurrences cannot drift
+# between the initial lift and the post-lift re-solve. Any of those concerns
+# appearing outside `CaptureWalk` is a second walk.
+sub check_single_lift_capture_walk {
+    my $rel = 'src/postcheck/monotype_lifted/lift.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my $top_level = '';
+    my $line_no = 0;
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+        my $code = zig_code_line($line);
+        if ($code =~ /^(?:pub\s+)?(?:fn|const|var)\s+([A-Za-z0-9_]+)\b/ || $code =~ /^test\b/) {
+            $top_level = defined $1 ? $1 : 'test';
+        }
+        next if $top_level eq 'CaptureWalk' || $top_level eq 'test';
+        if ($code =~ /\bforEachBoundLocal\b/ ||
+            $code =~ /\bjoin_point\.retained\b/ ||
+            $code =~ /\bpayload_switch\.payload\b/ ||
+            $code =~ /\bfn\s+push(?:Expr|Stmt)Work\b/) {
+            push @violations, "$rel:$line_no: second-lift-capture-walk: $line";
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_single_lift_capture_walk();
+
+# A Monotype type-equality check whose only consequence is an invariant is a
+# debug-only assertion: `assertSameType`, or a condition gated on a debug
+# build. Computing the comparison in a release build would be a release-build
+# runtime check for a compiler invariant.
+sub check_monotype_same_type_assertions_debug_only {
+    my $rel = 'src/postcheck/monotype/lower.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+    my @lines = <$fh>;
+    close $fh or die "failed to close $rel: $!\n";
+    chomp @lines;
+
+    for my $index (0 .. $#lines) {
+        my $code = zig_code_line($lines[$index]);
+        next unless $code =~ /\bif\s*\(!(?:try\s+)?[A-Za-z0-9_.()]*\b(?:sameType|typeEql)\(/;
+        next if $code =~ /\bmode\s*==\s*\.debug\s+and\b/;
+        my $next = $index < $#lines ? zig_code_line($lines[$index + 1]) : '';
+        if ($code =~ /\bCommon\.(?:invariant|compilerBug)\b/ || ($code =~ /\{\s*$/ && $next =~ /^\s*Common\.(?:invariant|compilerBug)\b/)) {
+            push @violations, "$rel:" . ($index + 1) . ": release-computed-type-equality-invariant: $lines[$index]";
+        }
+    }
+}
+
+check_monotype_same_type_assertions_debug_only();
 
 if (@violations) {
     print "Post-check architecture violations found:\n";

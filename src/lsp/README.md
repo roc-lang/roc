@@ -23,8 +23,16 @@ The following notifications are handled:
 - `initialized`, `exit`
 - `didOpen` (stores the buffer into a `StringHashMap`)
 - `didChange` (same as `didOpen`, and supports incremental changes)
+- `didClose` (drops the buffer and forgets the document's URI)
 
 Diagnostics are pushed as `textDocument/publishDiagnostics` when a document is opened or changed.
+The check behind them runs once the server has handled every message it has received, so a burst
+of edits is checked once, against its final text, and an edit that arrives while its document is
+being checked cancels that check. A request that needs checked types runs its document's pending
+check first.
+Diagnostics and locations for an open document always use the URI the client opened it under,
+exactly as the client spelled it, since a URI rebuilt from the file's path can name the same file
+differently (percent-encoding, drive-letter case, or a path through a symlink).
 
 ### Inlay hints
 
@@ -151,10 +159,10 @@ LSP method, like `textDocument/completion` for example, the handler should be ad
 directory and its call should be added either in `request` (if it expects a response) or `notification`
 (if it doesn't expect a response). `textDocument/completion` for example would go here :
 ```zig
-const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
-    .{ "initialize", &InitializeHandler.call },
-    .{ "shutdown", &ShutdownHandler.call },
-    .{ "textDocument/completion", &CompletionHandler.call },
+const request_handlers = std.StaticStringMap(HandlerRegistration).initComptime(.{
+    .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_check = false } },
+    .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_check = false } },
+    .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_check = true } },
 });
 ```
 When adding a new capability, if the server is ready to support it, you need to add the capabilities to
@@ -167,10 +175,14 @@ pub fn buildCapabilities() ServerCapabilities {
             .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
     };
+    // ...
 }
 ```
 Here we tell the client that `textDocumentSync` is available in accordance to the LSP specifications data
-structure. The `Server` struct holds the state, meaning in has the knowledge of the project files, the
+structure. Handlers that need a full build declare `requires_check = true` so any
+scheduled check of their document runs before the request.
+
+The `Server` struct holds the state, meaning in has the knowledge of the project files, the
 documentation, the type inference, the syntax, etc. Every handler has access to it. These points of knowledge
 are ideally separated in different fields of the server. For example, the opened buffer and other desired files
 are stored in a `DocumentStore` which is a struct containing a `StringHashMap`, accessible through the `Server`.
@@ -209,24 +221,6 @@ which log build environment activity, syntax/type checking, and server lifecycle
 to the same session log file. Logs are created exclusively with owner-only permissions
 on Unix; existing files and symlinks are never reopened. Transport logs contain
 full document contents.
-
-## Workspace trust
-
-By default, opening or changing a document does not compile it. Formatting,
-folding ranges, and selection ranges remain available; diagnostics and semantic
-features require the client to send this in its `initialize` params:
-
-```json
-"initializationOptions": { "trustedWorkspace": true }
-```
-
-Enable this only after the user trusts the workspace: checking can download URL
-packages and execute compile-time Roc code inside the server. Clients must derive
-trust from their own user-controlled trust mechanism, never repository settings.
-Restart the server when trust changes. Trust applies to the entire server session,
-including every opened document and transitive dependency; use separate sessions
-for untrusted folders. Clients without a trust integration remain in syntax-only
-mode. Semantic requests return a trust-required error in that mode.
 
 ## Editor examples
 

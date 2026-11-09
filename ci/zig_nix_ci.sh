@@ -25,9 +25,11 @@ trap cleanup EXIT
 
 zig build "$@"
 if [[ "$build_only" -eq 1 ]]; then
-    printf 'Skipping snapshot/test in this Nix leg; the regular Zig target matrix covers them for: %s\n' "$*"
+    printf 'Skipping MiniCI in this Nix leg; the regular Zig target matrix covers it for: %s\n' "$*"
     exit 0
 fi
 
-zig build run-check-snapshots "$@"
-zig build run-test-zig "$@"
+# Every MiniCI job whose result can differ by host, as declared for this file
+# in the `workflows` table in src/build/minici.zig. MiniCI forwards the
+# trailing arguments to each child `zig build`.
+zig build minici -- --minici-lane secondary "$@"

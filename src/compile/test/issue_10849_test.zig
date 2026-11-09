@@ -48,7 +48,7 @@ fn countReachableOps(
         const proc_index = @backingInt(proc_id);
         if (seen_procs[proc_index]) continue;
         seen_procs[proc_index] = true;
-        if (store.getProcSpec(proc_id).body) |body| try stmt_work.append(allocator, body);
+        if (store.getProcSpecImmediate(proc_id).body) |body| try stmt_work.append(allocator, body);
 
         while (stmt_work.pop()) |stmt_id| {
             const stmt_index = @backingInt(stmt_id);
@@ -64,7 +64,7 @@ fn countReachableOps(
                 if (op == .list_replace_unsafe) counts.list_replace += 1;
                 if (op == .list_map_prepare_reuse) counts.prepare_reuse += 1;
                 if (op == .list_map_can_reuse) counts.can_reuse += 1;
-                if (op == .list_map_extract_unsafe) counts.extract += 1;
+                if (op == .list_move_out_unsafe) counts.extract += 1;
                 if (op == .list_map_write_unsafe) counts.write += 1;
             } else if (stmt == .incref) {
                 const retained = store.getLocal(stmt.incref.value);

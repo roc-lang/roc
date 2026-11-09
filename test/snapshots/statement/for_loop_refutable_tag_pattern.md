@@ -111,7 +111,10 @@ main! = |_args| {
 								(args
 									(e-string
 										(e-literal (string "bad")))))))
-					(e-empty_record))
+					(e-block
+						(s-expr
+							(e-empty_record))
+						(e-empty_record)))
 				(e-tag (name "Ok")
 					(args
 						(e-empty_record)))))))

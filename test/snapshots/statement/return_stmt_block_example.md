@@ -78,7 +78,7 @@ EndOfFile,
 ~~~roc
 foo : U64 -> Try(Str, [TooBig])
 foo = |num| {
-	str = if (num > 10) {
+	str = if num > 10 {
 		return Err(TooBig)
 	} else {
 		"SMALL"
@@ -100,7 +100,7 @@ foo = |num| {
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 264)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 269)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "num"))))

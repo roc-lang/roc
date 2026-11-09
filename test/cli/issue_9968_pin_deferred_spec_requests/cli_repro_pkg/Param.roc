@@ -45,6 +45,21 @@ Param := [].{
 		Param.builder_with_parameter_parser(Optional, value_parser)
 	}
 
+	# Same phantom record row, but the request also carries a minted
+	# iterator argument, so the deferred request holds generated-private
+	# representation evidence alongside the phantom row.
+	maybe_str_prefixed : Iter(Str) -> CliBuilder(Try(Str, [NoValue]), { ..action }, { get_params : {} })
+	maybe_str_prefixed = |prefixes| {
+		prefix = prefixes.fold("", |acc, p| Str.concat(acc, p))
+		value_parser = |values|
+			match values {
+				[] => Ok(Err(NoValue))
+				[single_value, ..] => Ok(Ok(Str.concat(prefix, single_value)))
+			}
+
+		Param.builder_with_parameter_parser(Optional, value_parser)
+	}
+
 	# Phantom `to_action` bound to a non-empty tag row.
 	maybe_str_tag : {} -> CliBuilder(Try(Str, [NoValue]), from_action, [GetParams({})])
 	maybe_str_tag = |_| {

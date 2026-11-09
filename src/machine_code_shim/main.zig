@@ -10,11 +10,8 @@ const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const stack_probe = @import("stack_probe.zig");
 const instruction_cache = @import("instruction_cache.zig");
-const base_mod = @import("base");
 const backend = @import("backend");
 const builtins = @import("builtins");
-const eval = @import("eval");
-const lir = @import("lir");
 const ipc = @import("ipc");
 const shim_host_abi = @import("shim_host_abi");
 const shim_io = @import("shim_io");
@@ -56,17 +53,6 @@ const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const hot_reload = ipc.hot_reload;
 const RunImage = backend.RunImage;
 
-const BoxyProgramRuntime = struct {
-    runtime: *eval.boxy_abi.GlobalBoxyRuntime,
-    view: *lir.LirImage.BoxySidecar.View,
-
-    fn deinit(self: *BoxyProgramRuntime, gpa: Allocator) void {
-        eval.boxy_abi.deinitRuntime(self.runtime);
-        self.view.deinit();
-        gpa.destroy(self.view);
-    }
-};
-
 const DevProgram = struct {
     entrypoints: []const RunImage.Entrypoint,
     code: []const u8,
@@ -76,21 +62,22 @@ const DevProgram = struct {
     descriptor: ?*hot_reload.ImageDescriptor,
     descriptor_offset: usize,
     local_refs: std.atomic.Value(usize),
-    boxy: ?BoxyProgramRuntime,
+    /// Whether the image's static data holds pointers to its own code.
+    static_code_references: bool,
+    /// The image's function table, registered with the process while the
+    /// program is loaded (`registerFunctionTable`).
+    function_table: ?*anyopaque,
 
-    fn deinit(self: *DevProgram, gpa: Allocator) void {
-        if (self.boxy) |*boxy| boxy.deinit(gpa);
-        self.boxy = null;
+    fn deinit(self: *DevProgram) void {
+        if (comptime builtin.os.tag == .windows) {
+            if (self.function_table) |table| _ = unwind_tables.RtlDeleteFunctionTable(table);
+        }
+        self.function_table = null;
         self.entrypoints = &.{};
         self.code = &.{};
         self.executable = &.{};
         self.data = &.{};
     }
-};
-
-const HotReloadCallRef = struct {
-    program: *DevProgram,
-    previous_boxy_runtime: ?*eval.boxy_abi.GlobalBoxyRuntime,
 };
 
 const RuntimeState = struct {
@@ -114,6 +101,7 @@ const LoadDevProgramError = Allocator.Error || RunImage.ImageError || error{
     UnresolvedSymbol,
     VirtualProtectFailed,
     FlushInstructionCacheFailed,
+    FunctionTableRegistrationFailed,
 };
 
 const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryError || LoadDevProgramError;
@@ -145,32 +133,10 @@ fn viewRuntimeImage(
 
     const header: *const RunImage.Header = @ptrCast(@alignCast(shm.base_ptr + image_offset));
     if (header.image_size > image_bound) return error.InvalidDevRunImage;
-    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound);
+    return RunImage.viewMappedImage(header, shm.base_ptr, image_bound, shm.total_size);
 }
 
-/// Decode and own the boxy runtime paired with one run image. Generated table
-/// indices are meaningful only against this exact sidecar; retained old images
-/// therefore retain their runtime alongside their code and data.
-fn createBoxyRuntime(gpa: Allocator, ops: *RocOps, view: *const RunImage.ProgramView) RuntimeStateError!?BoxyProgramRuntime {
-    if (view.boxy_blob.len == 0) return null;
-
-    const boxy_view = try gpa.create(lir.LirImage.BoxySidecar.View);
-    errdefer gpa.destroy(boxy_view);
-    boxy_view.* = view.boxy_sidecar.view(
-        view.boxy_blob.ptr,
-        view.boxy_blob.len,
-        base_mod.target.TargetUsize.native,
-        gpa,
-    ) catch return error.InvalidDevRunImage;
-    errdefer boxy_view.deinit();
-
-    const runtime = eval.boxy_abi.createRuntimeFromSidecarView(gpa, boxy_view, ops) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    return .{ .runtime = runtime, .view = boxy_view };
-}
-
-fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState {
+fn openRuntimeState(gpa: Allocator) RuntimeStateError!RuntimeState {
     var shm = try SharedMemoryAllocator.fromCoordination(gpa, shimIo());
     errdefer shm.deinit(gpa);
 
@@ -190,13 +156,13 @@ fn openRuntimeState(gpa: Allocator, ops: *RocOps) RuntimeStateError!RuntimeState
     const view = try viewRuntimeImage(&shm, image_offset, image_bound);
     const program = try createDevProgram(
         gpa,
-        ops,
         &view,
         generation,
         if (retained_image) |image| image.descriptor_offset else hot_reload.invalid_descriptor_offset,
         if (retained_image) |image| image.descriptor else null,
     );
     errdefer destroyDevProgram(gpa, program);
+    if (retained_image) |image| acceptHotReloadProgram(program, image.descriptor);
 
     return .{
         .shm = shm,
@@ -214,7 +180,7 @@ fn ensureRuntimeState(ops: *RocOps) *RuntimeState {
 
     if (runtime_state_initialized.load(.acquire)) return &runtime_state;
 
-    runtime_state = openRuntimeState(allocator(), ops) catch |err| {
+    runtime_state = openRuntimeState(allocator()) catch |err| {
         var message_buffer: [256]u8 = undefined;
         const message = switch (err) {
             error.UnresolvedSymbol => std.fmt.bufPrint(&message_buffer, "Machine-code shim could not map the compiled Roc image: unresolved symbol {s}", .{last_unresolved_symbol orelse "?"}) catch
@@ -255,9 +221,8 @@ const RelocationContext = struct {
         for (self.view.data_symbols) |symbol| {
             const symbol_name = self.view.dataSymbolName(symbol) catch return null;
             if (std.mem.eql(u8, symbol_name, name)) {
-                return @intFromPtr(self.view.data.ptr) +
-                    @as(usize, @intCast(symbol.data_offset)) +
-                    @as(usize, @intCast(symbol.symbol_offset));
+                const bytes = self.view.dataSymbolBytes(symbol) catch return null;
+                return @intFromPtr(bytes.ptr) + @as(usize, @intCast(symbol.symbol_offset));
             }
         }
 
@@ -286,6 +251,8 @@ fn loadDevProgram(
 ) LoadDevProgramError!DevProgram {
     if (view.code.len == 0) return error.EmptyCode;
     try validateDirectImageLayout(view);
+    // A composed image's host imports own the stub area.
+    if (view.host_imports.len != 0 and (view.relocations.len != 0 or view.data_relocations.len != 0)) return error.InvalidDevRunImage;
     try prepareDirectImageForRelocation(view);
 
     var function_stubs = std.ArrayList(FunctionStub).empty;
@@ -297,55 +264,37 @@ fn loadDevProgram(
     for (view.relocations, relocation_records) |record, *relocation| {
         const name = try view.symbolName(record.symbol);
         const shim_function_addr = resolveShimFunction(name);
-        switch (try record.relocationKind()) {
-            .linked_function => {
-                const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
+        const encoding = try record.relocationKind();
+        const data_kind: ?@FieldType(@FieldType(backend.Relocation, "linked_data"), "kind") = switch (encoding) {
+            .linked_function_x86_call_rel32, .linked_function_aarch64_call26 => null,
+            .linked_data_abs64 => .abs64,
+            .linked_data_rel32 => .rel32,
+            .linked_data_page21 => .page21,
+            .linked_data_pageoff12 => .pageoff12,
+        };
+        if (data_kind) |kind| {
+            if (shim_function_addr) |target_addr| {
                 try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                relocation.* = .{ .linked_function = .{
+            }
+            relocation.* = .{ .linked_data = .{
+                .offset = record.code_offset,
+                .name = name,
+                .kind = kind,
+            } };
+        } else {
+            const target_addr = shim_function_addr orelse return unresolvedSymbol(name);
+            try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
+            relocation.* = .{
+                .linked_function = .{
                     .offset = record.code_offset,
                     .name = name,
-                } };
-            },
-            .linked_data_abs64 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .abs64,
-                } };
-            },
-            .linked_data_rel32 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .rel32,
-                } };
-            },
-            .linked_data_page21 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .page21,
-                } };
-            },
-            .linked_data_pageoff12 => {
-                if (shim_function_addr) |target_addr| {
-                    try ensureFunctionStub(gpa, &function_stubs, name, target_addr);
-                }
-                relocation.* = .{ .linked_data = .{
-                    .offset = record.code_offset,
-                    .name = name,
-                    .kind = .pageoff12,
-                } };
-            },
+                    .kind = switch (encoding) {
+                        .linked_function_x86_call_rel32 => .x86_call_rel32,
+                        .linked_function_aarch64_call26 => .aarch64_call26,
+                        .linked_data_abs64, .linked_data_rel32, .linked_data_page21, .linked_data_pageoff12 => unreachable, // data encodings were handled above
+                    },
+                },
+            };
         }
     }
     const stub_size = try jumpStubSize();
@@ -375,7 +324,9 @@ fn loadDevProgram(
         RelocationContext.resolve,
     );
     try applyDataRelocations(view, &relocation_context);
+    try applyComposedRelocations(view);
     try finishDirectImageRelocation(view);
+    const function_table = try registerFunctionTable(view);
 
     return .{
         .entrypoints = view.entrypoints,
@@ -386,8 +337,90 @@ fn loadDevProgram(
         .descriptor = descriptor,
         .descriptor_offset = descriptor_offset,
         .local_refs = std.atomic.Value(usize).init(1),
-        .boxy = null,
+        .static_code_references = view.static_code_references,
+        .function_table = function_table,
     };
+}
+
+/// Register a composed image's function table with the process, so the
+/// unwinder knows the image's functions: Windows finds a function's unwind
+/// information only through a registered table. The table's addresses count
+/// from the start of the image's code. Only an image composed from COFF
+/// unit images, which runs only on Windows, has one.
+fn registerFunctionTable(view: *const RunImage.ProgramView) LoadDevProgramError!?*anyopaque {
+    if (view.function_table.len == 0) return null;
+    if (comptime builtin.os.tag != .windows) return error.InvalidDevRunImage;
+    // The shim runs on Windows only on 64-bit x86 and ARM.
+    const entry_size: usize = if (builtin.cpu.arch == .aarch64) 8 else 12;
+    if (view.function_table.len % entry_size != 0 or @intFromPtr(view.function_table.ptr) % 4 != 0) return error.InvalidDevRunImage;
+    const count = std.math.cast(u32, view.function_table.len / entry_size) orelse return error.InvalidDevRunImage;
+    const table: *anyopaque = @ptrCast(@constCast(view.function_table.ptr));
+    if (unwind_tables.RtlAddFunctionTable(table, count, @intFromPtr(view.code.ptr)) == 0) return error.FunctionTableRegistrationFailed;
+    return table;
+}
+
+const unwind_tables = struct {
+    extern "ntdll" fn RtlAddFunctionTable(table: *anyopaque, count: u32, base_address: u64) callconv(.winapi) u8;
+    extern "ntdll" fn RtlDeleteFunctionTable(table: *anyopaque) callconv(.winapi) u8;
+};
+
+/// Fill a composed image's host sites and rebase its absolute addresses into
+/// itself: each host import is resolved once by name and its sites filled,
+/// a displacement reaching it through the import's jump stub; each rebased
+/// word becomes the image's code address plus its value.
+fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramError!void {
+    if (view.host_imports.len == 0 and view.rebases.len == 0) return;
+    const stub_size = try jumpStubSize();
+    if (view.host_imports.len > view.function_stubs.len / stub_size) return error.InvalidDevRunImage;
+    const code_base = @intFromPtr(view.code.ptr);
+    for (view.host_imports, 0..) |import, index| {
+        const name = try view.symbolName(import.symbol);
+        const address = resolveShimFunction(name) orelse return unresolvedSymbol(name);
+        const stub = view.function_stubs[index * stub_size ..][0..stub_size];
+        try writeJumpStub(stub, address);
+        const stub_address: i64 = @intCast(@intFromPtr(stub.ptr));
+        for (try view.hostImportSites(import)) |site| switch (try site.siteKind()) {
+            .pc32 => {
+                const field = try composedField(view, site.offset, 4);
+                const displacement = std.math.cast(i32, stub_address + site.addend - @as(i64, @intCast(@intFromPtr(field.ptr)))) orelse return error.BranchOutOfRange;
+                std.mem.writeInt(i32, field[0..4], displacement, .little);
+            },
+            .abs64 => {
+                const field = try composedField(view, site.offset, 8);
+                std.mem.writeInt(u64, field[0..8], @bitCast(@as(i64, @intCast(address)) + site.addend), .little);
+            },
+            .branch26 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .branch26, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .page21 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .page21, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+            .pageoff12 => {
+                const field = try composedField(view, site.offset, 4);
+                if (!backend.dev.UnitImage.applySite(field, .pageoff12, stub_address + site.addend, @intFromPtr(field.ptr))) return error.BranchOutOfRange;
+            },
+        };
+    }
+    for (view.rebases) |rebase| {
+        const field = try composedField(view, rebase.offset, 8);
+        std.mem.writeInt(u64, field[0..8], @as(u64, code_base) +% rebase.value, .little);
+    }
+}
+
+/// The `width` bytes at `offset` from the start of a composed image's code,
+/// which lie in its executable pages or its writable data.
+fn composedField(view: *const RunImage.ProgramView, offset: u64, width: usize) RunImage.ImageError![]u8 {
+    if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
+    const address = @intFromPtr(view.code.ptr) +% @as(usize, @intCast(offset));
+    for ([_][]u8{ view.executable, view.writable_data }) |region| {
+        const start = @intFromPtr(region.ptr);
+        if (address >= start and address - start <= region.len and width <= region.len - (address - start)) {
+            return region[address - start ..][0..width];
+        }
+    }
+    return error.InvalidDevRunImage;
 }
 
 /// The name of the last symbol the image needed and this shim could not
@@ -405,7 +438,6 @@ fn unresolvedSymbol(name: []const u8) error{UnresolvedSymbol} {
 
 fn createDevProgram(
     gpa: Allocator,
-    ops: *RocOps,
     view: *const RunImage.ProgramView,
     generation: u64,
     descriptor_offset: usize,
@@ -415,8 +447,6 @@ fn createDevProgram(
     errdefer gpa.destroy(program);
 
     program.* = try loadDevProgram(gpa, view, generation, descriptor_offset, descriptor);
-    errdefer program.deinit(gpa);
-    program.boxy = try createBoxyRuntime(gpa, ops, view);
     return program;
 }
 
@@ -451,7 +481,7 @@ fn relocatedDataAddress(base_addr: usize, addend: i64) RunImage.ImageError!usize
 }
 
 fn destroyDevProgram(gpa: Allocator, program: *DevProgram) void {
-    program.deinit(gpa);
+    program.deinit();
     gpa.destroy(program);
 }
 
@@ -461,7 +491,19 @@ fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageEr
     if (view.executable.len == 0 or view.executable.len % view.page_size != 0) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.code)) return error.InvalidDevRunImage;
     if (!rangeContains(view.executable, view.function_stubs)) return error.InvalidDevRunImage;
+    if (!rangeContains(view.executable, view.function_table)) return error.InvalidDevRunImage;
+    if (view.function_table.len != 0 and @intFromPtr(view.function_table.ptr) < @intFromPtr(view.code.ptr)) return error.InvalidDevRunImage;
     if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    if (view.writable_data.len != 0) {
+        if (@intFromPtr(view.writable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+        for ([_][]const u8{ view.executable, view.data }) |readonly| {
+            if (readonly.len == 0) continue;
+            const writable_start = @intFromPtr(view.writable_data.ptr);
+            const readonly_start = @intFromPtr(readonly.ptr);
+            if (writable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
+                readonly_start < writable_start + std.mem.alignForward(usize, view.writable_data.len, view.page_size)) return error.InvalidDevRunImage;
+        }
+    }
     for (view.code_symbols) |symbol| {
         if (symbol.code_offset >= view.code.len) return error.InvalidDevRunImage;
         _ = try view.codeSymbolName(symbol);
@@ -481,6 +523,9 @@ fn rangeContains(outer: []const u8, inner: []const u8) bool {
 fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
     try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_write);
     try protectDataPages(view, .read_write);
+    if (view.writable_data.len != 0) {
+        try ipc.platform.protectMappedMemory(view.writable_data.ptr, std.mem.alignForward(usize, view.writable_data.len, view.page_size), .read_write);
+    }
 }
 
 fn finishDirectImageRelocation(view: *const RunImage.ProgramView) (ipc.platform.MemoryProtectError || instruction_cache.Error)!void {
@@ -591,7 +636,46 @@ fn resolveShimFunction(name: []const u8) ?usize {
     }
     if (resolveRuntimeSymbol(name)) |address| return address;
     if (resolveHostedSymbol(name)) |address| return address;
-    return resolveBoxyShimFunction(name);
+    if (resolvePackageSymbol(name)) |address| return address;
+    return resolveSystemSymbol(name);
+}
+
+/// A function of the system libraries the support image's builtins call,
+/// looked up by name in this process: libSystem on macOS, kernel32 and
+/// ntdll on Windows. A Linux support image calls none.
+fn resolveSystemSymbol(name: []const u8) ?usize {
+    var buffer: [256]u8 = undefined;
+    if (name.len >= buffer.len) return null;
+    @memcpy(buffer[0..name.len], name);
+    buffer[name.len] = 0;
+    const name_z: [*:0]const u8 = buffer[0..name.len :0];
+    if (builtin.os.tag == .macos) {
+        // `RTLD_DEFAULT`: every image the process has loaded.
+        const default_handle: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
+        return @intFromPtr(std.c.dlsym(default_handle, name_z) orelse return null);
+    }
+    if (builtin.os.tag == .windows) {
+        for ([_][*:0]const u16{ std.unicode.utf8ToUtf16LeStringLiteral("kernel32.dll"), std.unicode.utf8ToUtf16LeStringLiteral("ntdll.dll") }) |module_name| {
+            const module = system_libraries.GetModuleHandleW(module_name) orelse continue;
+            if (system_libraries.GetProcAddress(module, name_z)) |address| return @intFromPtr(address);
+        }
+        return null;
+    }
+    return null;
+}
+
+const system_libraries = struct {
+    extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetProcAddress(module: *anyopaque, name: [*:0]const u8) callconv(.winapi) ?*anyopaque;
+};
+
+/// An object-cache entry linked into this executable, by its C-ABI entry
+/// name, which the generated platform shim recorded next to its address.
+fn resolvePackageSymbol(name: []const u8) ?usize {
+    for (shim_host_abi.packageNames(), shim_host_abi.packageFns()) |package_name, package_fn| {
+        if (std.mem.eql(u8, std.mem.span(package_name), name)) return @intFromPtr(package_fn);
+    }
+    return null;
 }
 
 /// The host's runtime symbols, which this shim links against directly.
@@ -618,29 +702,11 @@ fn resolveHostedSymbol(name: []const u8) ?usize {
     return null;
 }
 
-/// Resolve a Boxy runtime wrapper to the linked in-process implementation.
-fn resolveBoxyShimFunction(name: []const u8) ?usize {
-    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
-        const symbol_name = comptime boxy_fn.symbolName();
-        if (std.mem.eql(u8, name, symbol_name)) {
-            return @intFromPtr(&@field(eval.boxy_abi, symbol_name));
-        }
-    }
-    return null;
-}
-
 fn maxDevDataAlignment(view: *const RunImage.ProgramView) RunImage.ImageError!usize {
     var max_alignment: usize = 1;
     for (view.data_symbols) |symbol| {
         if (symbol.alignment == 0 or !std.math.isPowerOfTwo(symbol.alignment)) return error.InvalidDevRunImage;
-        if (symbol.data_offset > std.math.maxInt(usize) or symbol.len > std.math.maxInt(usize) or symbol.symbol_offset > std.math.maxInt(usize)) {
-            return error.InvalidDevRunImage;
-        }
-        const data_offset: usize = @intCast(symbol.data_offset);
-        const len: usize = @intCast(symbol.len);
-        const symbol_offset: usize = @intCast(symbol.symbol_offset);
-        if (len > view.data.len or data_offset > view.data.len - len or symbol_offset > len) return error.InvalidDevRunImage;
+        _ = try view.dataSymbolBytes(symbol);
         max_alignment = @max(max_alignment, symbol.alignment);
     }
     return max_alignment;
@@ -718,10 +784,7 @@ fn executeDevEntrypoint(
     arg_ptr: ?*anyopaque,
 ) void {
     const entrypoint = devEntrypointForOrdinal(program.entrypoints, entry_idx) orelse {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: missing dev entrypoint ordinal {d}", .{entry_idx});
     };
     if (entrypoint.code_offset > std.math.maxInt(usize)) {
         ops.crash("Machine-code shim received an invalid dev entrypoint offset");
@@ -737,10 +800,16 @@ fn executeDevEntrypoint(
     // the host through this shim's runtime symbols.
     const func: *const fn (*anyopaque, ?*anyopaque) callconv(.c) void =
         @ptrCast(@alignCast(program.code.ptr + entry_offset));
-    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
-    const previous_runtime = eval.boxy_abi.swapActiveRuntime(runtime);
-    defer _ = eval.boxy_abi.swapActiveRuntime(previous_runtime);
     func(ret, arg_ptr);
+}
+
+/// Accept a loaded hot-reload image before any of its code runs. From then on
+/// values the host keeps may point into its static data. Static data that
+/// points at the image's own code is never dropped, so it holds a reference to
+/// the image for the rest of the session.
+fn acceptHotReloadProgram(program: *DevProgram, descriptor: *hot_reload.ImageDescriptor) void {
+    hot_reload.markDescriptorAccepted(descriptor);
+    if (program.static_code_references) acquireDevProgramRef(program);
 }
 
 fn devProgramContainsCodeAddress(program: *const DevProgram, address: usize) bool {
@@ -763,10 +832,7 @@ fn acquireDevProgramRef(program: *DevProgram) void {
         hot_reload.retainDescriptor(descriptor);
         return;
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     }
 
     const previous = program.local_refs.fetchAdd(1, .acquire);
@@ -779,10 +845,7 @@ fn releaseDevProgramRefLocked(state: *RuntimeState, program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -799,10 +862,7 @@ fn releaseDevProgramRef(program: *DevProgram) void {
     if (program.descriptor) |descriptor| {
         hot_reload.releaseDescriptor(descriptor);
     } else if (program.descriptor_offset != hot_reload.invalid_descriptor_offset) {
-        if (builtin.mode == .debug) {
-            invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
-        }
-        unreachable;
+        invariant("machine-code shim invariant violated: hot reload program has no descriptor", .{});
     } else {
         const previous = program.local_refs.fetchSub(1, .acq_rel);
         if (builtin.mode == .debug and previous == 0) {
@@ -836,10 +896,7 @@ fn devProgramRefCount(program: *const DevProgram) usize {
     return program.local_refs.load(.acquire);
 }
 
-fn refreshRuntimeProgramIfNeeded(
-    state: *RuntimeState,
-    ops: *RocOps,
-) void {
+fn refreshRuntimeProgramIfNeeded(state: *RuntimeState) void {
     const control = state.control orelse return;
 
     while (true) {
@@ -865,7 +922,6 @@ fn refreshRuntimeProgramIfNeeded(
         const gpa = allocator();
         const next_program = createDevProgram(
             gpa,
-            ops,
             &view,
             retained_image.generation,
             retained_image.descriptor_offset,
@@ -893,6 +949,7 @@ fn refreshRuntimeProgramIfNeeded(
             return;
         };
 
+        acceptHotReloadProgram(next_program, retained_image.descriptor);
         const old_program = state.program;
         state.program = next_program;
         state.retired_programs.appendAssumeCapacity(old_program);
@@ -911,7 +968,7 @@ fn evaluateEntrypoint(
     const state = ensureRuntimeState(ops);
     if (state.control != null) {
         runtime_state_mutex.lockUncancelable(shimIo());
-        refreshRuntimeProgramIfNeeded(state, ops);
+        refreshRuntimeProgramIfNeeded(state);
         const program = state.program;
         acquireDevProgramRef(program);
         runtime_state_mutex.unlock(shimIo());
@@ -931,21 +988,12 @@ pub fn roc_hot_reload_enter(return_address: usize) ?*anyopaque {
     if (!runtime_state_initialized.load(.acquire)) return null;
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
-    const call_ref = allocator().create(HotReloadCallRef) catch @panic("machine-code shim could not allocate a hot-reload call reference");
-    call_ref.* = .{
-        .program = program,
-        .previous_boxy_runtime = eval.boxy_abi.swapActiveRuntime(if (program.boxy) |boxy| boxy.runtime else null),
-    };
-    return call_ref;
+    return program;
 }
 
 /// Release a loaded dev image token returned by `roc_hot_reload_enter`.
 pub fn roc_hot_reload_leave(code_ref: ?*anyopaque) void {
-    const code_ref_ptr = code_ref orelse return;
-    const call_ref: *HotReloadCallRef = @ptrCast(@alignCast(code_ref_ptr));
-    _ = eval.boxy_abi.swapActiveRuntime(call_ref.previous_boxy_runtime);
-    const program = call_ref.program;
-    allocator().destroy(call_ref);
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
     releaseDevProgramRef(program);
 }
 
@@ -958,20 +1006,6 @@ pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
     const program = findDevProgramByCodeAddressLocked(&runtime_state, return_address) orelse return null;
     acquireDevProgramRef(program);
     return program;
-}
-
-/// Select the sidecar runtime retained by an erased callable while its capture
-/// drop callback executes. Returns the previously selected runtime.
-pub fn roc_hot_reload_activate_retained(code_ref: ?*anyopaque) ?*anyopaque {
-    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return null));
-    const runtime = if (program.boxy) |boxy| boxy.runtime else null;
-    return eval.boxy_abi.swapActiveRuntime(runtime);
-}
-
-/// Restore the sidecar runtime returned by `roc_hot_reload_activate_retained`.
-pub fn roc_hot_reload_deactivate_retained(previous: ?*anyopaque) void {
-    const runtime: ?*eval.boxy_abi.GlobalBoxyRuntime = if (previous) |ptr| @ptrCast(@alignCast(ptr)) else null;
-    _ = eval.boxy_abi.swapActiveRuntime(runtime);
 }
 
 /// Release an image retained by `roc_hot_reload_retain_current`.
@@ -1032,6 +1066,8 @@ test "loaded dev program borrows direct shared image metadata" {
         .{ .ordinal = 0, .code_offset = 0 },
     };
 
+    var plan = try RunImage.StaticDataPool.Plan.init(std.testing.allocator, &.{}, false);
+    defer plan.deinit();
     const header = try RunImage.writeToSharedMemory(
         std.testing.allocator,
         shm.allocator(),
@@ -1043,29 +1079,17 @@ test "loaded dev program borrows direct shared image metadata" {
         &.{},
         &.{},
         &.{},
-        &.{},
-        std.mem.zeroes(RunImage.BoxySidecar),
+        &plan,
     );
-    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size));
+    const view = try RunImage.viewMappedImage(header, shm.base_ptr, @intCast(header.image_size), shm.total_size);
 
     var program = try loadDevProgram(std.testing.allocator, &view, 0, hot_reload.invalid_descriptor_offset, null);
-    defer program.deinit(std.testing.allocator);
+    defer program.deinit();
 
     try std.testing.expect(program.entrypoints.ptr == view.entrypoints.ptr);
     try std.testing.expect(program.code.ptr == view.code.ptr);
     try std.testing.expectEqual(@as(u32, 0), program.entrypoints[0].ordinal);
     try std.testing.expectEqual(@as(u64, 0), program.entrypoints[0].code_offset);
-}
-
-test "shim resolves every Boxy runtime wrapper" {
-    inline for (@typeInfo(backend.LirCodeGenMod.BoxyBuiltinFn).@"enum".field_names) |field_name| {
-        const boxy_fn: backend.LirCodeGenMod.BoxyBuiltinFn = @fromBackingInt(@intCast(@backingInt(@field(backend.LirCodeGenMod.BoxyBuiltinFn, field_name))));
-        const symbol_name = comptime boxy_fn.symbolName();
-        try std.testing.expectEqual(
-            @intFromPtr(&@field(eval.boxy_abi, symbol_name)),
-            resolveShimFunction(symbol_name),
-        );
-    }
 }
 
 test "data relocations patch data pointers" {
@@ -1109,8 +1133,8 @@ test "data relocations patch data pointers" {
         .data = &data,
         .data_symbols = &data_symbols,
         .page_size = 4096,
-        .boxy_blob = &.{},
-        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,
@@ -1154,8 +1178,8 @@ test "function-pointer data relocations patch generated Roc code pointers" {
         .data = &data,
         .data_symbols = &.{},
         .page_size = 4096,
-        .boxy_blob = &.{},
-        .boxy_sidecar = std.mem.zeroes(RunImage.BoxySidecar),
+        .mapping = &.{},
+        .static_code_references = false,
     };
     const relocation_context = RelocationContext{
         .view = &view,

@@ -31,7 +31,7 @@ DOES NOT EXIST - hello_world_with_block.md:11:2:11:14
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "world")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_world")

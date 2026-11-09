@@ -10,7 +10,7 @@ const frame = helpers.frame;
 const collectResponses = helpers.collectResponses;
 const uriFromPath = helpers.uriFromPath;
 
-const ExpectSingleErrorResponseError = helpers.HelperError || std.json.ParseError(std.json.Scanner) || error{
+const ExpectSingleErrorResponseError = helpers.HelperError || std.json.ParseError(std.json.Scanner) || std.Io.ConcurrentError || error{
     MissingCode,
     MissingError,
     MissingId,
@@ -27,7 +27,7 @@ const InitialServerState = enum {
 };
 
 const FailingWriter = struct {
-    pub fn write(_: *@This(), _: []const u8) error{InjectedFailure}!usize {
+    pub fn writeAll(_: *@This(), _: []const u8) error{InjectedFailure}!void {
         return error.InjectedFailure;
     }
 };
@@ -53,7 +53,6 @@ fn expectSingleErrorResponse(
 
     var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
-    server.client.trusted_workspace = true;
     server.state = switch (initial_state) {
         .waiting_for_initialize => .waiting_for_initialize,
         .running => .running,
@@ -92,7 +91,7 @@ fn lifecycleInput(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     const messages = [_][]const u8{
         \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/before.roc","version":1,"text":"before"}}}
         ,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
         ,
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}
         ,
@@ -175,10 +174,10 @@ test "server handles initialize/shutdown/exit handshake" {
 test "server rejects re-initialization requests" {
     const allocator = std.testing.allocator;
     const init =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const reinit =
-        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const shutdown =
         \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
@@ -305,7 +304,7 @@ test "server enforces request lifecycle state before dispatch" {
 test "server propagates response write failures without committing initialization" {
     const allocator = std.testing.allocator;
     const request =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{}}}
     ;
     const input = try frame(allocator, request);
     defer allocator.free(input);
@@ -390,15 +389,43 @@ test "server tracks documents on didOpen/didChange" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
-    server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
     const doc = maybe_doc.?;
     try std.testing.expectEqualStrings("app main = 42", doc.text);
     try std.testing.expectEqual(@as(i64, 2), doc.version);
+}
+
+test "server forgets documents on didClose" {
+    const allocator = std.testing.allocator;
+    const file_uri = "file:///tmp/closed.roc";
+
+    const open_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/closed.roc","version":1,"text":"app main = 0"}}}
+    );
+    defer allocator.free(open_msg);
+    const close_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didClose","params":{"textDocument":{"uri":"file:///tmp/closed.roc"}}}
+    );
+    defer allocator.free(close_msg);
+    const combined = try std.mem.concat(allocator, u8, &.{ open_msg, close_msg });
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    try server.run();
+
+    try std.testing.expect(server.getDocumentForTesting(file_uri) == null);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.close_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.forget_calls);
 }
 
 test "server applies sequential incremental changes in a single didChange" {
@@ -446,9 +473,8 @@ test "server applies sequential incremental changes in a single didChange" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
-    server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
@@ -525,15 +551,176 @@ test "server handles burst of incremental didChange messages" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
-    server.client.trusted_workspace = true;
     try server.run();
-    try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
 
     const maybe_doc = server.getDocumentForTesting(file_uri);
     try std.testing.expect(maybe_doc != null);
     const doc = maybe_doc.?;
     try std.testing.expectEqualStrings("abc DEF\nline!\nDONE", doc.text);
     try std.testing.expectEqual(@as(i64, 4), doc.version);
+}
+
+// repro for https://github.com/roc-lang/roc/issues/12537
+// didChange notifications that arrive back-to-back (undo/redo, fast typing,
+// multi-cursor edits) are coalesced into a single re-check of the final text,
+// rather than re-checking the document once per notification.
+test "server coalesces rapid consecutive didChange messages into one check" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "test.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":""}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    var builder: std.ArrayList(u8) = .empty;
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, open_msg);
+
+    const edits = [_][]const u8{ "a", "b", "c" };
+    for (edits, 0..) |edit, i| {
+        const change_body = try std.fmt.allocPrint(allocator,
+            \\{{"jsonrpc":"2.0","method":"textDocument/didChange","params":{{"textDocument":{{"uri":"{s}","version":{d}}},"contentChanges":[{{"text":"{s}","range":{{"start":{{"line":0,"character":{d}}},"end":{{"line":0,"character":{d}}}}}}}]}}}}
+        , .{ file_uri, i + 2, edit, i, i });
+        defer allocator.free(change_body);
+        const change_msg = try frame(allocator, change_body);
+        defer allocator.free(change_msg);
+        try builder.appendSlice(allocator, change_msg);
+    }
+
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    const reader_stream: std.Io.Reader = .fixed(combined);
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+
+    var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    try server.run();
+
+    const maybe_doc = server.getDocumentForTesting(file_uri);
+    try std.testing.expect(maybe_doc != null);
+    const doc = maybe_doc.?;
+    try std.testing.expectEqualStrings("abc", doc.text);
+    try std.testing.expectEqual(@as(i64, 4), doc.version);
+
+    // At most one check for the didOpen plus one for the whole didChange burst.
+    if (server.syntax_checker.check_calls > 2) {
+        std.debug.print("expected at most 2 checks, got {d}\n", .{server.syntax_checker.check_calls});
+        return error.TestUnexpectedResult;
+    }
+}
+
+/// Client input a test hands over piece by piece: reads wait until the test
+/// sends more bytes or closes the input.
+const GatedInput = struct {
+    io: std.Io,
+    mutex: std.Io.Mutex = .init,
+    arrived: std.Io.Condition = .init,
+    bytes: std.ArrayList(u8) = .empty,
+    read_offset: usize = 0,
+    closed: bool = false,
+    buffer: [256]u8 = undefined,
+
+    /// The server's reader of this input. Only one may exist at a time.
+    const Reader = struct {
+        input: *GatedInput,
+        interface: std.Io.Reader,
+    };
+
+    fn reader(self: *GatedInput) Reader {
+        return .{
+            .input = self,
+            .interface = .{ .vtable = &.{ .stream = stream }, .buffer = &self.buffer, .seek = 0, .end = 0 },
+        };
+    }
+
+    fn deinit(self: *GatedInput, allocator: std.mem.Allocator) void {
+        self.bytes.deinit(allocator);
+    }
+
+    fn send(self: *GatedInput, allocator: std.mem.Allocator, data: []const u8) std.mem.Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.bytes.appendSlice(allocator, data);
+        self.arrived.broadcast(self.io);
+    }
+
+    fn close(self: *GatedInput) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        self.closed = true;
+        self.arrived.broadcast(self.io);
+    }
+
+    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
+        const gated: *Reader = @alignCast(@fieldParentPtr("interface", r));
+        const self = gated.input;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        while (self.read_offset == self.bytes.items.len) {
+            if (self.closed) return error.EndOfStream;
+            self.arrived.wait(self.io, &self.mutex) catch return error.ReadFailed;
+        }
+        const available = limit.slice(self.bytes.items[self.read_offset..]);
+        const written = try w.write(available);
+        self.read_offset += written;
+        return written;
+    }
+};
+
+test "server cancels a check that an edit to its document makes stale" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const file_uri = "file:///tmp/cancel.roc";
+
+    const open_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/cancel.roc","version":1,"text":"a"}}}
+    );
+    defer allocator.free(open_msg);
+    const change_msg = try frame(allocator,
+        \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/cancel.roc","version":2},"contentChanges":[{"text":"ab"}]}}
+    );
+    defer allocator.free(change_msg);
+
+    var input: GatedInput = .{ .io = io };
+    defer input.deinit(allocator);
+    try input.send(allocator, open_msg);
+
+    var writer_buffer: [8192]u8 = undefined;
+    const writer_stream: std.Io.Writer = .fixed(&writer_buffer);
+    const Server = TestServer(GatedInput.Reader, std.Io.Writer);
+    var server = try Server.init(allocator, io, input.reader(), writer_stream, null, .{});
+    defer server.deinit();
+    server.state = .running;
+    var gate: TestSyntaxDriver.CancelGate = .{ .io = io };
+    server.syntax_checker.cancel_gate = &gate;
+
+    var run = try io.concurrent(Server.run, .{&server});
+    defer run.cancel(io) catch {};
+    gate.started.waitUncancelable(io);
+    try input.send(allocator, change_msg);
+    input.close();
+    try run.await(io);
+
+    // The stale check of "a" was canceled; "ab" was checked once its edit
+    // was handled.
+    try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.canceled_checks);
+    try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
+    const doc = server.getDocumentForTesting(file_uri).?;
+    try std.testing.expectEqualStrings("ab", doc.text);
 }
 
 test "server responds to semantic tokens request" {
@@ -549,7 +736,7 @@ test "server responds to semantic tokens request" {
 
     // Full lifecycle: init -> initialized -> didOpen -> semanticTokens -> shutdown -> exit
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -642,7 +829,7 @@ test "server returns error for semantic tokens on unknown document" {
     const allocator = std.testing.allocator;
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -727,7 +914,7 @@ test "server returns empty tokens for empty document" {
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -811,10 +998,9 @@ test "server returns empty tokens for empty document" {
     try std.testing.expect(found_tokens_response);
 }
 
-test "workspace trust gates document builds and all semantic requests" {
+test "document checks and semantic requests need no workspace trust" {
     const allocator = std.testing.allocator;
-    for ([_][]const u8{ "", ",\"initializationOptions\":null", ",\"initializationOptions\":{}", ",\"initializationOptions\":{\"trustedWorkspace\":false}", ",\"initializationOptions\":{\"trustedWorkspace\":true}" }, 0..) |options, index| {
-        const trusted = index == 4;
+    for ([_][]const u8{ "", ",\"initializationOptions\":null", ",\"initializationOptions\":{}", ",\"initializationOptions\":{\"trustedWorkspace\":false}", ",\"initializationOptions\":{\"trustedWorkspace\":true}" }) |options| {
         var input: std.ArrayList(u8) = .empty;
         defer input.deinit(allocator);
         const initialize = try std.fmt.allocPrint(allocator,
@@ -825,9 +1011,9 @@ test "workspace trust gates document builds and all semantic requests" {
             initialize,
             \\{"jsonrpc":"2.0","method":"initialized","params":{}}
             ,
-            \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","languageId":"roc","version":1,"text":"module [x]\nx = 1\n"}}}
+            \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/workspace.roc","languageId":"roc","version":1,"text":"module [x]\nx = 1\n"}}}
             ,
-            \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","version":2},"contentChanges":[{"text":"module [x]\nx = 2\n"}]}}
+            \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/workspace.roc","version":2},"contentChanges":[{"text":"module [x]\nx = 2\n"}]}}
             ,
         };
         for (messages) |message| {
@@ -835,14 +1021,14 @@ test "workspace trust gates document builds and all semantic requests" {
             defer allocator.free(framed);
             try input.appendSlice(allocator, framed);
         }
-        // Even malformed params must not reach any compiler-backed handler
-        // before the session is trusted.
+        // Every semantic request reaches its handler, which validates params,
+        // regardless of obsolete workspace trust options.
         const semantic_methods = [_][]const u8{
             "semanticTokens/full", "hover",      "definition", "documentSymbol",
             "documentHighlight",   "completion", "rename",     "prepareRename",
             "references",          "inlayHint",  "codeAction",
         };
-        if (!trusted) for (semantic_methods) |method| {
+        for (semantic_methods) |method| {
             const body = try std.fmt.allocPrint(allocator,
                 \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/{s}","params":{{}}}}
             , .{method});
@@ -850,44 +1036,41 @@ test "workspace trust gates document builds and all semantic requests" {
             const framed = try frame(allocator, body);
             defer allocator.free(framed);
             try input.appendSlice(allocator, framed);
-        };
+        }
         const syntax_methods = [_][]const u8{ "formatting", "foldingRange", "selectionRange" };
-        if (!trusted) for (syntax_methods) |method| {
+        for (syntax_methods) |method| {
             const body = try std.fmt.allocPrint(allocator,
-                \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/{s}","params":{{"textDocument":{{"uri":"file:///tmp/untrusted.roc"}},"positions":[{{"line":1,"character":0}}],"options":{{"tabSize":4,"insertSpaces":true}}}}}}
+                \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/{s}","params":{{"textDocument":{{"uri":"file:///tmp/workspace.roc"}},"positions":[{{"line":1,"character":0}}],"options":{{"tabSize":4,"insertSpaces":true}}}}}}
             , .{method});
             defer allocator.free(body);
             const framed = try frame(allocator, body);
             defer allocator.free(framed);
             try input.appendSlice(allocator, framed);
-        };
+        }
         const reader: std.Io.Reader = .fixed(input.items);
         var output: [16384]u8 = undefined;
         const writer: std.Io.Writer = .fixed(&output);
         var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader, writer, null, .{});
         defer server.deinit();
         try server.run();
-        try std.testing.expectEqual(trusted, server.client.trusted_workspace);
-        try std.testing.expectEqual(@as(usize, if (trusted) 2 else 0), server.syntax_checker.check_calls);
-        const doc = server.getDocumentForTesting("file:///tmp/untrusted.roc").?;
+        try std.testing.expectEqual(@as(usize, 1), server.syntax_checker.check_calls);
+        const doc = server.getDocumentForTesting("file:///tmp/workspace.roc").?;
         try std.testing.expectEqualStrings("module [x]\nx = 2\n", doc.text);
-        if (!trusted) {
-            const responses = try collectResponses(allocator, output[0..server.transport.writer.end]);
-            defer {
-                for (responses) |body| allocator.free(body);
-                allocator.free(responses);
-            }
-            try std.testing.expectEqual(1 + semantic_methods.len + syntax_methods.len, responses.len);
-            for (responses[1 .. 1 + semantic_methods.len]) |body| {
-                const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
-                defer parsed.deinit();
-                try std.testing.expectEqual(@as(i64, @backingInt(protocol.ErrorCode.request_failed)), parsed.value.object.get("error").?.object.get("code").?.integer);
-            }
-            for (responses[1 + semantic_methods.len ..]) |body| {
-                const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
-                defer parsed.deinit();
-                try std.testing.expect(parsed.value.object.contains("result"));
-            }
+        const responses = try collectResponses(allocator, output[0..server.transport.writer.end]);
+        defer {
+            for (responses) |body| allocator.free(body);
+            allocator.free(responses);
+        }
+        try std.testing.expectEqual(1 + semantic_methods.len + syntax_methods.len, responses.len);
+        for (responses[1 .. 1 + semantic_methods.len]) |body| {
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+            defer parsed.deinit();
+            try std.testing.expectEqual(@as(i64, @backingInt(protocol.ErrorCode.invalid_params)), parsed.value.object.get("error").?.object.get("code").?.integer);
+        }
+        for (responses[1 + semantic_methods.len ..]) |body| {
+            const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+            defer parsed.deinit();
+            try std.testing.expect(parsed.value.object.contains("result"));
         }
     }
 }

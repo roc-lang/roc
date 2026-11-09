@@ -283,22 +283,29 @@ pub fn parseUrlPath(url: []const u8) error{ InvalidUrl, InvalidVersion, Ambiguou
 /// Checks if a URL is safe. Used for platform specification.
 ///
 /// Allows:
-/// - HTTPS URLs (any host)
-/// - HTTP URLs to localhost variants: localhost, 127.0.0.1, [::1]
+/// - HTTPS URLs to any host named by a domain name or an IPv4 address
+/// - HTTP URLs to localhost variants: localhost, 127.0.0.1, [::1], without
+///   user information (which would make a different host look like loopback,
+///   as in `http://localhost:80@example.com/`)
 ///
-/// Rejects all other HTTP URLs for security.
+/// Rejects all other HTTP URLs for security, and HTTPS URLs whose host is a
+/// bracketed IP literal such as `[::1]`, which the HTTPS client cannot
+/// connect to (`https://localhost` reaches IPv6 loopback instead).
 pub fn isSafeUrl(url: []const u8) bool {
     // Package group keys use NUL to separate the URL spans around a version.
     // Reject it before a URL can enter resolution or reach a fetcher.
     if (std.mem.findScalar(u8, url, 0) != null) return false;
 
-    return std.mem.startsWith(u8, url, "https://") or
-        std.mem.startsWith(u8, url, "http://localhost:") or
-        std.mem.startsWith(u8, url, "http://localhost/") or
-        std.mem.startsWith(u8, url, "http://127.0.0.1:") or
-        std.mem.startsWith(u8, url, "http://127.0.0.1/") or
-        std.mem.startsWith(u8, url, "http://[::1]:") or
-        std.mem.startsWith(u8, url, "http://[::1]/");
+    const uri = std.Uri.parse(url) catch return false;
+    const host = (uri.host orelse return false).percent_encoded;
+    if (host.len == 0) return false;
+
+    if (std.mem.eql(u8, uri.scheme, "https")) return host[0] != '[';
+    if (!std.mem.eql(u8, uri.scheme, "http")) return false;
+    if (uri.user != null or uri.password != null) return false;
+    return std.mem.eql(u8, host, "localhost") or
+        std.mem.eql(u8, host, "127.0.0.1") or
+        std.mem.eql(u8, host, "[::1]");
 }
 
 test "isSafeUrl" {
@@ -316,6 +323,21 @@ test "isSafeUrl" {
     try testing.expect(isSafeUrl("http://[::1]/path"));
 
     try testing.expect(!isSafeUrl("https://example.com/a\x00b/1.0.0/hashA.tar.zst"));
+
+    // HTTPS to a bracketed IP literal cannot be connected to
+    try testing.expect(!isSafeUrl("https://[::1]:8080/path"));
+    try testing.expect(!isSafeUrl("https://[2001:db8::1]/path"));
+    try testing.expect(isSafeUrl("https://localhost:8080/path"));
+    try testing.expect(isSafeUrl("https://127.0.0.1:8080/path"));
+
+    // User information cannot make a different host look like loopback
+    try testing.expect(!isSafeUrl("http://localhost:80@example.com/path"));
+    try testing.expect(!isSafeUrl("http://127.0.0.1@example.com/path"));
+    try testing.expect(!isSafeUrl("http://user@localhost/path"));
+
+    // Loopback names must be the whole host
+    try testing.expect(!isSafeUrl("http://localhost.example.com/path"));
+    try testing.expect(!isSafeUrl("http://127.0.0.10/path"));
 
     // Should return false for non-localhost HTTP URLs
     try testing.expect(!isSafeUrl("http://example.com/path"));

@@ -103,26 +103,31 @@ pub fn CirVisitor(comptime Context: type) type {
             };
         }
 
+        /// Runs a node's pre-visit hook and reports whether to walk its
+        /// children. A skipped node still gets its post-visit hook, and a
+        /// stop ends the traversal.
+        fn enterNode(self: *Self, pre: anytype, post: anytype, idx: anytype, node: anytype) bool {
+            const hook = pre orelse return true;
+            switch (hook(self.ctx, idx, node)) {
+                .continue_traversal => return true,
+                .skip_children => {
+                    if (post) |post_hook| post_hook(self.ctx, idx, node);
+                    return false;
+                },
+                .stop => {
+                    self.stopped = true;
+                    return false;
+                },
+            }
+        }
+
         /// Walk an expression tree, invoking callbacks at each node.
         pub fn walkExpr(self: *Self, store: *const NodeStore, expr_idx: CIR.Expr.Idx) void {
             if (self.stopped) return;
 
             const expr = store.getSourceExpr(expr_idx);
 
-            // Pre-visit callback
-            if (self.visit_expr_pre) |hook| {
-                switch (hook(self.ctx, expr_idx, expr)) {
-                    .continue_traversal => {},
-                    .skip_children => {
-                        if (self.visit_expr_post) |post| post(self.ctx, expr_idx, expr);
-                        return;
-                    },
-                    .stop => {
-                        self.stopped = true;
-                        return;
-                    },
-                }
-            }
+            if (!self.enterNode(self.visit_expr_pre, self.visit_expr_post, expr_idx, expr)) return;
 
             // Walk children based on expression type
             switch (expr) {
@@ -338,20 +343,7 @@ pub fn CirVisitor(comptime Context: type) type {
 
             const stmt = store.getSourceStatement(stmt_idx);
 
-            // Pre-visit callback
-            if (self.visit_stmt_pre) |hook| {
-                switch (hook(self.ctx, stmt_idx, stmt)) {
-                    .continue_traversal => {},
-                    .skip_children => {
-                        if (self.visit_stmt_post) |post| post(self.ctx, stmt_idx, stmt);
-                        return;
-                    },
-                    .stop => {
-                        self.stopped = true;
-                        return;
-                    },
-                }
-            }
+            if (!self.enterNode(self.visit_stmt_pre, self.visit_stmt_post, stmt_idx, stmt)) return;
 
             // Walk children based on statement type
             switch (stmt) {
@@ -436,20 +428,7 @@ pub fn CirVisitor(comptime Context: type) type {
 
             const pattern = store.getSourcePattern(pattern_idx);
 
-            // Pre-visit callback
-            if (self.visit_pattern_pre) |hook| {
-                switch (hook(self.ctx, pattern_idx, pattern)) {
-                    .continue_traversal => {},
-                    .skip_children => {
-                        if (self.visit_pattern_post) |post| post(self.ctx, pattern_idx, pattern);
-                        return;
-                    },
-                    .stop => {
-                        self.stopped = true;
-                        return;
-                    },
-                }
-            }
+            if (!self.enterNode(self.visit_pattern_pre, self.visit_pattern_post, pattern_idx, pattern)) return;
 
             // Walk children based on pattern type
             switch (pattern) {
@@ -527,20 +506,7 @@ pub fn CirVisitor(comptime Context: type) type {
 
             const anno = store.getTypeAnno(anno_idx);
 
-            // Pre-visit callback
-            if (self.visit_type_anno_pre) |hook| {
-                switch (hook(self.ctx, anno_idx, anno)) {
-                    .continue_traversal => {},
-                    .skip_children => {
-                        if (self.visit_type_anno_post) |post| post(self.ctx, anno_idx, anno);
-                        return;
-                    },
-                    .stop => {
-                        self.stopped = true;
-                        return;
-                    },
-                }
-            }
+            if (!self.enterNode(self.visit_type_anno_pre, self.visit_type_anno_post, anno_idx, anno)) return;
 
             // Walk children based on type annotation type
             switch (anno) {

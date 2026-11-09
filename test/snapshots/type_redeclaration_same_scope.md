@@ -32,7 +32,7 @@ TYPE REDECLARED - type_redeclaration_same_scope.md:3:1:3:24
 				(file "type_redeclaration_same_scope.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "type_redeclaration_same_scope.md") (start 1 1) (end 1 27) (annotation dim) (line-text "Maybe(a) : [Some(a), None]")))))
 ~~~

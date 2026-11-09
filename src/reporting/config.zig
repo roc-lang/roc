@@ -45,28 +45,12 @@ pub const ReportingConfig = struct {
     /// Maximum line width for rendering
     max_line_width: u32,
 
-    /// Whether to show line numbers in source context
-    show_line_numbers: bool,
-
-    /// Number of context lines to show around errors
-    context_lines: u32,
-
-    /// Whether to validate UTF-8 output
-    validate_utf8: bool,
-
-    /// Maximum bytes for truncating error messages
-    max_message_bytes: usize,
-
     pub fn initMarkdown() ReportingConfig {
         return ReportingConfig{
             .color_preference = .never,
             .is_tty = false,
             .render_target = .markdown,
             .max_line_width = 80,
-            .show_line_numbers = true,
-            .context_lines = 3,
-            .validate_utf8 = true,
-            .max_message_bytes = 4096,
         };
     }
 
@@ -76,10 +60,6 @@ pub const ReportingConfig = struct {
             .is_tty = false,
             .render_target = .html,
             .max_line_width = 80,
-            .show_line_numbers = true,
-            .context_lines = 3,
-            .validate_utf8 = true,
-            .max_message_bytes = 4096,
         };
     }
 
@@ -89,10 +69,6 @@ pub const ReportingConfig = struct {
             .is_tty = false,
             .render_target = .language_server,
             .max_line_width = 120, // LSP clients often have wider displays
-            .show_line_numbers = true,
-            .context_lines = 2, // Fewer context lines for cleaner LSP output
-            .validate_utf8 = true,
-            .max_message_bytes = 8192, // LSP may need longer messages
         };
     }
 
@@ -102,10 +78,6 @@ pub const ReportingConfig = struct {
             .is_tty = true,
             .render_target = .color_terminal,
             .max_line_width = 80,
-            .show_line_numbers = true,
-            .context_lines = 3,
-            .validate_utf8 = true,
-            .max_message_bytes = 4096,
         };
     }
 
@@ -115,10 +87,6 @@ pub const ReportingConfig = struct {
             .is_tty = true,
             .render_target = .color_terminal,
             .max_line_width = 80,
-            .show_line_numbers = true,
-            .context_lines = 3,
-            .validate_utf8 = true,
-            .max_message_bytes = 4096,
         };
     }
 
@@ -128,10 +96,6 @@ pub const ReportingConfig = struct {
             .is_tty = false,
             .render_target = .markdown,
             .max_line_width = 80,
-            .show_line_numbers = false, // Simpler output for tests
-            .context_lines = 1,
-            .validate_utf8 = true,
-            .max_message_bytes = 1024,
         };
     }
 
@@ -157,21 +121,6 @@ pub const ReportingConfig = struct {
     /// Get the maximum line width for this configuration
     pub fn getMaxLineWidth(self: ReportingConfig) u32 {
         return self.max_line_width;
-    }
-
-    /// Get the number of context lines to show
-    pub fn getContextLines(self: ReportingConfig) u32 {
-        return self.context_lines;
-    }
-
-    /// Check if line numbers should be shown
-    pub fn shouldShowLineNumbers(self: ReportingConfig) bool {
-        return self.show_line_numbers;
-    }
-
-    /// Get the maximum message size in bytes
-    pub fn getMaxMessageBytes(self: ReportingConfig) usize {
-        return self.max_message_bytes;
     }
 };
 
@@ -204,24 +153,6 @@ pub fn truncateUtf8(allocator: Allocator, input: []const u8, max_bytes: usize) (
     }
 
     return try allocator.dupe(u8, input[0..truncate_at]);
-}
-
-/// Safely format a string with UTF-8 validation
-pub fn formatUtf8(allocator: Allocator, comptime fmt: []const u8, args: anytype) (Allocator.Error || error{InvalidUtf8})![]u8 {
-    const result = try std.fmt.allocPrint(allocator, fmt, args);
-    validateUtf8(result) catch |err| {
-        allocator.free(result);
-        return err;
-    };
-    return result;
-}
-
-/// Safely format a string with UTF-8 validation and truncation
-pub fn formatUtf8Bounded(allocator: Allocator, max_bytes: usize, comptime fmt: []const u8, args: anytype) (Allocator.Error || error{ InvalidUtf8, CannotTruncate })![]u8 {
-    const result = try std.fmt.allocPrint(allocator, fmt, args);
-    defer allocator.free(result);
-
-    return truncateUtf8(allocator, result, max_bytes);
 }
 
 // Tests
@@ -261,8 +192,6 @@ test "ReportingConfig LSP" {
     try testing.expect(!config.is_tty);
     try testing.expectEqual(RenderTargetPreference.language_server, config.getRenderTarget());
     try testing.expectEqual(@as(u32, 120), config.getMaxLineWidth());
-    try testing.expectEqual(@as(u32, 2), config.getContextLines());
-    try testing.expectEqual(@as(usize, 8192), config.getMaxMessageBytes());
 }
 
 test "UTF-8 validation" {
@@ -289,23 +218,7 @@ test "UTF-8 truncation" {
     try validateUtf8(result2);
 }
 
-test "UTF-8 formatting" {
-    const result = try formatUtf8(testing.allocator, "Hello, {s}!", .{"世界"});
-    defer testing.allocator.free(result);
-    try testing.expectEqualStrings("Hello, 世界!", result);
-}
-
-test "UTF-8 bounded formatting" {
-    const result = try formatUtf8Bounded(testing.allocator, 10, "Hello, {s}!", .{"世界"});
-    defer testing.allocator.free(result);
-    try testing.expect(result.len <= 10);
-    try validateUtf8(result);
-}
-
 test "ReportingConfig for testing" {
     const config = ReportingConfig.initForTesting();
     try testing.expect(!config.shouldUseColors());
-    try testing.expect(!config.shouldShowLineNumbers());
-    try testing.expectEqual(@as(u32, 1), config.getContextLines());
-    try testing.expectEqual(@as(usize, 1024), config.getMaxMessageBytes());
 }

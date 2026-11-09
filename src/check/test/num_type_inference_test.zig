@@ -263,16 +263,16 @@ test "mirror-image literal groups commit identical types" {
     // each literal arrived on (the failure mode the old cross-module
     // MUST-agree contract warned about).
     //
-    // 1E80000's exact digits refute Dec and every integer candidate, and 1.5
-    // refutes the integers; F64 is the first candidate whose digit-fit accepts
-    // both, so the `plus` group commits F64 from either side.
+    // 1E300 is past Dec's range, every integer's, and F32's, and 1.5 refutes
+    // the integers; F64 is the first candidate whose digit-fit accepts both, so
+    // the `plus` group commits F64 from either side.
     {
-        var test_env = try TestEnv.init("Test", "x = 1E80000 + 1.5");
+        var test_env = try TestEnv.init("Test", "x = 1E300 + 1.5");
         defer test_env.deinit();
         try test_env.assertDefType("x", "F64");
     }
     {
-        var test_env = try TestEnv.init("Test", "x = 1.5 + 1E80000");
+        var test_env = try TestEnv.init("Test", "x = 1.5 + 1E300");
         defer test_env.deinit();
         try test_env.assertDefType("x", "F64");
     }

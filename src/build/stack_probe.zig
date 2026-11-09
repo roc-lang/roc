@@ -10,6 +10,24 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+/// Fixed COFF input generated when the compiler is built, never per link.
+pub const object = blk: {
+    @setEvalBranchQuota(20_000);
+    var buffer: [1024]u8 = undefined;
+    var allocator = std.heap.FixedBufferAllocator.init(&buffer);
+    const bytes = generateStackProbeObject(allocator.allocator()) catch
+        @compileError("stack probe object exceeds its compile-time buffer");
+    break :blk bytes[0..bytes.len].*;
+};
+
+/// Build-time content identity of the immutable COFF input.
+pub const digest = blk: {
+    @setEvalBranchQuota(20_000);
+    var hash: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(&object, &hash, .{});
+    break :blk hash;
+};
+
 /// x86_64 machine code for ___chkstk_ms (stack probe without SP adjustment)
 /// This probes stack pages in 4KB increments to ensure they are committed.
 ///
@@ -151,20 +169,10 @@ pub fn generateStackProbeObject(allocator: std.mem.Allocator) Allocator.Error![]
     return output.toOwnedSlice(allocator);
 }
 
-/// Write the stack probe object file to a path.
-pub fn writeStackProbeObject(allocator: std.mem.Allocator, std_io: std.Io, path: []const u8) (std.mem.Allocator.Error || std.Io.Dir.WriteFileError)!void {
-    const obj_bytes = try generateStackProbeObject(allocator);
-    defer allocator.free(obj_bytes);
-
-    try std.Io.Dir.cwd().writeFile(std_io, .{
-        .sub_path = path,
-        .data = obj_bytes,
-    });
-}
-
 test "generate stack probe object" {
     const obj_bytes = try generateStackProbeObject(std.testing.allocator);
     defer std.testing.allocator.free(obj_bytes);
+    try std.testing.expectEqualSlices(u8, &object, obj_bytes);
 
     // Verify COFF magic (machine type)
     const machine = std.mem.readInt(u16, obj_bytes[0..2], .little);

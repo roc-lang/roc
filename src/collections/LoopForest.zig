@@ -13,6 +13,7 @@
 //! `succs`, and likewise for predecessors.
 
 const std = @import("std");
+const SingleThreadArena = @import("SingleThreadArena.zig");
 const Allocator = std.mem.Allocator;
 
 const LoopForest = @This();
@@ -56,7 +57,7 @@ pub fn build(
     preds: []const u32,
 ) Error!LoopForest {
     const node_count = succ_starts.len - 1;
-    var scratch_arena = std.heap.ArenaAllocator.init(allocator);
+    var scratch_arena = SingleThreadArena.init(allocator);
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
 

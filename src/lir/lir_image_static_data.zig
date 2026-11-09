@@ -19,9 +19,8 @@ pub fn Schema(comptime Image: type) type {
             alignment: u32,
             is_global: u8,
             is_exported: u8,
-            /// The bytes alignment adds after `is_exported`, declared so that
-            /// every byte of a row is defined.
-            _padding: [2]u8 = @as([2]u8, @splat(0)),
+            /// Explicit trailing alignment bytes.
+            _padding: [2]u8 = .{ 0, 0 },
         };
         pub const Relocation = extern struct {
             name: ArrayRef,

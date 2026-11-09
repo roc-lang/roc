@@ -34,7 +34,7 @@ UNUSED VARIABLE - local_annotation_undeclared_type.md:3:5:3:6
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "r")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_r")

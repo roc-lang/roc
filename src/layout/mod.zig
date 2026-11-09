@@ -48,6 +48,8 @@ pub const TupleData = @import("layout.zig").TupleData;
 pub const TagUnionLayout = @import("layout.zig").TagUnionLayout;
 pub const TagUnionIdx = @import("layout.zig").TagUnionIdx;
 pub const TagUnionData = @import("layout.zig").TagUnionData;
+pub const VariantIndex = @import("layout.zig").VariantIndex;
+pub const max_tag_union_variants = @import("layout.zig").max_tag_union_variants;
 pub const TagUnionVariant = @import("layout.zig").TagUnionVariant;
 pub const ClosureLayout = @import("layout.zig").ClosureLayout;
 pub const RocAlignment = @import("layout.zig").RocAlignment;
@@ -68,11 +70,21 @@ pub const ScalarInfo = @import("layout.zig").ScalarInfo;
 // Per-target C-ABI parameter/return classification.
 pub const abi = @import("abi/mod.zig");
 pub const erased_call_abi = @import("erased_call_abi.zig");
+/// Digest of the binary contract a platform entrypoint shares with its host.
+pub const host_boundary_digest = @import("host_boundary_digest.zig");
+
+// The std-only shape arithmetic (alignment classes, struct and tag union
+// measuring) the layout store and the Boxy runtime share.
+pub const shape = @import("layout_shape");
 
 // Record field ordering used by the layout store when committing record
 // layouts. `roc glue` consumes the committed order rather than reordering
 // fields itself, so both describe the same memory layout.
-pub const field_order = @import("field_order.zig");
+pub const field_order = shape.field_order;
+
+// The byte layout of an entrypoint's argument buffer, shared by the code that
+// writes it and the code that reads it.
+pub const entrypoint_args = @import("entrypoint_args.zig");
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
@@ -136,8 +148,9 @@ test "layout tests" {
     std.testing.refAllDecls(@import("rc_helper.zig"));
     std.testing.refAllDecls(@import("digest.zig"));
     std.testing.refAllDecls(@import("erased_call_abi.zig"));
+    std.testing.refAllDecls(@import("host_boundary_digest.zig"));
     std.testing.refAllDecls(@import("store.zig"));
-    std.testing.refAllDecls(@import("field_order.zig"));
+    std.testing.refAllDecls(@import("entrypoint_args.zig"));
     std.testing.refAllDecls(@import("abi/mod.zig"));
     std.testing.refAllDecls(@import("abi/aarch64.zig"));
     std.testing.refAllDecls(@import("abi/x86_64.zig"));

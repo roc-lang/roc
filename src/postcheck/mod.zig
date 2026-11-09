@@ -4,6 +4,8 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
+/// Which runtime specializations compile-time evaluation must lower.
+pub const LiteralDemand = @import("literal_demand.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
 pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
@@ -11,6 +13,7 @@ pub const Monotype = struct {
     pub const Lower = @import("monotype/lower.zig");
     pub const Solve = @import("monotype/solve.zig");
     pub const Specialize = @import("monotype/specialize.zig");
+    pub const LayoutKey = @import("monotype/layout_key.zig");
 };
 /// Monotype IR after nested function bodies are lifted.
 pub const MonotypeLifted = struct {
@@ -24,21 +27,22 @@ pub const LambdaSolved = struct {
     pub const Type = @import("lambda_solved/type.zig");
     pub const Solve = @import("lambda_solved/solve.zig");
 };
-/// Lambda-solved IR after function values have concrete runtime encodings.
+/// Lambda Mono types: the function-free runtime type store the direct
+/// solved-to-LIR lowering commits layouts against.
 pub const LambdaMono = struct {
-    pub const Ast = @import("lambda_mono/ast.zig");
     pub const Type = @import("lambda_mono/type.zig");
-    pub const Lower = @import("lambda_mono/lower.zig");
-    pub const Eval = @import("lambda_mono/eval.zig");
 };
-/// Decision-tree match compiler used by the direct solved-to-LIR lowering.
-/// `.boxy` does not use it yet and folds match branches into a sequential
-/// chain of its own pattern tests.
+/// Decision-tree match compiler for the direct solved-to-LIR lowering.
 pub const MatchTree = @import("match_tree.zig");
 pub const SolvedInline = @import("solved_inline.zig");
 pub const SolvedLirLower = @import("solved_lir_lower.zig");
 pub const ComptimeScalarValues = @import("comptime_scalar_values.zig");
-/// Boxy checked-to-LIR planning and lowering components.
+/// The erased callables completed compile-time values hold.
+pub const CompletedErasedMembers = @import("completed_erased_members.zig").CompletedErasedMembers;
+/// The compile-time producers each producer's evaluation reads.
+pub const ComptimeRootGraph = @import("comptime_root_graph.zig");
+/// Discovery summaries of a lowered program (design.md "Discovery Summaries").
+/// `.boxy` runtime lowering (design.md "`.boxy` Runtime Lowering").
 pub const Boxy = @import("boxy/mod.zig");
 pub const StructuralTest = @import("structural_test.zig");
 
@@ -46,28 +50,29 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("literal_demand.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));
     std.testing.refAllDecls(@import("monotype/worker_inputs.zig"));
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
+    std.testing.refAllDecls(@import("monotype/layout_key.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/body_shard_test.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/inline_productivity.zig"));
     std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
     std.testing.refAllDecls(@import("lambda_solved/type.zig"));
     std.testing.refAllDecls(@import("lambda_solved/solve.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/ast.zig"));
     std.testing.refAllDecls(@import("lambda_mono/type.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));
     std.testing.refAllDecls(@import("proc_identity.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
+    std.testing.refAllDecls(@import("comptime_root_graph.zig"));
 }
 
 test "lambda solved unification loop is iterative" {

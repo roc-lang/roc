@@ -64,7 +64,7 @@ pub fn fromVarWithAnchoredIdentities(
     store: *const TypeStore,
     env: *const ModuleEnv,
     var_: Var,
-    anchors: *const std.AutoHashMap(Var, void),
+    anchors: *const collections.DenseMap(Var, void),
 ) Allocator.Error!canonical.CanonicalTypeKey {
     var digester = Digester.init(allocator, store, env);
     defer digester.deinit();
@@ -152,13 +152,16 @@ pub fn identityVarsFromVarIgnoringConstraints(
     return try allocator.dupe(types.Var, builder.identity_variables.items);
 }
 
-/// Public `fromVarErrSensitive` function.
+/// Key one type of a dispatch state, up to renaming of its variables.
 ///
-/// Like `fromVar`, except erroneous content digests as its resolved root var
-/// rather than as one universal token. Dispatch-state digests use this so two
-/// states that were poisoned by unrelated failures never compare equal, while
-/// re-encountering the very same poisoned var still digests stably.
-pub fn fromVarErrSensitive(
+/// Unlike `fromVar`, erroneous content digests as its resolved root var rather
+/// than as one universal token, so two states poisoned by unrelated failures
+/// never compare equal while re-encountering the very same poisoned var still
+/// digests stably. Variable names are not written, since they don't affect
+/// which state this is. Constraints attached to variables are omitted: each is
+/// a separate relation settled on its own receiver, and none of them can
+/// change which method a state selects.
+pub fn dispatchStateKey(
     allocator: Allocator,
     store: *const TypeStore,
     env: *const ModuleEnv,
@@ -166,7 +169,7 @@ pub fn fromVarErrSensitive(
 ) Allocator.Error!canonical.CanonicalTypeKey {
     var digester = Digester.init(allocator, store, env);
     defer digester.deinit();
-    digester.adapter.err_by_var = true;
+    digester.adapter.setDispatchStateMode(true);
     return (try digester.info(var_)).key;
 }
 
@@ -196,7 +199,8 @@ pub fn schemeFromVar(
 }
 
 /// A source scheme's key: its root type's key in the scheme namespace.
-fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
+/// The scheme key of a type whose key is `key`.
+pub fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
     var hasher = TypeDigestHasher.init();
     hasher.update(&.{@backingInt(KeyTag.canonical_type_scheme)});
     hasher.update(&key.bytes);
@@ -287,6 +291,36 @@ pub const TypeWriter = struct {
         self.digester.retain = true;
     }
 
+    pub const KeyMemory = struct {
+        engine: type_key_engine.RetainedBytes = .{},
+        adapter_scratch: usize = 0,
+        owned_ranks: usize = 0,
+        nodes: usize = 0,
+        classes: usize = 0,
+        summaries: usize = 0,
+        map_nodes: usize = 0,
+    };
+
+    /// The plain retained key writer used by SealedTypeKeys. Mode-specific
+    /// digesters and inspection are not used by that owner.
+    pub fn retainedKeyMemory(self: *const TypeWriter) KeyMemory {
+        const adapter = &self.digester.adapter;
+        const engine = &self.digester.engine;
+        var result = KeyMemory{
+            .engine = engine.retainedBytes(),
+            .owned_ranks = type_key_engine.listRetainedBytes(adapter.rank_scratch.ranks),
+            .nodes = engine.node_info.count(),
+            .classes = engine.classes.items.len,
+            .summaries = engine.summaries.items.len,
+            .map_nodes = engine.maps.nodes.items.len,
+        };
+        inline for (.{ "fields", "tags", "field_sort_scratch", "tag_sort_scratch" }) |field| {
+            result.adapter_scratch += type_key_engine.listRetainedBytes(@field(adapter, field));
+        }
+        result.adapter_scratch += type_key_engine.stackRetainedBytes(adapter.ext_seen);
+        return result;
+    }
+
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
         return try self.digester.info(var_);
     }
@@ -297,10 +331,10 @@ pub const TypeWriter = struct {
         return schemeKeyForType((try self.digester.info(var_)).key);
     }
 
-    /// Dispatch-state keys retain the identity of each erroneous root.
-    pub fn fromVarErrSensitive(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeKey {
-        self.mode_digester.adapter.err_by_var = true;
-        defer self.mode_digester.adapter.err_by_var = false;
+    /// See the module-level `dispatchStateKey`.
+    pub fn dispatchStateKey(self: *TypeWriter, var_: Var) Allocator.Error!canonical.CanonicalTypeKey {
+        self.mode_digester.adapter.setDispatchStateMode(true);
+        defer self.mode_digester.adapter.setDispatchStateMode(false);
         return (try self.mode_digester.info(var_)).key;
     }
 
@@ -322,7 +356,7 @@ pub const TypeWriter = struct {
         self.mode_digester.engine.reset();
     }
 
-    pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const std.AutoHashMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
+    pub fn fromVarWithAnchoredIdentities(self: *TypeWriter, var_: Var, anchors: *const collections.DenseMap(Var, void)) Allocator.Error!canonical.CanonicalTypeKey {
         self.mode_digester.adapter.identity_anchors = anchors;
         self.mode_digester.adapter.write_identity_names = false;
         defer {
@@ -392,6 +426,14 @@ pub const TypeWriter = struct {
         self.inspector.resetDigest();
         try self.inspector.writeVar(var_);
         try out.appendSlice(self.inspector.allocator, self.inspector.identity_variables.items);
+    }
+
+    /// Like `appendIdentityVarsFromVar`, enumerating ordinary structure only:
+    /// the method requirements attached to an identity are not followed.
+    pub fn appendIdentityVarsFromVarIgnoringConstraints(self: *TypeWriter, var_: Var, out: *std.ArrayListUnmanaged(Var)) Allocator.Error!void {
+        self.inspector.walk_identity_constraints = false;
+        defer self.inspector.walk_identity_constraints = true;
+        try self.appendIdentityVarsFromVar(var_, out);
     }
 
     /// Like `appendIdentityVarsFromVar`, treating every var whose resolved
@@ -481,11 +523,14 @@ const SourceAdapter = struct {
     err_by_var: bool = false,
     /// Checker-local identities that keep their store identity instead of
     /// being alpha-renamed while comparing private requirement shapes.
-    identity_anchors: ?*const std.AutoHashMap(Var, void) = null,
+    identity_anchors: ?*const collections.DenseMap(Var, void) = null,
     /// Durable canonical keys preserve source-level variable names. Ephemeral
     /// requirement-shape keys ignore them because names do not affect type
     /// compatibility.
     write_identity_names: bool = true,
+    /// Whether a type variable's attached constraints are left out of its
+    /// description.
+    omit_identity_constraints: bool = false,
     /// Whether a row that repeats a label along its extension chain is
     /// reported to the caller (the checker, which normalizes the row and
     /// asks again) instead of violating the settled-row invariant.
@@ -512,6 +557,12 @@ const SourceAdapter = struct {
             .rank_scratch = base.TextRankCache.init(allocator),
             .ext_seen = collections.IndexedStack(Var).init(allocator),
         };
+    }
+
+    fn setDispatchStateMode(self: *SourceAdapter, enabled: bool) void {
+        self.err_by_var = enabled;
+        self.write_identity_names = !enabled;
+        self.omit_identity_constraints = enabled;
     }
 
     fn deinit(self: *SourceAdapter) void {
@@ -623,7 +674,10 @@ const SourceAdapter = struct {
             try sink.boolean(name != null);
             if (name) |text| try self.ident(sink, text);
         }
-        const items = self.store.sliceStaticDispatchConstraints(constraints);
+        const items: []const types.StaticDispatchConstraint = if (self.omit_identity_constraints)
+            &.{}
+        else
+            self.store.sliceStaticDispatchConstraints(constraints);
         try sink.varint(@intCast(items.len));
         sink.constraint_count = @intCast(items.len);
         for (items) |constraint| {
@@ -631,7 +685,7 @@ const SourceAdapter = struct {
             try self.child(sink, constraint.fn_var);
             try sink.text(@tagName(constraint.origin));
             try sink.boolean(constraint.origin.binopNegated());
-            const maybe_num_literal = constraint.origin.numeralInfo();
+            const maybe_num_literal = self.store.constraintNumeralInfo(constraint);
             try sink.boolean(maybe_num_literal != null);
             if (maybe_num_literal) |num_literal| try sink.bytes(&num_literal.keyBytes());
         }
@@ -1113,10 +1167,7 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant(message, .{});
-    }
-    unreachable;
+    base.invariant(message, .{});
 }
 
 test "canonical type key declarations are referenced" {
@@ -1156,7 +1207,8 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     const numeral_constraints = try store.appendStaticDispatchConstraints(&.{.{
         .fn_name = from_numeral_ident,
         .fn_var = numeral_fn_var,
-        .origin = .{ .from_literal = .{ .numeral = types.NumeralInfo.testOnlyInt(1, false, base.Region.zero()) } },
+        .origin = .{ .from_literal = .numeral },
+        .numeral = try store.appendNumeralInfo(types.NumeralInfo.testOnlyInt(1, false, base.Region.zero())),
     }});
     const numeral_var = try store.freshFromContent(.{
         .flex = types.Flex.init().withConstraints(numeral_constraints),
@@ -1330,9 +1382,9 @@ test "err-sensitive keys distinguish unrelated erroneous vars and stay stable pe
     const err_a = try store.freshFromContent(.err);
     const err_b = try store.freshFromContent(.err);
 
-    const key_a = try fromVarErrSensitive(allocator, &store, &env, err_a);
-    const key_b = try fromVarErrSensitive(allocator, &store, &env, err_b);
-    const key_a_again = try fromVarErrSensitive(allocator, &store, &env, err_a);
+    const key_a = try dispatchStateKey(allocator, &store, &env, err_a);
+    const key_b = try dispatchStateKey(allocator, &store, &env, err_b);
+    const key_a_again = try dispatchStateKey(allocator, &store, &env, err_a);
 
     try std.testing.expect(!std.meta.eql(key_a, key_b));
     try std.testing.expect(std.meta.eql(key_a, key_a_again));
@@ -1358,7 +1410,7 @@ test "err-sensitive keys match plain keys on error-free types" {
     const tuple = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = tuple_elems } } });
 
     const plain = try fromVar(allocator, &store, &env, tuple);
-    const sensitive = try fromVarErrSensitive(allocator, &store, &env, tuple);
+    const sensitive = try dispatchStateKey(allocator, &store, &env, tuple);
     try std.testing.expect(std.meta.eql(plain, sensitive));
 }
 
@@ -1436,11 +1488,13 @@ test "issue 11128 scheme writer reuses scratch with fresh identity and cycle num
     var writer = SchemeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     for (roots) |root| _ = try writer.fromVar(root);
+    try std.testing.expectEqual(roots.len, writer.test_digests);
     const allocated = counter.allocated_bytes;
     for (0..128) |_| {
         for (roots, expected) |root, key| try std.testing.expectEqualDeep(key, try writer.fromVar(root));
     }
     try std.testing.expectEqual(allocated, counter.allocated_bytes);
+    try std.testing.expectEqual(roots.len * 129, writer.test_digests);
 }
 
 test "issue 11128 scheme writer recovers from every allocation failure" {
@@ -1589,7 +1643,7 @@ test "type writer resets checker digest modes between requests" {
     }});
     const root = try store.freshFromContent(.{ .flex = types.Flex.init().withConstraints(constraints) });
     const err = try store.freshFromContent(.err);
-    var anchors = std.AutoHashMap(Var, void).init(gpa);
+    var anchors = collections.DenseMap(Var, void).init(gpa);
     defer anchors.deinit();
     try anchors.put(root, {});
     var writer = TypeWriter.init(gpa, &store, &env);
@@ -1597,11 +1651,11 @@ test "type writer resets checker digest modes between requests" {
     const ordinary = try fromVar(gpa, &store, &env, root);
     const plain_error = try fromVar(gpa, &store, &env, err);
     const anchored = try fromVarWithAnchoredIdentities(gpa, &store, &env, root, &anchors);
-    const sensitive = try fromVarErrSensitive(gpa, &store, &env, err);
+    const sensitive = try dispatchStateKey(gpa, &store, &env, err);
     for (0..3) |_| {
         try std.testing.expectEqualDeep(anchored, try writer.fromVarWithAnchoredIdentities(root, &anchors));
         try std.testing.expectEqualDeep(ordinary, (try writer.fromVar(root)).key);
-        try std.testing.expectEqualDeep(sensitive, try writer.fromVarErrSensitive(err));
+        try std.testing.expectEqualDeep(sensitive, try writer.dispatchStateKey(err));
         try std.testing.expectEqualDeep(plain_error, (try writer.fromVar(err)).key);
         try std.testing.expect(try writer.containsError(err));
         try std.testing.expect(!try writer.containsError(root));
@@ -1675,7 +1729,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
 /// First-encounter identity order for the test graphs below (tuples,
 /// functions, records whose tails are identities), traversed directly on the
 /// store in the key encoding's child order.
-fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) Allocator.Error![]Var {
+fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const ModuleEnv, roots: []const Var) (Allocator.Error || error{TestUnexpectedResult})![]Var {
     var visited = std.AutoHashMap(Var, void).init(gpa);
     defer visited.deinit();
     var order = std.ArrayList(Var).empty;
@@ -1714,9 +1768,9 @@ fn referenceIdentityOrder(gpa: Allocator, store: *const TypeStore, env: *const M
                         for (by_name[0..fields.len]) |field| try children.append(gpa, field.var_);
                         try children.append(gpa, record.ext);
                     },
-                    .empty_record, .empty_tag_union, .nominal_type, .fn_effectful, .fn_unbound, .tag_union => unreachable,
+                    .empty_record, .empty_tag_union, .nominal_type, .fn_effectful, .fn_unbound, .tag_union => return error.TestUnexpectedResult,
                 },
-                .alias, .err, .field_presence => unreachable,
+                .alias, .err, .field_presence => return error.TestUnexpectedResult,
             }
             // Visit children in order: push in reverse.
             var i = children.items.len;
@@ -1757,7 +1811,7 @@ test "inspection enumerates identities in first-encounter key order across share
                         .ext = try store.fresh(),
                     } } });
                 },
-                else => unreachable,
+                else => unreachable, // uintLessThan(u8, 3) yields only 0, 1, or 2
             }
         }
         var writer = TypeWriter.init(gpa, &store, &env);
@@ -1917,6 +1971,39 @@ test "composed keys are the same whether or not a retaining writer keyed the chi
     try std.testing.expectEqualDeep(holder_fresh, try writer.fromVar(holder));
 }
 
+test "scheme keys compose the same whether or not their closed children were keyed first" {
+    const allocator = std.testing.allocator;
+
+    var env = try ModuleEnv.init(allocator, "");
+    defer env.deinit();
+    const field_name = try env.insertIdent(Ident.for_text("field"));
+    var store = try TypeStore.initCapacity(allocator, 16, 8);
+    defer store.deinit();
+
+    const leaf = try store.freshFromContent(.{ .structure = .empty_record });
+    const record = try store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = field_name, .presence = .required(leaf) }}),
+        .ext = try store.freshFromContent(.{ .structure = .empty_record }),
+    } } });
+    const a = try store.fresh();
+    const callable = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{ record, a }),
+        .ret = a,
+    } } });
+
+    const fresh = try schemeFromVar(allocator, &store, &env, callable);
+    var scheme_writer = SchemeWriter.init(allocator, &store, &env);
+    defer scheme_writer.deinit();
+    try std.testing.expectEqualDeep(fresh, try scheme_writer.fromVar(callable));
+
+    var writer = TypeWriter.init(allocator, &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    const record_info = try writer.fromVar(record);
+    try std.testing.expect(record_info.composable);
+    try std.testing.expectEqualDeep(fresh, try writer.schemeFromVar(callable));
+}
+
 test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
     const allocator = std.testing.allocator;
 
@@ -1935,8 +2022,8 @@ test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
 
     try std.testing.expect(std.meta.eql(try fromVar(allocator, &store, &env, outer_a), try fromVar(allocator, &store, &env, outer_b)));
     try std.testing.expect(!std.meta.eql(
-        try fromVarErrSensitive(allocator, &store, &env, outer_a),
-        try fromVarErrSensitive(allocator, &store, &env, outer_b),
+        try dispatchStateKey(allocator, &store, &env, outer_a),
+        try dispatchStateKey(allocator, &store, &env, outer_b),
     ));
 
     // A writer that keyed the erroneous subtree in the plain encoding must not
@@ -1946,7 +2033,7 @@ test "err-sensitive keys distinguish erroneous content inside closed subtrees" {
     writer.retainComposedKeys();
     _ = try writer.fromVar(outer_a);
     _ = try writer.fromVar(outer_b);
-    try std.testing.expect(!std.meta.eql(try writer.fromVarErrSensitive(outer_a), try writer.fromVarErrSensitive(outer_b)));
+    try std.testing.expect(!std.meta.eql(try writer.dispatchStateKey(outer_a), try writer.dispatchStateKey(outer_b)));
 }
 
 /// Test-only reader of the key encoding: it consumes one node per call and
@@ -2341,7 +2428,7 @@ const EqualityOracle = struct {
         self.pending.deinit(self.gpa);
     }
 
-    fn equal(self: *EqualityOracle, left: Var, right: Var) Allocator.Error!bool {
+    fn equal(self: *EqualityOracle, left: Var, right: Var) (Allocator.Error || error{TestUnexpectedResult})!bool {
         try self.pending.append(self.gpa, .{ left, right });
         while (self.pending.pop()) |pair| {
             if (!try self.step(pair[0], pair[1])) return false;
@@ -2349,7 +2436,7 @@ const EqualityOracle = struct {
         return true;
     }
 
-    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) Allocator.Error!bool {
+    fn step(self: *EqualityOracle, left_var: Var, right_var: Var) (Allocator.Error || error{TestUnexpectedResult})!bool {
         const left = self.store.resolveVar(left_var);
         const right = self.store.resolveVar(right_var);
         if ((try self.assumed.getOrPut(.{ left.var_, right.var_ })).found_existing) return true;
@@ -2399,10 +2486,10 @@ const EqualityOracle = struct {
                         try self.pending.append(self.gpa, .{ left_union.ext, right_flat.tag_union.ext });
                         return true;
                     },
-                    .empty_record, .record, .nominal_type, .fn_effectful, .fn_unbound => unreachable,
+                    .empty_record, .record, .nominal_type, .fn_effectful, .fn_unbound => return error.TestUnexpectedResult,
                 }
             },
-            .rigid, .alias, .err, .field_presence => unreachable,
+            .rigid, .alias, .err, .field_presence => return error.TestUnexpectedResult,
         }
     }
 
@@ -2464,7 +2551,7 @@ test "keys are equal exactly when types are equal up to renaming, over random sh
                         .tags = try store.appendTags(&.{.{ .name = names[tag_choice[i]], .args = try store.appendVars(&.{ c0, c1 }) }}),
                         .ext = empty_union,
                     } } },
-                    else => unreachable,
+                    else => unreachable, // shapes[i] comes from uintLessThan(u8, 5), so it is 0 through 4
                 };
                 try store.setVarContent(self_var, content);
             }
@@ -2536,4 +2623,29 @@ test "keying every link of a constrained-variable chain takes work linear in its
     // Doubling the chain at most roughly doubles the work; the quadratic
     // walk of every link's whole remaining chain quadrupled it.
     try std.testing.expect(work[1] * 10 <= work[0] * 25);
+}
+
+test "type key retained byte accounting matches a live composed writer" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 16, 8);
+    defer store.deinit();
+    const variable = try store.fresh();
+    const cyclic = try store.fresh();
+    try store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ cyclic, variable }) } } });
+    const outer = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ cyclic, variable, cyclic }) } } });
+    const fresh = try fromVarInfo(gpa, &store, &env, outer);
+    var counted = std.testing.FailingAllocator.init(gpa, .{});
+    var writer = TypeWriter.init(counted.allocator(), &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    for ([_]Var{ cyclic, outer, variable, outer }) |root| {
+        _ = try writer.fromVar(root);
+        const work = writer.digester.engine.work;
+        const memory = writer.retainedKeyMemory();
+        try std.testing.expectEqual(counted.allocated_bytes - counted.freed_bytes, memory.engine.persistent() + memory.engine.scratch + memory.adapter_scratch + memory.owned_ranks);
+        try std.testing.expectEqual(work, writer.digester.engine.work);
+    }
+    try std.testing.expectEqualDeep(fresh, try writer.fromVar(outer));
 }

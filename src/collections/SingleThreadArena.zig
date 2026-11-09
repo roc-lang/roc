@@ -159,8 +159,16 @@ pub fn reset(arena: *SingleThreadArena, mode: ResetMode) bool {
         return true;
     }
 
-    // Couldn't reach the requested capacity; the chunk is still valid as-is.
-    return false;
+    // The chunk could not grow in place: replace it with one chunk of the
+    // requested capacity, so the retained chunk never depends on whether
+    // the child allocator happened to have room after it. The old chunk is
+    // valid as-is when even that allocation fails.
+    const ptr = arena.child_allocator.rawAlloc(total_size, buf_node_align, @returnAddress()) orelse return false;
+    arena.child_allocator.rawFree(fullSlice(node), buf_node_align, @returnAddress());
+    const fresh: *BufNode = @ptrCast(@alignCast(ptr));
+    fresh.* = .{ .next = null, .capacity = total_size };
+    arena.state.first = fresh;
+    return true;
 }
 
 fn createNode(arena: *SingleThreadArena, prev_capacity: usize, minimum_size: usize) ?*BufNode {

@@ -44,6 +44,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             error.FormattingNotStable => {
                 @panic("Formatting not stable");
             },
+            error.CommentsNotPreserved => {
+                @panic("Formatting did not preserve comments");
+            },
             else => {
                 std.debug.panic("Unexpected error: {any}", .{err});
             },

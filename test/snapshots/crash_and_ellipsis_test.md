@@ -44,7 +44,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result1")
@@ -58,7 +58,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result2")
@@ -72,7 +72,7 @@ UNUSED VARIABLE - crash_and_ellipsis_test.md:22:5:22:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")
@@ -254,19 +254,19 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 298)
+					(e-call (constraint-fn-var 303)
 						(e-lookup-local
 							(p-assign (ident "testEllipsis")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 302)
+					(e-call (constraint-fn-var 307)
 						(e-lookup-local
 							(p-assign (ident "testCrash")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 306)
+					(e-call (constraint-fn-var 311)
 						(e-lookup-local
 							(p-assign (ident "testCrashSimple")))
 						(e-num (value "42"))))

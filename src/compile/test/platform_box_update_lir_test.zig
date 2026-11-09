@@ -128,8 +128,11 @@ fn expectNoInlineOwnership(store: *const lir.LirStore, layouts: *const layout.St
         unbox_proc,
         "update_pattern_for_host!",
     );
+    // Every checked list mutation these wrappers reach, `List.update` included
+    // (its failure path hands the caller's list back), consumes its list and
+    // needs no retain around the call.
     try std.testing.expectEqual(@as(usize, 0), active.box_retain);
-    try std.testing.expect(active.list_retain > 0);
+    try std.testing.expectEqual(@as(usize, 0), active.list_retain);
     try std.testing.expectEqual(@as(usize, 0), pattern_active.box_retain);
     try std.testing.expectEqual(@as(usize, 0), pattern_active.list_retain);
 
@@ -167,7 +170,9 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
     try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
-    try std.testing.expectEqual(@as(usize, 4), total.list_append);
+    // Both platform appends call the shared `List.append`, which holds one
+    // append; `List.repeat` holds the other.
+    try std.testing.expectEqual(@as(usize, 2), total.list_append);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expectEqual(@as(usize, 0), total.list_retain);
 }
@@ -188,7 +193,7 @@ fn countProc(
     unbox_proc: ?lir.LIR.LirProcSpecId,
     called_procs: ?*std.ArrayList(lir.LIR.LirProcSpecId),
 ) harness.LowerToLirHarnessError!Counts {
-    const body = store.getProcSpec(proc_id).body orelse return .{};
+    const body = store.getProcSpecImmediate(proc_id).body orelse return .{};
     var counts = Counts{};
     var work = std.ArrayList(lir.LIR.CFStmtId).empty;
     defer work.deinit(std.testing.allocator);

@@ -8,16 +8,24 @@ type=snippet
 r = "a"..<"z"
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - range_missing_method_error.md:1:5:1:8
+MISSING METHOD - range_missing_method_error.md:1:5:1:8
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 1 5) (end 1 8))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "range_exclusive_to")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "..<")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "range_missing_method_error.md") (start 1 5) (end 1 8) (annotation error) (line-text "r = \"a\"..<\"z\""))
 			(line-break)
@@ -28,13 +36,6 @@ TYPE NOT DETERMINED - range_missing_method_error.md:1:5:1:8
 			(indent 1)
 			(text "num where [num.range_exclusive_to : num, num -> Range(num)]")
 			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated operator "..<")
-			(reflow " ")
-			(reflow "to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
@@ -73,11 +74,11 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "r"))
-		(e-dispatch-call (method "range_exclusive_to") (constraint-fn-var 232)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-string
+				(e-literal (string "a")))
+			(e-string
+				(e-literal (string "z"))))))
 ~~~
 # TYPES
 ~~~clojure

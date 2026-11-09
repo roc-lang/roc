@@ -20,12 +20,12 @@ const MethodRegistryTestCheckedTypes = struct {
     store: Store = .{},
 
     const Store = struct {
-        pub fn payloadCount(_: Store) usize {
-            unreachable;
+        pub fn typeCount(_: Store) usize {
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
 
         pub fn payload(_: Store, _: checked_ids.CheckedTypeId) checked_artifact.CheckedTypePayload {
-            unreachable;
+            @panic("the method registry test source declares no methods, so the registry never queries checked types");
         }
     };
 
@@ -36,30 +36,29 @@ const MethodRegistryTestCheckedTypes = struct {
         _: *canonical.CanonicalNameStore,
         _: types.Var,
     ) std.mem.Allocator.Error!checked_ids.CheckedTypeId {
-        unreachable;
+        @panic("the method registry test source declares no methods, so the registry never queries checked types");
     }
 };
 
-const MethodRegistryTestCheckedBodies = struct {
-    pub fn patternBinderForSource(
-        _: *const @This(),
-        _: can.CIR.Pattern.Idx,
-    ) ?checked_ids.PatternBinderId {
-        unreachable;
+const MethodRegistryTestModuleIndex = struct {
+    pub fn reachesExpr(_: *const @This(), _: can.CIR.Expr.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn exprIdForSource(
-        _: *const @This(),
-        _: can.CIR.Expr.Idx,
-    ) ?checked_ids.CheckedExprId {
-        unreachable;
+    pub fn reachesPattern(_: *const @This(), _: can.CIR.Pattern.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
     }
 
-    pub fn statementIdForSource(
-        _: *const @This(),
-        _: can.CIR.Statement.Idx,
-    ) ?checked_ids.CheckedStatementId {
-        unreachable;
+    pub fn reachesStatement(_: *const @This(), _: can.CIR.Statement.Idx) bool {
+        @panic("the method registry test source declares no methods, so the registry never queries the module index");
+    }
+};
+
+/// The source's only associated value is a record, which is not a
+/// reference, so publication resolves it to no method target.
+const MethodRegistryTestReferencedTargets = struct {
+    pub fn methodBindingTarget(_: *@This(), _: ModuleEnv.MethodBinding, _: can.CIR.Expr.Idx, _: static_dispatch.MethodOwner) error{OutOfMemory}!?static_dispatch.ReferencedMethodTarget {
+        return null;
     }
 };
 
@@ -112,14 +111,14 @@ test "check type - string plus number should fail" {
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Type Not Determined");
+    try checkTypesModule(source, .fail_first, "Missing Method");
 }
 
 test "check type - string plus string should fail (no plus method)" {
     const source =
         \\x = "hello" + "world"
     ;
-    try checkTypesModule(source, .fail, "Type Not Determined");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binop operand type unification //
@@ -309,21 +308,21 @@ test "issue 10296: single quote literals do not emit defaulted warning" {
     const source =
         \\x = || 'M' == 'M'
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to number literal without warning" {
     const source =
         \\y = || 'M' == 1
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "issue 10296: single quote literal compared to fractional number without warning" {
     const source =
         \\z = || 'M' == 1.5
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> Bool");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> Bool");
 }
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
@@ -1079,6 +1078,54 @@ test "check type - record - opt - destructure of optional field binds Try" {
     // access's chain result (design.md "Field Kinds").
     try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
         \\Try(U8, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of optional field binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record : { outer : { n ?: Str } }
+        \\my_record = { outer: {} }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    // A record pattern means the same thing nested as it does on its own:
+    // the inner pattern checks against the outer field's value, whose `n` is
+    // optional, so `n` binds `Try(Str, [MissingField])`.
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of optional field in a parameter binds Try" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\inner : { outer : { n ?: Str } } -> Try(Str, [MissingField])
+        \\inner = |{ outer: { n } }| n
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "inner" } },
+        \\{ outer: { n ?: Str } } -> Try(Str, [MissingField])
+    );
+}
+
+test "check type - record - opt - nested destructure of still-flex base pins required" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\my_record = { outer: { n: "hi" } }
+        \\
+        \\use_it = {
+        \\    { outer: { n } } = my_record
+        \\    n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "use_it" } },
+        \\Str
     );
 }
 
@@ -3776,7 +3823,8 @@ test "checked artifact method registry skips nominal associated values" {
         .by_def = &.{},
     };
     const checked_types = MethodRegistryTestCheckedTypes{};
-    const checked_bodies = MethodRegistryTestCheckedBodies{};
+    const module_index = MethodRegistryTestModuleIndex{};
+    var referenced_targets = MethodRegistryTestReferencedTargets{};
 
     var names = canonical.CanonicalNameStore.init(testing.allocator);
     defer names.deinit();
@@ -3785,10 +3833,11 @@ test "checked artifact method registry skips nominal associated values" {
         testing.allocator,
         module,
         &names,
+        .{},
         &template_lookup,
-        &.{},
         &checked_types,
-        &checked_bodies,
+        &module_index,
+        &referenced_targets,
     );
     defer registry.deinit(testing.allocator);
 
@@ -4015,7 +4064,7 @@ test "check type - nominal - local method type - fail" {
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
-        \\                   ^^^
+        \\  ^^^^^^^^^^^^^^^^^^^^^
         \\
         \\The method `encode_str` has the type:
         \\
@@ -4173,7 +4222,7 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.
         \\```roc
         \\x = if True 1 else "s"
         \\```
@@ -4194,7 +4243,7 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both.
         \\```roc
         \\x = if True "s" else 1
         \\```
@@ -4370,14 +4419,14 @@ test "check type - match - diff cond types 1" {
     try checkTypesModule(
         source,
         .fail_with,
-        \\**Missing Method**
-        \\This `from_quote` method is being called on a value whose type doesn't have that method.
+        \\**Type Mismatch**
+        \\This string literal is being used where a non-string type is needed.
         \\```roc
         \\  match "hello" {
         \\```
         \\        ^^^^^^^
         \\
-        \\The value's type, which does not have a method named `from_quote`, is:
+        \\The type was determined to be:
         \\
         \\    [True]
         \\
@@ -4504,7 +4553,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "Type Not Determined");
+    try checkTypesModule(source, .fail, "Missing Method");
 }
 
 // binops
@@ -4621,7 +4670,7 @@ test "check type - record - access - not a record" {
         \\
         \\x = r.my_field
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // record update
@@ -4941,7 +4990,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 test "check type - patterns tag with payload" {
@@ -4969,7 +5018,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail_first, "Missing Method");
+    try checkTypesExpr(source, .fail_first, "Type Mismatch");
 }
 
 test "check type - patterns str" {
@@ -5126,7 +5175,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "Missing Method");
+    try checkTypesExpr(source, .fail, "Type Mismatch");
 }
 
 // vars + reassignment //
@@ -5477,10 +5526,9 @@ test "check type - if with all crash branches makes following code unreachable" 
         \\}
     ;
 
-    try checkTypesModule(source, .{ .pass_with_warnings = .{
-        .def = .last_def,
-        .warnings = &.{"Unreachable Code"},
-    } }, "Bool -> Str");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("Bool -> Str", &.{.unreachable_code});
 }
 
 test "check type - constant if condition warns" {
@@ -6961,8 +7009,8 @@ test "check type - effectful zero-arg function annotation" {
     // Expected: zero-arg effectful function returning empty record
     // If the parser bug exists, this would fail with TYPE MISMATCH because:
     // - annotation parses as: (()) => {} (one empty-tuple arg)
-    // - lambda infers as: ({}) -> {} (zero args, pure)
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) => {}");
+    // - lambda infers as: () -> {} (zero args, pure)
+    try checkTypesModule(source, .{ .pass = .last_def }, "() => {}");
 }
 
 test "check type - pure zero-arg function annotation" {
@@ -6973,7 +7021,7 @@ test "check type - pure zero-arg function annotation" {
         \\foo = || {}
     ;
     // Expected: zero-arg pure function returning empty record
-    try checkTypesModule(source, .{ .pass = .last_def }, "({}) -> {}");
+    try checkTypesModule(source, .{ .pass = .last_def }, "() -> {}");
 }
 
 test "qualified imports don't produce MODULE NOT FOUND during canonicalization" {
@@ -7207,11 +7255,11 @@ test "check type - polarity - try may not flow an unlisted error into the annota
     );
 }
 
-test "check type - polarity - a rejected callback row keeps the annotated type" {
-    // The callback result opens, and `?` relates its row to the enclosing
-    // result, so `Err(NotAFunction)` would add a tag the callback's annotation
-    // does not list. That relation is rejected where it happens, and `run`
-    // keeps its annotated type.
+test "check type - polarity - a callback's closed error row is included in the composed result" {
+    // The callback result is an input of `run`, so its row is closed. The `?`
+    // contributes that row's tags to `run`'s composed result without relating
+    // the closed tail to it (design.md "Row Subsumption"), so the result also
+    // holds `NotAFunction`, and the callback's own row stays closed.
     const source =
         \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
         \\run = |fn| {
@@ -7221,8 +7269,8 @@ test "check type - polarity - a rejected callback row keeps the annotated type" 
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Type Mismatch");
-    try test_env.assertDefTypeOptions("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction])", .{ .allow_type_errors = true });
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("run", "({} -> Try(I64, [WrongArity])) -> Try(I64, [NotAFunction, WrongArity])");
 }
 
 // record extension in type annotations //
@@ -7806,6 +7854,20 @@ test "nominal value does not inverse-lift through an annotated structural parame
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "structural value lifts through an annotated structural parameter feeding a backing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\LogEntry := [Entry([Info, Error])]
+        \\
+        \\make : [Info, Error] -> LogEntry
+        \\make = |x| Entry(x)
+        \\
+        \\entry = make(Info)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "LogEntry");
+}
+
 test "nominal value does not inverse-lift into an imported nominal backing" {
     const source_lib =
         \\module [LogEntry]
@@ -8002,7 +8064,9 @@ test "check type - unreachable final expression does not constrain early return"
         \\}
         \\result = f(1.I64)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("I64", &.{.unreachable_code});
 }
 
 test "check type - unreachable statements do not constrain early return" {
@@ -8014,7 +8078,9 @@ test "check type - unreachable statements do not constrain early return" {
         \\}
         \\result = f(1.I64)
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "I64");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertLastDefTypeWithCanDiagnostics("I64", &.{.unreachable_code});
 }
 
 test "check type - final infinite loop can satisfy annotated return type" {
@@ -8625,10 +8691,10 @@ test "check type - mutually recursive functions - type mismatch error" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check can - recursive non-function top-level cycle is rejected before type checking" {
+test "check type - recursive non-function top-level cycle is rejected" {
     const source =
         \\force : ({} -> I64) -> I64
-        \\force = |thunk| thunk(0)
+        \\force = |thunk| thunk({})
         \\
         \\t1 = |_| force(|_| t2)
         \\t2 = t1(0)
@@ -8637,7 +8703,7 @@ test "check can - recursive non-function top-level cycle is rejected before type
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertOneCanError("Circular Value Definition");
+    try test_env.assertOneTypeError("Circular Value Definition");
 }
 
 test "check type - monomorphic top-level numeric constant cannot be used at multiple types" {
@@ -8937,10 +9003,10 @@ test "check type - mutually recursive functions - all annotated polymorphic" {
     );
 }
 
-test "check type - annotated self recursive function - polymorphic recursion allowed" {
+test "check type - annotated self recursive function - polymorphic recursion is rejected" {
     // An annotated def's self-reference instantiates its pre-declared scheme,
-    // so a recursive use at a specialized type is legal (polymorphic
-    // recursion for annotated defs).
+    // but the recursive use must pass the def's own type variables along
+    // unchanged: each call here would need `depth` at a larger type.
     const source =
         \\depth : List(a) -> U64
         \\depth = |list| match list {
@@ -8948,14 +9014,80 @@ test "check type - annotated self recursive function - polymorphic recursion all
         \\    [first, ..] => 1 + depth([[first]])
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "depth" } }, "List(a) -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
-test "check type - issue 11740 custom literal requirements in polymorphic recursion" {
-    // An annotated recursive edge may instantiate a at Poly(a). The literal
-    // therefore requires conversions at Poly(U8), Poly(Poly(U8)), and so on;
-    // the recursion depth is a runtime argument. A literal planner cannot
-    // assume that structural requirement deduplication makes this finite.
+test "check type - annotated self recursive function - swapped type variables are rejected" {
+    const source =
+        \\swap : U64, a, b -> U64
+        \\swap = |n, x, y| if n == 0 0 else 1 + swap(n - 1, y, x)
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated self recursive function - unchanged type variables are accepted" {
+    const source =
+        \\countdown : U64, a -> a
+        \\countdown = |count, x| if count == 0 x else countdown(count - 1, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "countdown" } }, "U64, a -> a");
+}
+
+test "check type - annotated self recursive function - recursion at a closed type is accepted" {
+    // The recursive use mentions none of the def's own variables, so the
+    // recursion reaches one further instantiation and stops there.
+    const source =
+        \\restart : U64, a -> U64
+        \\restart = |count, _x| if count == 0 0 else 1 + restart(count - 1, 5.U64)
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "restart" } }, "U64, a -> U64");
+}
+
+test "check type - annotated mutual recursion - growth around the cycle is rejected" {
+    const source =
+        \\ping : U64, a -> U64
+        \\ping = |n, x| if n == 0 0 else pong(n - 1, x)
+        \\pong : U64, a -> U64
+        \\pong = |n, x| if n == 0 0 else ping(n - 1, [x])
+    ;
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
+}
+
+test "check type - annotated mutual recursion - variables that line up are accepted" {
+    const source =
+        \\Tree(a) := [Leaf(a), Node(List(Tree(a)))]
+        \\count_tree : Tree(a) -> U64
+        \\count_tree = |tree| match tree {
+        \\    Tree.Leaf(_) => 1
+        \\    Tree.Node(children) => count_children(children)
+        \\}
+        \\count_children : List(Tree(a)) -> U64
+        \\count_children = |children| {
+        \\    var $total = 0
+        \\    for child in children {
+        \\        $total = $total + count_tree(child)
+        \\    }
+        \\    $total
+        \\}
+    ;
+    try checkTypesModuleDefs(source, &.{
+        .{ .def = "count_tree", .expected = "Tree(a) -> U64" },
+        .{ .def = "count_children", .expected = "List(Tree(a)) -> U64" },
+    });
+}
+
+test "check type - a generic function using another at a larger type without recursion is accepted" {
+    const source =
+        \\wrap_len : a -> U64
+        \\wrap_len = |x| List.len([x])
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "wrap_len" } }, "a -> U64");
+}
+
+test "check type - polymorphic recursion through a literal requirement is rejected" {
+    // The recursive use instantiates `a` at `Poly(a)`, so the literal would
+    // need conversions at `Poly(U8)`, `Poly(Poly(U8))`, and so on, as deep as
+    // a runtime argument says.
     const source =
         \\Poly(a) := [Val(a), Quoted(Str)].{
         \\    from_quote : Str -> Try(Poly(a), [BadQuotedBytes(Str)])
@@ -8983,7 +9115,7 @@ test "check type - issue 11740 custom literal requirements in polymorphic recurs
         \\}
         \\entry = |remaining| walk(remaining, Poly.Val(0.U8))
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "entry" } }, "U64 -> U64");
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive functions - inner let-def lambda inside cycle participant is generalized" {
@@ -9060,7 +9192,7 @@ test "check type - polarity - output is inferred as open" {
     try checkTypesModuleDefs(
         source,
         &.{
-            .{ .def = "mk_my_tag", .expected = "({}) -> [MyTag]" },
+            .{ .def = "mk_my_tag", .expected = "() -> [MyTag]" },
         },
     );
 }
@@ -9228,7 +9360,10 @@ test "check type - polarity - closed value closes the output row" {
     try checkTypesModule(source, .{ .pass = .last_def }, "[A, B] -> [A, B]");
 }
 
-test "check type - polarity - closed output row cannot be widened by callers" {
+test "check type - polarity - a caller widens a forwarded closed output row" {
+    // `id`'s body forwards its closed input, which closes the result row its
+    // annotation leaves open; a call still uses the result at a wider union
+    // (design.md "Row Subsumption").
     const source =
         \\id : [A, B] -> [A, B]
         \\id = |x| x
@@ -9236,14 +9371,17 @@ test "check type - polarity - closed output row cannot be widened by callers" {
         \\wider : [A, B] -> [A, B, C]
         \\wider = |x| id(x)
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }
 
-test "check type - polarity - closed output row cannot be widened by its own recursive call" {
+test "check type - polarity - forwarded output row may be widened by its own recursive call" {
     // A recursive call instantiates the annotation's predeclared scheme, whose
-    // result row is open, but the body closes that row by returning its
-    // closed parameter. The call is related to the scheme the body publishes,
-    // exactly like `wider`'s call above (issue #12095).
+    // result row is open. The body forwards its closed parameter into that
+    // result through a widening copy (design.md "Row Subsumption"), so the
+    // scheme the body publishes has the same open row and the call may widen
+    // its own copy, exactly as it may for a body that constructs its result.
     const source =
         \\f : [A] -> [A]
         \\f = |a| if a == A a else {
@@ -9251,10 +9389,10 @@ test "check type - polarity - closed output row cannot be widened by its own rec
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by a recursive call after it closes" {
+test "check type - polarity - forwarded output row may be widened by a recursive call after an early return" {
     const source =
         \\f : [A] -> [A]
         \\f = |a| {
@@ -9263,10 +9401,10 @@ test "check type - polarity - closed output row cannot be widened by a recursive
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by a recursive group member" {
+test "check type - polarity - forwarded output row may be widened by a recursive group member" {
     const source =
         \\f : [A] -> [A]
         \\f = |a| if a == A a else g(a)
@@ -9277,10 +9415,10 @@ test "check type - polarity - closed output row cannot be widened by a recursive
         \\    a
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
 }
 
-test "check type - polarity - closed output row cannot be widened by an annotated local's recursive call" {
+test "check type - polarity - forwarded output row may be widened by an annotated local's recursive call" {
     const source =
         \\main = {
         \\    f : [A] -> [A]
@@ -9291,7 +9429,7 @@ test "check type - polarity - closed output row cannot be widened by an annotate
         \\    f(A)
         \\}
     ;
-    try checkTypesModule(source, .fail_first, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A]");
 }
 
 test "check type - polarity - open output row may be widened by its own recursive call" {
@@ -9328,8 +9466,9 @@ test "check type - polarity - annotated input union stays closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - nested function arguments stay closed" {
-    // Each function establishes its own input position.
+test "check type - polarity - a callback's argument is an output of the function receiving it" {
+    // `use` produces the `[A]` it passes to the callback, so a callback that
+    // accepts more tags is still a valid argument.
     const source =
         \\use : ([A] -> Str) -> Str
         \\use = |callback| callback(A)
@@ -9339,11 +9478,21 @@ test "check type - polarity - nested function arguments stay closed" {
         \\
         \\result = use(accepts_more)
     ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+}
+
+test "check type - polarity - a callback's opened argument still bounds the body" {
+    const source =
+        \\use : ([A] -> Str) -> Str
+        \\use = |callback| callback(B)
+    ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - callback return position is output" {
-    // Ignore the callback so body exhaustiveness cannot close its result row.
+test "check type - polarity - a callback's result is an input of the function receiving it" {
+    // `run` consumes the callback's result, so a callback producing a tag
+    // the annotation does not list is rejected even though the body ignores
+    // the callback.
     const source =
         \\run : (Str -> [Done]) -> Str
         \\run = |_callback| "done"
@@ -9353,12 +9502,51 @@ test "check type - polarity - callback return position is output" {
         \\
         \\result = run(produces_more)
     ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a callback's callback result is an output again" {
+    // Two function argument positions down, `[Done]` is produced by `drive`
+    // itself (it is the result of the callback `drive` hands to `step`), so a
+    // `step` that accepts a callback producing more tags is accepted.
+    const source =
+        \\drive : ((Str -> [Done]) -> Str) -> Str
+        \\drive = |step| step(|_| Done)
+        \\
+        \\step_more : (Str -> [Done, Extra]) -> Str
+        \\step_more = |_| "ok"
+        \\
+        \\result = drive(step_more)
+    ;
     try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+}
+
+test "check type - polarity - a forwarded callback result stays closed for callers" {
+    // https://github.com/roc-lang/roc/issues/12132
+    // The callback's result is consumed by `f`, so the caller's callback may
+    // not return a tag the annotation does not list, even though `f` forwards
+    // that result to its own (open) output.
+    const source =
+        \\f : (U64 -> [Before, After]) -> [Before, After]
+        \\f = |g| g(1)
+        \\
+        \\result = f(|_| Oops)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a builtin's callback result stays closed for callers" {
+    // https://github.com/roc-lang/roc/issues/12132
+    // `List.sort_with` consumes its comparator's `[Before, Same, After]`.
+    const source =
+        \\sorted = [3, 1, 2].sort_with(|a, b| if a < b LT else if a == b EQ else GT)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // These fixtures ignore the annotated parameter. No body operation unifies any
 // row or leaf beneath it, so the graph records annotation generation itself.
-test "check type - polarity - alias and direct annotation graphs use function local positions" {
+test "check type - polarity - alias and direct annotation graphs agree at both use positions" {
     const declarations =
         \\Consumer : [E] -> Str
         \\Producer(a) : Str -> a
@@ -9378,57 +9566,67 @@ test "check type - polarity - alias and direct annotation graphs use function lo
         \\N(a) := { produce : Str -> a }
         \\NominalAlias : N([E])
         \\Many(a,b,c,d,e,f,g,h,i) : (a,b,c,d,e,f,g,h,(i -> Str))
+        \\Twice : ([E] -> Str) -> Str
     ;
-    const Case = struct { alias: []const u8, direct: []const u8, open: []const bool };
+    // Whether each written row opens when the type is an argument of the
+    // annotated function. Every row here has one polarity, so the same type
+    // as the function's result opens exactly the other rows.
+    const Case = struct { alias: []const u8, direct: []const u8, open_as_input: []const bool };
     const cases = [_]Case{
-        .{ .alias = "Consumer", .direct = "([E] -> Str)", .open = &.{false} },
-        .{ .alias = "Producer([E])", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "Identity([E])", .direct = "[E]", .open = &.{false} },
-        .{ .alias = "Nested([E])", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open = &.{ true, true } },
-        .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open = &.{ false, true } },
-        .{ .alias = "LiteralProducer", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "LiteralConsumer", .direct = "([E] -> Str)", .open = &.{false} },
-        .{ .alias = "MyResult(Str)", .direct = "Try(Str, [MyError])", .open = &.{false} },
-        .{ .alias = "Many({},{},{},{},{},{},{},{},[E])", .direct = "({},{},{},{},{},{},{},{},([E] -> Str))", .open = &.{false} },
-        .{ .alias = "(NominalAlias,[F])", .direct = "(N([E]),[F])", .open = &.{ true, false } },
-        .{ .alias = "NominalAlias", .direct = "N([E])", .open = &.{true} },
-        .{ .alias = "ResultFn", .direct = "(Str -> Try(Str, [MyError]))", .open = &.{true} },
-        .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open = &.{ true, false } },
-        .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open = &.{ false, true } },
-        .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open = &.{ true, false } },
-        .{ .alias = "ReversedFields", .direct = "{ before : [F], callback : Str -> [E] }", .open = &.{ false, true } },
-        .{ .alias = "Shared(a)", .direct = "((a -> [E(a)]), (Str -> [F(a)]))", .open = &.{ true, true } },
+        .{ .alias = "Consumer", .direct = "([E] -> Str)", .open_as_input = &.{true} },
+        .{ .alias = "Producer([E])", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "Identity([E])", .direct = "[E]", .open_as_input = &.{false} },
+        .{ .alias = "Nested([E])", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open_as_input = &.{ false, false } },
+        .{ .alias = "LiteralProducer", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "LiteralConsumer", .direct = "([E] -> Str)", .open_as_input = &.{true} },
+        .{ .alias = "MyResult(Str)", .direct = "Try(Str, [MyError])", .open_as_input = &.{false} },
+        .{ .alias = "Many({},{},{},{},{},{},{},{},[E])", .direct = "({},{},{},{},{},{},{},{},([E] -> Str))", .open_as_input = &.{true} },
+        .{ .alias = "(NominalAlias,[F])", .direct = "(N([E]),[F])", .open_as_input = &.{ false, false } },
+        .{ .alias = "NominalAlias", .direct = "N([E])", .open_as_input = &.{false} },
+        .{ .alias = "ResultFn", .direct = "(Str -> Try(Str, [MyError]))", .open_as_input = &.{false} },
+        .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open_as_input = &.{ false, false } },
+        .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open_as_input = &.{ false, false } },
+        .{ .alias = "ReversedFields", .direct = "{ before : [F], callback : Str -> [E] }", .open_as_input = &.{ false, false } },
+        .{ .alias = "Shared(a)", .direct = "((a -> [E(a)]), (Str -> [F(a)]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Twice", .direct = "(([E] -> Str) -> Str)", .open_as_input = &.{false} },
+        .{ .alias = "Handler(Producer([E]))", .direct = "((Str -> [E]) -> Str)", .open_as_input = &.{true} },
     };
     for (cases) |case| {
-        const source = try std.fmt.allocPrint(
-            testing.allocator,
-            "{s}\ndirect : {s} -> Str\ndirect = |_| \"ok\"\naliased : {s} -> Str\naliased = |_| \"ok\"\n",
-            .{ declarations, case.direct, case.alias },
-        );
-        defer testing.allocator.free(source);
-        var env = try TestEnv.init("FunctionLocalPolarity", source);
-        defer env.deinit();
-        try env.assertNoErrors();
-        var direct: PolarityTestGraph = .{};
-        defer direct.deinit();
-        var aliased: PolarityTestGraph = .{};
-        defer aliased.deinit();
-        try direct.collectDef(&env, "direct");
-        try aliased.collectDef(&env, "aliased");
-        try testing.expectEqualSlices(bool, case.open, direct.open.items);
-        try testing.expectEqualSlices(bool, case.open, aliased.open.items);
-        // Compare actual structure, extension content, and repeated-variable
-        // sharing, with only transparent alias wrappers and fresh IDs erased.
-        try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        inline for ([_]bool{ true, false }) |as_input| {
+            const template = comptime if (as_input)
+                "{s}\ndirect : {s} -> Str\ndirect = |_| crash \"unused\"\naliased : {s} -> Str\naliased = |_| crash \"unused\"\n"
+            else
+                "{s}\ndirect : Str -> {s}\ndirect = |_| crash \"unused\"\naliased : Str -> {s}\naliased = |_| crash \"unused\"\n";
+            const source = try std.fmt.allocPrint(testing.allocator, template, .{ declarations, case.direct, case.alias });
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("FunctionPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var expected: [4]bool = undefined;
+            for (case.open_as_input, 0..) |open, index| expected[index] = open == as_input;
+            var direct: PolarityTestGraph = .{};
+            defer direct.deinit();
+            var aliased: PolarityTestGraph = .{};
+            defer aliased.deinit();
+            try direct.collectDef(&env, "direct");
+            try aliased.collectDef(&env, "aliased");
+            try testing.expectEqualSlices(bool, expected[0..case.open_as_input.len], direct.open.items);
+            try testing.expectEqualSlices(bool, expected[0..case.open_as_input.len], aliased.open.items);
+            // Compare actual structure, extension content, and repeated-variable
+            // sharing, with only transparent alias wrappers and fresh IDs erased.
+            try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        }
     }
 }
 
-test "check type - polarity - mixed inherited and output formal shares its row" {
-    // A shared formal must satisfy both occurrences. Unlike two separately
-    // written [E] literals, these occurrences have exactly one extension:
-    // the inherited occurrence closes it at input uses, and both open at outputs.
+test "check type - polarity - a formal inside and outside a function result shares its row" {
+    // Both occurrences stand at the reference's own polarity, and unlike two
+    // separately written [E] literals they have exactly one extension: closed
+    // at input uses and open at output uses.
     for ([_][]const u8{ "(a, (Str -> a))", "((Str -> a), a)" }) |backing| {
         for ([_]bool{ false, true }) |output| {
             const annotation = if (output) "Str -> Mixed([E])" else "Mixed([E]) -> Str";
@@ -9619,8 +9817,10 @@ test "check type - polarity - the same row written directly is closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - alias reference preserves the function local input position" {
-    // An enclosing argument does not turn the callback's input into an output.
+test "check type - polarity - alias reference flips a callback's input position" {
+    // `Handler([A, B])` in an argument position is a callback `run` passes
+    // `[A, B]` to, so the row is an output of `run`, exactly as the direct
+    // spelling `([A, B] -> Str) -> Str` is.
     const source =
         \\Handler(e) : e -> Str
         \\
@@ -9632,7 +9832,7 @@ test "check type - polarity - alias reference preserves the function local input
         \\
         \\out = run(wide)
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
 }
 
 test "check type - polarity - alias reference still opens a row the declaration puts in an output position" {
@@ -9873,36 +10073,98 @@ test "check type - polarity - annotated value body is bounded" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
-test "check type - polarity - each use of a top-level value widens it independently" {
-    // A top-level value has one type, and each use relates to its own
-    // widening copy of it (design.md "Value Rows: Local Values Share,
-    // Top-Level Values Widen At Each Use"): `use_a` needs `e` at `[A, Boom]`
-    // and `use_b` at `[B, Boom]`, and neither use changes `e`'s type or
-    // constrains the other.
+test "check type - value rows - an annotated top-level value keeps its row at every use" {
+    // An annotated value's row is the annotation's, closed as written, and no
+    // use widens it (design.md "Value Rows: Uses Share One Row"): `e` is
+    // `[Boom]`, and a `match` whose patterns name `A` is a mismatch at the
+    // use, reported as the use's own mismatch rather than as `e` producing `A`.
+    const source =
+        \\e : [Boom]
+        \\e = Boom
+        \\
+        \\describe = match e {
+        \\    Boom => "boom"
+        \\    A => "a"
+        \\    _ => "other"
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - value rows - returning an annotated top-level value widens the function's result" {
+    // Flowing into an annotated function's result is not a use of `e` at a
+    // wider union: the result relates to a widening copy (design.md "Row
+    // Subsumption"), so `use_a`'s result is `[A, Boom]` while `e` stays
+    // `[Boom]`.
     const source =
         \\e : [Boom]
         \\e = Boom
         \\
         \\use_a : Str -> [A, Boom]
         \\use_a = |_| e
-        \\
-        \\use_b : Str -> [B, Boom]
-        \\use_b = |_| e
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertNoErrors();
+    try test_env.assertDefType("e", "[Boom]");
 }
 
-test "check type - polarity - an importer widens a top-level value its module also widens" {
-    // `choice` uses `e` at `[A, Boom]` through its own widening copy, so `e`'s
-    // type stays `[Boom]`, and an importer widens that type at its own use
-    // (design.md "Value Rows: Local Values Share, Top-Level Values Widen At
-    // Each Use").
+test "check type - value rows - an unannotated top-level value's row is shared by its uses" {
+    // Every use of `e` in its module widens one row (design.md "Value Rows:
+    // Uses Share One Row"): a `match` naming `Zed` and a call where
+    // `[Aa, Boom, ..]` is accepted leave `e` at `[Aa, Boom, Zed]`, which the
+    // module closes when it finishes.
+    const source =
+        \\e = Boom
+        \\
+        \\first : [Aa, Boom, ..] -> Str
+        \\first = |tag| match tag {
+        \\    Aa => "aa"
+        \\    Boom => "boom"
+        \\    _ => "other"
+        \\}
+        \\
+        \\second = match e {
+        \\    Boom => "boom"
+        \\    Zed => "zed"
+        \\    _ => "other"
+        \\}
+        \\
+        \\both = "${first(e)} ${second}"
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("e", "[Aa, Boom, Zed]");
+}
+
+test "check type - value rows - two uses at different closed unions are a mismatch" {
+    // One shared row cannot be both closed unions (design.md "Value Rows:
+    // Uses Share One Row"), exactly as for a local value: the second use is
+    // the mismatch, and the fix is a tag written at each use or an
+    // annotation on the value.
+    const source =
+        \\e = Boom
+        \\
+        \\first : [Boom, Zed] -> Str
+        \\first = |_| "first"
+        \\
+        \\last : [Aa, Boom] -> Str
+        \\last = |_| "last"
+        \\
+        \\both = "${first(e)} ${last(e)}"
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - value rows - an importer reads a top-level value at its closed row" {
+    // `choice` widens `e`'s shared row to `[A, Boom]`, and the module closes it
+    // there, so an importer reads `e : [A, Boom]` exactly (design.md "Value
+    // Rows: Uses Share One Row"): a use at that row is accepted and a use
+    // needing `C` is a mismatch at the importer.
     const source_lib =
         \\module [e, choice]
         \\
-        \\e : [Boom]
         \\e = Boom
         \\
         \\choice = if Bool.True e else A
@@ -9910,26 +10172,36 @@ test "check type - polarity - an importer widens a top-level value its module al
     var lib_env = try TestEnv.init("Lib", source_lib);
     defer lib_env.deinit();
     try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
+    try lib_env.assertDefTypeOptions("e", "[A, Boom]", .{ .allow_type_errors = false, .allow_can_errors = true });
 
-    const source_main =
+    const source_same =
+        \\import Lib
+        \\
+        \\same : [A, Boom]
+        \\same = Lib.e
+    ;
+    var same_env = try TestEnv.initWithImport("Same", source_same, "Lib", &lib_env);
+    defer same_env.deinit();
+    try same_env.assertNoErrors();
+
+    const source_wider =
         \\import Lib
         \\
         \\wider : [A, Boom, C]
         \\wider = Lib.e
     ;
-    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
-    defer main_env.deinit();
-    try main_env.assertNoErrors();
+    var wider_env = try TestEnv.initWithImport("Wider", source_wider, "Lib", &lib_env);
+    defer wider_env.deinit();
+    try std.testing.expect(try wider_env.typeProblemCount() > 0);
 }
 
-test "check type - polarity - a defaulted field use may widen a weak value row" {
-    // A defaulted record field's default expression is an ordinary USE SITE,
-    // so it may widen the weak row of the value it names—exactly like the
-    // accepted first use in the test above. It is checked later than every
-    // other use (`checkPendingDefaults` is the first pass of `finalizeTypes`,
-    // after the whole def pass), and the late implicit-open-ext replay
-    // (`Check.runLateImplicitOpenExtAudit`) used to read the row after that
-    // widening and blame `e` for producing `A`, which `e = Boom` cannot.
+test "check type - polarity - a defaulted field use of an annotated value keeps its row" {
+    // A defaulted record field's default expression is an ordinary USE SITE
+    // of `e`, and `e : [Boom]` is closed at every use (design.md "Value Rows:
+    // Uses Share One Row"), so a field typed `[A, Boom]` cannot default to it.
+    // The use is checked later than every other use (`checkPendingDefaults`
+    // is the first pass of `finalizeTypes`), and the report is the use's own
+    // mismatch rather than a claim that `e` produces `A`.
     const source =
         \\e : [Boom]
         \\e = Boom
@@ -9938,7 +10210,7 @@ test "check type - polarity - a defaulted field use may widen a weak value row" 
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 test "check type - polarity - a defaulted field use at the annotated width is clean" {
@@ -10099,11 +10371,11 @@ test "check type - polarity - where-method implementation may not return an unli
 }
 
 test "check type - polarity - where-method row nested in the result stays closed as written" {
-    // Only the positions the result-row widening adapter can re-tag open per
-    // use (design.md "Result-Row Widening Adapter"): the direct result row and
-    // a `Try` result's rows. A row inside a `List` is generated as written, so
-    // the body use that widens it is an ordinary mismatch at the use rather
-    // than a widening no lowering could express. `Job`'s implementation
+    // Only the positions within the row coercion's reach open per use
+    // (design.md "Closed Result Rows At Template Boundaries"): the direct
+    // result row and a `Try` result's rows. A row inside a `List` is generated
+    // as written, so the body use that widens it is an ordinary mismatch at
+    // the use. `Job`'s implementation
     // publishes the closed row—the case the adapter exists for, which it
     // cannot reach here.
     const source =
@@ -10149,7 +10421,7 @@ test "check type - polarity - alias-referenced row nested in the result stays cl
     //
     // Before the reference walk became position-aware, this program CHECKED and
     // then panicked in `unifyTagRows` during lowering, because the nested row
-    // reopened per use and no adapter can re-tag inside a `List`.
+    // reopened per use, outside the row coercion's reach.
     const source =
         \\Statuses : List([Ok(Str), Err(Str)])
         \\
@@ -10186,11 +10458,11 @@ test "check type - polarity - alias-referenced row nested in the result stays cl
     );
 }
 
-test "check type - polarity - alias-referenced Try error row is still adapter-reachable" {
+test "check type - polarity - alias-referenced Try error row is still reachable" {
     // The positive control for the test above: a reference whose declaration
-    // body IS the adapter-reachable position keeps its marker deferred, so the
-    // body use may widen it. `Res` stands in the signature's direct result and
-    // its body is a `Try`, whose ERROR argument the adapter re-tags—so the
+    // body IS a reachable position keeps its marker deferred, so the body use
+    // may widen it. `Res` stands in the signature's direct result and its
+    // body is a `Try`, whose ERROR argument a use may widen—so the
     // marker on `[NotFound]` survives the reference and `load` may return the
     // wider row.
     const source =
@@ -10252,14 +10524,12 @@ test "check type - polarity - nested widening is rejected even against an open i
     );
 }
 
-test "check type - polarity - where-method Try ok row stays closed as written" {
-    // The adapter-reachable set is exactly the direct result row and a `Try`'s
-    // ERROR row: `closedResultRowOrNull` narrows `Try`'s `args[1]`, and
-    // `hostedTryReturnInjectionExpr` asserts the ok type is unchanged. Per-use
-    // opening is therefore withheld from a `Try`'s ok row too, so widening it
-    // is an ordinary mismatch at the body use rather than a lowering panic.
-    // `m`'s implementation publishes the closed row, which is the case the
-    // adapter exists for and the case it cannot reach here.
+test "check type - polarity - a where-method result's closed ok row is widened into the annotated result" {
+    // Per-use opening is withheld from a `Try`'s ok row, so `x.m()` has the
+    // closed ok row the where clause writes. That row is within the row
+    // coercion's reach (a tag payload of `Try`'s backing), so the body's value
+    // relates to the annotated result through a widening copy and crosses
+    // into it through a row coercion (design.md "Row Subsumption").
     const source =
         \\describe : a -> Try([Some(Str), None], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]
         \\describe = |x| x.m()
@@ -10272,25 +10542,10 @@ test "check type - polarity - where-method Try ok row stays closed as written" {
         \\    m = |_| closed_try
         \\}
     ;
-    // The region is the body use, not the signature and not the obligation.
-    try checkTypesModule(source, .fail_with,
-        \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
-        \\```roc
-        \\describe = |x| x.m()
-        \\```
-        \\               ^^^^^
-        \\
-        \\It has the type:
-        \\
-        \\    Try([Some(Str)], [E1])
-        \\
-        \\But the annotation says it should be:
-        \\
-        \\    Try([None, Some(Str)], [E1])
-        \\
-        \\
-    );
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    try test_env.assertDefType("describe", "a -> Try([None, Some(Str)], [E1]) where [a.m : a -> Try([Some(Str)], [E1])]");
 }
 
 test "check type - polarity - explicit anonymous ext in a function's output position warns redundant" {
@@ -11476,29 +11731,47 @@ test "check type - annotated open arg not closed even with exhaustive match" {
     );
 }
 
-test "check type - tag union - ext hints 1" {
-    // A closed union (the input-position arg) flowing into a named-rigid
-    // open row: closed where open was expected.
+test "check type - tag union - a forwarded closed union widens into a named-rigid output row" {
+    // The closed input-position arg flows into the result through a widening
+    // copy, which relates to the named-rigid extension as any caller's row
+    // would (design.md "Row Subsumption").
     const source =
         \\foo : [X, Y] -> [X, Y, ..ext]
         \\foo = |tag| tag
     ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[X, Y] -> [X, Y, ..ext]");
+}
+
+test "check type - tag union - ext hints 1" {
+    // A closed union (an input-position arg) flowing into a named-rigid open
+    // row (another input-position arg of the same function, whose `ext` the
+    // body cannot bind): closed where open was expected.
+    const source =
+        \\foo : [X, Y], [X, Y, ..ext] -> Str
+        \\foo = |closed, open| {
+        \\    _both = [closed, open]
+        \\    "tag"
+        \\}
+    ;
     try checkTypesModule(source, .fail_with,
         \\**Type Mismatch**
-        \\This expression is used in an unexpected way.
+        \\The two elements in this list have incompatible types.
         \\```roc
-        \\foo = |tag| tag
+        \\    _both = [closed, open]
         \\```
-        \\            ^^^
+        \\                     ^^^^
         \\
-        \\It has the type:
+        \\The first element has this type:
         \\
         \\    [X, Y]
         \\
-        \\But the annotation says it should be:
+        \\However, the second element has this type:
         \\
         \\    [X, Y, ..ext]
         \\
+        \\All elements in a list must have compatible types.
+        \\__Note:__ You can wrap each element in a tag to make them compatible.
+        \\To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
         \\**Hint:** This tag union is closed, but I expected it be extended by `ext`.
         \\
         \\
@@ -12063,7 +12336,7 @@ test "check type - shared pending scheme requirement reports once across uses" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
-    try test_env.assertFirstTypeError("Type Not Determined");
+    try test_env.assertFirstTypeError("Missing Method");
 }
 
 test "check type - independent value dispatch sites each receive an ambiguity judgment" {
@@ -12603,7 +12876,7 @@ test "check type - interpolation part mismatch keeps the result's Str type" {
 test "check type - dispatch - interpolation cannot target Try" {
     const source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Url), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
@@ -13109,14 +13382,15 @@ test "check type - mutually recursive static dispatch - unannotated name-linked 
     });
 }
 
-test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member" {
+test "check type - mutually recursive static dispatch - annotated polymorphic recursion into checked group member is rejected" {
     // Polymorphic recursion: `deeper` dispatches `size` on `Poly((a, a))`, a
-    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. The
-    // annotations license this—each method-syntax dispatch to an annotated
-    // target must instantiate the target's predeclared scheme, whether or not
-    // the target sits in the same name-linked group and has already been
-    // checked. (The `Poly.size`/`Poly.deeper` type-qualified calls create the
-    // name-graph cycle that makes the two methods one binding group.)
+    // DIFFERENT instantiation of the receiver than its own `Poly(a)`. Each
+    // method-syntax dispatch to an annotated target instantiates the target's
+    // predeclared scheme, whether or not the target sits in the same
+    // name-linked group and has already been checked, and the recursion
+    // through that dispatch grows the type on every trip. (The
+    // `Poly.size`/`Poly.deeper` type-qualified calls create the name-graph
+    // cycle that makes the two methods one binding group.)
     const source =
         \\Poly(a) := [Val(a)].{
         \\  size : Poly(a), U64 -> U64
@@ -13138,11 +13412,7 @@ test "check type - mutually recursive static dispatch - annotated polymorphic re
         \\}
         \\use = Poly.Val(1.U64).size(3)
     ;
-    try checkTypesModuleDefs(source, &.{
-        .{ .def = "Test.Poly.size", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "Test.Poly.deeper", .expected = "Poly(a), U64 -> U64" },
-        .{ .def = "use", .expected = "U64" },
-    });
+    try checkTypesModule(source, .fail, "Polymorphic Recursion");
 }
 
 test "check type - mutually recursive static dispatch - annotated dispatch-only mutual methods" {
@@ -13575,12 +13845,125 @@ test "check type - self-recursive where-clause dispatch is rejected as recursive
     try test_env.assertOneTypeError("Recursive Dispatch");
 }
 
-test "check type - self-dispatch method over module receiver is rejected as recursive dispatch" {
+test "check type - dispatch - a chain accumulating constraints on a shared variable closes" {
+    // Each hop copies `n + 1`'s `plus` onto the same `n`. Those copies are
+    // separate relations, so the state repeats with `n` still unresolved.
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    count = |e, n| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.count(n)
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).count(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a repeated state over its ancestor's variables closes before they resolve" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    keep = |e, n| match e {
+        \\        Leaf(_) => n
+        \\        Next(inner) => inner.keep(n)
+        \\    }
+        \\}
+        \\
+        \\main = Expr.Next(Expr.Leaf(3)).keep(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a repeated state over a quantified variable closes" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    keep = |e, n| match e {
+        \\        Leaf(_) => n
+        \\        Next(inner) => inner.keep(n)
+        \\    }
+        \\}
+        \\
+        \\generic = |x| Expr.Next(Expr.Leaf(3)).keep(x)
+        \\
+        \\a : U64
+        \\a = generic(1)
+        \\
+        \\b : Str
+        \\b = generic("b")
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - mutually recursive methods accumulating constraints close" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    even = |e, n| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.odd(n)
+        \\    }
+        \\    odd = |e, n| match e {
+        \\        Leaf(_) => n + 2
+        \\        Next(inner) => inner.even(n)
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).even(2)
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a state repeating only up to renaming waits for its variables" {
+    // Each hop's argument is a fresh result variable, which `step`'s own
+    // relation fixes once the call's argument is known. `m` also grows `n`'s
+    // constraints, so the state differs only by what the key leaves out.
+    var test_env = try TestEnv.init("Test",
+        \\Wrap := [W(U64)].{
+        \\    step = |w| w
+        \\}
+        \\
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    count = |e, n, m| match e {
+        \\        Leaf(_) => n + 1
+        \\        Next(inner) => inner.count(n, m.step())
+        \\    }
+        \\}
+        \\
+        \\main : U64
+        \\main = Expr.Next(Expr.Leaf(3)).count(2, Wrap.W(1))
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - dispatch - a state that grows every hop is still rejected" {
+    var test_env = try TestEnv.init("Test",
+        \\Expr := [Leaf(U64), Next(Expr)].{
+        \\    pump = |e, n| match e {
+        \\        Leaf(_) => 0.U64
+        \\        Next(inner) => inner.pump(Box.box(n))
+        \\    }
+        \\}
+        \\
+        \\main = Expr.Next(Expr.Leaf(3)).pump(1.U64)
+    );
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+test "check type - self-dispatch method over module receiver closes as recursion" {
     // The receiver is a module-level numeral pinned to `N` by annotation, and
     // the unannotated method re-dispatches the same method on it: satisfying
-    // the dispatch re-enters the same binding with an equal state, which the
-    // exact-repeat rule rejects. No self-edge ever enters the derivation
-    // graph on the way there.
+    // the dispatch re-enters the same binding with the same state, which
+    // closes as a recursive call. The method never returns, so its result is
+    // quantified, as `loop = |x| loop(x)`'s is. No self-edge ever enters the
+    // derivation graph on the way there.
     var test_env = try TestEnv.init("Test",
         \\n = 3
         \\N := [Val(I64)].{
@@ -13593,7 +13976,7 @@ test "check type - self-dispatch method over module receiver is rejected as recu
         \\main = N.Val(7).poke()
     );
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Recursive Dispatch");
+    try test_env.assertNoErrors();
 }
 
 // Instantiation depth pin for the explicit-worklist graph copier
@@ -14112,10 +14495,51 @@ test "check type - polarity - phantom alias actual retains source argument polic
     try checkTypesModule(source, .{ .pass = .last_def }, "Wrapped -> Str");
 }
 
-test "check type - polarity - retained phantom arguments preserve function positions" {
+test "check type - polarity - an invariant formal's argument is closed at every depth" {
+    // `e` stands on both sides of `Both` and `N`, so the `[A]` nested in the
+    // argument does too, even one function argument position further in,
+    // whether the row is written at the reference or deferred through an
+    // alias body.
+    const cases = [_]struct { annotation: []const u8, rows: usize }{
+        .{ .annotation = "Both([A] -> Str)", .rows = 2 },
+        .{ .annotation = "N([A] -> Str)", .rows = 1 },
+        .{ .annotation = "ViaNominal", .rows = 1 },
+        .{ .annotation = "ViaAlias", .rows = 2 },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |output| {
+            const signature = if (output)
+                try std.fmt.allocPrint(testing.allocator, "Str -> {s}", .{case.annotation})
+            else
+                try std.fmt.allocPrint(testing.allocator, "{s} -> Str", .{case.annotation});
+            defer testing.allocator.free(signature);
+            const source = try std.fmt.allocPrint(testing.allocator,
+                \\Both(e) : e -> e
+                \\N(e) := {{ f : e -> e }}
+                \\ViaNominal : N([A] -> Str)
+                \\ViaAlias : Both([A] -> Str)
+                \\value : {s}
+                \\value = |_| crash "unused"
+            , .{signature});
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("InvariantPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var graph: PolarityTestGraph = .{};
+            defer graph.deinit();
+            try graph.collectDef(&env, "value");
+            const closed = [_]bool{ false, false };
+            try testing.expectEqualSlices(bool, closed[0..case.rows], graph.open.items);
+        }
+    }
+}
+
+test "check type - polarity - retained phantom arguments flip through function positions" {
+    // `Chain([E])` is an argument of the annotated function, so `[E]` opens
+    // exactly where the retained backing puts it in a function argument.
     const cases = [_]struct { backing: []const u8, output: bool }{
-        .{ .backing = "Str -> a", .output = true },
-        .{ .backing = "a -> Str", .output = false },
+        .{ .backing = "Str -> a", .output = false },
+        .{ .backing = "a -> Str", .output = true },
         .{ .backing = "a", .output = false },
     };
     for (cases) |case| {
@@ -14148,38 +14572,60 @@ test "check type - polarity - retained phantom arguments preserve function posit
     }
 }
 
-test "check type - polarity - retained phantom callback output accepts wider rows" {
-    for ([_][]const u8{ "Outer([E])", "Phantom(Str -> [E])", "Chain([E])" }) |annotation| {
+test "check type - polarity - retained phantom callback result is generated closed for consumers" {
+    // `use` consumes the retained callback's result, so every spelling
+    // generates `[E]` closed, exactly as a direct `(Str -> [E]) -> Str` does.
+    // Aliases are transparent, so acceptance alone cannot observe a phantom
+    // row; the generated graph can.
+    const cases = [_]struct { annotation: []const u8, rows: usize }{
+        .{ .annotation = "Outer([E])", .rows = 2 },
+        .{ .annotation = "Phantom(Str -> [E])", .rows = 1 },
+        .{ .annotation = "Chain([E])", .rows = 3 },
+    };
+    for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\Phantom(a) : {{}}
             \\Outer(a) : Phantom(Str -> a)
             \\Chain(a) : Outer(a)
             \\use : {s} -> Str
             \\use = |_| "ok"
-            \\source : Str -> Outer([E, F])
-            \\source = |_| {{}}
-            \\result = use(source(""))
-        , .{annotation});
+        , .{case.annotation});
         defer testing.allocator.free(source);
         var env = try TestEnv.init("PhantomCallback", source);
         defer env.deinit();
         try env.assertNoErrors();
+        var graph: PolarityTestGraph = .{ .include_alias_arguments = true };
+        defer graph.deinit();
+        try graph.collectDef(&env, "use");
+        const closed = [_]bool{ false, false, false };
+        try testing.expectEqualSlices(bool, closed[0..case.rows], graph.open.items);
     }
 }
 
 test "check type - polarity - recursive retained formals preserve exact position transfers" {
+    // `Loop(...)` is an argument of the annotated function. A formal carried
+    // only through its own recursion never occurs, so like an unused formal
+    // its argument keeps the reference's (input) position; an occurrence
+    // composes through every recursive reference on the way to it.
     const Case = struct { recursive: []const u8, extra: []const u8 = "", argument: []const u8 = "a", direct_argument: []const u8 = "[E]", open: bool };
     const cases = [_]Case{
         .{ .recursive = "[Next(Loop(a))]", .open = false },
-        .{ .recursive = "[Next(Loop(a))]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = true },
-        .{ .recursive = "[Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Loop(a))]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = false },
+        .{ .recursive = "[Next(Str -> Loop(a))]", .open = false },
         .{ .recursive = "[Next(Loop(a) -> Str)]", .open = false },
         .{ .recursive = "[Next((Loop(a), (Str -> Loop(a))))]", .open = false },
-        .{ .recursive = "[Next(Producer(Loop(a)))]", .open = true },
-        .{ .recursive = "[Next(Other(a))]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Producer(Loop(a)))]", .open = false },
+        .{ .recursive = "[Next(Other(a))]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = false },
         .{ .recursive = "[Next(Other(a) -> Str)]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = false },
-        .{ .recursive = "[Next(Input(Out(a)))]", .extra = "Out(a) : Str -> Loop(a)", .open = true },
-        .{ .recursive = "[Next(Str -> Pass(a))]", .extra = "Pass(a) : Loop(a)", .open = true },
+        .{ .recursive = "[Next(Input(Out(a)))]", .extra = "Out(a) : Str -> Loop(a)", .open = false },
+        .{ .recursive = "[Next(Str -> Pass(a))]", .extra = "Pass(a) : Loop(a)", .open = false },
+        .{ .recursive = "[Next(Loop(a)), Leaf(a -> Str)]", .open = true },
+        .{ .recursive = "[Next(Loop(a)), Leaf(a -> Str)]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = true },
+        .{ .recursive = "[Next(Str -> Loop(a)), Leaf(a -> Str)]", .open = true },
+        .{ .recursive = "[Next(Loop(a) -> Str), Leaf(a)]", .open = false },
+        .{ .recursive = "[Next(Loop(a) -> Str), Leaf(a -> Str)]", .open = false },
+        .{ .recursive = "[Next(Input(Out(a))), Leaf(Input(a))]", .extra = "Out(a) : Str -> Loop(a)", .open = false },
+        .{ .recursive = "[Next(Other(a)), Leaf(a)]", .extra = "Other(a) := [Next(Loop(a) -> Str)]", .open = false },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,
@@ -14272,4 +14718,136 @@ test "check type - polarity - hidden alias rows do not change source arity" {
         \\bad = Ok("x")
     ;
     try checkTypesModule(source, .fail_first, "Too Many Args");
+}
+
+test "check type - row subsumption - a call widens a forwarded closed result row" {
+    // `forward` and `construct` carry the same signature; `forward`'s body
+    // forwards its closed input into the result. A call of either may use the
+    // result at a wider union (design.md "Row Subsumption").
+    const source =
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+        \\
+        \\construct : [A, B] -> [A, B]
+        \\construct = |x| match x {
+        \\    A => A
+        \\    B => B
+        \\}
+        \\
+        \\describe : [A, B, C] -> Str
+        \\describe = |_| "x"
+        \\
+        \\out = (describe(forward(B)), describe(construct(B)))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a forwarder's input row stays closed" {
+    // Re-opening the forwarded result must not re-open the input row it is
+    // one class with: a call at a tag the input does not list is rejected.
+    const source =
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+        \\
+        \\out = forward(C)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - a closed branch in result position widens into the annotated result" {
+    // A branch of an `if` or `match` in result position relates to the
+    // annotated result through a widening copy, exactly as a body that is the
+    // value itself does (design.md "Row Subsumption"), whichever branch
+    // comes first.
+    const source =
+        \\else_branch : [B, C], Bool -> [A, B, C]
+        \\else_branch = |v, first| if first { A } else { v }
+        \\
+        \\then_branch : [B, C], Bool -> [A, B, C]
+        \\then_branch = |v, first| if first { v } else { A }
+        \\
+        \\match_branch : [B, C], Bool -> [A, B, C]
+        \\match_branch = |v, first| match first {
+        \\    True => A
+        \\    False => v
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a closed branch in result position may not produce a tag the annotation omits" {
+    // The widening copy re-opens only the branch's own closed row, so a
+    // branch whose row holds a tag the annotated result does not list is
+    // still rejected.
+    const source =
+        \\pick : [B, C], Bool -> [A, B]
+        \\pick = |v, first| if first { A } else { v }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check type - row subsumption - an importer's call widens a forwarded closed result row" {
+    const source_lib =
+        \\module [forward]
+        \\
+        \\forward : [A, B] -> [A, B]
+        \\forward = |x| x
+    ;
+    var lib_env = try TestEnv.init("Lib", source_lib);
+    defer lib_env.deinit();
+    try std.testing.expectEqual(@as(usize, 0), try lib_env.typeProblemCount());
+
+    const source_main =
+        \\import Lib
+        \\
+        \\describe : [A, B, C] -> Str
+        \\describe = |_| "x"
+        \\
+        \\out = describe(Lib.forward(B))
+    ;
+    var main_env = try TestEnv.initWithImport("Main", source_main, "Lib", &lib_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+}
+
+test "check type - row subsumption - a method call widens a forwarded closed result row" {
+    // repro for https://github.com/roc-lang/roc/issues/12262
+    // `position` forwards a closed error row out of a nominal field. A method
+    // call `reader.position()?` widens its result exactly like the qualified
+    // call `Reader.position(reader)?` does (design.md "Row Subsumption").
+    const source =
+        \\Reader := { pos : Try(U64, [ReadErr(Str)]) }.{
+        \\    position : Reader -> Try(U64, [ReadErr(Str)])
+        \\    position = |reader| reader.pos
+        \\}
+        \\
+        \\direct : Reader, Bool -> Try(U64, [ReadErr(Str), Other])
+        \\direct = |reader, fail| {
+        \\    if fail {
+        \\        return Err(Other)
+        \\    }
+        \\    n = Reader.position(reader)?
+        \\    Ok(n)
+        \\}
+        \\
+        \\method : Reader, Bool -> Try(U64, [ReadErr(Str), Other])
+        \\method = |reader, fail| {
+        \\    if fail {
+        \\        return Err(Other)
+        \\    }
+        \\    n = reader.position()?
+        \\    Ok(n)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }

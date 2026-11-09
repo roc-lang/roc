@@ -9,11 +9,12 @@
 //! them without changing what any annotation means.
 //!
 //! The walk mirrors `Check.generateAnnoTypeInPlace`: the root of an annotation
-//! is an output, each function establishes input arguments and an output
-//! return, and other positions inherit their surroundings; a type application's argument is generated at
-//! the application's polarity composed with the positions of the declaration
+//! is an output, function arguments flip the surrounding polarity, and every
+//! other position keeps it; a type application's argument is generated at the
+//! application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
-//! the result-row widening adapter can re-tag. Which annotations qualify at all
+//! within the row coercion's reach (design.md "Closed Result Rows At Template
+//! Boundaries"). Which annotations qualify at all
 //! mirrors `Check.bindingRhsGeneralizes` together with
 //! `Check.collectHostBoundaryAnnotations`.
 //!
@@ -30,6 +31,7 @@
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
+const collections = @import("collections");
 const CIR = @import("can").CIR;
 const Positions = base.annotation_positions.Positions;
 
@@ -52,6 +54,13 @@ const try_type_name = "Try";
 const Polarity = enum {
     pos,
     neg,
+
+    fn flip(self: Polarity) Polarity {
+        return switch (self) {
+            .pos => .neg,
+            .neg => .pos,
+        };
+    }
 };
 
 /// `Check.GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior`.
@@ -97,7 +106,9 @@ pub const OpenRows = struct {
     builtin_syntax: ?*BuiltinSyntax = null,
     /// Borrowed invocation-owned builtin analysis, shared across files.
     shared_builtins: ?*BuiltinFacts = null,
-    position_cache: std.AutoHashMapUnmanaged(AST.Statement.Idx, ?[]Positions) = .empty,
+    /// Each analyzed type declaration's formal positions, or null when they
+    /// are unknown. Callers borrow the slices for the life of these rows.
+    position_cache: collections.DenseMapUnmanaged(AST.Statement.Idx, ?[]Positions) = .empty,
     ast: *const AST,
     /// One bit per AST node, set on a tag union whose anonymous `..` is
     /// redundant.
@@ -120,6 +131,10 @@ pub const OpenRows = struct {
     provided_names: std.StringHashMapUnmanaged(void),
     /// Reused worklist for walking destructuring patterns.
     pattern_worklist: std.ArrayList(AST.Pattern.Idx) = .empty,
+    /// The current annotation's type variables, cleared per annotation.
+    occurrences: VarOccurrences = .empty,
+    /// Reused stack of annotation positions still to visit.
+    walk_pending: std.ArrayList(WalkItem) = .empty,
 
     /// Index the file's declarations, imports and header.
     pub fn init(gpa: Allocator, ast: *const AST) Allocator.Error!OpenRows {
@@ -200,6 +215,8 @@ pub const OpenRows = struct {
         self.external_names.deinit(self.gpa);
         self.provided_names.deinit(self.gpa);
         self.pattern_worklist.deinit(self.gpa);
+        self.occurrences.deinit(self.gpa);
+        self.walk_pending.deinit(self.gpa);
         self.redundant.deinit(self.gpa);
     }
 
@@ -402,23 +419,23 @@ pub const OpenRows = struct {
     }
 
     fn markAnnotation(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, where: ?AST.Collection.Idx) Allocator.Error!void {
-        var occurrences: VarOccurrences = .{};
-        defer occurrences.deinit(self.gpa);
+        self.occurrences.clearRetainingCapacity();
+        const occurrences = &self.occurrences;
 
         const ctx = Ctx{ .opening = .implicit_open, .reach = .nested };
-        try self.walk(anno_idx, ctx, .pos, &occurrences);
+        try self.walk(anno_idx, ctx, .pos, occurrences);
 
         const where_coll = where orelse return;
         const coll = self.ast.store.getCollection(where_coll);
         for (self.ast.store.whereClauseSlice(.{ .span = coll.span })) |clause_idx| {
             switch (self.ast.store.getWhereClause(clause_idx)) {
                 .mod_method => |method| {
-                    if (!receiverOpens(&occurrences, self.tokenName(method.var_tok))) continue;
+                    if (!receiverOpens(occurrences, self.tokenName(method.var_tok))) continue;
                     // `Check.completeOwnedStaticDispatchConstraint`.
                     try self.walk(method.anno, .{ .opening = .per_use, .reach = .signature }, .pos, null);
                 },
                 .mod_alias => |alias| {
-                    if (!receiverOpens(&occurrences, self.tokenName(alias.var_tok))) continue;
+                    if (!receiverOpens(occurrences, self.tokenName(alias.var_tok))) continue;
                     // `Check.generateWhereAliasReferenceArgs`.
                     switch (self.ast.store.getTypeAnno(alias.alias)) {
                         .apply => |apply| for (self.ast.store.typeAnnoSlice(apply.args)[1..]) |arg| {
@@ -455,10 +472,11 @@ pub const OpenRows = struct {
     /// call depth; visiting only sets marks and joins occurrence flags, so the
     /// order positions are visited in does not matter.
     fn walk(self: *OpenRows, anno_idx: AST.TypeAnno.Idx, ctx: Ctx, polarity: Polarity, occurrences: ?*VarOccurrences) Allocator.Error!void {
-        var pending: std.ArrayList(WalkItem) = .empty;
-        defer pending.deinit(self.gpa);
+        const pending = &self.walk_pending;
+        std.debug.assert(pending.items.len == 0);
+        defer pending.clearRetainingCapacity();
         try pending.append(self.gpa, .{ .anno = anno_idx, .ctx = ctx, .polarity = polarity });
-        while (pending.pop()) |item| try self.visit(item, occurrences, &pending);
+        while (pending.pop()) |item| try self.visit(item, occurrences, pending);
     }
 
     fn visit(self: *OpenRows, item: WalkItem, occurrences: ?*VarOccurrences, pending: *std.ArrayList(WalkItem)) Allocator.Error!void {
@@ -472,10 +490,10 @@ pub const OpenRows = struct {
             .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = .neg });
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = polarity.flip() });
                 }
                 const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
-                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = .pos });
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = polarity });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
@@ -514,14 +532,14 @@ pub const OpenRows = struct {
                 const args = all_args[1..];
 
                 const positions = try self.applyPositions(head, args.len);
-                defer if (positions) |items| self.gpa.free(items);
 
                 const reaches = if (ctx.opening == .per_use and ctx.reach != .nested) try self.applyReaches(head, args.len, ctx.reach) else null;
                 defer if (reaches) |items| self.gpa.free(items);
 
                 for (args, 0..) |arg, arg_index| {
                     const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
-                    const arg_ctx = if (positions != null) ctx.withReach(reach) else ctx.withReach(reach).withOpening(.as_written);
+                    const as_written = if (positions) |known| known[arg_index].isInvariant() else true;
+                    const arg_ctx = if (as_written) ctx.withReach(reach).withOpening(.as_written) else ctx.withReach(reach);
                     const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
                     try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = arg_polarity });
                 }
@@ -593,21 +611,23 @@ pub const OpenRows = struct {
         std.debug.assert(self.builtin_owner);
         const qualified = for (CIR.builtin_type_specs) |spec| {
             if (spec.auto_import and std.mem.eql(u8, spec.display_name, name)) break spec.qualified_name;
-        } else unreachable;
+        } else unreachable; // candidates reports builtin only for a name matching an auto-imported builtin_type_specs entry
         var path = std.mem.splitScalar(u8, qualified, '.');
         var statements = self.ast.store.statementSlice(self.ast.store.getFile().statements);
         while (path.next()) |part| {
             const statement = for (statements) |index| {
                 const node = self.ast.store.getStatement(index);
                 if (node != .type_decl) continue;
-                const header = self.ast.store.getTypeHeader(node.type_decl.header) catch unreachable;
+                const header = self.ast.store.getTypeHeader(node.type_decl.header) catch
+                    base.invariant("fmt invariant violated: a Builtin type declaration has a malformed header", .{});
                 if (std.mem.eql(u8, self.tokenName(header.name), part)) break index;
-            } else unreachable;
+            } else base.invariant("fmt invariant violated: Builtin source declares no type `{s}` on the path `{s}`", .{ part, qualified });
             if (path.peek() == null) return statement;
-            const associated = self.ast.store.getStatement(statement).type_decl.associated orelse unreachable;
+            const associated = self.ast.store.getStatement(statement).type_decl.associated orelse
+                base.invariant("fmt invariant violated: Builtin type `{s}` on the path `{s}` has no associated block", .{ part, qualified });
             statements = self.ast.store.statementSlice(associated.statements);
         }
-        unreachable;
+        unreachable; // splitScalar yields at least one part, and the loop returns at the last one
     }
 
     fn declarationPositions(self: *OpenRows, statement: AST.Statement.Idx) Allocator.Error!?[]const Positions {
@@ -622,47 +642,36 @@ pub const OpenRows = struct {
     }
 
     /// Drop syntax only when every possible declaration has the same transfer.
-    fn applyPositions(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize) Allocator.Error!?[]Positions {
+    /// The positions are borrowed from a declaration's cached analysis.
+    fn applyPositions(self: *OpenRows, head: AST.TypeAnno.Idx, arity: usize) Allocator.Error!?[]const Positions {
         const found = self.candidates(head);
         if (found.external) return null;
-        var answer: ?[]Positions = null;
-        errdefer if (answer) |items| self.gpa.free(items);
+        var answer: ?[]const Positions = null;
         for (found.locals) |statement| {
-            const positions = (try self.declarationPositions(statement)) orelse {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            };
-            if (positions.len != arity) {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            }
-            if (answer) |items| {
-                for (items, positions) |left, right| if (@as(u8, @bitCast(left)) != @as(u8, @bitCast(right))) {
-                    self.gpa.free(items);
-                    return null;
-                };
-            } else answer = try self.gpa.dupe(Positions, positions);
+            const positions = (try self.declarationPositions(statement)) orelse return null;
+            if (!positionsAgree(answer, positions, arity)) return null;
+            answer = positions;
         }
         if (found.builtin) {
             const builtin_rows = try self.builtinRows();
             const name = self.tokenName(self.ast.store.getTypeAnno(head).ty.token);
             const statement = builtin_rows.builtinDeclaration(name);
-            const positions = (try builtin_rows.declarationPositions(statement)) orelse {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            };
-            if (positions.len != arity) {
-                if (answer) |items| self.gpa.free(items);
-                return null;
-            }
-            if (answer) |items| {
-                for (items, positions) |left, right| if (@as(u8, @bitCast(left)) != @as(u8, @bitCast(right))) {
-                    self.gpa.free(items);
-                    return null;
-                };
-            } else answer = try self.gpa.dupe(Positions, positions);
+            const positions = (try builtin_rows.declarationPositions(statement)) orelse return null;
+            if (!positionsAgree(answer, positions, arity)) return null;
+            answer = positions;
         }
         return answer;
+    }
+
+    /// Whether a candidate declaration's positions fit an application of
+    /// `arity` arguments and match the candidates before it.
+    fn positionsAgree(answer: ?[]const Positions, positions: []const Positions, arity: usize) bool {
+        if (positions.len != arity) return false;
+        const earlier = answer orelse return true;
+        for (earlier, positions) |left, right| {
+            if (@as(u8, @bitCast(left)) != @as(u8, @bitCast(right))) return false;
+        }
+        return true;
     }
 
     /// The index of the declaration formal named `name`.
@@ -800,10 +809,10 @@ const PositionAdapter = struct {
     allocator: Allocator,
     children: std.ArrayList(Annotation) = .empty,
 
-    pub fn declaration(_: *PositionAdapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize, nominal: bool } {
+    pub fn declaration(_: *PositionAdapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize } {
         const decl = key.owner.ast.store.getStatement(key.statement).type_decl;
         const header = key.owner.ast.store.getTypeHeader(decl.header) catch return null;
-        return .{ .body = decl.anno, .formal_count = key.owner.ast.store.typeAnnoSlice(header.args).len, .nominal = decl.kind != .alias };
+        return .{ .body = decl.anno, .formal_count = key.owner.ast.store.typeAnnoSlice(header.args).len };
     }
 
     fn reference(owner: *OpenRows, head: Annotation) Allocator.Error!PositionAnalysis.Reference {

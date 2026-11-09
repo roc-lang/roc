@@ -6,24 +6,124 @@
 //! clean up any surviving runtime allocations at the end of a run.
 
 const std = @import("std");
+const dev_diagnostics = @import("base").dev_diagnostics;
 const Allocator = std.mem.Allocator;
-const base = @import("base");
 const builtins = @import("builtins");
-const sljmp = @import("sljmp");
-
-const signal_handler = base.signal_handler;
+const crash_boundary_mod = @import("crash_boundary.zig");
 
 const RocOps = builtins.host_abi.RocOps;
-const JmpBuf = sljmp.JmpBuf;
-const setjmp = sljmp.setjmp;
-const longjmp = sljmp.longjmp;
+const JmpBuf = crash_boundary_mod.JmpBuf;
+const longjmp = crash_boundary_mod.longjmp;
 
 const RuntimeHostEnv = @This();
 
-const AllocationInfo = struct {
+/// Diagnostic only: a bounded stack prefix, with exact call/byte totals for
+/// that prefix. This does not change allocation policy or generated code.
+const AllocationProfile = struct {
+    const Counts = struct { calls: usize = 0, bytes: usize = 0 };
+    entry_frame: usize = 0,
+    sites: std.AutoHashMapUnmanaged([16]usize, Counts) = .empty,
+};
+
+/// Set the live root frame bounding allocation stack walks when profiling is enabled.
+pub fn beginAllocationProfile(self: *RuntimeHostEnv, frame: usize) void {
+    if (dev_diagnostics.isSet(.profile_allocations)) self.allocation_profile.entry_frame = frame;
+}
+
+fn profileAllocation(self: *RuntimeHostEnv, bytes: usize, frame: usize) void {
+    if (comptime !dev_diagnostics.available) return;
+    if (comptime @import("builtin").cpu.arch != .x86_64 or @import("builtin").os.tag != .linux) return;
+    if (self.allocation_profile.entry_frame == 0) return;
+    var stack: [16]usize = @splat(0);
+    var fp = frame;
+    var depth: usize = 0;
+    // The root caller supplies the live stack bound. Native generated code
+    // and builtins preserve frame pointers, as for compile-time failures.
+    while (depth < stack.len and fp % @alignOf(usize) == 0 and fp >= frame and fp + 2 * @sizeOf(usize) <= self.allocation_profile.entry_frame) : (depth += 1) {
+        const record: *const [2]usize = @ptrFromInt(fp);
+        stack[depth] = record[1];
+        if (record[0] <= fp) break;
+        fp = record[0];
+    }
+    const entry = self.allocation_profile.sites.getOrPut(self.allocator, stack) catch oom("allocation profiling");
+    if (!entry.found_existing) entry.value_ptr.* = .{};
+    entry.value_ptr.calls += 1;
+    entry.value_ptr.bytes += bytes;
+}
+
+/// Print accumulated allocation counts and bytes by stack, labeled with `root`,
+/// when allocation profiling is enabled. Retains the recorded counts.
+pub fn dumpAllocationProfile(self: *RuntimeHostEnv, root: usize) void {
+    if (comptime !dev_diagnostics.available) return;
+    if (!dev_diagnostics.isSet(.profile_allocations)) return;
+    var entries = self.allocation_profile.sites.iterator();
+    while (entries.next()) |entry| {
+        std.debug.print("alloc-stack root={d} calls={d} bytes={d} frames={any}\n", .{ root, entry.value_ptr.calls, entry.value_ptr.bytes, entry.key_ptr.* });
+    }
+}
+
+/// Bookkeeping stored at the start of every block handed to Roc code: a free
+/// or reallocation reads the block's size and alignment back from the block
+/// itself, and the live blocks form a list that `deinit` can release.
+///
+/// In safety-checked builds the payload sits `alignment` bytes past
+/// `header_region`, so its address is a multiple of the requested alignment
+/// and never of twice it. Code that leans on more alignment than it asked for
+/// then misbehaves in every eval test instead of only on a host whose
+/// allocator happens to differ, and a free or reallocation at a different
+/// alignment than the allocation fails loudly: production hosts locate a
+/// block from the alignment they are given. Release builds place the payload
+/// right after `header_region` and check nothing.
+const Header = extern struct {
+    prev: ?*Header,
+    next: ?*Header,
     size: usize,
     alignment: usize,
+
+    const header_region = 32;
+    const block_alignment: std.mem.Alignment = .@"32";
+    const max_payload_alignment = 16;
+
+    comptime {
+        std.debug.assert(@sizeOf(Header) <= header_region);
+        std.debug.assert(header_region % block_alignment.toByteUnits() == 0);
+        std.debug.assert(max_payload_alignment < block_alignment.toByteUnits());
+    }
+
+    /// Bytes between `header_region` and a payload at `alignment`.
+    fn payloadSkew(alignment: usize) usize {
+        return if (std.debug.runtime_safety) alignment else 0;
+    }
+
+    fn fromPayload(ptr: *anyopaque) *Header {
+        // payload = block start + header_region + skew, and the skew is less
+        // than block_alignment, so rounding down recovers the start.
+        const start = (@intFromPtr(ptr) - header_region) & ~(block_alignment.toByteUnits() - 1);
+        return @ptrFromInt(start);
+    }
+
+    fn payload(self: *Header) [*]u8 {
+        const bytes: [*]u8 = @ptrCast(self);
+        return bytes + header_region + payloadSkew(self.alignment);
+    }
+
+    fn block(self: *Header) []align(32) u8 {
+        const bytes: [*]align(32) u8 = @ptrCast(@alignCast(self));
+        return bytes[0 .. header_region + payloadSkew(self.alignment) + self.size];
+    }
+
+    /// In safety-checked builds, fail loudly when `alignment` is not the one
+    /// the block was allocated at.
+    fn expectAlignment(self: *Header, alignment: usize, comptime operation: []const u8) void {
+        if (std.debug.runtime_safety and self.alignment != alignment) {
+            std.debug.panic("RuntimeHostEnv: " ++ operation ++ " at alignment {d} of a block allocated at alignment {d} (ptr=0x{x})", .{ alignment, self.alignment, @intFromPtr(self.payload()) });
+        }
+    }
 };
+
+/// Payload addresses of the live blocks, kept only in safety-checked builds
+/// so that a double or foreign free fails loudly there.
+const LiveSet = if (std.debug.runtime_safety) std.AutoHashMapUnmanaged(usize, void) else void;
 
 /// Poison value written to the refcount slot on free in debug builds. Mirrors
 /// `src/builtins/utils.zig` so double-free / use-after-free bugs fail loudly.
@@ -150,25 +250,29 @@ jmp_buf: JmpBuf = undefined,
 active_jmp_buf: ?*JmpBuf = null,
 termination: Termination = .returned,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
-allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
+/// The most recently allocated live block; blocks link through their headers.
+live_blocks: ?*Header = null,
+live_count: usize = 0,
+live_set: LiveSet = if (std.debug.runtime_safety) .empty else {},
 allocation_call_count: u32 = 0,
+requested_bytes: if (dev_diagnostics.available) usize else void = if (dev_diagnostics.available) 0 else {},
+allocation_profile: if (dev_diagnostics.available) AllocationProfile else void = if (dev_diagnostics.available) .{} else {},
 event_callback: ?EventCallback = null,
 expect_passed: []u64 = &.{},
 expect_failed: []u64 = &.{},
 
 pub fn init(allocator: std.mem.Allocator) RuntimeHostEnv {
-    // Runtime byte leak checking is handled by allocation_tracker itself, so
-    // keep the tracker's backing allocations out of the caller's leak reports.
-    return .{
-        .allocator = allocator,
-        .allocation_tracker = std.AutoHashMap(usize, AllocationInfo).init(runtime_bytes_allocator),
-    };
+    return .{ .allocator = allocator };
 }
 
 pub fn deinit(self: *RuntimeHostEnv) void {
+    if (dev_diagnostics.available) self.allocation_profile.sites.deinit(self.allocator);
     self.resetObservation();
     self.freeRemainingAllocations();
-    self.allocation_tracker.deinit();
+    // Runtime byte leak checking is handled by the live block list itself, so
+    // the safety set's backing allocations stay out of the caller's leak
+    // reports.
+    if (std.debug.runtime_safety) self.live_set.deinit(runtime_bytes_allocator);
 }
 
 /// Public function `resetObservation`.
@@ -182,13 +286,13 @@ pub fn resetObservation(self: *RuntimeHostEnv) void {
 /// Public function `resetAllocationTracker`.
 pub fn resetAllocationTracker(self: *RuntimeHostEnv) void {
     self.freeRemainingAllocations();
-    self.allocation_tracker.clearRetainingCapacity();
     self.allocation_call_count = 0;
+    if (dev_diagnostics.available) self.requested_bytes = 0;
 }
 
 /// Public function `checkForLeaks`.
 pub fn checkForLeaks(self: *RuntimeHostEnv) LeakError!void {
-    if (self.allocation_tracker.count() > 0) return error.MemoryLeak;
+    if (self.live_count > 0) return error.MemoryLeak;
 }
 
 /// Public function `allocationCallCount`.
@@ -273,68 +377,17 @@ pub fn snapshot(self: *const RuntimeHostEnv, allocator: std.mem.Allocator) Alloc
     return RecordedRun.dupe(.{
         .events = self.events.items,
         .termination = self.termination,
-        .allocation_count = @intCast(self.allocation_tracker.count()),
+        .allocation_count = @intCast(self.live_count),
     }, allocator);
 }
 
 /// Public struct `CrashBoundary`.
-pub const CrashBoundary = struct {
-    env: *RuntimeHostEnv,
-    prev_jmp_buf: ?*JmpBuf,
-    recovery: signal_handler.StackOverflowRecovery = undefined,
-    prev_recovery: ?*const signal_handler.StackOverflowRecovery = null,
-    recovery_registered: bool = false,
-
-    pub fn init(env: *RuntimeHostEnv) CrashBoundary {
-        return .{
-            .env = env,
-            .prev_jmp_buf = env.installJumpBuf(&env.jmp_buf),
-        };
-    }
-
-    pub fn deinit(self: *CrashBoundary) void {
-        if (self.recovery_registered) {
-            _ = signal_handler.setStackOverflowRecovery(self.prev_recovery);
-            self.recovery_registered = false;
-        }
-        self.env.restoreJumpBuf(self.prev_jmp_buf);
-    }
-
-    pub inline fn set(self: *CrashBoundary) c_int {
-        const sj = setjmp(&self.env.jmp_buf);
-        if (sj == 0) {
-            // Register this boundary as the thread's escape route for a stack
-            // overflow in the code the caller is about to run: the fault
-            // handler longjmps back here instead of taking the process down.
-            self.recovery = .{
-                .context = @ptrCast(self.env),
-                .escape = &escapeStackOverflow,
-            };
-            self.prev_recovery = signal_handler.setStackOverflowRecovery(&self.recovery);
-            self.recovery_registered = true;
-        } else if (sj == signal_handler.stack_overflow_longjmp_value) {
-            signal_handler.restoreStackGuardAfterOverflow();
-            self.env.noteStackOverflow();
-        }
-        return sj;
-    }
-};
-
-fn escapeStackOverflow(context: *anyopaque) noreturn {
-    const env: *RuntimeHostEnv = @ptrCast(@alignCast(context));
-    const active_jmp_buf = env.active_jmp_buf orelse std.process.exit(134);
-    env.active_jmp_buf = null;
-    longjmp(active_jmp_buf, signal_handler.stack_overflow_longjmp_value);
-}
-
-/// The message recorded when compiled Roc code overflows its stack. Worded to
-/// match the interpreter's own stack-overflow report.
-pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
+pub const CrashBoundary = crash_boundary_mod.CrashBoundary(RuntimeHostEnv, true);
 
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
 /// so callers report it as this run's ordinary crash outcome.
 pub fn noteStackOverflow(self: *RuntimeHostEnv) void {
-    self.noteCrash(STACK_OVERFLOW_MESSAGE);
+    self.noteCrash(crash_boundary_mod.STACK_OVERFLOW_MESSAGE);
 }
 
 /// Record a Roc crash that reached the host some other way than
@@ -348,16 +401,6 @@ pub fn noteCrash(self: *RuntimeHostEnv, message: []const u8) void {
 /// Public function `enterCrashBoundary`.
 pub fn enterCrashBoundary(self: *RuntimeHostEnv) CrashBoundary {
     return CrashBoundary.init(self);
-}
-
-fn installJumpBuf(self: *RuntimeHostEnv, jmp_buf: *JmpBuf) ?*JmpBuf {
-    const prev = self.active_jmp_buf;
-    self.active_jmp_buf = jmp_buf;
-    return prev;
-}
-
-fn restoreJumpBuf(self: *RuntimeHostEnv, prev: ?*JmpBuf) void {
-    self.active_jmp_buf = prev;
 }
 
 fn appendEvent(
@@ -422,95 +465,83 @@ fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void 
 fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
-    const alloc_ptr = allocateTrackedBytes(self.allocator, length, alignment);
-    self.allocation_tracker.put(@intFromPtr(alloc_ptr), .{
-        .size = length,
-        .alignment = alignment,
-    }) catch {
-        std.debug.panic("RuntimeHostEnv: failed to track allocation", .{});
-    };
-    return @ptrCast(alloc_ptr);
+    if (dev_diagnostics.available) self.requested_bytes += length;
+    if (dev_diagnostics.isSet(.profile_allocations)) self.profileAllocation(length, @frameAddress());
+    return @ptrCast(self.allocateBlock(length, alignment).payload());
 }
 
-fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
+fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, alignment: usize) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
-    const alloc_ptr = @intFromPtr(ptr);
-    const alloc_info = self.allocation_tracker.fetchRemove(alloc_ptr) orelse {
-        std.debug.panic("RuntimeHostEnv: double-free or untracked free at ptr=0x{x}", .{alloc_ptr});
-    };
-
-    if (alloc_info.value.size >= @sizeOf(isize)) {
-        const refcount_ptr: *isize = @ptrCast(@alignCast(ptr));
+    const header = self.liveHeader(ptr, "double-free or untracked free");
+    header.expectAlignment(alignment, "dealloc");
+    if (header.size >= @sizeOf(isize)) {
+        const refcount_ptr: *align(1) isize = @ptrCast(ptr);
         refcount_ptr.* = POISON_VALUE;
     }
-
-    freeTrackedBytes(self.allocator, ptr, alloc_info.value);
+    self.freeBlock(header);
 }
 
 fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
-    const old_alloc_ptr = @intFromPtr(ptr);
-    const old_info = self.allocation_tracker.fetchRemove(old_alloc_ptr) orelse {
-        std.debug.panic("RuntimeHostEnv: realloc of untracked memory at ptr=0x{x}", .{old_alloc_ptr});
-    };
-
-    const new_base_ptr = allocateTrackedBytes(undefined, new_length, alignment);
-    const old_bytes: [*]u8 = @ptrCast(@alignCast(ptr));
-    const copy_size = @min(old_info.value.size, new_length);
-    @memcpy(new_base_ptr[0..copy_size], old_bytes[0..copy_size]);
-
-    freeTrackedBytes(undefined, ptr, old_info.value);
-
-    self.allocation_tracker.put(@intFromPtr(new_base_ptr), .{
-        .size = new_length,
-        .alignment = alignment,
-    }) catch {
-        std.debug.panic("RuntimeHostEnv: failed to track reallocation", .{});
-    };
-
-    return @ptrCast(new_base_ptr);
+    if (dev_diagnostics.available) self.requested_bytes += new_length;
+    if (dev_diagnostics.isSet(.profile_allocations)) self.profileAllocation(new_length, @frameAddress());
+    const old_header = self.liveHeader(ptr, "realloc of untracked memory");
+    old_header.expectAlignment(alignment, "realloc");
+    const new_header = self.allocateBlock(new_length, alignment);
+    const copy_size = @min(old_header.size, new_length);
+    @memcpy(new_header.payload()[0..copy_size], old_header.payload()[0..copy_size]);
+    self.freeBlock(old_header);
+    return @ptrCast(new_header.payload());
 }
 
-// Use a non-tracing allocator for Roc runtime bytes. RuntimeHostEnv owns the
-// allocation_tracker that powers these tests' leak checks, so the underlying
-// allocator does not need to track the same bytes a second time.
+// Use a non-tracing allocator for Roc runtime bytes. RuntimeHostEnv's live
+// block list powers these tests' leak checks, so the underlying allocator
+// does not need to track the same bytes a second time.
 const runtime_bytes_allocator: std.mem.Allocator = if (@import("builtin").target.os.tag == .freestanding)
     std.heap.wasm_allocator
 else
     std.heap.smp_allocator;
 
-fn allocateTrackedBytes(_: std.mem.Allocator, len: usize, alignment: usize) [*]u8 {
-    const allocator = runtime_bytes_allocator;
-    return switch (alignment) {
-        1 => (allocator.alignedAlloc(u8, .@"1", len) catch oom("roc_alloc")).ptr,
-        2 => (allocator.alignedAlloc(u8, .@"2", len) catch oom("roc_alloc")).ptr,
-        4 => (allocator.alignedAlloc(u8, .@"4", len) catch oom("roc_alloc")).ptr,
-        8 => (allocator.alignedAlloc(u8, .@"8", len) catch oom("roc_alloc")).ptr,
-        16 => (allocator.alignedAlloc(u8, .@"16", len) catch oom("roc_alloc")).ptr,
+/// Allocate a live block for a payload of `size` bytes at `alignment`.
+fn allocateBlock(self: *RuntimeHostEnv, size: usize, alignment: usize) *Header {
+    switch (alignment) {
+        1, 2, 4, 8, 16 => {},
         else => std.debug.panic("RuntimeHostEnv: unsupported alignment {d}", .{alignment}),
-    };
+    }
+    const block = runtime_bytes_allocator.alignedAlloc(u8, Header.block_alignment, Header.header_region + Header.payloadSkew(alignment) + size) catch oom("roc_alloc");
+    const header: *Header = @ptrCast(@alignCast(block.ptr));
+    header.* = .{ .prev = null, .next = self.live_blocks, .size = size, .alignment = alignment };
+    if (std.debug.runtime_safety) {
+        self.live_set.put(runtime_bytes_allocator, @intFromPtr(header.payload()), {}) catch {
+            std.debug.panic("RuntimeHostEnv: failed to track allocation", .{});
+        };
+    }
+    if (self.live_blocks) |next| next.prev = header;
+    self.live_blocks = header;
+    self.live_count += 1;
+    return header;
 }
 
-fn freeTrackedBytes(_: std.mem.Allocator, ptr: *anyopaque, alloc_info: AllocationInfo) void {
-    const allocator = runtime_bytes_allocator;
-    const bytes: [*]u8 = @ptrCast(@alignCast(ptr));
-    switch (alloc_info.alignment) {
-        1 => allocator.free(bytes[0..alloc_info.size]),
-        2 => allocator.free((@as([*]align(2) u8, @alignCast(bytes)))[0..alloc_info.size]),
-        4 => allocator.free((@as([*]align(4) u8, @alignCast(bytes)))[0..alloc_info.size]),
-        8 => allocator.free((@as([*]align(8) u8, @alignCast(bytes)))[0..alloc_info.size]),
-        16 => allocator.free((@as([*]align(16) u8, @alignCast(bytes)))[0..alloc_info.size]),
-        else => std.debug.panic("RuntimeHostEnv: unsupported free alignment {d}", .{alloc_info.alignment}),
+/// The header of the live block whose payload is `ptr`.
+fn liveHeader(self: *RuntimeHostEnv, ptr: *anyopaque, comptime misuse: []const u8) *Header {
+    if (std.debug.runtime_safety and !self.live_set.contains(@intFromPtr(ptr))) {
+        std.debug.panic("RuntimeHostEnv: " ++ misuse ++ " at ptr=0x{x}", .{@intFromPtr(ptr)});
     }
+    return Header.fromPayload(ptr);
+}
+
+/// Unlink and free one live block.
+fn freeBlock(self: *RuntimeHostEnv, header: *Header) void {
+    if (std.debug.runtime_safety) _ = self.live_set.remove(@intFromPtr(header.payload()));
+    if (header.prev) |prev| prev.next = header.next else self.live_blocks = header.next;
+    if (header.next) |next| next.prev = header.prev;
+    self.live_count -= 1;
+    runtime_bytes_allocator.free(header.block());
 }
 
 fn freeRemainingAllocations(self: *RuntimeHostEnv) void {
-    var iterator = self.allocation_tracker.iterator();
-    while (iterator.next()) |entry| {
-        const ptr: *anyopaque = @ptrFromInt(entry.key_ptr.*);
-        freeTrackedBytes(self.allocator, ptr, entry.value_ptr.*);
-    }
+    while (self.live_blocks) |header| self.freeBlock(header);
 }
 
 fn oom(comptime context: []const u8) noreturn {

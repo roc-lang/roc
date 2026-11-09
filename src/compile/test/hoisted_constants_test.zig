@@ -31,7 +31,6 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         DownloadFailed,
         ExportedRuntimeEntrypointNotFound,
         ExpectedPlatformString,
-        ExpectedString,
         FileError,
         HoistedConstWasNotI64,
         HoistedConstWasNotScalar,
@@ -58,12 +57,10 @@ const HoistedConstantsTestError = std.mem.Allocator.Error ||
         OutOfMemory,
         PatternExtractionMissingCheckedRootPattern,
         PatternExtractionMissingSourcePattern,
-        PatternExtractionRootValueWasNotSyntheticLookup,
-        PatternExtractionRootWasNotSyntheticMatch,
+        PatternExtractionResultWasNotHoisted,
         PathOutsideWorkspace,
         RootDidNotStoreConstNode,
         StaticDataInitializerCountMismatch,
-        StaticDataInitializerPrecededRootBody,
         StaticDataInitializerRequestOrderMismatch,
         StaticDataLiteralNotFound,
         StaticDataSymbolNotFound,
@@ -84,7 +81,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
     defer shared_test_builtins_mutex.unlock(std.testing.io);
 
     if (shared_test_builtins == null) {
-        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator);
+        shared_test_builtins = try eval.BuiltinModules.init(std.heap.page_allocator, std.testing.io);
     }
 
     return &shared_test_builtins.?;
@@ -298,7 +295,7 @@ test "hoisted local constants are finalized and restored during runtime lowering
     try expectRootRequestBefore(app_artifact, top_b.id, ordinary_call.root);
     try expectRootRequestBefore(app_artifact, top_b.id, block_value.root);
     try expectRootRequestBefore(app_artifact, indirect_local.root, indirect_top.id);
-    try expectPatternExtractionSyntheticRegions(app_artifact);
+    try expectPatternExtractionRoots(app_artifact);
 
     const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
     defer gpa.free(lir_roots);
@@ -536,13 +533,9 @@ test "hoisted list constants lower to internal static data in request order" {
     const second_initializer = lowered.lir_result.store.getProcSpec(lowered.lir_result.static_data_values.items[1].initializer.?);
     const first_body = first_initializer.body orelse return error.StaticDataLiteralNotFound;
     const second_body = second_initializer.body orelse return error.StaticDataLiteralNotFound;
-    // Reachable roots form a barrier before queued initializers, whose request
-    // order must then determine their body order.
+    // Queued initializers lower in request order. ARC leaves initializers as
+    // lowered, so their bodies' statement ids still show that order.
     if (@backingInt(first_body) >= @backingInt(second_body)) return error.StaticDataInitializerRequestOrderMismatch;
-    for (lowered.lir_result.root_procs.items) |root_proc| {
-        const root_body = lowered.lir_result.store.getProcSpec(root_proc).body orelse return error.StaticDataLiteralNotFound;
-        if (@backingInt(root_body) >= @backingInt(first_body)) return error.StaticDataInitializerPrecededRootBody;
-    }
     try expectStaticDataLiteralPresent(&lowered.lir_result);
 
     const exports = try static_data_exports.buildStaticData(
@@ -573,6 +566,135 @@ test "hoisted list constants lower to internal static data in request order" {
         }
     }
     return error.StaticDataSymbolNotFound;
+}
+
+test "hoisted Dec and I128 list constants keep their elements 16-aligned in static data" {
+    // Packed scalar lists share the string-literal blobs, so a blob can hold
+    // 16-byte elements; LLVM reads a constant list of them with aligned
+    // vector loads, so an element 8 bytes off a 16-byte boundary faults
+    // wherever the linker happens to place the blob on one.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\decs : List(Dec)
+        \\decs = [1.5, 2.5, 3.5]
+        \\wides = [11.I128, 22.I128, 33.I128]
+        \\
+        \\main! = |args| {
+        \\    var $d = 0.5
+        \\    for n in decs {
+        \\        $d = $d + n
+        \\    }
+        \\    var $w = 0.I128
+        \\    for n in wides {
+        \\        $w = $w + n
+        \\    }
+        \\    _ = List.len(args)
+        \\    _ = $d
+        \\    _ = $w
+        \\    Echo.line!("done")
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_compatibility_id,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.u64 },
+    );
+    defer lowered.deinit();
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    // The elements as they are stored: Dec is an i128 scaled by 10^18.
+    var dec_elements: [3 * 16]u8 = undefined;
+    var wide_elements: [3 * 16]u8 = undefined;
+    for ([_]i128{ 1_500_000_000_000_000_000, 2_500_000_000_000_000_000, 3_500_000_000_000_000_000 }, 0..) |value, i| {
+        std.mem.writeInt(i128, dec_elements[i * 16 ..][0..16], value, .little);
+    }
+    for ([_]i128{ 11, 22, 33 }, 0..) |value, i| {
+        std.mem.writeInt(i128, wide_elements[i * 16 ..][0..16], value, .little);
+    }
+    try expectElementsSixteenAligned(exports, &dec_elements);
+    try expectElementsSixteenAligned(exports, &wide_elements);
+}
+
+/// The export holding `elements` places them 16-aligned: the export is
+/// aligned to at least 16, and they start at a multiple of 16 within it.
+fn expectElementsSixteenAligned(exports: []const static_data_exports.StaticDataExport, elements: []const u8) error{ StaticDataElementsMisaligned, StaticDataElementsNotFound }!void {
+    for (exports) |static_export| {
+        const at = std.mem.find(u8, static_export.bytes, elements) orelse continue;
+        if (static_export.alignment < 16 or at % 16 != 0) {
+            std.debug.print("{s}: elements at byte {d} of an export aligned to {d} (symbol_offset {d})\n", .{ static_export.symbol_name, at, static_export.alignment, static_export.symbol_offset });
+            return error.StaticDataElementsMisaligned;
+        }
+        return;
+    }
+    return error.StaticDataElementsNotFound;
 }
 
 test "inline list iter constants lower to internal static data" {
@@ -735,7 +857,74 @@ test "a compile-time list of copies of one scalar is static data, not a per-read
     }.inspect);
 }
 
-test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
+// Repro for https://github.com/roc-lang/roc/issues/12294
+test "issue 12294: a restored list of boxed capturing closures is static data, not a per-read rebuild" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box(({} -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|{}| n)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , struct {
+        fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+            // The list, the box, and the closure's capture record ride in
+            // static data; reading the constant must not rebuild them.
+            try expectLowLevelAbsent(result, .list_with_capacity);
+            try expectLowLevelAbsent(result, .list_append_unsafe);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            return 0;
+        }
+    }.inspect);
+}
+
+fn expectRestoredSelfReadingClosuresStatic(result: *lir.Program.Result) HoistedConstantsTestError!usize {
+    // The closure reads `handlers` as a top-level constant, the way its
+    // compile-time evaluation did, so the list it sits in stays static data.
+    try expectLowLevelAbsent(result, .list_with_capacity);
+    try expectLowLevelAbsent(result, .list_append_unsafe);
+    try std.testing.expect(result.static_data_values.items.len > 0);
+    return 0;
+}
+
+test "a restored list of boxed closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = [Box.box(|k| List.len(handlers) + k)]
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
+test "a restored list of boxed capturing closures that read their own constant is static data" {
+    _ = try lowerEchoApp(
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\handlers : List(Box((U64 -> U64)))
+        \\handlers = {
+        \\    n = 42
+        \\    [Box.box(|k| if k == 0 n else List.len(handlers) + k)]
+        \\}
+        \\main! = |args| {
+        \\    kept = List.drop_first(handlers, List.len(args) - List.len(args))
+        \\    Echo.line!(List.len(kept).to_str())
+        \\    Ok({})
+        \\}
+    , expectRestoredSelfReadingClosuresStatic);
+}
+
+test "an empty compile-time list reads immutable data without a capacity request" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -747,15 +936,14 @@ test "an empty compile-time list rebuilds with the capacity it was evaluated wit
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 64);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
 }
 
-test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+test "a compile-time record of an empty list and a scalar reads immutable data" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
     // whose empty list carries no capacity.
@@ -772,12 +960,129 @@ test "a compile-time record of an empty list and a scalar lowers as its construc
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 8);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
+}
+
+test "an empty list with capacity in a record frozen into static data is the empty list" {
+    // The completed empty list has no backing allocation or runtime capacity
+    // request, including when stored inside a record.
+    const gpa = std.testing.allocator;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "main.roc",
+        .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\state : { name : Str, items : List(Str) }
+        \\state = { name: "a", items: List.with_capacity(4) }
+        \\
+        \\fill : { name : Str, items : List(Str) }, Str -> U64
+        \\fill = |record, item| List.len(List.prepend(record.items, item)) + Str.count_utf8_bytes(record.name)
+        \\
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(fill(state, List.len(args).to_str())))
+        \\    Ok({})
+        \\}
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        .x64linux,
+        builtin_modules,
+        build_options.compiler_compatibility_id,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try std.testing.expect(!coord.hasUserErrors());
+
+    try coord.finishCheckedProgram(.executable_artifacts);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.u64 },
+    );
+    defer lowered.deinit();
+    try expectLowLevelAbsent(&lowered.lir_result, .list_with_capacity);
+
+    const exports = try static_data_exports.buildStaticData(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        &lowered,
+        .x64linux,
+        .{ .include_provided_exports = true },
+    );
+    defer static_data_exports.deinitStaticData(gpa, exports);
+
+    // Every list field of a frozen record: null pointer, zero length and
+    // capacity, and no relocation.
+    const layouts = &lowered.lir_result.layouts;
+    var frozen_lists: usize = 0;
+    for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
+        const record = layouts.getLayout(value.layout_idx);
+        if (record.tag != .struct_) continue;
+        const struct_idx = record.getStruct().idx;
+        const symbol = try lir.Program.staticDataSymbolName(gpa, @fromBackingInt(@intCast(index)));
+        defer gpa.free(symbol);
+        const static_export = for (exports) |static_export| {
+            if (std.mem.eql(u8, static_export.symbol_name, symbol)) break static_export;
+        } else return error.StaticDataSymbolNotFound;
+        for (0..layouts.getStructData(struct_idx).getFields().count) |field| {
+            const field_index: u32 = @intCast(field);
+            if (layouts.getLayout(layouts.getStructFieldLayout(struct_idx, field_index)).tag != .list) continue;
+            const offset = static_export.symbol_offset + layouts.getStructFieldOffset(struct_idx, field_index);
+            const size = layouts.getStructFieldSize(struct_idx, field_index);
+            try std.testing.expect(std.mem.allEqual(u8, static_export.bytes[offset..][0..size], 0));
+            for (static_export.relocations) |relocation| try std.testing.expect(relocation.offset != offset);
+            frozen_lists += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), frozen_lists);
 }
 
 /// Checks and lowers an app over the echo platform, handing the lowered
@@ -860,29 +1165,10 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     return statement_count;
 }
 
-fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
-    }
-    return error.StaticDataLiteralNotFound;
-}
-
 fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
     for (result.store.getCFStmts()) |stmt| {
         if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return error.UnexpectedLowLevel;
     }
-}
-
-fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt != .assign_literal) continue;
-        switch (stmt.assign_literal.value) {
-            .i128_literal => |literal| if (literal.value == value) return,
-            .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
-        }
-    }
-    return error.StaticDataLiteralNotFound;
 }
 
 test "callable binding with alias annotation is const-evaluated" {
@@ -2006,7 +2292,7 @@ test "issue 10721: runtime-dependent callable use keeps one validating extractio
     try std.testing.expectEqual(@as(usize, 1), validating_extraction_roots);
 }
 
-test "hoisted match guard does not report unused branch warning" {
+test "a match on a constant with a guard selects a hoisted root" {
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -2058,13 +2344,6 @@ test "hoisted match guard does not report unused branch warning" {
     try coord.coordinatorLoop();
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
-
-    var found_unused_branch = false;
-    var report_iter = coord.iterReports();
-    while (report_iter.next()) |entry| {
-        if (std.mem.eql(u8, entry.report.title, "Unused Branch")) found_unused_branch = true;
-    }
-    try std.testing.expect(!found_unused_branch);
 
     const artifact = coord.appRootCheckedArtifact();
     var found_hoisted_root = false;
@@ -2251,6 +2530,7 @@ fn expectCompileTimeRootKindsPresent(
             .expect,
             .numeral_conversion,
             .quote_conversion,
+            .literal_argument,
             .repl_expr,
             => {},
         }
@@ -2334,7 +2614,7 @@ fn compileTimeRootKindMatchesRequest(
         .callable_binding => request_kind == .compile_time_callable,
         .expect => request_kind == .test_expect,
         .repl_expr => request_kind == .repl_expr,
-        .numeral_conversion, .quote_conversion => request_kind == .compile_time_constant,
+        .numeral_conversion, .quote_conversion, .literal_argument => request_kind == .compile_time_constant,
     };
 }
 
@@ -2349,14 +2629,13 @@ fn rootSourceMatches(
         .statement => |statement| statement == b.statement,
         .required_binding => |required_binding| required_binding == b.required_binding,
         .hoisted => |hoisted| hoisted.index == b.hoisted.index and hoisted.expr == b.hoisted.expr,
+        .literal => |literal| std.meta.eql(literal, b.literal),
     };
 }
 
-fn expectPatternExtractionSyntheticRegions(
+fn expectPatternExtractionRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) HoistedConstantsTestError!void {
-    const ModuleEnv = can.ModuleEnv;
-    const module_env = artifact.moduleEnvConst();
     var extraction_count: usize = 0;
 
     for (artifact.compile_time_roots.roots) |root| {
@@ -2371,149 +2650,23 @@ fn expectPatternExtractionSyntheticRegions(
 
         try std.testing.expectEqual(extraction.result_pattern, root.source_pattern orelse return error.PatternExtractionMissingSourcePattern);
         const checked_result_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedRootPattern;
+        try std.testing.expectEqual(extraction.result_pattern, checked_result_pattern);
 
-        const synthetic_match = artifact.checked_bodies.expr(root.expr);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            synthetic_match.source_region,
-        );
+        // The root evaluates the match of its base expression against the
+        // scrutinee pattern that lowering builds from this description.
+        try std.testing.expectEqual(extraction.base_expr, root.rootExpr());
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, null), root.evaluatedExpr());
+        const parts = root.bodyParts();
+        try std.testing.expectEqual(@as(?can.CIR.Expr.Idx, extraction.base_expr), parts.expr);
+        try std.testing.expectEqual(@as(?can.CIR.Pattern.Idx, extraction.scrutinee_pattern), parts.pattern);
 
-        const match_data = switch (synthetic_match.data) {
-            .match_ => |match_| match_,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_local,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootWasNotSyntheticMatch,
-        };
-        const checked_base_expr = artifact.checked_bodies.expr(match_data.cond);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.base_expr)),
-            checked_base_expr.source_region,
-        );
-        try std.testing.expectEqual(@as(usize, 1), match_data.branches.len);
-        try std.testing.expect(!match_data.is_try_suffix);
-        try std.testing.expect(!match_data.skip_exhaustiveness);
-
-        const branch = match_data.branches[0];
-        const branch_patterns = branch.patternsSlice(&artifact.checked_bodies);
-        try std.testing.expectEqual(@as(usize, 1), branch_patterns.len);
-        const checked_scrutinee_pattern = artifact.checked_bodies.pattern(branch_patterns[0].pattern);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern)),
-            checked_scrutinee_pattern.source_region,
-        );
-        try std.testing.expect(!branch_patterns[0].degenerate);
-        try std.testing.expectEqual(@as(usize, 0), branch_patterns[0].binderRemapsSlice(&artifact.checked_bodies).len);
-        try std.testing.expectEqual(@as(?check.CheckedArtifact.CheckedExprId, null), branch.guard);
-
-        const synthetic_lookup = artifact.checked_bodies.expr(branch.value);
-        try expectRegionEqual(
-            module_env.store.getNodeRegion(ModuleEnv.nodeIdxFrom(extraction.result_pattern)),
-            synthetic_lookup.source_region,
-        );
-        const lookup = switch (synthetic_lookup.data) {
-            .lookup_local => |lookup| lookup,
-            .pending,
-            .numeral,
-            .str_from_quote,
-            .str_segment,
-            .str,
-            .bytes_literal,
-            .lookup_external,
-            .lookup_required,
-            .list,
-            .empty_list,
-            .tuple,
-            .match_,
-            .if_,
-            .call,
-            .record,
-            .empty_record,
-            .block,
-            .tag,
-            .nominal,
-            .zero_argument_tag,
-            .closure,
-            .lambda,
-            .binop,
-            .unary_minus,
-            .unary_not,
-            .field_access,
-            .dispatch_call,
-            .interpolation,
-            .structural_eq,
-            .structural_hash,
-            .method_eq,
-            .type_dispatch_call,
-            .tuple_access,
-            .runtime_error,
-            .crash,
-            .dbg,
-            .expect_err,
-            .expect,
-            .ellipsis,
-            .anno_only,
-            .break_,
-            .return_,
-            .row_coerce,
-            .for_,
-            .hosted_lambda,
-            .run_low_level,
-            => return error.PatternExtractionRootValueWasNotSyntheticLookup,
-        };
-        try std.testing.expectEqual(checked_result_pattern, lookup.pattern);
-        try std.testing.expect(lookup.resolved != null);
+        // The extracted value is the hoisted constant of the result pattern.
+        const result_const = artifact.hoisted_constants.lookupByPattern(extraction.result_pattern) orelse
+            return error.PatternExtractionResultWasNotHoisted;
+        try std.testing.expectEqual(root.id, result_const.root);
     }
 
     try std.testing.expect(extraction_count >= 4);
-}
-
-fn expectRegionEqual(expected: base.Region, actual: base.Region) HoistedConstantsTestError!void {
-    try std.testing.expectEqual(expected.start.offset, actual.start.offset);
-    try std.testing.expectEqual(expected.end.offset, actual.end.offset);
 }
 
 fn writeEchoPlatform(dir: anytype) HoistedConstantsTestError!void {
@@ -2622,15 +2775,17 @@ fn countStoredHoistedI64(
     return count;
 }
 
+/// The hoisted constant roots that evaluate a match: a source `match`
+/// expression, or the match of a pattern extraction.
 fn countHoistedMatchRoots(
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
 ) usize {
+    const store = &artifact.moduleEnvConst().store;
     var count: usize = 0;
     for (artifact.compile_time_roots.roots) |root| {
         if (root.kind != .hoisted_constant) continue;
-        if (std.meta.activeTag(artifact.checked_bodies.expr(root.expr).data) == .match_) {
-            count += 1;
-        }
+        const evaluates_match = if (root.evaluatedExpr()) |evaluated| store.getExpr(evaluated) == .e_match else root.hoisted_body.? == .pattern_extraction;
+        if (evaluates_match) count += 1;
     }
     return count;
 }
@@ -2656,8 +2811,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .f64_literal,
                 .f32_literal,
                 .dec_literal,
-                .boxy_dynamic_num_literal,
-                .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
                 .proc_ref,
@@ -2665,23 +2818,10 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             },
             .init_uninitialized,
             .assign_ref,
+            .dyn,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -2694,13 +2834,10 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -2717,7 +2854,7 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
 
 fn expectStaticInitializersMaterializationOnly(result: *const lir.Program.Result) HoistedConstantsTestError!void {
     for (result.static_data_values.items) |value| {
-        try std.testing.expect(result.store.getProcSpec(value.initializer.?).is_static_initializer);
+        try std.testing.expect(result.store.getProcSpecImmediate(value.initializer.?).is_static_initializer);
     }
 }
 
@@ -2731,6 +2868,7 @@ fn storedI64(
     const node_from_root = switch (root.payload) {
         .const_node => |node| node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,
@@ -2757,6 +2895,7 @@ fn rootStoredI64(
     const node = switch (root.payload) {
         .const_node => |const_node| const_node,
         .pending,
+        .unevaluated,
         .fn_value,
         .discarded,
         .expect,
@@ -2800,6 +2939,7 @@ fn scalarConstNodeI64(
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => return error.HoistedConstWasNotScalar,
     };
     return actual;

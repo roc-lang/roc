@@ -40,29 +40,23 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
     },
 };
 
+const CompletedStages = eval.CompileTimeFinalization.CompletedStages;
+
 fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
     try dir.createDirPath(io, ".roc_echo_platform");
     for (echo_platform) |file| try dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
 }
 
-fn materializedRootCount(program: *const lir.CheckedPipeline.LoweredProgram) usize {
-    var count: usize = 0;
-    for (program.lir_result.const_roots.items) |root| {
-        if (root.value_slot != null) count += 1;
-    }
-    return count;
-}
-
 /// How many of one module's evaluated roots the program materializes a
 /// completed value for.
 fn materializedAmong(
-    program: *const lir.CheckedPipeline.LoweredProgram,
+    stages: *const CompletedStages,
     module: CheckedArtifact.ModuleId,
     requests: []const CheckedArtifact.RootRequest,
-) usize {
+) error{TestUnexpectedResult}!usize {
     var count: usize = 0;
     for (requests) |request| {
-        if (materializesRoot(program, module, rootIdentity(request))) count += 1;
+        if (materializingStage(stages, module, try rootIdentity(request)) != null) count += 1;
     }
     return count;
 }
@@ -123,6 +117,18 @@ fn materializesRoot(
     return false;
 }
 
+/// The stage whose program evaluates the root into the slot it declares.
+fn materializingStage(
+    stages: *const CompletedStages,
+    module: CheckedArtifact.ModuleId,
+    root: CheckedArtifact.ComptimeRootId,
+) ?usize {
+    for (stages.programs(), 0..) |program, index| {
+        if (materializesRoot(program, module, root)) return index;
+    }
+    return null;
+}
+
 fn countNamedProcs(store: *const lir.LirStore, expected: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
@@ -143,8 +149,8 @@ fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     return count;
 }
 
-fn rootIdentity(request: CheckedArtifact.RootRequest) CheckedArtifact.ComptimeRootId {
-    return request.compile_time_root orelse unreachable;
+fn rootIdentity(request: CheckedArtifact.RootRequest) error{TestUnexpectedResult}!CheckedArtifact.ComptimeRootId {
+    return request.compile_time_root orelse error.TestUnexpectedResult;
 }
 
 /// The request for the root declared at `order` in its module.
@@ -155,7 +161,7 @@ fn rootWithOrder(requests: []const CheckedArtifact.RootRequest, order: u32) erro
     return error.TestUnexpectedResult;
 }
 
-test "compile-time consumer materializes only the evaluated values the program reads" {
+test "a build evaluates every compile-time value and materializes the ones its program reads" {
     if (is_freestanding) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
@@ -203,7 +209,7 @@ test "compile-time consumer materializes only the evaluated values the program r
     ctx.ctx = &capture;
     ctx.vtable.writeStderr = Capture.write;
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -232,25 +238,32 @@ test "compile-time consumer materializes only the evaluated values the program r
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
 
-    // Both roots ran: an unreachable value still reports its `dbg`.
+    // A build evaluates every root (design.md "Demand-Driven Compile-Time
+    // Evaluation"), so the unread value runs and reports its `dbg` too.
     const observed = capture.bytes[0..capture.len];
     try std.testing.expect(std.mem.find(u8, observed, "evaluated used table") != null);
     try std.testing.expect(std.mem.find(u8, observed, "evaluated unused table") != null);
 
-    const host = &session.host.?;
+    const host = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
     try std.testing.expectEqual(@as(usize, 2), helper_roots.len);
-    // Only the value the program reads is materialized and frozen. The other
-    // root's value is checked module data, not target data. Transcoding
-    // rejects a read whose value the host did not materialize, so the runtime
-    // continuation below also fails if the wrong root were the retained one.
-    try std.testing.expectEqual(@as(usize, 1), materializedAmong(host, helper.key, helper_roots));
-    try std.testing.expect(materializedRootCount(host) < host.lir_result.const_roots.items.len);
+    // The value the program reads is materialized and frozen; the other root
+    // is complete but stays in its module's store. Transcoding rejects a read
+    // whose value the host did not materialize, so the runtime continuation
+    // below also fails if the wrong root were the materialized one.
+    try std.testing.expectEqual(@as(usize, 1), try materializedAmong(host, helper.key.digest(), helper_roots));
+    for (helper_roots) |request| {
+        try std.testing.expect(helper.compile_time_roots.root(request.compile_time_root.?).payload != .unevaluated);
+    }
 
+    // The runtime program restores the completed table from Helper's store
+    // (design.md "Runtime Programs Read Stored Values"), so it reads nothing
+    // of the evaluation's frozen image.
+    try std.testing.expect(session.runtime_stages == .respecialized);
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
-    try std.testing.expect(runtime.frozen_static_data != null);
+    try std.testing.expect(runtime.frozen_static_data == null);
 }
 
 test "one evaluated root has one completed-value slot however many places read it" {
@@ -286,7 +299,7 @@ test "one evaluated root has one completed-value slot however many places read i
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -312,37 +325,45 @@ test "one evaluated root has one completed-value slot however many places read i
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    const host = &session.host.?;
+    const stages = &session.completed.?;
     const helper = moduleArtifactNamed(&coord, "Helper") orelse return error.TestUnexpectedResult;
     const helper_roots = helper.root_requests.compile_time_requests;
     try std.testing.expectEqual(@as(usize, 3), helper_roots.len);
 
     // Every one of these values is computed, read at runtime, and
     // materialized for the runtime consumer; `base_value` is additionally
-    // read by `doubled`, at compile time, from this very program. Those two
-    // demands name one concrete value, so they are one slot.
+    // read by `doubled`, at compile time. No program has two slots for one
+    // concrete value, however many places in it read the value.
     for (helper_roots) |request| {
-        const root = rootIdentity(request);
-        try std.testing.expect(materializesRoot(host, helper.key, root));
-        try std.testing.expectEqual(@as(usize, 1), valueSlotsForRoot(host, helper.key, root));
+        const root = try rootIdentity(request);
+        try std.testing.expect(materializingStage(stages, helper.key.digest(), root) != null);
+        for (stages.programs()) |program| try std.testing.expect(valueSlotsForRoot(program, helper.key.digest(), root) <= 1);
     }
-    try std.testing.expectEqual(@as(usize, 3), materializedAmong(host, helper.key, helper_roots));
+    try std.testing.expectEqual(@as(usize, 3), try materializedAmong(stages, helper.key.digest(), helper_roots));
 
-    // `base_value` really is read inside this program: a read before the
-    // roots are evaluated goes through the slot's accessor, and only a read
-    // creates one. A root this program never reads has none, so the shared
-    // slot above is a reader's slot and the materialization request took it.
-    const base_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 0))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(base_slot)].accessor != null);
-    const offset_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 2))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(offset_slot)].accessor == null);
+    // `doubled` reads `base_value` once it has completed: in a later stage
+    // than the one evaluating `base_value`, where the completed scalar is a
+    // literal and needs no slot. A root nothing evaluated later reads has a
+    // slot only where it runs.
+    const base_root = try rootIdentity(try rootWithOrder(helper_roots, 0));
+    const doubled_root = try rootIdentity(try rootWithOrder(helper_roots, 1));
+    const offset_root = try rootIdentity(try rootWithOrder(helper_roots, 2));
+    const base_stage = materializingStage(stages, helper.key.digest(), base_root).?;
+    const doubled_stage = materializingStage(stages, helper.key.digest(), doubled_root).?;
+    try std.testing.expect(doubled_stage > base_stage);
+    try std.testing.expect(valueSlotForRoot(stages.programs()[doubled_stage], helper.key.digest(), base_root) == null);
+    const offset_stage = materializingStage(stages, helper.key.digest(), offset_root).?;
+    for (stages.programs(), 0..) |program, index| {
+        if (index == offset_stage) continue;
+        try std.testing.expect(valueSlotForRoot(program, helper.key.digest(), offset_root) == null);
+    }
 
     // `base_value` and `offset` commit the same eight-byte layout and are
     // distinct values, so layout agreement alone never merges two demands.
-    const first = valueSlotForRoot(host, helper.key, rootIdentity(helper_roots[0])).?;
-    try std.testing.expect(helper_roots.len > 1);
-    for (helper_roots[1..]) |request| {
-        const other = valueSlotForRoot(host, helper.key, rootIdentity(request)).?;
+    const host = stages.programs()[base_stage];
+    if (base_stage == offset_stage) {
+        const first = valueSlotForRoot(host, helper.key.digest(), base_root).?;
+        const other = valueSlotForRoot(host, helper.key.digest(), offset_root).?;
         try std.testing.expect(first != other);
         const first_layout = host.lir_result.static_data_values.items[@backingInt(first)].layout_idx;
         const other_layout = host.lir_result.static_data_values.items[@backingInt(other)].layout_idx;
@@ -352,15 +373,12 @@ test "one evaluated root has one completed-value slot however many places read i
         );
     }
 
-    // Transcoding rejects a root with ambiguous source slots, so this also
-    // fails if the demands stopped sharing one slot.
+    // The runtime program restores every completed value from Helper's
+    // store, so it declares no slot for any of them.
+    try std.testing.expect(session.runtime_stages == .respecialized);
     var runtime = try session.takeRuntime(allocator, session.runtime_roots, target);
     defer runtime.deinit();
-    var value_exports: usize = 0;
-    for ((runtime.frozen_static_data orelse return error.TestUnexpectedResult).exports) |item| {
-        if (item.value_id != null) value_exports += 1;
-    }
-    try std.testing.expect(value_exports > 0);
+    try std.testing.expect(runtime.frozen_static_data == null);
 }
 
 test "a separate compile-time consumer lowers no runtime-only procedure" {
@@ -396,7 +414,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -430,19 +448,24 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
     try coord.finishCheckedProgram(.executable_artifacts);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    const host = &session.host.?.lir_result.store;
+    const stages = &session.completed.?;
 
-    // Asserted while the compile-time program is still whole, before any
+    // Asserted while the compile-time programs are still whole, before any
     // consumer has taken the runtime continuation or released this code.
-    try std.testing.expect(session.host != null);
     try std.testing.expect(session.runtime_prepared != null);
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.lir_continuations);
-    try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_a"));
-    try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_b"));
-    // However the app module qualifies its names, neither is here.
-    try std.testing.expectEqual(@as(usize, 0), countProcsNaming(host, "runtime_only"));
+    // Evaluation completed `answer`, so the runtime program was specialized
+    // again from its stored value.
+    try std.testing.expect(session.runtime_stages == .respecialized);
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
+    try std.testing.expectEqual(@as(u32, @intCast(stages.programs().len)), metrics.lir_continuations);
+    for (stages.programs()) |program| {
+        const host = &program.lir_result.store;
+        try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_a"));
+        try std.testing.expectEqual(@as(usize, 0), countNamedProcs(host, "runtime_only_b"));
+        // However the app module qualifies its names, neither is here.
+        try std.testing.expectEqual(@as(usize, 0), countProcsNaming(host, "runtime_only"));
+    }
 
     // The runtime consumer names both procedures, so missing debug names
     // cannot be what makes them absent from the evaluation's program.
@@ -477,7 +500,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", allocator);
     defer allocator.free(app_path);
 
-    var builtin_modules = try eval.BuiltinModules.init(allocator);
+    var builtin_modules = try eval.BuiltinModules.init(allocator, std.testing.io);
     defer builtin_modules.deinit();
     var coord = try Coordinator.init(
         allocator,
@@ -535,15 +558,16 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
     try coord.finishCheckedProgram(.none);
     try std.testing.expect(!coord.hasUserErrors());
     const session = &coord.program_session.?;
-    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.completed != null);
     try std.testing.expect(session.runtime_prepared != null);
 
     var runtime = try session.takeRuntime(allocator, requests, target);
     defer runtime.deinit();
-    // One specialization serves both consumers: the runtime consumer
-    // continues the Solved program compile-time evaluation ran in.
-    try std.testing.expectEqual(@as(u32, 1), metrics.monotype_runs);
-    try std.testing.expectEqual(@as(u32, 1), metrics.solved_runs);
+    // Evaluation completed `answer`, so the runtime consumer continues the
+    // program specialized again from its stored value, keeping the
+    // producer's root order and test-plan metadata just the same.
+    try std.testing.expectEqual(@as(u32, 2), metrics.monotype_runs);
+    try std.testing.expectEqual(@as(u32, 2), metrics.solved_runs);
     try std.testing.expectEqual(@as(usize, 2), runtime.lir_result.root_metadata.items.len);
     for (expects.items, plan_metadata.items, runtime.lir_result.root_metadata.items) |request, declared, metadata| {
         try std.testing.expectEqual(request.order, metadata.order);

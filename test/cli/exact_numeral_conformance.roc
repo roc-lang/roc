@@ -1,7 +1,7 @@
 # Cross-engine conformance for exact numeric literals: every executor must
 # produce identical bits for these—they exercise correctly-rounded float
-# conversion (ties-to-even, subnormals, overflow), exact Dec scaling, and
-# integer boundary values.
+# conversion (ties-to-even, subnormals, the largest finite values), exact Dec
+# scaling, and integer boundary values.
 
 f64_tie : F64
 f64_tie = 9007199254740993
@@ -15,11 +15,11 @@ f32_tie = 16777217
 f32_frac : F32
 f32_frac = 0.1
 
-f64_overflow : F64
-f64_overflow = 1e400
+f64_max_boundary : F64
+f64_max_boundary = 1.7976931348623158e308
 
-f32_overflow : F32
-f32_overflow = 1e39
+f32_max_boundary : F32
+f32_max_boundary = 340282356779733661637539395458142568447
 
 deep_subnormal : F64
 deep_subnormal = 0.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000049406564584124654
@@ -50,8 +50,8 @@ expect f64_odd_tie == 9007199254740996
 expect f32_tie == 16777216
 expect f32_frac > 0.099
 expect f32_frac < 0.101
-expect f64_overflow > 1e308
-expect f32_overflow > 3e38
+expect f64_max_boundary == 1.7976931348623157e308
+expect f32_max_boundary == 340282346638528859811704183484516925440
 expect deep_subnormal > 0
 expect long_tail == 1
 expect tiny_dec + tiny_dec == 0.000000000000000002

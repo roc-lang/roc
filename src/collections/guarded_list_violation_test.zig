@@ -73,7 +73,6 @@ pub fn main(init: std.process.Init) ViolationError!void {
     if (std.mem.eql(u8, case_name, "mono_exprs")) return monoExprs();
     if (std.mem.eql(u8, case_name, "mono_type_spans")) return monoTypeSpans();
     if (std.mem.eql(u8, case_name, "mono_type_fields")) return monoTypeFields();
-    if (std.mem.eql(u8, case_name, "lambda_mono_expr_ids")) return lambdaMonoExprIds();
     if (std.mem.eql(u8, case_name, "lambda_mono_type_spans")) return lambdaMonoTypeSpans();
 
     return error.UnknownCaseName;
@@ -284,29 +283,6 @@ fn monoTypeFields() ViolationError!void {
     return error.ExpectedGuardedListPanic;
 }
 
-fn lambdaMonoExprIds() ViolationError!void {
-    var move_allocator = MoveAllocator{};
-    const allocator = move_allocator.allocator();
-    var program = LambdaMono.Ast.Program.init(
-        allocator,
-        check.CheckedNames.NameStore.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-    );
-    defer program.deinit();
-
-    const ty = try program.types.add(.zst);
-    const first_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
-    const second_expr = try program.addExpr(.{ .ty = ty, .data = .unit });
-    try program.expr_ids.ensureTotalCapacityPrecise(allocator, 1);
-    const span = try program.addExprSpan(&.{first_expr});
-    const borrow = program.expr_ids.borrowSpan(span.start, span.len);
-    _ = try program.addExprSpan(&.{second_expr});
-    _ = GuardedList.at(borrow, 0);
-    return error.ExpectedGuardedListPanic;
-}
-
 fn lambdaMonoTypeSpans() ViolationError!void {
     var move_allocator = MoveAllocator{};
     const allocator = move_allocator.allocator();
@@ -328,6 +304,10 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         allocator,
         check.CheckedNames.NameStore.init(allocator),
         Mono.Type.Store.init(allocator),
+        .empty, // const_fn_evidence
+        .empty, // const_fn_evidence_targets
+        .empty, // const_fn_evidence_structurals
+        .empty, // const_fn_evidence_frames
         .empty, // exprs
         .empty, // pats
         .empty, // stmts
@@ -339,26 +319,24 @@ fn emptyLiftedProgram(allocator: Allocator) Lifted.Ast.Program {
         .empty, // field_exprs
         .empty, // field_access_segments
         .empty, // fn_def_captures
+        .empty, // capture_operands
         .empty, // record_destructs
         .empty, // str_pattern_steps
         .empty, // branches
         .empty, // if_branches
         .empty, // string_literals
-        .empty,
-        .empty,
-        .empty,
         Mono.Ast.ProcDebugNameMap.init(allocator),
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
-        .empty,
+        .empty, // source_files
+        .empty, // expr_locs
+        .empty, // expr_regions
+        .empty, // stmt_locs
+        .empty, // stmt_regions
+        .empty, // inline_scopes
+        .empty, // expr_inline_scopes
+        .empty, // stmt_inline_scopes
+        .empty, // local_names
+        .empty, // static_data_values
+        .empty, // comptime_sites
         0,
     );
 }

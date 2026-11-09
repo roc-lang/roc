@@ -193,11 +193,10 @@ EndOfFile,
 ~~~roc
 {
 	Foo.Bar.baz
-	
+
 	x :
-	
+
 	y :
-	
 }
 ~~~
 # CANONICALIZE

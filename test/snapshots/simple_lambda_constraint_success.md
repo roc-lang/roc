@@ -67,7 +67,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 244)
+			(e-dispatch-call (method "plus") (constraint-fn-var 249)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -82,7 +82,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 261)
+			(e-dispatch-call (method "plus") (constraint-fn-var 266)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

@@ -35,12 +35,6 @@ pub const Tag = enum {
     /// rhs - last token
     root,
 
-    /// TODO: Find a way to remove this
-    /// This is a hack _only_ for the formatter - it should never be emitted by the parser
-    /// * lhs - node that caused this node to be added by formatter
-    /// * rhs - ignored
-    emit_ws,
-
     /// Module header
     /// * lhs - module type
     /// * rhs - extra data pointer
@@ -193,11 +187,6 @@ pub const Tag = enum {
     /// * lhs - LHS DESCRIPTION
     /// * rhs - RHS DESCRIPTION
     ty_ty,
-
-    /// `MyMod.MyType` in `Foo : MyMod.MyType`
-    /// * lhs - LHS DESCRIPTION
-    /// * rhs - RHS DESCRIPTION
-    ty_mod_ty,
 
     /// DESCRIPTION
     /// Example: EXAMPLE
@@ -557,14 +546,8 @@ pub const Tag = enum {
     /// Collection of packages fields
     collection_packages,
 
-    /// Collection of record fields
-    collection_record_fields,
-
     /// Collection of where clauses
     collection_where_clause,
-
-    /// Collection of type annotations
-    collection_ty_anno,
 
     // Target section nodes
 

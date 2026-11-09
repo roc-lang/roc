@@ -49,7 +49,7 @@ MOD NOT IMPORTED - type_undeclared_usage.md:8:15:8:34
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "value")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_value")

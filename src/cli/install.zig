@@ -10,6 +10,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const CoreCtx = @import("ctx").CoreCtx;
 const unbundle = @import("unbundle");
+const line_record = @import("base").line_record;
 const Allocator = std.mem.Allocator;
 
 const InstallOs = enum { windows, macos, other };
@@ -69,13 +70,13 @@ fn classifyInstallOs(os: std.Target.Os.Tag) InstallOs {
 }
 
 /// Manifest file recorded at the root of every install entry.
-pub const manifest_filename = "install.json";
+pub const manifest_filename = "install.manifest";
 /// Directory holding the extracted bundle source within an entry.
 pub const source_dir_name = "source";
 /// Directory holding built artifacts within an entry.
 pub const bin_dir_name = "bin";
 /// Bump when the entry layout or manifest schema changes incompatibly.
-pub const manifest_format_version: u32 = 1;
+pub const manifest_format_version: u32 = 2;
 
 /// How a CLI source argument is interpreted. Classification is purely
 /// syntactic—no filesystem probing, and never a fallback from one
@@ -137,20 +138,27 @@ pub const InstallKind = enum {
 
 /// Metadata recorded for every install entry. The URL is the source's
 /// compiler identity; the shorthand and paths are storage details.
+///
+/// The manifest file is line-oriented text, every line ending in `\n`:
+///
+/// ```
+/// roc-install-manifest <format_version>
+/// kind <executable|glue>
+/// url <len>:<url bytes>
+/// hash <len>:<hash bytes>
+/// compiler_version <len>:<compiler version bytes>
+/// ```
+///
+/// with nothing after the last line. Numbers are decimal with no sign and no
+/// leading zeros, and each string is written raw after its byte length.
 pub const Manifest = struct {
-    format_version: u32,
-    kind: []const u8,
+    kind: InstallKind,
     url: []const u8,
     hash: []const u8,
     compiler_version: []const u8,
 };
 
-/// Parse a manifest's kind string. Null means the manifest is corrupt.
-pub fn manifestKind(manifest: Manifest) ?InstallKind {
-    if (std.mem.eql(u8, manifest.kind, "executable")) return .executable;
-    if (std.mem.eql(u8, manifest.kind, "glue")) return .glue;
-    return null;
-}
+const manifest_magic = "roc-install-manifest ";
 
 /// Resolve the install root directory: `ROC_INSTALL_DIR` if set, otherwise a
 /// platform-appropriate persistent user data directory (deliberately not a
@@ -206,7 +214,7 @@ pub fn versionDir(allocator: Allocator, install_root: []const u8) Allocator.Erro
 pub const EntryPaths = struct {
     /// `<root>/<compiler_version>/<shorthand>`
     entry_dir: []const u8,
-    /// `<entry>/install.json`
+    /// `<entry>/install.manifest`
     manifest_path: []const u8,
     /// `<entry>/source`
     source_dir: []const u8,
@@ -257,54 +265,45 @@ pub fn entryPathsIn(allocator: Allocator, entry_dir: []const u8, shorthand: []co
     };
 }
 
-/// Serialize a manifest to JSON. Caller owns the returned slice.
-pub fn manifestToJson(allocator: Allocator, manifest: Manifest) Allocator.Error![]u8 {
+/// Serialize a manifest in the current format. Caller owns the returned slice.
+pub fn encodeManifest(allocator: Allocator, manifest: Manifest) Allocator.Error![]u8 {
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();
-    std.json.Stringify.value(manifest, .{}, &buffer.writer) catch return error.OutOfMemory;
+    writeManifest(&buffer.writer, manifest) catch return error.OutOfMemory;
     return buffer.toOwnedSlice();
 }
 
-/// A parsed manifest together with its backing JSON allocation.
-pub const ParsedManifest = struct {
-    parsed: std.json.Parsed(Manifest),
+fn writeManifest(writer: *std.Io.Writer, manifest: Manifest) std.Io.Writer.Error!void {
+    try writer.print(manifest_magic ++ "{d}\n", .{manifest_format_version});
+    try writer.print("kind {s}\n", .{@tagName(manifest.kind)});
+    try writer.writeAll("url ");
+    try line_record.writeLengthPrefixed(writer, manifest.url);
+    try writer.writeAll("\nhash ");
+    try line_record.writeLengthPrefixed(writer, manifest.hash);
+    try writer.writeAll("\ncompiler_version ");
+    try line_record.writeLengthPrefixed(writer, manifest.compiler_version);
+    try writer.writeByte('\n');
+}
 
-    pub fn manifest(self: *const ParsedManifest) Manifest {
-        return self.parsed.value;
-    }
-
-    pub fn deinit(self: *ParsedManifest) void {
-        self.parsed.deinit();
-    }
-};
-
-/// Parse and validate manifest JSON. Returns null when the bytes are not a
+/// Parse and validate manifest bytes. Returns null when the bytes are not a
 /// valid manifest of the current format version—callers must treat that as
-/// a corrupt entry, never fall back to guessing.
-pub fn parseManifest(allocator: Allocator, bytes: []const u8) Allocator.Error!?ParsedManifest {
-    const parsed = std.json.parseFromSlice(Manifest, allocator, bytes, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.BufferUnderrun,
-        error.DuplicateField,
-        error.InvalidCharacter,
-        error.InvalidEnumTag,
-        error.InvalidNumber,
-        error.LengthMismatch,
-        error.MissingField,
-        error.Overflow,
-        error.SyntaxError,
-        error.UnexpectedEndOfInput,
-        error.UnexpectedToken,
-        error.UnknownField,
-        error.ValueTooLong,
-        => return null,
-    };
-    if (parsed.value.format_version != manifest_format_version or manifestKind(parsed.value) == null) {
-        var owned = parsed;
-        owned.deinit();
-        return null;
-    }
-    return .{ .parsed = parsed };
+/// a corrupt entry, never fall back to guessing. The result's strings borrow
+/// from `bytes`.
+pub fn parseManifest(bytes: []const u8) ?Manifest {
+    var reader = line_record.Reader{ .bytes = bytes };
+    if (!reader.literal(manifest_magic)) return null;
+    const format_version = reader.decimal(u32, '\n') orelse return null;
+    if (format_version != manifest_format_version) return null;
+    if (!reader.literal("kind ")) return null;
+    const kind = std.meta.stringToEnum(InstallKind, reader.until('\n') orelse return null) orelse return null;
+    if (!reader.literal("url ")) return null;
+    const url = reader.lengthPrefixed('\n') orelse return null;
+    if (!reader.literal("hash ")) return null;
+    const hash = reader.lengthPrefixed('\n') orelse return null;
+    if (!reader.literal("compiler_version ")) return null;
+    const compiler_version = reader.lengthPrefixed('\n') orelse return null;
+    if (reader.remaining() != 0) return null;
+    return .{ .kind = kind, .url = url, .hash = hash, .compiler_version = compiler_version };
 }
 
 test "shorthand grammar" {
@@ -359,35 +358,75 @@ test "source ref classification" {
     try std.testing.expectEqual(SourceRefKind.local_path, classifySourceRef("foo.roc"));
 }
 
-test "manifest json round trip" {
+test "manifest round trip" {
     const gpa = std.testing.allocator;
-    const json = try manifestToJson(gpa, .{
-        .format_version = manifest_format_version,
-        .kind = "executable",
+    const manifests = [_]Manifest{
+        .{
+            .kind = .executable,
+            .url = "https://example.com/tokei/1.2.3/abc.tar.zst",
+            .hash = "abc",
+            .compiler_version = "test-version",
+        },
+        .{
+            .kind = .glue,
+            .url = "http://127.0.0.1:8000/a b\nc/abc.tar.zst",
+            .hash = "",
+            .compiler_version = "1:x \x00\xff\n",
+        },
+    };
+    for (manifests) |original| {
+        const bytes = try encodeManifest(gpa, original);
+        defer gpa.free(bytes);
+
+        const parsed = parseManifest(bytes) orelse return error.TestUnexpectedResult;
+        try std.testing.expectEqual(original.kind, parsed.kind);
+        try std.testing.expectEqualStrings(original.url, parsed.url);
+        try std.testing.expectEqualStrings(original.hash, parsed.hash);
+        try std.testing.expectEqualStrings(original.compiler_version, parsed.compiler_version);
+    }
+}
+
+test "manifest is written in the documented line format" {
+    const gpa = std.testing.allocator;
+    const bytes = try encodeManifest(gpa, .{
+        .kind = .executable,
         .url = "https://example.com/tokei/1.2.3/abc.tar.zst",
         .hash = "abc",
         .compiler_version = "test-version",
     });
-    defer gpa.free(json);
+    defer gpa.free(bytes);
 
-    var parsed = (try parseManifest(gpa, json)) orelse return error.TestUnexpectedResult;
-    defer parsed.deinit();
-    try std.testing.expectEqualStrings("https://example.com/tokei/1.2.3/abc.tar.zst", parsed.manifest().url);
-    try std.testing.expectEqualStrings("abc", parsed.manifest().hash);
-    try std.testing.expectEqual(InstallKind.executable, manifestKind(parsed.manifest()).?);
+    try std.testing.expectEqualStrings(
+        "roc-install-manifest 2\n" ++
+            "kind executable\n" ++
+            "url 43:https://example.com/tokei/1.2.3/abc.tar.zst\n" ++
+            "hash 3:abc\n" ++
+            "compiler_version 12:test-version\n",
+        bytes,
+    );
 }
 
-test "manifest rejects wrong format version" {
-    const gpa = std.testing.allocator;
-    const json = try manifestToJson(gpa, .{
-        .format_version = manifest_format_version + 1,
-        .kind = "executable",
-        .url = "https://example.com/x/1.0.0/abc.tar.zst",
-        .hash = "abc",
-        .compiler_version = "test-version",
-    });
-    defer gpa.free(json);
+test "manifest rejects anything but the exact current format" {
+    const valid = "roc-install-manifest 2\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 1:v\n";
+    try std.testing.expect(parseManifest(valid) != null);
 
-    try std.testing.expect((try parseManifest(gpa, json)) == null);
-    try std.testing.expect((try parseManifest(gpa, "not json at all")) == null);
+    const malformed = [_][]const u8{
+        "",
+        "not a manifest at all",
+        "{\"format_version\":1,\"kind\":\"executable\",\"url\":\"u\",\"hash\":\"h\",\"compiler_version\":\"v\"}",
+        "roc-install-manifest 1\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 1:v\n",
+        "roc-install-manifest 3\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 1:v\n",
+        "roc-install-manifest 02\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 1:v\n",
+        "roc-install-manifest 2\nkind plugin\nurl 1:u\nhash 1:h\ncompiler_version 1:v\n",
+        "roc-install-manifest 2\nkind glue\nhash 1:h\nurl 1:u\ncompiler_version 1:v\n",
+        "roc-install-manifest 2\nkind glue\nurl 2:u\nhash 1:h\ncompiler_version 1:v\n",
+        "roc-install-manifest 2\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 2:v\n",
+        "roc-install-manifest 2\nkind glue\nurl 1:u\nhash 1:h\ncompiler_version 1:v",
+        "roc-install-manifest 2\nkind glue\nurl 1:u\nhash 1:h\n",
+        valid ++ "\n",
+        valid ++ "extra 1:x\n",
+    };
+    for (malformed) |bytes| {
+        try std.testing.expect(parseManifest(bytes) == null);
+    }
 }

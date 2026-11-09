@@ -43,14 +43,14 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+if (5 > 3) 1 else 2
 ~~~
 # CANONICALIZE
 ~~~clojure
 (e-if
 	(if-branches
 		(if-branch
-			(e-dispatch-call (method "is_gt") (constraint-fn-var 227)
+			(e-dispatch-call (method "is_gt") (constraint-fn-var 232)
 				(receiver
 					(e-num (value "5")))
 				(args

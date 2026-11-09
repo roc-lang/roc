@@ -2,17 +2,18 @@
 
 const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
+const recursive_digest = @import("base").recursive_digest;
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
 const tracy = @import("tracy");
 const base = @import("base");
 const collections = @import("collections");
+const builtins = @import("builtins");
 
 const layout_mod = @import("layout.zig");
 const graph_mod = @import("./graph.zig");
 const rc_helper = @import("./rc_helper.zig");
-const work_mod = @import("./work.zig");
-const field_order = @import("./field_order.zig");
+const layout_shape = @import("layout_shape");
+const field_order = layout_shape.field_order;
 const digest_mod = @import("./digest.zig");
 
 const target = base.target;
@@ -72,14 +73,13 @@ const GraphChildren = struct {
         }
     }
 };
-pub const ModuleVarKey = work_mod.ModuleVarKey;
 
-fn assertAppendIdx(expected: usize, idx: anytype) void {
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(@backingInt(idx) == expected);
-    } else if (@backingInt(idx) != expected) {
-        unreachable;
-    }
+/// The position the next row of a table gets, as the field type `Position`
+/// that names it. A table that has already filled every position reports
+/// allocation failure rather than narrowing past the field.
+fn nextRowPosition(comptime Position: type, len: u64) std.mem.Allocator.Error!Position {
+    if (len > std.math.maxInt(Position)) return error.OutOfMemory;
+    return @intCast(len);
 }
 
 /// Errors that can occur during layout computation
@@ -111,7 +111,8 @@ pub const Store = struct {
     allocator: std.mem.Allocator,
 
     layouts: collections.SafeList(Layout),
-    resolved_list_layouts: std.ArrayList(?Idx),
+    /// The list layout each layout resolves to through boxes, or `Idx.none`.
+    resolved_list_layouts: std.ArrayList(Idx),
     tuple_elems: collections.SafeList(Idx),
     struct_fields: StructField.SafeMultiList,
     /// Each committed struct field's byte offset for both pointer widths,
@@ -126,20 +127,38 @@ pub const Store = struct {
 
     // Structural interning cache for non-scalar layouts. Keys are canonical
     // binary encodings of layout shape.
-    interned_layouts: std.StringHashMap(Idx),
+    interned_layouts: InternedLayouts,
+    /// Every interned layout's key bytes, one after another; the intern map
+    /// holds each key as a span of this buffer.
+    interned_key_bytes: std.ArrayList(u8),
     scratch_intern_key: std.ArrayList(u8),
+    /// Field offsets for both pointer widths of the struct most recently
+    /// measured by `measureStructFields`, in its field order.
+    scratch_field_offsets: std.ArrayList(layout_mod.WidthValues(u32)) = .empty,
 
     // Recursive layout graphs need a representation-complete key because their
     // ordinary layout keys necessarily contain provisional cycle indices.
     // These keys identify a node by its position in its reduced recursive
-    // group (see `RecursiveGraphAnalysis`), so exactly the nodes describing
-    // the same infinite runtime representation share a layout.
-    interned_recursive_graphs: RecursiveGraphMap,
-    // One-step unfolding of every committed recursive node, mapped to that
-    // node's recursive key. Persisting these across commits lets an acyclic
-    // unrolled copy committed later (possibly against `committed` leaves)
-    // resolve to the recursive layout it unrolls.
-    recursive_unfoldings: RecursiveGraphUnfoldings,
+    // group (see `RecursiveGraphAnalysis`), so nodes describing the same
+    // infinite logical graph share a layout. Graphs that differ only in
+    // their recursion boxes meet at `recursive_commit_layouts`.
+    /// The recursive-graph key of every node committed as part of a
+    /// recursive graph, with the layout it committed to, in commit order.
+    /// Keys identify logical graphs, not layouts: graphs that differ only in
+    /// whether a recursion box is explicit or inserted by the commit have
+    /// different keys and the same layout, so one layout can have several
+    /// keys. Only commits read them, so a viewed store has none.
+    recursive_layout_keys: collections.SafeList(RecursiveLayoutKey),
+    /// Position in `recursive_layout_keys` of each key, looked up by key.
+    interned_recursive_graphs: RecursiveGraphIndex,
+    /// Every layout a commit with recursive nodes created, by content digest,
+    /// so a later such commit reuses the layout for the same representation
+    /// rather than building a second one (see `commitWorkingGraph`).
+    recursive_commit_layouts: std.AutoHashMapUnmanaged(digest_mod.Digest, Idx),
+    // Every recursive group settled by a commit, so a graph committed later
+    // that unrolls one (possibly against `committed` leaves) or ties a copy
+    // whose references lead back into one resolves to that group's keys.
+    recursive_digests: recursive_digest.Settled,
 
     // The target's usize type (32-bit or 64-bit) - used for layout calculations
     // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
@@ -147,6 +166,9 @@ pub const Store = struct {
 
     /// Memoized content digests, shared by every reader of this store.
     digest_cache: *digest_mod.DigestCache,
+    /// Scratch memory of `commitGraph`, reset after each commit with its
+    /// capacity kept for the next one.
+    commit_scratch: collections.SingleThreadArena.State = .{},
 
     // Number of sentinel layouts that are pre-populated in the layout store.
     // Must be kept in sync with the sentinel values in layout.zig Idx enum.
@@ -179,10 +201,13 @@ pub const Store = struct {
             .struct_data = .{},
             .tag_union_variants = .{},
             .tag_union_data = .{},
-            .interned_layouts = std.StringHashMap(Idx).init(allocator),
+            .interned_layouts = .empty,
+            .interned_key_bytes = .empty,
             .scratch_intern_key = .empty,
-            .interned_recursive_graphs = RecursiveGraphMap.init(allocator),
-            .recursive_unfoldings = .empty,
+            .recursive_layout_keys = .{},
+            .interned_recursive_graphs = .empty,
+            .recursive_commit_layouts = .empty,
+            .recursive_digests = recursive_digest.Settled.init(allocator, recursive_digest_domain),
             .target_usize = target_usize,
             .digest_cache = try digest_mod.DigestCache.create(allocator),
         };
@@ -199,12 +224,12 @@ pub const Store = struct {
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_variants.len();
             const idx = try tag_union_variants.append(allocator, .{ .payload_layout = .zst });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = tag_union_data.items.items.len;
@@ -220,7 +245,7 @@ pub const Store = struct {
                 // two-nullary enum contains no refcounted data.
                 .contains_refcounted = false,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         // Pre-populate primitive type layouts in order matching the Idx enum.
@@ -228,92 +253,92 @@ pub const Store = struct {
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.boolType());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.str());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i8));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i16));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.u128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.int(.i128));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f32));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.f64));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.frac(.dec));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.opaquePtr());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.zst());
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         inline for (std.enums.values(layout_mod.Vector)) |vector| {
             const expected_idx = layouts.items.items.len;
             const idx = try layouts.append(allocator, Layout.vector(vector));
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         std.debug.assert(layouts.len() == num_primitives);
@@ -328,14 +353,13 @@ pub const Store = struct {
         try self.rememberScratchInternKey(.bool);
         try self.resolved_list_layouts.ensureTotalCapacity(allocator, num_primitives);
         for (0..num_primitives) |_| {
-            self.resolved_list_layouts.appendAssumeCapacity(null);
+            self.resolved_list_layouts.appendAssumeCapacity(.none);
         }
         return self;
     }
 
     pub const GraphCommit = struct {
         root_idx: Idx,
-        raw_layouts: []Idx,
         value_layouts: []Idx,
         /// Recursive-graph digest per input node, resolved through nominals.
         /// Null for a node that resolves to a bare canonical ref. Producers
@@ -344,7 +368,6 @@ pub const Store = struct {
         digests: []?graph_mod.Digest = &.{},
 
         pub fn deinit(self_commit: *GraphCommit, allocator: std.mem.Allocator) void {
-            allocator.free(self_commit.raw_layouts);
             allocator.free(self_commit.value_layouts);
             allocator.free(self_commit.digests);
         }
@@ -360,15 +383,16 @@ pub const Store = struct {
         self.struct_data.deinit(self.allocator);
         self.tag_union_variants.deinit(self.allocator);
         self.tag_union_data.deinit(self.allocator);
-        var interned_keys = self.interned_layouts.keyIterator();
-        while (interned_keys.next()) |key_ptr| {
-            self.allocator.free(key_ptr.*);
-        }
-        self.interned_layouts.deinit();
+        self.interned_layouts.deinit(self.allocator);
+        self.interned_key_bytes.deinit(self.allocator);
         self.scratch_intern_key.deinit(self.allocator);
-        self.interned_recursive_graphs.deinit();
-        self.recursive_unfoldings.deinit(self.allocator);
+        self.scratch_field_offsets.deinit(self.allocator);
+        self.recursive_layout_keys.deinit(self.allocator);
+        self.interned_recursive_graphs.deinit(self.allocator);
+        self.recursive_commit_layouts.deinit(self.allocator);
+        self.recursive_digests.deinit();
         self.digest_cache.destroy(self.allocator);
+        self.commit_scratch.promote(self.allocator).deinit();
     }
 
     /// Content digest of a committed layout; see `digest.zig`.
@@ -392,19 +416,68 @@ pub const Store = struct {
         try self.appendInternKeyValue(raw_tag);
     }
 
+    /// An interned layout key: a span of `interned_key_bytes`.
+    pub const InternKey = struct { start: u32, len: u32 };
+
+    /// Interned layouts by key, hashed and compared by their key bytes.
+    pub const InternedLayouts = std.HashMapUnmanaged(InternKey, Idx, InternKeyContext, std.hash_map.default_max_load_percentage);
+
+    /// Hashes and compares stored keys by the bytes they span.
+    pub const InternKeyContext = struct {
+        bytes: []const u8,
+
+        pub fn hash(ctx: InternKeyContext, key: InternKey) u64 {
+            return std.hash.Wyhash.hash(0, ctx.bytes[key.start..][0..key.len]);
+        }
+
+        pub fn eql(ctx: InternKeyContext, a: InternKey, b: InternKey) bool {
+            return keyBytesEqual(ctx.bytes[a.start..][0..a.len], ctx.bytes[b.start..][0..b.len]);
+        }
+    };
+
+    /// Looks a stored key up by bytes not yet stored.
+    const InternKeyAdapter = struct {
+        bytes: []const u8,
+
+        pub fn hash(_: InternKeyAdapter, key: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, key);
+        }
+
+        pub fn eql(ctx: InternKeyAdapter, key: []const u8, stored: InternKey) bool {
+            return keyBytesEqual(key, ctx.bytes[stored.start..][0..stored.len]);
+        }
+    };
+
+    /// Intern keys are encoded layout fields, compared byte for byte.
+    fn keyBytesEqual(a: []const u8, b: []const u8) bool {
+        if (a.len != b.len) return false;
+        for (a, b) |left, right| if (left != right) return false;
+        return true;
+    }
+
+    fn internKeyContext(self: *const Self) InternKeyContext {
+        return .{ .bytes = self.interned_key_bytes.items };
+    }
+
+    fn internedLayout(self: *const Self, key: []const u8) ?Idx {
+        return self.interned_layouts.getAdapted(key, InternKeyAdapter{ .bytes = self.interned_key_bytes.items });
+    }
+
     fn lookupInternedScratchKey(self: *Self) ?Idx {
-        return self.interned_layouts.get(self.scratch_intern_key.items);
+        return self.internedLayout(self.scratch_intern_key.items);
     }
 
     fn rememberScratchInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
-        const owned_key = try self.allocator.dupe(u8, self.scratch_intern_key.items);
-        errdefer self.allocator.free(owned_key);
-        try self.interned_layouts.put(owned_key, idx);
+        const start = self.interned_key_bytes.items.len;
+        try self.interned_key_bytes.appendSlice(self.allocator, self.scratch_intern_key.items);
+        errdefer self.interned_key_bytes.shrinkRetainingCapacity(start);
+        const key = InternKey{ .start = @intCast(start), .len = @intCast(self.scratch_intern_key.items.len) };
+        try self.interned_layouts.putContext(self.allocator, key, idx, self.internKeyContext());
     }
 
     fn publishExistingLayoutInternKey(self: *Self, idx: Idx) std.mem.Allocator.Error!void {
         try self.buildExistingLayoutInternKey(self.getLayout(idx));
-        if (self.interned_layouts.getPtr(self.scratch_intern_key.items)) |existing| {
+        if (self.interned_layouts.getPtrAdapted(@as([]const u8, self.scratch_intern_key.items), InternKeyAdapter{ .bytes = self.interned_key_bytes.items })) |existing| {
             existing.* = idx;
             return;
         }
@@ -446,8 +519,10 @@ pub const Store = struct {
 
     fn buildExistingLayoutInternKey(self: *Self, layout: Layout) std.mem.Allocator.Error!void {
         switch (layout.tag) {
-            .scalar => unreachable,
+            .scalar => base.invariant("layout.Store invariant violated: scalar layouts have fixed indices and no intern key", .{}),
             .zst => try self.startInternKey(.zst),
+            .hole => try self.startInternKey(.hole),
+            .dynamic => try self.startInternKey(.dynamic),
             .box => {
                 try self.startInternKey(.box);
                 try self.appendInternKeyIdx(layout.getIdx());
@@ -457,7 +532,6 @@ pub const Store = struct {
                 try self.appendInternKeyIdx(layout.getIdx());
             },
             .box_of_zst => try self.startInternKey(.box_of_zst),
-            .erased_box => try self.startInternKey(.erased_box),
             .erased_callable => try self.startInternKey(.erased_callable),
             .list => {
                 try self.startInternKey(.list);
@@ -495,18 +569,21 @@ pub const Store = struct {
     }
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // The top position is `Idx.none`, so it is never a layout's.
+        if (self.layouts.len() >= @backingInt(Idx.none)) return error.OutOfMemory;
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
         const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
-        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx));
+        try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx) orelse .none);
         return idx;
     }
 
+    /// Intern the struct of `fields`, which `measureStructFields` measured last.
     fn internStructShape(
         self: *Self,
-        sort_key: layout_mod.SortKey,
-        sizes: layout_mod.WidthValues(u32),
+        metrics: StructMetrics,
         fields: []const StructField,
     ) std.mem.Allocator.Error!Idx {
+        const sort_key = metrics.sort_key;
         try self.buildStructInternKeyFromFields(sort_key, fields);
         if (self.lookupInternedScratchKey()) |existing| return existing;
 
@@ -514,22 +591,25 @@ pub const Store = struct {
         for (fields) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(fields);
 
         const contains_refcounted = self.computeStructContainsRefcounted(fields);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const slots = self.computeStructOwnershipSlots(fields, contains_refcounted);
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
-            .size = sizes,
+            .size = metrics.sizes,
             .fields = .{
                 .start = @intCast(fields_start),
                 .count = @intCast(fields.len),
             },
             .contains_refcounted = contains_refcounted,
+            .expands_fields = slots.expands_fields,
+            .ownership_slots = slots.count,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
         const layout_idx = try self.reserveLayout(Layout.struct_(sort_key, struct_idx));
         try self.rememberScratchInternKey(layout_idx);
@@ -543,6 +623,7 @@ pub const Store = struct {
         discriminant_size: u8,
         variant_layouts: []const Idx,
     ) std.mem.Allocator.Error!Idx {
+        if (variant_layouts.len > layout_mod.max_tag_union_variants) return error.OutOfMemory;
         const sort_key = self.tagUnionVariantsSortKey(variant_layouts, discriminant_size);
         try self.buildTagUnionInternKeyFromVariants(
             sort_key,
@@ -557,11 +638,11 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{
@@ -574,7 +655,7 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const layout_idx = try self.reserveLayout(Layout.tagUnion(sort_key, .{ .int_idx = @intCast(tag_union_data_idx) }));
@@ -592,11 +673,6 @@ pub const Store = struct {
         return try self.insertLayout(layout);
     }
 
-    /// Insert the descriptor-backed runtime box used for Boxy dynamic storage.
-    pub fn insertErasedBox(self: *Self) std.mem.Allocator.Error!Idx {
-        return try self.insertLayout(Layout.erasedBox());
-    }
-
     /// Insert a compiler-internal pointer layout with the given element layout.
     /// `ptr` layouts are never refcounted; they are introduced by the TRMC pass
     /// for hole/head locals and must never appear as struct fields, tag payloads,
@@ -612,7 +688,7 @@ pub const Store = struct {
         key[0] = @intCast(@backingInt(LayoutTag.ptr));
         const raw_idx: u32 = @intCast(@backingInt(elem_idx));
         @memcpy(key[1..], std.mem.asBytes(&raw_idx));
-        return self.interned_layouts.get(&key);
+        return self.internedLayout(&key);
     }
 
     test "getPtr reads prepared layouts without changing intern scratch" {
@@ -664,23 +740,23 @@ pub const Store = struct {
         defer trace.end();
 
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, fields);
-        self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, fields);
+        try self.sortStructFields(temp_fields.items);
 
-        const sizes = self.structSizes(temp_fields.items);
-        if (sizes.get(.u64) == 0) {
+        const metrics = try self.measureStructFields(temp_fields.items);
+        if (metrics.sizes.get(.u64) == 0) {
             return try self.ensureZstLayout();
         }
-        return self.internStructShape(
-            self.structFieldsSortKey(temp_fields.items),
-            sizes,
-            temp_fields.items,
-        );
+        return self.internStructShape(metrics, temp_fields.items);
     }
 
     /// Insert a nominal record struct layout from semantic fields given in
@@ -691,29 +767,29 @@ pub const Store = struct {
     /// slice order is the source declaration order.
     pub fn putNominalStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!Idx {
         if (fields.len == 0) {
-            return self.getEmptyStructLayout();
+            return self.ensureZstLayout();
         }
 
-        const sizes = self.structSizes(fields);
-        if (sizes.get(.u64) == 0) {
+        const metrics = try self.measureStructFields(fields);
+        if (metrics.sizes.get(.u64) == 0) {
             return try self.ensureZstLayout();
         }
-        return self.internStructShape(
-            self.structFieldsSortKey(fields),
-            sizes,
-            fields,
-        );
+        return self.internStructShape(metrics, fields);
     }
 
     /// Insert a tuple layout from concrete element layouts. The shared layout
     /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
+        defer temp_fields.deinit(temp_allocator);
 
         for (element_layouts, 0..) |elem_layout, i| {
             const elem_idx = try self.insertLayout(elem_layout);
-            try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = elem_idx });
+            try temp_fields.append(temp_allocator, .{ .index = @intCast(i), .layout = elem_idx });
         }
 
         return self.putStructFields(temp_fields.items);
@@ -722,28 +798,29 @@ pub const Store = struct {
     /// Sort structural-record / tuple fields by the total canonical key:
     /// descending target-independent sort key, then ascending semantic index.
     /// This is independent of the order in which callers present the fields.
-    fn sortStructFields(self: *Self, fields: []StructField) void {
+    fn sortStructFields(self: *Self, fields: []StructField) std.mem.Allocator.Error!void {
         if (fields.len <= 1) return;
 
-        const SortContext = struct {
-            store: *const Self,
-
-            fn key(ctx: @This(), field: StructField) field_order.StructuralField {
-                return .{
-                    .sort_key = if (field.is_padding)
-                        .align_1
-                    else
-                        ctx.store.getLayout(field.layout).sortKey(),
-                    .semantic_index = field.index,
-                };
-            }
-
-            fn lessThan(ctx: @This(), a: StructField, b: StructField) bool {
-                return field_order.comesBefore(ctx.key(a), ctx.key(b));
-            }
+        // Each field's key reads its layout once, not once per comparison.
+        const Keyed = struct { key: field_order.StructuralField, field: StructField };
+        var keyed_buffer: [16 * @sizeOf(Keyed)]u8 align(@alignOf(Keyed)) = undefined;
+        var keyed_storage = std.heap.BufferFirstAllocator.init(&keyed_buffer, self.allocator);
+        const keyed_allocator = keyed_storage.allocator();
+        const keyed = try keyed_allocator.alloc(Keyed, fields.len);
+        defer keyed_allocator.free(keyed);
+        for (fields, keyed) |field, *entry| entry.* = .{
+            .key = .{
+                .sort_key = if (field.is_padding) .align_1 else self.getLayout(field.layout).sortKey(),
+                .semantic_index = field.index,
+            },
+            .field = field,
         };
-
-        std.sort.pdq(StructField, fields, SortContext{ .store = self }, SortContext.lessThan);
+        std.sort.pdq(Keyed, keyed, {}, struct {
+            fn lessThan(_: void, a: Keyed, b: Keyed) bool {
+                return field_order.comesBefore(a.key, b.key);
+            }
+        }.lessThan);
+        for (keyed, fields) |entry, *field| field.* = entry.field;
     }
 
     /// Create a tag union layout from pre-computed variant payload layouts.
@@ -778,13 +855,17 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!Layout {
         std.debug.assert(input_fields.len >= 1);
 
+        // Most records have a handful of fields; those stay on the stack.
+        var temp_buffer: [16 * @sizeOf(StructField)]u8 align(@alignOf(StructField)) = undefined;
+        var temp_storage = std.heap.BufferFirstAllocator.init(&temp_buffer, self.allocator);
+        const temp_allocator = temp_storage.allocator();
         var temp_fields = std.ArrayList(StructField).empty;
-        defer temp_fields.deinit(self.allocator);
-        try temp_fields.appendSlice(self.allocator, input_fields);
-        if (order == .structural) self.sortStructFields(temp_fields.items);
+        defer temp_fields.deinit(temp_allocator);
+        try temp_fields.appendSlice(temp_allocator, input_fields);
+        if (order == .structural) try self.sortStructFields(temp_fields.items);
 
-        const sizes = self.structSizes(temp_fields.items);
-        if (sizes.get(.u64) == 0) {
+        const metrics = try self.measureStructFields(temp_fields.items);
+        if (metrics.sizes.get(.u64) == 0) {
             return Layout.zst();
         }
 
@@ -792,28 +873,32 @@ pub const Store = struct {
         for (temp_fields.items) |field| {
             const expected_idx = self.struct_fields.items.len;
             const idx = try self.struct_fields.append(self.allocator, field);
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         try self.appendStructFieldPlacement(temp_fields.items);
 
         const contains_refcounted = self.computeStructContainsRefcounted(temp_fields.items);
-        const struct_idx = StructIdx{ .int_idx = @intCast(self.struct_data.len()) };
+        const slots = self.computeStructOwnershipSlots(temp_fields.items, contains_refcounted);
+        const struct_idx = StructIdx{ .int_idx = try nextRowPosition(@FieldType(StructIdx, "int_idx"), self.struct_data.len()) };
         const expected_idx = self.struct_data.items.items.len;
         const struct_data_idx = try self.struct_data.append(self.allocator, .{
-            .size = sizes,
+            .size = metrics.sizes,
             .fields = .{
                 .start = @intCast(fields_start),
                 .count = @intCast(temp_fields.items.len),
             },
             .contains_refcounted = contains_refcounted,
+            .expands_fields = slots.expands_fields,
+            .ownership_slots = slots.count,
         });
-        assertAppendIdx(expected_idx, struct_data_idx);
+        std.debug.assert(@backingInt(struct_data_idx) == expected_idx);
 
-        return Layout.struct_(self.structFieldsSortKey(temp_fields.items), struct_idx);
+        return Layout.struct_(metrics.sort_key, struct_idx);
     }
 
     fn buildUninternedTagUnionLayout(self: *Self, variant_layouts: []const Idx) std.mem.Allocator.Error!Layout {
         std.debug.assert(variant_layouts.len >= 1);
+        if (variant_layouts.len > layout_mod.max_tag_union_variants) return error.OutOfMemory;
 
         const discriminant_size: u8 = TagUnionData.discriminantSize(variant_layouts.len);
         const m32 = self.tagUnionMetricsAt(variant_layouts, discriminant_size, .u32);
@@ -830,11 +915,11 @@ pub const Store = struct {
             const idx = try self.tag_union_variants.append(self.allocator, .{
                 .payload_layout = variant_layout_idx,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         const contains_refcounted = self.computeTagUnionContainsRefcounted(variant_layouts);
-        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        const tag_union_data_idx: u32 = try nextRowPosition(@FieldType(TagUnionIdx, "int_idx"), self.tag_union_data.len());
         {
             const expected_idx = self.tag_union_data.items.items.len;
             const idx = try self.tag_union_data.append(self.allocator, .{
@@ -847,34 +932,87 @@ pub const Store = struct {
                 },
                 .contains_refcounted = contains_refcounted,
             });
-            assertAppendIdx(expected_idx, idx);
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
 
         return Layout.tagUnion(self.tagUnionVariantsSortKey(variant_layouts, discriminant_size), .{ .int_idx = @intCast(tag_union_data_idx) });
     }
 
-    /// Committed layout per recursive-graph node identity.
-    pub const RecursiveGraphMap = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, Idx);
-    /// Recursive key per one-step unfolding of a committed recursive node.
-    pub const RecursiveGraphUnfoldings = std.AutoHashMapUnmanaged(RecursiveGraphAnalysis.RecursiveKey, RecursiveGraphAnalysis.RecursiveKey);
+    /// One recursive-graph key and the layout it committed to.
+    pub const RecursiveLayoutKey = struct {
+        key: RecursiveGraphAnalysis.RecursiveKey,
+        layout: Idx,
+    };
+    /// Positions in `recursive_layout_keys`, hashed and compared by the key
+    /// stored there.
+    pub const RecursiveGraphIndex = std.HashMapUnmanaged(u32, void, RecursiveKeyContext, std.hash_map.default_max_load_percentage);
 
-    /// Canonical identity of every cyclic node of a temporary layout graph.
+    /// Recursive-graph keys are SHA-256 digests, so their leading bytes are
+    /// already a uniform hash.
+    fn recursiveKeyHash(key: *const RecursiveGraphAnalysis.RecursiveKey) u64 {
+        return std.mem.readInt(u64, key[0..8], .little);
+    }
+
+    pub const RecursiveKeyContext = struct {
+        entries: []const RecursiveLayoutKey,
+
+        pub fn hash(ctx: RecursiveKeyContext, position: u32) u64 {
+            return recursiveKeyHash(&ctx.entries[position].key);
+        }
+
+        pub fn eql(_: RecursiveKeyContext, a: u32, b: u32) bool {
+            // Each key is stored at exactly one position.
+            return a == b;
+        }
+    };
+
+    /// Looks a stored position up by its key.
+    const RecursiveKeyAdapter = struct {
+        entries: []const RecursiveLayoutKey,
+
+        pub fn hash(_: RecursiveKeyAdapter, key: RecursiveGraphAnalysis.RecursiveKey) u64 {
+            return recursiveKeyHash(&key);
+        }
+
+        pub fn eql(ctx: RecursiveKeyAdapter, key: RecursiveGraphAnalysis.RecursiveKey, position: u32) bool {
+            return std.meta.eql(key, ctx.entries[position].key);
+        }
+    };
+
+    /// The committed layout of a recursive-graph key, if any.
+    fn recursiveGraphLayout(self: *const Self, key: RecursiveGraphAnalysis.RecursiveKey) ?Idx {
+        const entries = self.recursive_layout_keys.items.items;
+        const position = self.interned_recursive_graphs.getKeyAdapted(key, RecursiveKeyAdapter{ .entries = entries }) orelse return null;
+        return entries[position].layout;
+    }
+
+    /// Record the layout a new recursive-graph key committed to.
+    fn recordRecursiveLayoutKey(self: *Self, key: RecursiveGraphAnalysis.RecursiveKey, layout_idx: Idx) std.mem.Allocator.Error!void {
+        const position: u32 = @intCast(self.recursive_layout_keys.len());
+        try self.interned_recursive_graphs.ensureUnusedCapacityContext(self.allocator, 1, .{ .entries = self.recursive_layout_keys.items.items });
+        _ = try self.recursive_layout_keys.append(self.allocator, .{ .key = key, .layout = layout_idx });
+        self.interned_recursive_graphs.putAssumeCapacityNoClobberContext(position, {}, .{ .entries = self.recursive_layout_keys.items.items });
+    }
+
+    /// Every recursive-graph key with its layout, in commit order.
+    pub fn recursiveLayoutKeys(self: *const Self) []const RecursiveLayoutKey {
+        return self.recursive_layout_keys.items.items;
+    }
+    /// Digest domain of recursive layout keys.
+    pub const recursive_digest_domain = "roc.layout.recursive-graph.v3";
+
+    /// Canonical identity of every recursive node of a temporary layout
+    /// graph.
     ///
-    /// The graph's condensation is discovered by Tarjan's algorithm, which
-    /// pops components children-first, so every reference leaving a popped
-    /// component already has a settled digest. An acyclic node digests its
-    /// encoding with those child digests. A cyclic component is reduced by
-    /// bisimulation refinement over content labels, its reduced positions are
-    /// ordered by their final labels, the whole group is rendered once with
-    /// group-relative back-references, and every member is identified by its
-    /// position against that rendering's digest. Nominal nodes are transparent:
-    /// references resolve through them and they carry no identity of their
-    /// own. A `committed` leaf carries the digest its node settled to when it
-    /// was committed, so it digests exactly like a re-expansion of that
-    /// subgraph; one-step unfoldings of recursive members persist in the store
-    /// across commits for the same reason.
+    /// Every non-nominal node of the graph is reduced by the shared
+    /// recursive-type reduction (`base.recursive_digest`) against the store's
+    /// settled recursive groups. Nominal nodes are transparent: references
+    /// resolve through them and they carry no identity of their own. A
+    /// `committed` leaf carries the digest its node settled to when it was
+    /// committed, so it digests exactly like a re-expansion of that
+    /// subgraph, and a reference to a canonical layout is that layout's
+    /// index.
     const RecursiveGraphAnalysis = struct {
-        allocator: Allocator,
         /// Identity per recursive node or its unrolled copy; null otherwise.
         keys: []?RecursiveKey,
         /// Settled digest per node resolved through nominals; null when the
@@ -883,58 +1021,65 @@ pub const Store = struct {
 
         pub const RecursiveKey = graph_mod.Digest;
 
-        const no_component = std.math.maxInt(u32);
-        /// Component marker for `committed` leaves, whose digest is given.
-        const committed_component = std.math.maxInt(u32) - 1;
-        const unvisited = std.math.maxInt(u32);
-        const domain = "roc.layout.recursive-graph.v2";
+        const no_node = std.math.maxInt(u32);
 
+        /// Analyze `graph` with temporaries and results in `scratch`; the
+        /// store's `settled` groups grow in their own allocator.
         fn init(
-            allocator: Allocator,
+            scratch: Allocator,
             graph: *const LayoutGraph,
-            unfoldings: *RecursiveGraphUnfoldings,
+            settled: *recursive_digest.Settled,
         ) Allocator.Error!RecursiveGraphAnalysis {
             const node_count = graph.nodes.items.len;
-            const keys = try allocator.alloc(?RecursiveKey, node_count);
-            errdefer allocator.free(keys);
+            const keys = try scratch.alloc(?RecursiveKey, node_count);
             @memset(keys, null);
-            const node_digests = try allocator.alloc(?RecursiveKey, node_count);
-            errdefer allocator.free(node_digests);
+            const node_digests = try scratch.alloc(?RecursiveKey, node_count);
 
-            var engine = try Engine.init(allocator, graph, keys, unfoldings);
-            defer engine.deinit();
-            for (graph.nodes.items, 0..) |node, i| {
-                switch (node) {
-                    .committed => |committed| {
-                        engine.visit_index[i] = 0;
-                        engine.component[i] = committed_component;
-                        engine.digests[i] = graph.committedDigest(committed);
-                    },
-                    .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
-                }
+            // The reduction node of every node that is neither nominal nor
+            // committed.
+            const reduction_node = try scratch.alloc(u32, node_count);
+            var reduction = recursive_digest.Graph.init(scratch);
+            for (graph.nodes.items, reduction_node) |node, *index| {
+                index.* = switch (node) {
+                    .nominal, .committed => no_node,
+                    .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => try reduction.addNode(),
+                };
             }
-            for (graph.nodes.items, 0..) |node, i| {
-                if (node == .nominal) continue;
-                if (engine.visit_index[i] != unvisited) continue;
-                try engine.strongConnect(@intCast(i));
+            for (reduction_node, 0..) |index, i| {
+                if (index == no_node) continue;
+                reduction.beginNode(index);
+                var hasher = TypeDigestHasher.init();
+                try encodeNode(graph, @intCast(i), ContentSink{
+                    .graph = graph,
+                    .reduction = &reduction,
+                    .reduction_node = reduction_node,
+                    .hasher = &hasher,
+                });
+                reduction.endNode(index, hasher.finalResult());
+            }
+            try reduction.resolve(settled, null);
+
+            for (reduction_node, keys) |index, *key| {
+                if (index == no_node) continue;
+                switch (reduction.resolution(index)) {
+                    .acyclic => {},
+                    .folded, .cyclic => key.* = reduction.digest(index),
+                }
             }
             for (node_digests, 0..) |*digest, i| {
                 digest.* = switch (resolveNominalRef(graph, .{ .local = @fromBackingInt(@intCast(i)) })) {
                     .canonical => null,
-                    .local => |node_id| engine.digests[@backingInt(node_id)],
+                    .local => |node_id| switch (graph.getNode(node_id)) {
+                        .committed => |committed| graph.committedDigest(committed),
+                        .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => reduction.digest(reduction_node[@backingInt(node_id)]),
+                    },
                 };
             }
 
             return .{
-                .allocator = allocator,
                 .keys = keys,
                 .digests = node_digests,
             };
-        }
-
-        fn deinit(self_analysis: *RecursiveGraphAnalysis) void {
-            self_analysis.allocator.free(self_analysis.digests);
-            self_analysis.allocator.free(self_analysis.keys);
         }
 
         fn resolveNominalRef(graph: *const LayoutGraph, start: GraphRef) GraphRef {
@@ -957,7 +1102,8 @@ pub const Store = struct {
         /// references resolved through nominals via `sink.child`.
         fn encodeNode(graph: *const LayoutGraph, node_index: u32, sink: anytype) Allocator.Error!void {
             switch (graph.getNode(@fromBackingInt(@intCast(node_index)))) {
-                .pending, .nominal, .committed => unreachable,
+                .nominal, .committed => unreachable, // the analysis resolves children through nominals and settles committed leaves without encoding them
+                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
                 .box => |child| {
                     try sink.writeByte(0);
                     try sink.child(resolveNominalRef(graph, child));
@@ -993,451 +1139,44 @@ pub const Store = struct {
             }
         }
 
-        fn littleEndianBytes(value: u32) [4]u8 {
-            return .{ @truncate(value), @truncate(value >> 8), @truncate(value >> 16), @truncate(value >> 24) };
-        }
-
-        fn hashU32(hasher: *TypeDigestHasher, value: u32) void {
-            const bytes = littleEndianBytes(value);
-            hasher.update(&bytes);
-        }
-
-        fn digestLessThan(_: void, lhs: RecursiveKey, rhs: RecursiveKey) bool {
-            for (lhs, rhs) |lhs_byte, rhs_byte| {
-                if (lhs_byte != rhs_byte) return lhs_byte < rhs_byte;
-            }
-            return false;
-        }
-
-        const Engine = struct {
-            allocator: Allocator,
+        /// Hashes a node's encoding with every child as a bare slot and
+        /// hands its ordered children to the reduction.
+        const ContentSink = struct {
             graph: *const LayoutGraph,
-            keys: []?RecursiveKey,
-            /// Settled digest per node, valid once `component[node]` is set.
-            digests: []RecursiveKey,
-            /// Popped component per node, `no_component` until popped.
-            component: []u32,
-            /// Member position within its popped component.
-            position: []u32,
-            component_count: u32 = 0,
-            visit_index: []u32,
-            low_link: []u32,
-            on_stack: []bool,
-            next_visit: u32 = 0,
-            stack: std.ArrayList(u32) = .empty,
-            members: std.ArrayList(u32) = .empty,
-            /// In-component child node indices of the component being
-            /// resolved, contiguous per member.
-            edges: std.ArrayList(u32) = .empty,
-            edge_start: std.ArrayList(u32) = .empty,
-            edge_len: std.ArrayList(u32) = .empty,
-            render_buf: std.ArrayList(u8) = .empty,
-            /// Exact one-step encodings of settled recursive nodes, owned by
-            /// the store so they outlive this commit.
-            unfoldings: *RecursiveGraphUnfoldings,
+            reduction: *recursive_digest.Graph,
+            reduction_node: []const u32,
+            hasher: *TypeDigestHasher,
 
-            fn init(
-                allocator: Allocator,
-                graph: *const LayoutGraph,
-                keys: []?RecursiveKey,
-                unfoldings: *RecursiveGraphUnfoldings,
-            ) Allocator.Error!Engine {
-                const node_count = graph.nodes.items.len;
-                const digests = try allocator.alloc(RecursiveKey, node_count);
-                errdefer allocator.free(digests);
-                const component = try allocator.alloc(u32, node_count);
-                errdefer allocator.free(component);
-                @memset(component, no_component);
-                const position = try allocator.alloc(u32, node_count);
-                errdefer allocator.free(position);
-                const visit_index = try allocator.alloc(u32, node_count);
-                errdefer allocator.free(visit_index);
-                @memset(visit_index, unvisited);
-                const low_link = try allocator.alloc(u32, node_count);
-                errdefer allocator.free(low_link);
-                const on_stack = try allocator.alloc(bool, node_count);
-                errdefer allocator.free(on_stack);
-                @memset(on_stack, false);
-                return .{
-                    .allocator = allocator,
-                    .graph = graph,
-                    .keys = keys,
-                    .digests = digests,
-                    .component = component,
-                    .position = position,
-                    .visit_index = visit_index,
-                    .low_link = low_link,
-                    .on_stack = on_stack,
-                    .unfoldings = unfoldings,
-                };
+            fn writeByte(self_sink: ContentSink, value: u8) Allocator.Error!void {
+                self_sink.hasher.update(&.{value});
             }
 
-            fn deinit(self_engine: *Engine) void {
-                self_engine.render_buf.deinit(self_engine.allocator);
-                self_engine.edge_len.deinit(self_engine.allocator);
-                self_engine.edge_start.deinit(self_engine.allocator);
-                self_engine.edges.deinit(self_engine.allocator);
-                self_engine.members.deinit(self_engine.allocator);
-                self_engine.stack.deinit(self_engine.allocator);
-                self_engine.allocator.free(self_engine.on_stack);
-                self_engine.allocator.free(self_engine.low_link);
-                self_engine.allocator.free(self_engine.visit_index);
-                self_engine.allocator.free(self_engine.position);
-                self_engine.allocator.free(self_engine.component);
-                self_engine.allocator.free(self_engine.digests);
+            fn writeU32(self_sink: ContentSink, value: u32) Allocator.Error!void {
+                recursive_digest.writeU32(self_sink.hasher, value);
             }
 
-            /// Discovery sink: lists every local child for Tarjan's walk, in
-            /// encoding order.
-            const VisitSink = struct {
-                children: *std.ArrayList(u32),
-                allocator: Allocator,
-
-                fn writeByte(_: VisitSink, _: u8) Allocator.Error!void {}
-
-                fn writeU32(_: VisitSink, _: u32) Allocator.Error!void {}
-
-                fn child(self_sink: VisitSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => {},
-                        .local => |node_id| try self_sink.children.append(self_sink.allocator, @backingInt(node_id)),
-                    }
-                }
-            };
-
-            /// Edge sink: collects the ordered children that lie inside the
-            /// component being resolved.
-            const EdgeSink = struct {
-                engine: *Engine,
-                component_id: u32,
-
-                fn writeByte(_: EdgeSink, _: u8) Allocator.Error!void {}
-
-                fn writeU32(_: EdgeSink, _: u32) Allocator.Error!void {}
-
-                fn child(self_sink: EdgeSink, ref: GraphRef) Allocator.Error!void {
-                    const child_index: u32 = switch (ref) {
-                        .canonical => return,
-                        .local => |node_id| @backingInt(node_id),
-                    };
-                    const engine = self_sink.engine;
-                    if (engine.component[child_index] != self_sink.component_id) return;
-                    try engine.edges.append(engine.allocator, child_index);
-                }
-            };
-
-            /// Label sink: hashes a node's encoding with every child outside
-            /// the component rendered as its settled digest and every child
-            /// inside it as a bare positional marker.
-            const LabelSink = struct {
-                engine: *Engine,
-                hasher: *TypeDigestHasher,
-                component_id: u32,
-
-                fn writeByte(self_sink: LabelSink, value: u8) Allocator.Error!void {
-                    self_sink.hasher.update(&.{value});
-                }
-
-                fn writeU32(self_sink: LabelSink, value: u32) Allocator.Error!void {
-                    hashU32(self_sink.hasher, value);
-                }
-
-                fn child(self_sink: LabelSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => |layout_idx| {
-                            try self_sink.writeByte(0);
-                            try self_sink.writeU32(@backingInt(layout_idx));
-                        },
-                        .local => |node_id| {
-                            const child_index = @backingInt(node_id);
-                            const engine = self_sink.engine;
-                            if (engine.component[child_index] == self_sink.component_id) {
-                                try self_sink.writeByte(2);
-                                return;
-                            }
-                            std.debug.assert(engine.component[child_index] != no_component);
-                            try self_sink.writeByte(1);
-                            self_sink.hasher.update(&engine.digests[child_index]);
-                        },
-                    }
-                }
-            };
-
-            /// Group rendering sink: writes a node's encoding with every
-            /// child outside the component rendered as its settled digest and
-            /// every child inside it as its canonical position.
-            const RenderSink = struct {
-                engine: *Engine,
-                component_id: u32,
-                rank_of_member: []const u32,
-
-                fn writeByte(self_sink: RenderSink, value: u8) Allocator.Error!void {
-                    try self_sink.engine.render_buf.append(self_sink.engine.allocator, value);
-                }
-
-                fn writeU32(self_sink: RenderSink, value: u32) Allocator.Error!void {
-                    const bytes = littleEndianBytes(value);
-                    try self_sink.engine.render_buf.appendSlice(self_sink.engine.allocator, &bytes);
-                }
-
-                fn child(self_sink: RenderSink, ref: GraphRef) Allocator.Error!void {
-                    switch (ref) {
-                        .canonical => |layout_idx| {
-                            try self_sink.writeByte(0);
-                            try self_sink.writeU32(@backingInt(layout_idx));
-                        },
-                        .local => |node_id| {
-                            const child_index = @backingInt(node_id);
-                            const engine = self_sink.engine;
-                            if (engine.component[child_index] == self_sink.component_id) {
-                                try self_sink.writeByte(2);
-                                try self_sink.writeU32(self_sink.rank_of_member[engine.position[child_index]]);
-                                return;
-                            }
-                            std.debug.assert(engine.component[child_index] != no_component);
-                            try self_sink.writeByte(1);
-                            try engine.render_buf.appendSlice(engine.allocator, &engine.digests[child_index]);
-                        },
-                    }
-                }
-            };
-
-            /// A node of Tarjan's walk whose local children are
-            /// `walk_children[children_start..children_end]`, in encoding
-            /// order.
-            const WalkFrame = struct {
-                node: u32,
-                children_start: usize,
-                children_end: usize,
-                next: usize,
-            };
-
-            /// Tarjan's walk from `root` on explicit frames, so the depth of
-            /// the layout graph never becomes call depth.
-            fn strongConnect(self_engine: *Engine, root: u32) Allocator.Error!void {
-                const allocator = self_engine.allocator;
-                var frames = std.ArrayList(WalkFrame).empty;
-                defer frames.deinit(allocator);
-                var walk_children = std.ArrayList(u32).empty;
-                defer walk_children.deinit(allocator);
-                try self_engine.enterWalkNode(root, &frames, &walk_children);
-                while (frames.items.len > 0) {
-                    const frame = &frames.items[frames.items.len - 1];
-                    if (frame.next < frame.children_end) {
-                        const child_index = walk_children.items[frame.next];
-                        frame.next += 1;
-                        if (self_engine.visit_index[child_index] == unvisited) {
-                            try self_engine.enterWalkNode(child_index, &frames, &walk_children);
-                        } else if (self_engine.on_stack[child_index]) {
-                            self_engine.low_link[frame.node] = @min(self_engine.low_link[frame.node], self_engine.visit_index[child_index]);
-                        }
-                        continue;
-                    }
-                    const finished = frames.pop().?;
-                    walk_children.shrinkRetainingCapacity(finished.children_start);
-                    const node_index = finished.node;
-                    if (self_engine.low_link[node_index] == self_engine.visit_index[node_index]) {
-                        self_engine.members.clearRetainingCapacity();
-                        while (true) {
-                            const member = self_engine.stack.pop() orelse unreachable;
-                            self_engine.on_stack[member] = false;
-                            try self_engine.members.append(self_engine.allocator, member);
-                            if (member == node_index) break;
-                        }
-                        try self_engine.resolveComponent();
-                    }
-                    if (frames.items.len > 0) {
-                        const parent = frames.items[frames.items.len - 1].node;
-                        self_engine.low_link[parent] = @min(self_engine.low_link[parent], self_engine.low_link[node_index]);
-                    }
-                }
-            }
-
-            fn enterWalkNode(
-                self_engine: *Engine,
-                node_index: u32,
-                frames: *std.ArrayList(WalkFrame),
-                walk_children: *std.ArrayList(u32),
-            ) Allocator.Error!void {
-                self_engine.visit_index[node_index] = self_engine.next_visit;
-                self_engine.low_link[node_index] = self_engine.next_visit;
-                self_engine.next_visit += 1;
-                try self_engine.stack.append(self_engine.allocator, node_index);
-                self_engine.on_stack[node_index] = true;
-
-                const children_start = walk_children.items.len;
-                try encodeNode(self_engine.graph, node_index, VisitSink{ .children = walk_children, .allocator = self_engine.allocator });
-                try frames.append(self_engine.allocator, .{
-                    .node = node_index,
-                    .children_start = children_start,
-                    .children_end = walk_children.items.len,
-                    .next = children_start,
+            fn child(self_sink: ContentSink, ref: GraphRef) Allocator.Error!void {
+                self_sink.hasher.update(&.{0xff});
+                try self_sink.reduction.putChild(switch (ref) {
+                    .canonical => |layout_idx| .{ .settled = canonicalIdentity(layout_idx) },
+                    .local => |node_id| switch (self_sink.graph.getNode(node_id)) {
+                        .committed => |committed| .{ .settled = self_sink.graph.committedDigest(committed) },
+                        .nominal => unreachable, // children resolve through nominals before reaching the sink
+                        .pending, .box, .list, .closure, .erased_callable, .struct_, .tag_union => .{ .node = self_sink.reduction_node[@backingInt(node_id)] },
+                    },
                 });
-            }
-
-            /// Settle the digests of the component in `members`, whose every
-            /// outgoing reference already carries a settled digest.
-            fn resolveComponent(self_engine: *Engine) Allocator.Error!void {
-                const members = self_engine.members.items;
-                const component_id = self_engine.component_count;
-                self_engine.component_count += 1;
-                for (members, 0..) |member, pos| {
-                    self_engine.component[member] = component_id;
-                    self_engine.position[member] = @intCast(pos);
-                }
-
-                self_engine.edges.clearRetainingCapacity();
-                self_engine.edge_start.clearRetainingCapacity();
-                self_engine.edge_len.clearRetainingCapacity();
-                for (members) |member| {
-                    const start: u32 = @intCast(self_engine.edges.items.len);
-                    try encodeNode(self_engine.graph, member, EdgeSink{ .engine = self_engine, .component_id = component_id });
-                    try self_engine.edge_start.append(self_engine.allocator, start);
-                    try self_engine.edge_len.append(self_engine.allocator, @intCast(self_engine.edges.items.len - start));
-                }
-
-                if (members.len == 1 and self_engine.edges.items.len == 0) {
-                    const member = members[0];
-                    const unfolding = try self_engine.unfoldingKey(member);
-                    if (self_engine.unfoldings.get(unfolding)) |key| {
-                        self_engine.digests[member] = key;
-                        self_engine.keys[member] = key;
-                    } else {
-                        self_engine.digests[member] = unfolding;
-                    }
-                    return;
-                }
-
-                try self_engine.resolveCyclicComponent(component_id);
-            }
-
-            /// Encode one node using the settled digests of all its children,
-            /// including children in its own already-resolved component.
-            fn unfoldingKey(self_engine: *Engine, member: u32) Allocator.Error!RecursiveKey {
-                var hasher = TypeDigestHasher.init();
-                hasher.update(domain);
-                hasher.update("acyclic");
-                try encodeNode(self_engine.graph, member, LabelSink{
-                    .engine = self_engine,
-                    .hasher = &hasher,
-                    .component_id = no_component,
-                });
-                return hasher.finalResult();
-            }
-
-            fn resolveCyclicComponent(self_engine: *Engine, component_id: u32) Allocator.Error!void {
-                const allocator = self_engine.allocator;
-                const members = self_engine.members.items;
-                const member_count = members.len;
-
-                // Refine to the stable bisimulation partition: every member
-                // starts from its content label, and each round relabels it
-                // by its own label followed by the labels reached by every
-                // ordered in-component reference, until a round stops
-                // separating members. Labels are pure functions of a
-                // member's unfolding, so bisimilar members carry equal labels
-                // and the labels are the same for bisimilar positions of any
-                // two graphs whatever their node counts or allocation order.
-                var labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(labels);
-                var next_labels = try allocator.alloc(RecursiveKey, member_count);
-                defer allocator.free(next_labels);
-                var distinct_labels = std.AutoHashMap(RecursiveKey, u32).init(allocator);
-                defer distinct_labels.deinit();
-                for (members, 0..) |member, pos| {
-                    var hasher = TypeDigestHasher.init();
-                    try encodeNode(self_engine.graph, member, LabelSink{
-                        .engine = self_engine,
-                        .hasher = &hasher,
-                        .component_id = component_id,
-                    });
-                    labels[pos] = hasher.finalResult();
-                    try distinct_labels.put(labels[pos], no_component);
-                }
-                var label_count: u32 = distinct_labels.count();
-                while (true) {
-                    distinct_labels.clearRetainingCapacity();
-                    for (members, 0..) |_, pos| {
-                        var hasher = TypeDigestHasher.init();
-                        hasher.update(&labels[pos]);
-                        const edges = self_engine.edges.items[self_engine.edge_start.items[pos]..][0..self_engine.edge_len.items[pos]];
-                        for (edges) |child_index| {
-                            hasher.update(&labels[self_engine.position[child_index]]);
-                        }
-                        next_labels[pos] = hasher.finalResult();
-                        try distinct_labels.put(next_labels[pos], no_component);
-                    }
-                    const next_count: u32 = distinct_labels.count();
-                    const stable = next_count == label_count;
-                    const finished_labels = labels;
-                    labels = next_labels;
-                    next_labels = finished_labels;
-                    label_count = next_count;
-                    if (stable) break;
-                }
-
-                // Canonical order: the reduced positions sorted by label.
-                const block_count = label_count;
-                const sorted_labels = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(sorted_labels);
-                {
-                    var it = distinct_labels.keyIterator();
-                    var next: usize = 0;
-                    while (it.next()) |label| : (next += 1) {
-                        sorted_labels[next] = label.*;
-                    }
-                    std.debug.assert(next == block_count);
-                }
-                std.mem.sort(RecursiveKey, sorted_labels, {}, digestLessThan);
-                for (sorted_labels, 0..) |label, rank| {
-                    const slot = distinct_labels.getPtr(label) orelse unreachable;
-                    slot.* = @intCast(rank);
-                }
-                const rank_of_member = try allocator.alloc(u32, member_count);
-                defer allocator.free(rank_of_member);
-                const block_rep = try allocator.alloc(u32, block_count);
-                defer allocator.free(block_rep);
-                @memset(block_rep, no_component);
-                for (members, 0..) |member, pos| {
-                    const rank = distinct_labels.get(labels[pos]) orelse unreachable;
-                    rank_of_member[pos] = rank;
-                    if (block_rep[rank] == no_component) block_rep[rank] = member;
-                }
-
-                // One group rendering in canonical order; every reduced
-                // position digests as its rank against the rendering's digest.
-                self_engine.render_buf.clearRetainingCapacity();
-                try self_engine.render_buf.appendSlice(allocator, domain);
-                try self_engine.render_buf.appendSlice(allocator, "group");
-                for (block_rep) |rep| {
-                    try encodeNode(self_engine.graph, rep, RenderSink{
-                        .engine = self_engine,
-                        .component_id = component_id,
-                        .rank_of_member = rank_of_member,
-                    });
-                }
-                var group_hasher = TypeDigestHasher.init();
-                group_hasher.update(self_engine.render_buf.items);
-                const group_digest = group_hasher.finalResult();
-                const block_digest = try allocator.alloc(RecursiveKey, block_count);
-                defer allocator.free(block_digest);
-                for (0..block_count) |rank| {
-                    var hasher = TypeDigestHasher.init();
-                    hasher.update("recursive-member");
-                    hashU32(&hasher, @intCast(rank));
-                    hasher.update(&group_digest);
-                    block_digest[rank] = hasher.finalResult();
-                }
-                for (members, 0..) |member, pos| {
-                    const digest = block_digest[rank_of_member[pos]];
-                    self_engine.digests[member] = digest;
-                    self_engine.keys[member] = digest;
-                }
-                for (members) |member| {
-                    try self_engine.unfoldings.put(self_engine.allocator, try self_engine.unfoldingKey(member), self_engine.digests[member]);
-                }
             }
         };
+
+        /// The identity a reference to an already canonical layout
+        /// contributes: the layout itself.
+        fn canonicalIdentity(layout_idx: Idx) RecursiveKey {
+            var hasher = TypeDigestHasher.init();
+            recursive_digest.writeBytes(&hasher, recursive_digest_domain);
+            recursive_digest.writeBytes(&hasher, "canonical");
+            recursive_digest.writeU32(&hasher, @backingInt(layout_idx));
+            return hasher.finalResult();
+        }
     };
 
     fn translateGraphRef(mapping: []const GraphRef, ref: GraphRef) GraphRef {
@@ -1454,22 +1193,28 @@ pub const Store = struct {
         switch (root) {
             .canonical => |layout_idx| return .{
                 .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
+                .value_layouts = &.{},
             },
             .local => {},
         }
 
-        var analysis = try RecursiveGraphAnalysis.init(self.allocator, graph, &self.recursive_unfoldings);
-        defer analysis.deinit();
+        var scratch_arena = self.commit_scratch.promote(self.allocator);
+        defer {
+            _ = scratch_arena.reset(.retain_capacity);
+            self.commit_scratch = scratch_arena.state;
+        }
+        const scratch = scratch_arena.allocator();
 
-        const mapping = try self.allocator.alloc(GraphRef, graph.nodes.items.len);
-        defer self.allocator.free(mapping);
+        const analysis = try RecursiveGraphAnalysis.init(scratch, graph, &self.recursive_digests);
+
+        const node_count = graph.nodes.items.len;
+        const mapping = try scratch.alloc(GraphRef, node_count);
         var working = LayoutGraph{};
-        defer working.deinit(self.allocator);
-        var pending_recursive = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, GraphRef).init(self.allocator);
-        defer pending_recursive.deinit();
-        var first_working_node: ?GraphNodeId = null;
+        try working.nodes.ensureTotalCapacity(scratch, node_count);
+        try working.fields.ensureTotalCapacity(scratch, graph.fields.items.len);
+        try working.refs.ensureTotalCapacity(scratch, graph.refs.items.len);
+        var pending_recursive = std.AutoHashMap(RecursiveGraphAnalysis.RecursiveKey, GraphRef).init(scratch);
+        var has_recursive_node = false;
 
         for (graph.nodes.items, 0..) |node, i| {
             switch (node) {
@@ -1480,7 +1225,7 @@ pub const Store = struct {
                 .pending, .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {},
             }
             if (analysis.keys[i]) |key| {
-                if (self.interned_recursive_graphs.get(key)) |layout_idx| {
+                if (self.recursiveGraphLayout(key)) |layout_idx| {
                     mapping[i] = .{ .canonical = layout_idx };
                     continue;
                 }
@@ -1490,164 +1235,259 @@ pub const Store = struct {
                 }
             }
 
-            const node_id = try working.reserveNode(self.allocator);
-            if (first_working_node == null) first_working_node = node_id;
+            const node_id = try working.reserveNode(scratch);
             const local: GraphRef = .{ .local = node_id };
             mapping[i] = local;
-            if (analysis.keys[i]) |key| try pending_recursive.put(key, local);
+            if (analysis.keys[i]) |key| {
+                try pending_recursive.put(key, local);
+                has_recursive_node = true;
+            }
         }
 
-        const initialized = try self.allocator.alloc(bool, working.nodes.items.len);
-        defer self.allocator.free(initialized);
-        @memset(initialized, false);
+        try translateGraphNodes(scratch, graph, mapping, &working);
 
-        for (graph.nodes.items, 0..) |node, i| {
-            const working_node_id = switch (mapping[i]) {
+        const value_layouts = try self.allocator.alloc(Idx, node_count);
+        errdefer self.allocator.free(value_layouts);
+
+        const working_layouts: []const Idx = if (working.nodes.items.len != 0)
+            try self.commitWorkingGraph(scratch, &working, has_recursive_node)
+        else
+            &.{};
+
+        for (mapping, value_layouts) |mapped, *value_layout| {
+            value_layout.* = switch (mapped) {
+                .canonical => |layout_idx| layout_idx,
+                .local => |node_id| working_layouts[@backingInt(node_id)],
+            };
+        }
+
+        for (analysis.keys, 0..) |maybe_key, i| {
+            const key = maybe_key orelse continue;
+            if (self.recursiveGraphLayout(key)) |existing| {
+                std.debug.assert(existing == value_layouts[i]);
+            } else {
+                try self.recordRecursiveLayoutKey(key, value_layouts[i]);
+            }
+        }
+
+        const root_idx = switch (translateGraphRef(mapping, root)) {
+            .canonical => |layout_idx| layout_idx,
+            .local => |node_id| working_layouts[@backingInt(node_id)],
+        };
+        return .{
+            .root_idx = root_idx,
+            .value_layouts = value_layouts,
+            .digests = try self.allocator.dupe(?graph_mod.Digest, analysis.digests),
+        };
+    }
+
+    /// Fill every reserved node of `destination` from the `source` nodes
+    /// `mapping` sends to it, with children translated through `mapping`. Several
+    /// source nodes may map to one target node; the first fills it. Callers
+    /// map `committed` source nodes to canonical refs.
+    fn translateGraphNodes(
+        scratch: Allocator,
+        source: *const LayoutGraph,
+        mapping: []const GraphRef,
+        destination: *LayoutGraph,
+    ) Allocator.Error!void {
+        const initialized = try scratch.alloc(bool, destination.nodes.items.len);
+        @memset(initialized, false);
+        var fields = std.ArrayList(graph_mod.Field).empty;
+        var refs = std.ArrayList(GraphRef).empty;
+
+        for (source.nodes.items, 0..) |node, i| {
+            const destination_node_id = switch (mapping[i]) {
                 .canonical => continue,
                 .local => |node_id| node_id,
             };
-            const working_index = @backingInt(working_node_id);
-            if (initialized[working_index]) continue;
-            initialized[working_index] = true;
+            const destination_index = @backingInt(destination_node_id);
+            if (initialized[destination_index]) continue;
+            initialized[destination_index] = true;
 
             const translated_node: graph_mod.Node = switch (node) {
-                .pending, .committed => unreachable,
+                .committed => unreachable, // callers map committed nodes to canonical refs
+                .pending => base.invariant("layout.Store invariant violated: commitGraph received a reserved node that was never filled", .{}),
                 .nominal => |child| .{ .nominal = translateGraphRef(mapping, child) },
                 .box => |child| .{ .box = translateGraphRef(mapping, child) },
                 .list => |child| .{ .list = translateGraphRef(mapping, child) },
                 .closure => |child| .{ .closure = translateGraphRef(mapping, child) },
                 .erased_callable => .erased_callable,
                 .struct_ => |span| blk: {
-                    var fields = std.ArrayList(graph_mod.Field).empty;
-                    defer fields.deinit(self.allocator);
-                    try fields.ensureTotalCapacity(self.allocator, span.len);
-                    for (graph.getFields(span)) |field| {
+                    fields.clearRetainingCapacity();
+                    try fields.ensureTotalCapacity(scratch, span.len);
+                    for (source.getFields(span)) |field| {
                         fields.appendAssumeCapacity(.{
                             .index = field.index,
                             .child = translateGraphRef(mapping, field.child),
                             .is_padding = field.is_padding,
                         });
                     }
-                    var translated = try working.appendFields(self.allocator, fields.items);
-                    if (span.order == .declared) translated = working.declaredOrder(translated);
+                    var translated = try destination.appendFields(scratch, fields.items);
+                    if (span.order == .declared) translated = destination.declaredOrder(translated);
                     break :blk .{ .struct_ = translated };
                 },
                 .tag_union => |span| blk: {
-                    var refs = std.ArrayList(GraphRef).empty;
-                    defer refs.deinit(self.allocator);
-                    try refs.ensureTotalCapacity(self.allocator, span.len);
-                    for (graph.getRefs(span)) |child| {
+                    refs.clearRetainingCapacity();
+                    try refs.ensureTotalCapacity(scratch, span.len);
+                    for (source.getRefs(span)) |child| {
                         refs.appendAssumeCapacity(translateGraphRef(mapping, child));
                     }
-                    break :blk .{ .tag_union = try working.appendRefs(self.allocator, refs.items) };
+                    break :blk .{ .tag_union = try destination.appendRefs(scratch, refs.items) };
                 },
             };
-            working.setNode(working_node_id, translated_node);
+            destination.setNode(destination_node_id, translated_node);
         }
-
-        const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        errdefer self.allocator.free(raw_layouts);
-        const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        errdefer self.allocator.free(value_layouts);
-
-        var working_commit: ?GraphCommit = null;
-        defer if (working_commit) |*commit| commit.deinit(self.allocator);
-        if (working.nodes.items.len != 0) {
-            const translated_root = translateGraphRef(mapping, root);
-            const working_root: GraphRef = switch (translated_root) {
-                .local => translated_root,
-                .canonical => .{ .local = first_working_node.? },
-            };
-            working_commit = try self.commitGraphUncached(&working, working_root);
-        }
-
-        for (mapping, 0..) |mapped, i| {
-            switch (mapped) {
-                .canonical => |layout_idx| {
-                    raw_layouts[i] = layout_idx;
-                    value_layouts[i] = layout_idx;
-                },
-                .local => |node_id| {
-                    const commit = &working_commit.?;
-                    raw_layouts[i] = commit.raw_layouts[@backingInt(node_id)];
-                    value_layouts[i] = commit.value_layouts[@backingInt(node_id)];
-                },
-            }
-        }
-
-        for (analysis.keys, 0..) |maybe_key, i| {
-            const key = maybe_key orelse continue;
-            if (self.interned_recursive_graphs.get(key)) |existing| {
-                if (comptime builtin.mode == .debug) {
-                    std.debug.assert(existing == value_layouts[i]);
-                } else if (existing != value_layouts[i]) {
-                    unreachable;
-                }
-            } else {
-                try self.interned_recursive_graphs.put(key, value_layouts[i]);
-            }
-        }
-
-        const root_idx = switch (translateGraphRef(mapping, root)) {
-            .canonical => |layout_idx| layout_idx,
-            .local => |node_id| working_commit.?.value_layouts[@backingInt(node_id)],
-        };
-        return .{
-            .root_idx = root_idx,
-            .raw_layouts = raw_layouts,
-            .value_layouts = value_layouts,
-            .digests = try self.allocator.dupe(?graph_mod.Digest, analysis.digests),
-        };
     }
 
-    fn commitGraphUncached(self: *Self, graph: *const LayoutGraph, root: GraphRef) std.mem.Allocator.Error!GraphCommit {
-        switch (root) {
-            .canonical => |layout_idx| return .{
-                .root_idx = layout_idx,
-                .raw_layouts = try self.allocator.alloc(Idx, 0),
-                .value_layouts = try self.allocator.alloc(Idx, 0),
-            },
-            .local => {},
+    /// Commit a working graph, returning each node's value layout.
+    ///
+    /// Distinct logical graphs can describe one layout: a graph whose
+    /// recursion box is explicit and one whose box the commit inserts have
+    /// different recursive-graph keys and the same runtime representation.
+    /// Structural interning gives such acyclic layouts one index, but a
+    /// cyclic layout is built in raw slots of its own, so a commit with
+    /// recursive nodes checks the content digest of every layout it created
+    /// against those of earlier recursive commits and against each other.
+    /// A node whose layout duplicates another is redirected to that layout
+    /// (or to the node that made it) and the graph is committed again
+    /// without the duplicates, so every representation keeps one layout
+    /// index, which is what lets equal content digests stand for equal
+    /// layouts. The layouts of the first attempt that the second does not
+    /// reuse stay in the store unreferenced.
+    fn commitWorkingGraph(
+        self: *Self,
+        scratch: Allocator,
+        working: *const LayoutGraph,
+        has_recursive_node: bool,
+    ) Allocator.Error![]const Idx {
+        const layouts_before = self.layouts.len();
+        const first = try self.commitGraphUncached(scratch, working);
+        if (!has_recursive_node) return first;
+
+        const node_count = working.nodes.items.len;
+        const redirect = try scratch.alloc(?GraphRef, node_count);
+        @memset(redirect, null);
+        var has_duplicate = false;
+        var created = std.AutoHashMap(digest_mod.Digest, u32).init(scratch);
+        for (first, 0..) |layout_idx, i| {
+            if (@backingInt(layout_idx) < layouts_before) continue;
+            const digest = try self.contentDigest(layout_idx);
+            if (self.recursive_commit_layouts.get(digest)) |existing| {
+                redirect[i] = .{ .canonical = existing };
+                has_duplicate = true;
+                continue;
+            }
+            const entry = try created.getOrPut(digest);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(i);
+            } else if (first[entry.value_ptr.*] != layout_idx) {
+                redirect[i] = .{ .local = @fromBackingInt(entry.value_ptr.*) };
+                has_duplicate = true;
+            }
         }
 
-        const raw_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        errdefer self.allocator.free(raw_layouts);
-        const value_layouts = try self.allocator.alloc(Idx, graph.nodes.items.len);
-        errdefer self.allocator.free(value_layouts);
-        const resolved = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(resolved);
-        const recursive_nodes = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(recursive_nodes);
-        const component_ids = try self.allocator.alloc(u32, graph.nodes.items.len);
-        defer self.allocator.free(component_ids);
+        const committed = if (!has_duplicate) first else blk: {
+            // A redirect target is a layout an earlier commit created or
+            // the first node with its digest, which is never redirected.
+            const mapping = try scratch.alloc(GraphRef, node_count);
+            var deduplicated = LayoutGraph{};
+            for (redirect, mapping) |redirected, *mapped| {
+                if (redirected == null) mapped.* = .{ .local = try deduplicated.reserveNode(scratch) };
+            }
+            for (redirect, mapping) |redirected, *mapped| {
+                mapped.* = translateGraphRef(mapping, redirected orelse continue);
+            }
+            try translateGraphNodes(scratch, working, mapping, &deduplicated);
+            const second = try self.commitGraphUncached(scratch, &deduplicated);
+            const layouts = try scratch.alloc(Idx, node_count);
+            for (mapping, layouts) |mapped, *layout_idx| layout_idx.* = switch (mapped) {
+                .canonical => |canonical| canonical,
+                .local => |node_id| second[@backingInt(node_id)],
+            };
+            break :blk layouts;
+        };
+
+        for (committed) |layout_idx| {
+            if (@backingInt(layout_idx) < layouts_before) continue;
+            const entry = try self.recursive_commit_layouts.getOrPut(self.allocator, try self.contentDigest(layout_idx));
+            if (entry.found_existing) {
+                std.debug.assert(entry.value_ptr.* == layout_idx);
+            } else {
+                entry.value_ptr.* = layout_idx;
+            }
+        }
+        return committed;
+    }
+
+    /// Commit a graph of uncommitted nodes, returning each node's value
+    /// layout. The result and every temporary live in `scratch`.
+    ///
+    /// A node that reaches no cycle depends only on finished layouts, so it
+    /// is interned directly. Only nodes that reach a cycle get a raw slot: a
+    /// cyclic node's layout is referenced before it is finished, so its raw
+    /// slot first holds a provisional layout with the same size, alignment,
+    /// and contents as the finished one, and finalization later reads it
+    /// through recursive boxes and back-edges.
+    fn commitGraphUncached(self: *Self, scratch: Allocator, graph: *const LayoutGraph) std.mem.Allocator.Error![]Idx {
+        const node_count = graph.nodes.items.len;
+        const raw_layouts = try scratch.alloc(Idx, node_count);
+        const value_layouts = try scratch.alloc(Idx, node_count);
+        const resolved = try scratch.alloc(bool, node_count);
+        const recursive_nodes = try scratch.alloc(bool, node_count);
+        const component_ids = try scratch.alloc(u32, node_count);
+        const reaches_cycle = try scratch.alloc(bool, node_count);
         @memset(resolved, false);
         @memset(recursive_nodes, false);
         @memset(component_ids, std.math.maxInt(u32));
+        @memset(reaches_cycle, false);
 
-        const visit_index = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(visit_index);
-        const lowlink = try self.allocator.alloc(i32, graph.nodes.items.len);
-        defer self.allocator.free(lowlink);
-        const on_stack = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(on_stack);
+        const visit_index = try scratch.alloc(i32, graph.nodes.items.len);
+        const lowlink = try scratch.alloc(i32, graph.nodes.items.len);
+        const on_stack = try scratch.alloc(bool, graph.nodes.items.len);
         @memset(visit_index, -1);
         @memset(lowlink, 0);
         @memset(on_stack, false);
 
         var tarjan_stack = std.ArrayList(GraphNodeId).empty;
-        defer tarjan_stack.deinit(self.allocator);
 
         const CycleFinder = struct {
             allocator: std.mem.Allocator,
             graph: *const LayoutGraph,
+            edges: Edges,
             visit_index: []i32,
             lowlink: []i32,
             on_stack: []bool,
             stack: *std.ArrayList(GraphNodeId),
             recursive_nodes: []bool,
             component_ids: []u32,
+            reaches_cycle: []bool,
             next_index: i32 = 0,
             next_component_id: u32 = 0,
+
+            /// Which references the walk follows. `size` edges are the ones
+            /// that place a child inline in its parent, and their cycles
+            /// mark the recursive components whose slot edges get boxed.
+            /// `all` adds pointer edges, and its components settle
+            /// `reaches_cycle`.
+            const Edges = enum { size, all };
+
+            /// Set `reaches_cycle` for a popped component of the `all` walk,
+            /// whose children outside it were popped and settled before it.
+            fn settleReachesCycle(self_finder: *@This(), component: []const GraphNodeId) void {
+                var reaches = component.len > 1;
+                for (component) |member| {
+                    if (reaches) break;
+                    var children = GraphChildren.init(self_finder.graph, self_finder.graph.getNode(member));
+                    while (children.next()) |child| {
+                        if (child == member or self_finder.reaches_cycle[@backingInt(child)]) {
+                            reaches = true;
+                            break;
+                        }
+                    }
+                }
+                for (component) |member| self_finder.reaches_cycle[@backingInt(member)] = reaches;
+            }
 
             fn markRecursiveComponent(self_finder: *@This(), component: []const GraphNodeId) void {
                 const component_id = self_finder.next_component_id;
@@ -1795,6 +1635,13 @@ pub const Store = struct {
                         .canonical => {},
                         .local => |child_id| try walk_children.append(allocator, child_id),
                     },
+                    .box, .list, .closure => |child| switch (self_finder.edges) {
+                        .size => {},
+                        .all => switch (child) {
+                            .canonical => {},
+                            .local => |child_id| try walk_children.append(allocator, child_id),
+                        },
+                    },
                     .struct_ => |span| {
                         for (self_finder.graph.getFields(span)) |field| {
                             switch (field.child) {
@@ -1811,7 +1658,7 @@ pub const Store = struct {
                             }
                         }
                     },
-                    .pending, .committed, .box, .list, .closure, .erased_callable => {},
+                    .pending, .committed, .erased_callable => {},
                 }
                 try frames.append(allocator, .{
                     .node = node_id,
@@ -1829,28 +1676,33 @@ pub const Store = struct {
                 defer component.deinit(self_finder.allocator);
 
                 while (true) {
-                    const member = self_finder.stack.pop() orelse unreachable;
+                    const member = self_finder.stack.pop() orelse unreachable; // node_id is still on Tarjan's stack because its lowlink equals its visit index
                     const member_index = @backingInt(member);
                     self_finder.on_stack[member_index] = false;
                     try component.append(self_finder.allocator, member);
                     if (member == node_id) break;
                 }
 
-                if (component.items.len > 1 or self_finder.hasSizeSelfEdge(node_id)) {
-                    self_finder.markRecursiveComponent(component.items);
+                switch (self_finder.edges) {
+                    .size => if (component.items.len > 1 or self_finder.hasSizeSelfEdge(node_id)) {
+                        self_finder.markRecursiveComponent(component.items);
+                    },
+                    .all => self_finder.settleReachesCycle(component.items),
                 }
             }
         };
 
         var cycle_finder = CycleFinder{
-            .allocator = self.allocator,
+            .allocator = scratch,
             .graph = graph,
+            .edges = .all,
             .visit_index = visit_index,
             .lowlink = lowlink,
             .on_stack = on_stack,
             .stack = &tarjan_stack,
             .recursive_nodes = recursive_nodes,
             .component_ids = component_ids,
+            .reaches_cycle = reaches_cycle,
         };
 
         for (graph.nodes.items, 0..) |_, i| {
@@ -1859,26 +1711,297 @@ pub const Store = struct {
             }
         }
 
-        for (graph.nodes.items, 0..) |node, i| {
+        var has_cycle = false;
+        for (reaches_cycle) |reaches| has_cycle = has_cycle or reaches;
+        if (has_cycle) {
+            // Size cycles are cycles, so only a graph with a cycle can have them.
+            @memset(visit_index, -1);
+            @memset(lowlink, 0);
+            cycle_finder.edges = .size;
+            cycle_finder.next_index = 0;
+            for (graph.nodes.items, 0..) |_, i| {
+                if (visit_index[i] == -1) {
+                    try cycle_finder.strongConnect(@fromBackingInt(@intCast(i)));
+                }
+            }
+        }
+
+        const FinalizeState = enum(u2) { unseen, active, done };
+        const finalize_state = try scratch.alloc(FinalizeState, node_count);
+        @memset(finalize_state, .unseen);
+        const raw_used = try scratch.alloc(bool, node_count);
+        @memset(raw_used, false);
+
+        const Finalizer = struct {
+            store: *Self,
+            allocator: Allocator,
+            graph: *const LayoutGraph,
+            raw_layouts: []Idx,
+            value_layouts: []Idx,
+            finalize_state: []FinalizeState,
+            raw_used: []bool,
+            recursive_nodes: []bool,
+            component_ids: []u32,
+
+            /// The layout of child `ref`, or the node that must be finalized
+            /// first to produce it.
+            const ChildLayout = union(enum) {
+                layout: Idx,
+                finalize: GraphNodeId,
+            };
+
+            /// A nominal wrapper's layout is its child's whether the parent
+            /// stores the child or points at it, so a read looks through it:
+            /// a parent on a cycle through the wrapper then reads the
+            /// child's slot, and the wrapper never fills a slot of its own
+            /// with a copy of the child's layout.
+            fn childLayout(self_finalizer: *@This(), ref: GraphRef) ChildLayout {
+                var current = ref;
+                while (true) {
+                    const node_id = switch (current) {
+                        .canonical => |layout_idx| return .{ .layout = layout_idx },
+                        .local => |node_id| node_id,
+                    };
+                    if (self_finalizer.graph.getNode(node_id) == .nominal) {
+                        current = self_finalizer.graph.getNode(node_id).nominal;
+                        continue;
+                    }
+                    const index = @backingInt(node_id);
+                    return switch (self_finalizer.finalize_state[index]) {
+                        .done => .{ .layout = self_finalizer.value_layouts[index] },
+                        .active => blk: {
+                            self_finalizer.raw_used[index] = true;
+                            break :blk .{ .layout = self_finalizer.raw_layouts[index] };
+                        },
+                        .unseen => .{ .finalize = node_id },
+                    };
+                }
+            }
+
+            fn shouldBoxRecursiveSlotEdge(
+                self_finalizer: *@This(),
+                parent_id: GraphNodeId,
+                child_ref: GraphRef,
+            ) bool {
+                const child_id = switch (child_ref) {
+                    .canonical => return false,
+                    .local => |id| id,
+                };
+                const parent_index = @backingInt(parent_id);
+                const child_index = @backingInt(child_id);
+
+                if (!self_finalizer.recursive_nodes[parent_index] or !self_finalizer.recursive_nodes[child_index]) {
+                    return false;
+                }
+                if (self_finalizer.component_ids[parent_index] != self_finalizer.component_ids[child_index]) {
+                    return false;
+                }
+
+                return switch (self_finalizer.graph.getNode(parent_id)) {
+                    .struct_ => true,
+                    .tag_union => switch (self_finalizer.graph.getNode(child_id)) {
+                        .struct_ => false,
+                        .pending, .committed, .nominal, .box, .list, .closure, .erased_callable, .tag_union => true,
+                    },
+                    .pending, .committed, .nominal, .box, .list, .closure, .erased_callable => false,
+                };
+            }
+
+            fn recursiveSlotTargetLayout(
+                self_finalizer: *@This(),
+                child_ref: GraphRef,
+            ) Idx {
+                var current = child_ref;
+                while (true) {
+                    const child_id = switch (current) {
+                        .canonical => |layout_idx| return layout_idx,
+                        .local => |child_id| child_id,
+                    };
+                    switch (self_finalizer.graph.getNode(child_id)) {
+                        .nominal => |child| current = child,
+                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
+                            // A finished node's raw slot is used only if a
+                            // reference read it while the node was unfinished;
+                            // later references take its value layout, so the
+                            // node keeps exactly one layout.
+                            const index = @backingInt(child_id);
+                            if (self_finalizer.finalize_state[index] == .done) return self_finalizer.value_layouts[index];
+                            self_finalizer.raw_used[index] = true;
+                            return self_finalizer.raw_layouts[index];
+                        },
+                    }
+                }
+            }
+
+            fn recursiveSlotLayout(
+                self_finalizer: *@This(),
+                child_ref: GraphRef,
+            ) std.mem.Allocator.Error!Idx {
+                return try self_finalizer.store.insertBox(self_finalizer.recursiveSlotTargetLayout(child_ref));
+            }
+
+            /// Finalize `root` and every node it needs first. Children are
+            /// finalized before their parents; each node being finalized
+            /// waits in a frame on an explicit stack, so layout nesting never
+            /// becomes native call depth. Layouts are inserted in the order a
+            /// direct recursive finalization inserted them.
+            fn finalizeNode(self_finalizer: *@This(), start: GraphNodeId) std.mem.Allocator.Error!Idx {
+                const root_index = @backingInt(start);
+                switch (self_finalizer.finalize_state[root_index]) {
+                    .done => return self_finalizer.value_layouts[root_index],
+                    .active => {
+                        self_finalizer.raw_used[root_index] = true;
+                        return self_finalizer.raw_layouts[root_index];
+                    },
+                    .unseen => {},
+                }
+                const allocator = self_finalizer.allocator;
+                const Frame = struct {
+                    node_id: GraphNodeId,
+                    /// Child layouts finalized so far, in order.
+                    children: std.ArrayList(Idx) = .empty,
+                };
+                var frames: std.ArrayList(Frame) = .empty;
+                defer {
+                    for (frames.items) |*frame| frame.children.deinit(allocator);
+                    frames.deinit(allocator);
+                }
+                self_finalizer.finalize_state[root_index] = .active;
+                try frames.append(allocator, .{ .node_id = start });
+                var input: ?Idx = null;
+                while (true) {
+                    const frame = &frames.items[frames.items.len - 1];
+                    if (input) |child| try frame.children.append(allocator, child);
+                    input = null;
+                    const node_id = frame.node_id;
+                    const node = self_finalizer.graph.getNode(node_id);
+                    // The next child to read.
+                    const next: ?GraphRef = switch (node) {
+                        .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
+                        .nominal, .box, .list, .closure => |child| if (frame.children.items.len == 0) child else null,
+                        .erased_callable => null,
+                        .struct_ => |span| blk: {
+                            const graph_fields = self_finalizer.graph.getFields(span);
+                            while (frame.children.items.len < graph_fields.len) {
+                                const field = graph_fields[frame.children.items.len];
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk field.child;
+                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
+                            }
+                            break :blk null;
+                        },
+                        .tag_union => |span| blk: {
+                            const graph_refs = self_finalizer.graph.getRefs(span);
+                            while (frame.children.items.len < graph_refs.len) {
+                                const variant_ref = graph_refs[frame.children.items.len];
+                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk variant_ref;
+                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
+                            }
+                            break :blk null;
+                        },
+                    };
+                    if (next) |child| {
+                        switch (self_finalizer.childLayout(child)) {
+                            .layout => |layout_idx| input = layout_idx,
+                            .finalize => |child_id| {
+                                self_finalizer.finalize_state[@backingInt(child_id)] = .active;
+                                try frames.append(allocator, .{ .node_id = child_id });
+                            },
+                        }
+                        continue;
+                    }
+
+                    const children = frame.children.items;
+                    const value_layout = switch (node) {
+                        .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
+                        .nominal => children[0],
+                        .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                            try self_finalizer.store.insertLayout(Layout.boxOfZst())
+                        else
+                            try self_finalizer.store.insertBox(children[0]),
+                        .list => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
+                            try self_finalizer.store.insertLayout(Layout.listOfZst())
+                        else
+                            try self_finalizer.store.insertList(children[0]),
+                        .closure => try self_finalizer.store.insertLayout(Layout.closure(children[0])),
+                        .erased_callable => try self_finalizer.store.insertErasedCallable(),
+                        .struct_ => |span| blk_struct: {
+                            const graph_fields = self_finalizer.graph.getFields(span);
+                            if (graph_fields.len == 0) break :blk_struct .zst;
+                            const fields = try allocator.alloc(StructField, graph_fields.len);
+                            defer allocator.free(fields);
+                            for (graph_fields, children, fields) |field, field_layout, *out| out.* = .{
+                                .index = field.index,
+                                .layout = field_layout,
+                                .is_padding = field.is_padding,
+                            };
+                            break :blk_struct if (span.order == .declared)
+                                try self_finalizer.store.putNominalStructFields(fields)
+                            else
+                                try self_finalizer.store.putStructFields(fields);
+                        },
+                        .tag_union => try self_finalizer.store.putTagUnion(children),
+                    };
+
+                    const index = @backingInt(node_id);
+                    if (self_finalizer.raw_used[index]) {
+                        self_finalizer.store.setCommitLayout(
+                            self_finalizer.raw_layouts[index],
+                            self_finalizer.store.getLayout(value_layout),
+                        );
+                        self_finalizer.value_layouts[index] = self_finalizer.raw_layouts[index];
+                    } else {
+                        self_finalizer.value_layouts[index] = value_layout;
+                    }
+                    self_finalizer.finalize_state[index] = .done;
+                    var finished = frames.pop().?;
+                    finished.children.deinit(allocator);
+                    if (frames.items.len == 0) return self_finalizer.value_layouts[index];
+                    input = self_finalizer.value_layouts[index];
+                }
+            }
+        };
+
+        var finalizer = Finalizer{
+            .store = self,
+            .allocator = scratch,
+            .graph = graph,
+            .raw_layouts = raw_layouts,
+            .value_layouts = value_layouts,
+            .finalize_state = finalize_state,
+            .raw_used = raw_used,
+            .recursive_nodes = recursive_nodes,
+            .component_ids = component_ids,
+        };
+
+        // A node that reaches no cycle reads no raw slot, and neither does
+        // any node it reaches.
+        for (reaches_cycle, 0..) |reaches, i| {
+            if (!reaches) _ = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
+        }
+        if (!has_cycle) return value_layouts;
+        for (reaches_cycle, 0..) |reaches, i| {
+            if (reaches) continue;
+            raw_layouts[i] = value_layouts[i];
+            resolved[i] = true;
+        }
+
+        const layouts_start = self.layouts.len();
+        for (graph.nodes.items, reaches_cycle, 0..) |node, reaches, i| {
+            if (!reaches) continue;
             raw_layouts[i] = try self.reserveLayout(switch (node) {
-                .pending, .committed => unreachable,
+                .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                 .nominal, .struct_, .tag_union => Layout.zst(),
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
                 .closure => Layout.closure(.zst),
                 .erased_callable => Layout.erasedCallable(),
             });
-        }
-
-        for (graph.nodes.items, 0..) |node, i| {
-            value_layouts[i] = switch (node) {
-                .pending, .committed => unreachable,
-                .nominal, .box, .list, .closure, .erased_callable, .struct_, .tag_union => raw_layouts[i],
-            };
+            value_layouts[i] = raw_layouts[i];
         }
 
         const Resolver = struct {
             store: *Self,
+            allocator: Allocator,
             graph: *const LayoutGraph,
             raw_layouts: []Idx,
             value_layouts: []Idx,
@@ -1990,11 +2113,11 @@ pub const Store = struct {
                 if (self_resolver.resolved[index]) return false;
 
                 switch (self_resolver.graph.getNode(node_id)) {
-                    .pending, .committed => unreachable,
+                    .pending, .committed => unreachable, // commitGraph builds this working graph with committed leaves as canonical refs and every reserved node filled
                     .nominal => |child| {
                         if (!self_resolver.isValueReady(child)) return false;
                         const child_value_idx = self_resolver.valueIdx(child);
-                        self_resolver.store.updateLayout(
+                        self_resolver.store.setCommitLayout(
                             self_resolver.raw_layouts[index],
                             self_resolver.store.getLayout(child_value_idx),
                         );
@@ -2003,7 +2126,7 @@ pub const Store = struct {
                     .box => |child| {
                         const child_idx = self_resolver.pointerTargetLayout(child);
                         const child_is_zst = self_resolver.isKnownZeroSized(child);
-                        self_resolver.store.updateLayout(
+                        self_resolver.store.setCommitLayout(
                             self_resolver.raw_layouts[index],
                             if (child_is_zst) Layout.boxOfZst() else Layout.box(child_idx),
                         );
@@ -2011,19 +2134,19 @@ pub const Store = struct {
                     .list => |child| {
                         const child_idx = self_resolver.pointerTargetLayout(child);
                         const child_is_zst = self_resolver.isKnownZeroSized(child);
-                        self_resolver.store.updateLayout(
+                        self_resolver.store.setCommitLayout(
                             self_resolver.raw_layouts[index],
                             if (child_is_zst) Layout.listOfZst() else Layout.list(child_idx),
                         );
                     },
                     .closure => |child| {
-                        self_resolver.store.updateLayout(
+                        self_resolver.store.setCommitLayout(
                             self_resolver.raw_layouts[index],
                             Layout.closure(self_resolver.pointerTargetLayout(child)),
                         );
                     },
                     .erased_callable => {
-                        self_resolver.store.updateLayout(
+                        self_resolver.store.setCommitLayout(
                             self_resolver.raw_layouts[index],
                             Layout.erasedCallable(),
                         );
@@ -2031,11 +2154,11 @@ pub const Store = struct {
                     .struct_ => |span| {
                         const graph_fields = self_resolver.graph.getFields(span);
                         if (graph_fields.len == 0) {
-                            self_resolver.store.updateLayout(self_resolver.raw_layouts[index], Layout.zst());
+                            self_resolver.store.setCommitLayout(self_resolver.raw_layouts[index], Layout.zst());
                         } else {
                             var fields = std.ArrayList(StructField).empty;
-                            defer fields.deinit(self_resolver.store.allocator);
-                            try fields.ensureTotalCapacity(self_resolver.store.allocator, graph_fields.len);
+                            defer fields.deinit(self_resolver.allocator);
+                            try fields.ensureTotalCapacity(self_resolver.allocator, graph_fields.len);
 
                             for (graph_fields) |field| {
                                 const field_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, field.child))
@@ -2051,7 +2174,7 @@ pub const Store = struct {
                                 });
                             }
 
-                            self_resolver.store.updateLayout(
+                            self_resolver.store.setCommitLayout(
                                 self_resolver.raw_layouts[index],
                                 try self_resolver.store.buildUninternedStructLayout(fields.items, span.order),
                             );
@@ -2060,11 +2183,11 @@ pub const Store = struct {
                     .tag_union => |span| {
                         const graph_refs = self_resolver.graph.getRefs(span);
                         if (graph_refs.len == 0) {
-                            self_resolver.store.updateLayout(self_resolver.raw_layouts[index], Layout.zst());
+                            self_resolver.store.setCommitLayout(self_resolver.raw_layouts[index], Layout.zst());
                         } else {
                             var variants = std.ArrayList(Idx).empty;
-                            defer variants.deinit(self_resolver.store.allocator);
-                            try variants.ensureTotalCapacity(self_resolver.store.allocator, graph_refs.len);
+                            defer variants.deinit(self_resolver.allocator);
+                            try variants.ensureTotalCapacity(self_resolver.allocator, graph_refs.len);
 
                             for (graph_refs) |variant_ref| {
                                 const variant_layout = if (self_resolver.shouldBoxRecursiveSlotEdge(node_id, variant_ref))
@@ -2076,7 +2199,7 @@ pub const Store = struct {
                                 variants.appendAssumeCapacity(variant_layout);
                             }
 
-                            self_resolver.store.updateLayout(
+                            self_resolver.store.setCommitLayout(
                                 self_resolver.raw_layouts[index],
                                 try self_resolver.store.buildUninternedTagUnionLayout(variants.items),
                             );
@@ -2091,6 +2214,7 @@ pub const Store = struct {
 
         var resolver = Resolver{
             .store = self,
+            .allocator = scratch,
             .graph = graph,
             .raw_layouts = raw_layouts,
             .value_layouts = value_layouts,
@@ -2101,21 +2225,20 @@ pub const Store = struct {
 
         // A node resolves once the children it waits on have, so each node is
         // tried once and then again only when one of its children resolves.
-        // The parents of each node, as one flat list indexed by `parent_starts`.
-        const node_count = graph.nodes.items.len;
-        const parent_starts = try self.allocator.alloc(u32, node_count + 1);
-        defer self.allocator.free(parent_starts);
+        // The parents of each node that reaches a cycle, as one flat list
+        // indexed by `parent_starts`; the other nodes are already resolved.
+        const parent_starts = try scratch.alloc(u32, node_count + 1);
         @memset(parent_starts, 0);
-        for (graph.nodes.items) |node| {
+        for (graph.nodes.items, reaches_cycle) |node, reaches| {
+            if (!reaches) continue;
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| parent_starts[@backingInt(child) + 1] += 1;
         }
         for (1..parent_starts.len) |i| parent_starts[i] += parent_starts[i - 1];
-        const parents = try self.allocator.alloc(GraphNodeId, parent_starts[node_count]);
-        defer self.allocator.free(parents);
-        const parent_fill = try self.allocator.dupe(u32, parent_starts[0..node_count]);
-        defer self.allocator.free(parent_fill);
-        for (graph.nodes.items, 0..) |node, i| {
+        const parents = try scratch.alloc(GraphNodeId, parent_starts[node_count]);
+        const parent_fill = try scratch.dupe(u32, parent_starts[0..node_count]);
+        for (graph.nodes.items, reaches_cycle, 0..) |node, reaches, i| {
+            if (!reaches) continue;
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| {
                 const slot = &parent_fill[@backingInt(child)];
@@ -2124,16 +2247,17 @@ pub const Store = struct {
             }
         }
 
-        var pending = try std.ArrayList(GraphNodeId).initCapacity(self.allocator, node_count);
-        defer pending.deinit(self.allocator);
-        // Children are reserved after their parents, so trying the
-        // highest ids first resolves most nodes on their first try.
-        for (0..node_count) |i| pending.appendAssumeCapacity(@fromBackingInt(@intCast(i)));
+        // The working graph reserves children after their parents, so
+        // trying the highest ids first resolves most nodes on their first try.
+        var pending = try std.ArrayList(GraphNodeId).initCapacity(scratch, node_count);
+        for (reaches_cycle, 0..) |reaches, i| {
+            if (reaches) pending.appendAssumeCapacity(@fromBackingInt(@intCast(i)));
+        }
         while (pending.pop()) |node_id| {
             if (!try resolver.tryResolveNode(node_id)) continue;
             const index = @backingInt(node_id);
             for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-                if (!resolved[@backingInt(parent)]) try pending.append(self.allocator, parent);
+                if (!resolved[@backingInt(parent)]) try pending.append(scratch, parent);
             }
         }
 
@@ -2146,281 +2270,31 @@ pub const Store = struct {
             }
         }
 
-        const FinalizeState = enum(u2) { unseen, active, done };
-        const finalize_state = try self.allocator.alloc(FinalizeState, graph.nodes.items.len);
-        defer self.allocator.free(finalize_state);
-        @memset(finalize_state, .unseen);
-        const raw_used = try self.allocator.alloc(bool, graph.nodes.items.len);
-        defer self.allocator.free(raw_used);
-        @memset(raw_used, false);
-
-        const Finalizer = struct {
-            store: *Self,
-            graph: *const LayoutGraph,
-            raw_layouts: []Idx,
-            value_layouts: []Idx,
-            finalize_state: []FinalizeState,
-            raw_used: []bool,
-            recursive_nodes: []bool,
-            component_ids: []u32,
-
-            /// How a parent reads a child: as its final value, or as a
-            /// pointer target, which looks through nominal wrappers.
-            const ChildMode = enum { value, pointer };
-
-            /// The layout of child `ref`, or the node that must be finalized
-            /// first to produce it.
-            const ChildLayout = union(enum) {
-                layout: Idx,
-                finalize: GraphNodeId,
-            };
-
-            fn childLayout(self_finalizer: *@This(), ref: GraphRef, mode: ChildMode) ChildLayout {
-                var current = ref;
-                while (true) {
-                    const node_id = switch (current) {
-                        .canonical => |layout_idx| return .{ .layout = layout_idx },
-                        .local => |node_id| node_id,
-                    };
-                    if (mode == .pointer) {
-                        if (self_finalizer.graph.getNode(node_id) == .nominal) {
-                            current = self_finalizer.graph.getNode(node_id).nominal;
-                            continue;
-                        }
-                    }
-                    const index = @backingInt(node_id);
-                    return switch (self_finalizer.finalize_state[index]) {
-                        .done => .{ .layout = self_finalizer.value_layouts[index] },
-                        .active => blk: {
-                            self_finalizer.raw_used[index] = true;
-                            break :blk .{ .layout = self_finalizer.raw_layouts[index] };
-                        },
-                        .unseen => .{ .finalize = node_id },
-                    };
-                }
-            }
-
-            fn shouldBoxRecursiveSlotEdge(
-                self_finalizer: *@This(),
-                parent_id: GraphNodeId,
-                child_ref: GraphRef,
-            ) bool {
-                const child_id = switch (child_ref) {
-                    .canonical => return false,
-                    .local => |id| id,
-                };
-                const parent_index = @backingInt(parent_id);
-                const child_index = @backingInt(child_id);
-
-                if (!self_finalizer.recursive_nodes[parent_index] or !self_finalizer.recursive_nodes[child_index]) {
-                    return false;
-                }
-                if (self_finalizer.component_ids[parent_index] != self_finalizer.component_ids[child_index]) {
-                    return false;
-                }
-
-                return switch (self_finalizer.graph.getNode(parent_id)) {
-                    .struct_ => true,
-                    .tag_union => switch (self_finalizer.graph.getNode(child_id)) {
-                        .struct_ => false,
-                        .pending, .committed, .nominal, .box, .list, .closure, .erased_callable, .tag_union => true,
-                    },
-                    .pending, .committed, .nominal, .box, .list, .closure, .erased_callable => false,
-                };
-            }
-
-            fn recursiveSlotTargetLayout(
-                self_finalizer: *@This(),
-                child_ref: GraphRef,
-            ) Idx {
-                var current = child_ref;
-                while (true) {
-                    const child_id = switch (current) {
-                        .canonical => |layout_idx| return layout_idx,
-                        .local => |child_id| child_id,
-                    };
-                    switch (self_finalizer.graph.getNode(child_id)) {
-                        .nominal => |child| current = child,
-                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
-                            self_finalizer.raw_used[@backingInt(child_id)] = true;
-                            return self_finalizer.raw_layouts[@backingInt(child_id)];
-                        },
-                    }
-                }
-            }
-
-            fn recursiveSlotLayout(
-                self_finalizer: *@This(),
-                child_ref: GraphRef,
-            ) std.mem.Allocator.Error!Idx {
-                return try self_finalizer.store.insertBox(self_finalizer.recursiveSlotTargetLayout(child_ref));
-            }
-
-            /// Finalize `root` and every node it needs first. Children are
-            /// finalized before their parents; each node being finalized
-            /// waits in a frame on an explicit stack, so layout nesting never
-            /// becomes native call depth. Layouts are inserted in the order a
-            /// direct recursive finalization inserted them.
-            fn finalizeNode(self_finalizer: *@This(), start: GraphNodeId) std.mem.Allocator.Error!Idx {
-                const root_index = @backingInt(start);
-                switch (self_finalizer.finalize_state[root_index]) {
-                    .done => return self_finalizer.value_layouts[root_index],
-                    .active => {
-                        self_finalizer.raw_used[root_index] = true;
-                        return self_finalizer.raw_layouts[root_index];
-                    },
-                    .unseen => {},
-                }
-                const allocator = self_finalizer.store.allocator;
-                const Frame = struct {
-                    node_id: GraphNodeId,
-                    /// Child layouts finalized so far, in order.
-                    children: std.ArrayList(Idx) = .empty,
-                };
-                var frames: std.ArrayList(Frame) = .empty;
-                defer {
-                    for (frames.items) |*frame| frame.children.deinit(allocator);
-                    frames.deinit(allocator);
-                }
-                self_finalizer.finalize_state[root_index] = .active;
-                try frames.append(allocator, .{ .node_id = start });
-                var input: ?Idx = null;
-                while (true) {
-                    const frame = &frames.items[frames.items.len - 1];
-                    if (input) |child| try frame.children.append(allocator, child);
-                    input = null;
-                    const node_id = frame.node_id;
-                    const node = self_finalizer.graph.getNode(node_id);
-                    // The next child to read, with how it is read.
-                    const next: ?struct { ref: GraphRef, mode: ChildMode } = switch (node) {
-                        .pending, .committed => unreachable,
-                        .nominal => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .value } else null,
-                        .box, .list, .closure => |child| if (frame.children.items.len == 0) .{ .ref = child, .mode = .pointer } else null,
-                        .erased_callable => null,
-                        .struct_ => |span| blk: {
-                            const graph_fields = self_finalizer.graph.getFields(span);
-                            while (frame.children.items.len < graph_fields.len) {
-                                const field = graph_fields[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, field.child)) break :blk .{ .ref = field.child, .mode = .value };
-                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(field.child));
-                            }
-                            break :blk null;
-                        },
-                        .tag_union => |span| blk: {
-                            const graph_refs = self_finalizer.graph.getRefs(span);
-                            while (frame.children.items.len < graph_refs.len) {
-                                const variant_ref = graph_refs[frame.children.items.len];
-                                if (!self_finalizer.shouldBoxRecursiveSlotEdge(node_id, variant_ref)) break :blk .{ .ref = variant_ref, .mode = .value };
-                                try frame.children.append(allocator, try self_finalizer.recursiveSlotLayout(variant_ref));
-                            }
-                            break :blk null;
-                        },
-                    };
-                    if (next) |child| {
-                        switch (self_finalizer.childLayout(child.ref, child.mode)) {
-                            .layout => |layout_idx| input = layout_idx,
-                            .finalize => |child_id| {
-                                self_finalizer.finalize_state[@backingInt(child_id)] = .active;
-                                try frames.append(allocator, .{ .node_id = child_id });
-                            },
-                        }
-                        continue;
-                    }
-
-                    const children = frame.children.items;
-                    const value_layout = switch (node) {
-                        .pending, .committed => unreachable,
-                        .nominal => children[0],
-                        .box => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
-                            try self_finalizer.store.insertLayout(Layout.boxOfZst())
-                        else
-                            try self_finalizer.store.insertBox(children[0]),
-                        .list => if (self_finalizer.store.isZeroSized(self_finalizer.store.getLayout(children[0])))
-                            try self_finalizer.store.insertLayout(Layout.listOfZst())
-                        else
-                            try self_finalizer.store.insertList(children[0]),
-                        .closure => try self_finalizer.store.insertLayout(Layout.closure(children[0])),
-                        .erased_callable => try self_finalizer.store.insertErasedCallable(),
-                        .struct_ => |span| blk_struct: {
-                            const graph_fields = self_finalizer.graph.getFields(span);
-                            if (graph_fields.len == 0) break :blk_struct .zst;
-                            const fields = try allocator.alloc(StructField, graph_fields.len);
-                            defer allocator.free(fields);
-                            for (graph_fields, children, fields) |field, field_layout, *out| out.* = .{
-                                .index = field.index,
-                                .layout = field_layout,
-                                .is_padding = field.is_padding,
-                            };
-                            break :blk_struct if (span.order == .declared)
-                                try self_finalizer.store.putNominalStructFields(fields)
-                            else
-                                try self_finalizer.store.putStructFields(fields);
-                        },
-                        .tag_union => try self_finalizer.store.putTagUnion(children),
-                    };
-
-                    const index = @backingInt(node_id);
-                    if (self_finalizer.raw_used[index]) {
-                        self_finalizer.store.updateLayout(
-                            self_finalizer.raw_layouts[index],
-                            self_finalizer.store.getLayout(value_layout),
-                        );
-                        self_finalizer.value_layouts[index] = self_finalizer.raw_layouts[index];
-                    } else {
-                        self_finalizer.value_layouts[index] = value_layout;
-                    }
-                    self_finalizer.finalize_state[index] = .done;
-                    var finished = frames.pop().?;
-                    finished.children.deinit(allocator);
-                    if (frames.items.len == 0) return self_finalizer.value_layouts[index];
-                    input = self_finalizer.value_layouts[index];
-                }
-            }
-        };
-
-        var finalizer = Finalizer{
-            .store = self,
-            .graph = graph,
-            .raw_layouts = raw_layouts,
-            .value_layouts = value_layouts,
-            .finalize_state = finalize_state,
-            .raw_used = raw_used,
-            .recursive_nodes = recursive_nodes,
-            .component_ids = component_ids,
-        };
-
         for (graph.nodes.items, 0..) |_, i| {
             const finalized = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(finalized == value_layouts[i]);
-            } else if (finalized != value_layouts[i]) {
-                unreachable;
-            }
+            std.debug.assert(finalized == value_layouts[i]);
         }
 
-        for (graph.nodes.items, 0..) |_, i| {
-            self.updateLayout(
-                raw_layouts[i],
-                self.getLayout(value_layouts[i]),
-            );
+        for (reaches_cycle, 0..) |reaches, i| {
+            if (reaches) self.setCommitLayout(raw_layouts[i], self.getLayout(value_layouts[i]));
         }
 
-        for (graph.nodes.items, 0..) |_, i| {
-            if (value_layouts[i] == raw_layouts[i]) {
+        for (reaches_cycle, 0..) |reaches, i| {
+            if (reaches and value_layouts[i] == raw_layouts[i]) {
                 try self.publishExistingLayoutInternKey(raw_layouts[i]);
             }
         }
 
-        const root_idx = switch (root) {
-            .canonical => |layout_idx| layout_idx,
-            .local => |node_id| value_layouts[@backingInt(node_id)],
-        };
+        // Raw slots changed after layouts reaching them were reserved, so
+        // every layout this phase reserved resolves its list layout from
+        // the finished contents.
+        const layouts_end: usize = @intCast(self.layouts.len());
+        for (@as(usize, @intCast(layouts_start))..layouts_end) |i| {
+            const idx: Idx = @fromBackingInt(@intCast(i));
+            self.resolved_list_layouts.items[i] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+        }
 
-        return .{
-            .root_idx = root_idx,
-            .raw_layouts = raw_layouts,
-            .value_layouts = value_layouts,
-        };
+        return value_layouts;
     }
 
     /// Create a struct layout representing the sequential layout of closure captures.
@@ -2433,24 +2307,7 @@ pub const Store = struct {
             try temp_fields.append(self.allocator, .{ .index = @intCast(i), .layout = cap_idx });
         }
 
-        return self.internStructShape(
-            self.structFieldsSortKey(temp_fields.items),
-            self.structSizes(temp_fields.items),
-            temp_fields.items,
-        );
-    }
-
-    /// Whether a value stored in this layout is described by a Boxy
-    /// descriptor wherever one governs it: a box, or a struct, tag union,
-    /// list, or vector whose parts can hold Boxy values. List operations and
-    /// the runtime read a governed list item through the list's descriptor.
-    pub fn layoutTakesBoxyStructuralDesc(self: *const Self, idx: Idx) bool {
-        const value_layout = self.getLayout(idx);
-        return switch (value_layout.tag) {
-            .erased_box, .box, .list, .list_of_zst, .struct_, .tag_union => true,
-            .scalar => value_layout.getScalar().tag == .vector,
-            .box_of_zst, .closure, .erased_callable, .zst, .ptr => false,
-        };
+        return self.internStructShape(try self.measureStructFields(temp_fields.items), temp_fields.items);
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
@@ -2487,6 +2344,65 @@ pub const Store = struct {
         };
     }
 
+    /// Whether a value of layout `actual` can stand where layout `expected` is
+    /// required (design.md "Specialization By Demand"): the two are equal, or
+    /// `expected` is a list or box of holes and `actual` a list or box of
+    /// sized items, or both are structs of the same shape whose fields accept
+    /// pairwise. A demand-shaped procedure reads a list or box of holes only
+    /// as its header, which every element type shares, and such headers have
+    /// one size and alignment whatever their items are. A tag union never
+    /// crosses a demand-shaped call (its row joins where values flow), so an
+    /// unequal tag union is not accepted.
+    pub fn acceptsAtHoles(self: *const Self, allocator: std.mem.Allocator, actual: Idx, expected: Idx) std.mem.Allocator.Error!bool {
+        var pending: std.ArrayList([2]Idx) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, .{ actual, expected });
+        while (pending.pop()) |pair| {
+            if (pair[0] == pair[1]) continue;
+            const actual_layout = self.getLayout(pair[0]);
+            const expected_layout = self.getLayout(pair[1]);
+            switch (expected_layout.tag) {
+                // A list or box of zero-sized items has a runtime
+                // representation of its own, which a hole never stands for.
+                .list => {
+                    if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
+                    if (actual_layout.tag != .list) return false;
+                },
+                .box => {
+                    if (self.getLayout(expected_layout.getIdx()).tag != .hole) return false;
+                    if (actual_layout.tag != .box) return false;
+                },
+                .struct_ => {
+                    if (actual_layout.tag != .struct_) return false;
+                    const expected_fields = self.struct_fields.sliceRange(self.getStructData(expected_layout.getStruct().idx).getFields());
+                    const actual_fields = self.struct_fields.sliceRange(self.getStructData(actual_layout.getStruct().idx).getFields());
+                    if (expected_fields.len != actual_fields.len) return false;
+                    for (0..expected_fields.len) |index| {
+                        const expected_field = expected_fields.get(index);
+                        const actual_field = actual_fields.get(index);
+                        if (expected_field.index != actual_field.index or expected_field.is_padding != actual_field.is_padding) return false;
+                        try pending.append(allocator, .{ actual_field.layout, expected_field.layout });
+                    }
+                },
+                .scalar, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr, .hole, .tag_union, .dynamic => return false,
+            }
+        }
+        return true;
+    }
+
+    /// Whether a value of this layout carries a demand hole: the hole itself,
+    /// or a list or box of one. No refcount plan exists for such a value; the
+    /// procedures that hold one borrow it (design.md "Specialization By
+    /// Demand").
+    pub fn layoutHoldsHole(self: *const Self, layout_idx: Idx) bool {
+        const value = self.getLayout(layout_idx);
+        return switch (value.tag) {
+            .hole => true,
+            .list, .box => self.getLayout(value.getIdx()).tag == .hole,
+            .scalar, .box_of_zst, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .dynamic => false,
+        };
+    }
+
     pub fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: Idx) Idx {
         var current = layout_idx;
         while (true) {
@@ -2500,7 +2416,8 @@ pub const Store = struct {
         const list_layout = self.getLayout(list_layout_idx);
         std.debug.assert(list_layout.tag == .list or list_layout.tag == .list_of_zst);
         const info = self.getListInfo(list_layout);
-        const runtime_elem_layout_idx = if (list_layout.tag == .list)
+        // A list of holes is a list header whose items no code reads.
+        const runtime_elem_layout_idx = if (list_layout.tag == .list and info.elem_layout.tag != .hole)
             self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
         else
             null;
@@ -2522,7 +2439,7 @@ pub const Store = struct {
         const box_layout = self.getLayout(box_layout_idx);
         std.debug.assert(box_layout.tag == .box or box_layout.tag == .box_of_zst);
         const info = self.getBoxInfo(box_layout);
-        const runtime_elem_layout_idx = if (box_layout.tag == .box)
+        const runtime_elem_layout_idx = if (box_layout.tag == .box and info.elem_layout.tag != .hole)
             self.runtimeRepresentationLayoutIdx(info.elem_layout_idx)
         else
             null;
@@ -2560,7 +2477,7 @@ pub const Store = struct {
         const struct_data = self.getStructData(layout.getStruct().idx);
         return StructInfo{
             .data = struct_data,
-            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getStruct().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = struct_data.size.get(self.targetUsize()),
             .fields = self.struct_fields.sliceRange(struct_data.getFields()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
@@ -2574,7 +2491,7 @@ pub const Store = struct {
         return TagUnionInfo{
             .idx = layout.getTagUnion().idx,
             .data = tu_data,
-            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize()),
+            .alignment = layout.getTagUnion().sort_key.alignment(self.targetUsize().alignment()),
             .byte_size = tu_data.size.get(self.targetUsize()),
             .discriminant_offset = tu_data.discriminant_offset.get(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
@@ -2617,30 +2534,13 @@ pub const Store = struct {
         return self.getStructData(struct_idx).size.get(target_usize);
     }
 
-    /// Get the offset of a struct field at the given sorted index.
-    /// Effective alignment (in bytes) of a struct field for offset/size
-    /// computation. Padding spacers are always alignment 1—their value
-    /// layout's alignment is ignored so they never introduce internal padding
-    /// nor inflate the struct's alignment.
-    fn structFieldAlignmentBytes(field: StructField, size_align: SizeAlign) u32 {
-        if (field.is_padding) return 1;
-        return @intCast(size_align.alignment.toByteUnits());
-    }
-
     /// Record a newly committed struct's field offsets for both pointer
-    /// widths and its field positions ordered by original index, so field
-    /// queries never re-walk the struct.
+    /// widths, which `measureStructFields` left for these `fields`, and its
+    /// field positions ordered by original index, so field queries never
+    /// re-walk the struct.
     fn appendStructFieldPlacement(self: *Self, fields: []const StructField) std.mem.Allocator.Error!void {
-        var offsets = layout_mod.WidthValues(u32).both(0, 0);
-        for (fields) |field| {
-            const field_layout = self.getLayout(field.layout);
-            var field_offsets: layout_mod.WidthValues(u32) = undefined;
-            inline for (.{ target.TargetUsize.u32, target.TargetUsize.u64 }) |target_usize| {
-                const size_align = self.layoutSizeAlignAt(field_layout, target_usize);
-                const offset: u32 = @intCast(std.mem.alignForward(u32, offsets.get(target_usize), structFieldAlignmentBytes(field, size_align)));
-                field_offsets.per_target[@backingInt(target_usize)] = offset;
-                offsets.per_target[@backingInt(target_usize)] = offset + size_align.size;
-            }
+        std.debug.assert(self.scratch_field_offsets.items.len == fields.len);
+        for (self.scratch_field_offsets.items) |field_offsets| {
             _ = try self.struct_field_offsets.append(self.allocator, field_offsets);
         }
 
@@ -2778,26 +2678,16 @@ pub const Store = struct {
         return self.target_usize;
     }
 
-    /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
-    fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
-        return self.ensureZstLayout();
+    /// The zero-sized type layout, which every store holds at a fixed index.
+    pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
+        // The store is created holding the zero-sized layout at its fixed index.
+        std.debug.assert(self.getLayout(.zst).tag == .zst);
+        return .zst;
     }
 
-    /// Get or create a zero-sized type layout
-    pub fn ensureZstLayout(self: *Self) Allocator.Error!Idx {
-        // Check if we already have a ZST layout
-        const len: u32 = @intCast(self.layouts.len());
-        for (0..len) |i| {
-            const idx: Idx = @fromBackingInt(@intCast(i));
-            const layout = self.getLayout(idx);
-            if (layout.tag == .zst) {
-                return idx;
-            }
-        }
-
-        // Create new ZST layout
-        const zst_layout = Layout.zst();
-        return try self.insertLayout(zst_layout);
+    /// The layout every `.boxy` dynamic local has (see `Layout.dynamic`).
+    pub fn dynamicLayout(self: *Self) Allocator.Error!Idx {
+        return self.insertLayout(Layout.dynamic());
     }
 
     /// Get both the size and alignment of a layout in a single call.
@@ -2815,6 +2705,38 @@ pub const Store = struct {
         };
     }
 
+    /// Whether a list of `in_idx` items and a list of `out_idx` items can
+    /// share one allocation at `target_usize`: the same item stride, the same
+    /// allocation alignment class, and the same refcounted-items header
+    /// shape. A list of zero-sized items has no allocation to share.
+    pub fn listItemsInterchangeableAt(self: *const Self, in_idx: Idx, out_idx: Idx, target_usize: target.TargetUsize) bool {
+        const in_item = self.getLayout(in_idx);
+        const in_size = self.sizeAt(in_item, target_usize);
+        if (in_size == 0) return false;
+        const out_item = self.getLayout(out_idx);
+        if (self.sizeAt(out_item, target_usize) != in_size) return false;
+        // The allocation's hidden header and the alignment passed to the
+        // allocator both derive from max(ptr_width, item alignment) and from
+        // whether items are refcounted (which reserves an extra item-count
+        // slot for seamless slices). Both must agree or a later free would
+        // compute the wrong allocation pointer.
+        const ptr_width = target_usize.size();
+        const in_alignment: u32 = @intCast(in_item.alignment(target_usize).toByteUnits());
+        const out_alignment: u32 = @intCast(out_item.alignment(target_usize).toByteUnits());
+        if (@max(ptr_width, in_alignment) != @max(ptr_width, out_alignment)) return false;
+        return self.layoutContainsRefcounted(in_item) == self.layoutContainsRefcounted(out_item);
+    }
+
+    /// Whether a list's item layout occupies at most `bound` bytes, decided
+    /// per pointer width. A list of zero-sized items always fits.
+    pub fn listItemSizeAtMost(self: *const Self, list_layout_idx: Idx, bound: u128) layout_mod.WidthValues(bool) {
+        const list_layout = self.getLayout(list_layout_idx);
+        if (list_layout.tag == .list_of_zst) return layout_mod.WidthValues(bool).both(true, true);
+        if (list_layout.tag != .list) base.invariant("layout.Store invariant violated: listItemSizeAtMost expects a list layout, got {s}", .{@tagName(list_layout.tag)});
+        const elem = self.getLayout(self.runtimeRepresentationLayoutIdx(list_layout.getIdx()));
+        return layout_mod.WidthValues(bool).both(self.sizeAt(elem, .u32) <= bound, self.sizeAt(elem, .u64) <= bound);
+    }
+
     /// Size in bytes of a layout for a specific target. Aggregates read their
     /// precomputed per-target size; pointers/strings/lists scale with the target's
     /// pointer width. Recursion terminates at boxes.
@@ -2823,12 +2745,13 @@ pub const Store = struct {
             .scalar => switch (layout.getScalar().tag) {
                 .int => @intCast(layout.getScalar().getInt().size()),
                 .frac => @intCast(layout.getScalar().getFrac().size()),
-                .str => 3 * target_usize.size(), // ptr, encoded capacity, byte length
+                .str => builtins.str.RocStr.word_count * target_usize.size(),
                 .opaque_ptr => target_usize.size(),
                 .vector => 16,
             },
-            .box, .box_of_zst, .erased_box, .erased_callable, .ptr => target_usize.size(),
-            .list, .list_of_zst => 3 * target_usize.size(), // ptr, length, capacity
+            // A dynamic local holds the address of its bytes.
+            .box, .box_of_zst, .erased_callable, .ptr, .dynamic => target_usize.size(),
+            .list, .list_of_zst => builtins.list.RocList.word_count * target_usize.size(),
             .struct_ => self.getStructData(layout.getStruct().idx).size.get(target_usize),
             // A closure's captures follow its header, aligned; captures
             // that are themselves a closure nest the same way.
@@ -2845,50 +2768,64 @@ pub const Store = struct {
                 break :blk offset + self.sizeAt(current, target_usize);
             },
             .tag_union => self.getTagUnionData(layout.getTagUnion().idx).size.get(target_usize),
-            .zst => 0,
+            .zst, .hole => 0,
         };
     }
 
-    /// The struct's total byte size for a specific target, laid out in committed
-    /// field order with C-style padding (matches `getStructFieldOffset`).
-    fn structSizeAt(self: *const Self, fields: []const StructField, target_usize: target.TargetUsize) u32 {
-        var max_alignment: u32 = 1;
-        var current_offset: u32 = 0;
-        for (fields) |field| {
-            const field_align: u32 = if (field.is_padding)
-                1
-            else
-                @intCast(self.getLayout(field.layout).alignment(target_usize).toByteUnits());
-            max_alignment = @max(max_alignment, field_align);
-            current_offset = @intCast(std.mem.alignForward(u32, current_offset, field_align));
-            current_offset += self.sizeAt(self.getLayout(field.layout), target_usize);
-        }
-        return @intCast(std.mem.alignForward(u32, current_offset, max_alignment));
-    }
+    /// A struct's total byte size for both pointer widths, laid out in field
+    /// order with C-style padding, and its alignment class (the max sort key
+    /// of its non-padding fields).
+    const StructMetrics = struct {
+        sizes: layout_mod.WidthValues(u32),
+        sort_key: layout_mod.SortKey,
+    };
 
-    /// The struct's size precomputed for both pointer widths (target-independent).
-    fn structSizes(self: *const Self, fields: []const StructField) layout_mod.WidthValues(u32) {
-        return layout_mod.WidthValues(u32).both(
-            self.structSizeAt(fields, .u32),
-            self.structSizeAt(fields, .u64),
-        );
+    /// Measure the struct of `fields` in one walk, reading each field's
+    /// layout once. Each field's offsets for both pointer widths (matching
+    /// `getStructFieldOffset`) are left in `scratch_field_offsets`.
+    fn measureStructFields(self: *Self, fields: []const StructField) std.mem.Allocator.Error!StructMetrics {
+        const offsets = &self.scratch_field_offsets;
+        offsets.clearRetainingCapacity();
+        try offsets.ensureTotalCapacity(self.allocator, fields.len);
+        var measures: [2]layout_shape.StructMeasure = .{ .{}, .{} };
+        for (fields) |field| {
+            const field_layout = self.getLayout(field.layout);
+            const sort_key = field_layout.sortKey();
+            var field_offsets: layout_mod.WidthValues(u32) = undefined;
+            inline for (.{ target.TargetUsize.u32, target.TargetUsize.u64 }) |target_usize| {
+                const width = @backingInt(target_usize);
+                const size_align = self.layoutSizeAlignAt(field_layout, target_usize);
+                field_offsets.per_target[width] = measures[width].place(.{
+                    .size = size_align.size,
+                    .alignment = @intCast(size_align.alignment.toByteUnits()),
+                    .sort_key = sort_key,
+                    .is_padding = field.is_padding,
+                });
+            }
+            offsets.appendAssumeCapacity(field_offsets);
+        }
+        const m32 = measures[@backingInt(target.TargetUsize.u32)].finish();
+        const m64 = measures[@backingInt(target.TargetUsize.u64)].finish();
+        return .{
+            .sizes = layout_mod.WidthValues(u32).both(m32.size, m64.size),
+            .sort_key = m64.sort_key,
+        };
     }
 
     /// A tag union's total size and discriminant offset for one target.
     const TagUnionMetrics = struct { size: u32, discriminant_offset: u32 };
     fn tagUnionMetricsAt(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8, target_usize: target.TargetUsize) TagUnionMetrics {
-        var max_payload_size: u32 = 0;
-        var max_payload_alignment: u32 = 1;
+        var measure = layout_shape.TagUnionMeasure.init(discriminant_size);
         for (variant_layouts) |variant_idx| {
             const variant_layout = self.getLayout(variant_idx);
-            max_payload_size = @max(max_payload_size, self.sizeAt(variant_layout, target_usize));
-            max_payload_alignment = @max(max_payload_alignment, @as(u32, @intCast(variant_layout.alignment(target_usize).toByteUnits())));
+            measure.addPayload(.{
+                .size = self.sizeAt(variant_layout, target_usize),
+                .alignment = @intCast(variant_layout.alignment(target_usize).toByteUnits()),
+                .sort_key = variant_layout.sortKey(),
+            });
         }
-        const disc_align: u32 = @intCast(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
-        const disc_offset: u32 = @intCast(std.mem.alignForward(u32, max_payload_size, disc_align));
-        const tu_align = @max(max_payload_alignment, disc_align);
-        const total_size: u32 = @intCast(std.mem.alignForward(u32, disc_offset + discriminant_size, tu_align));
-        return .{ .size = total_size, .discriminant_offset = disc_offset };
+        const metrics = measure.finish();
+        return .{ .size = metrics.size, .discriminant_offset = metrics.discriminant_offset };
     }
 
     /// Get the size in bytes of a layout, given the store's target usize.
@@ -2896,22 +2833,10 @@ pub const Store = struct {
         return self.layoutSizeAlign(layout).size;
     }
 
-    /// The alignment class of a struct from its (already-committed) fields—the
-    /// max sort key of its non-padding fields. Used at commit time to compute the
-    /// `sort_key` stored on the struct layout.
-    fn structFieldsSortKey(self: *const Self, fields: []const StructField) layout_mod.SortKey {
-        var key: layout_mod.SortKey = .align_1;
-        for (fields) |field| {
-            if (field.is_padding) continue;
-            key = key.max(self.getLayout(field.layout).sortKey());
-        }
-        return key;
-    }
-
     /// The alignment class of a tag union from its variant payloads and
     /// discriminant size. Used at commit time.
     fn tagUnionVariantsSortKey(self: *const Self, variant_layouts: []const Idx, discriminant_size: u8) layout_mod.SortKey {
-        var key = layout_mod.SortKey.fromAlignBytes(TagUnionData.alignmentForDiscriminantSize(discriminant_size).toByteUnits());
+        var key = layout_shape.discriminantSortKey(discriminant_size);
         for (variant_layouts) |variant_idx| {
             key = key.max(self.getLayout(variant_idx).sortKey());
         }
@@ -2921,7 +2846,9 @@ pub const Store = struct {
     /// Check if a layout is zero-sized
     /// This simply checks if the layout has size 0
     pub fn isZeroSized(self: *const Self, l: Layout) bool {
-        return self.layoutSize(l) == 0;
+        // A hole occupies no bytes, but a list or box of holes is an ordinary
+        // list or box whose items no code reads, not a list of zero-sized items.
+        return l.tag != .hole and self.layoutSize(l) == 0;
     }
 
     /// Check if a layout contains any refcounted data (directly or transitively).
@@ -2939,11 +2866,16 @@ pub const Store = struct {
     pub fn layoutContainsRefcounted(self: *const Self, l: Layout) bool {
         return switch (l.tag) {
             .scalar => l.getScalar().tag == .str,
-            .list, .list_of_zst, .box, .erased_box, .erased_callable => true,
+            .list, .list_of_zst, .box, .erased_callable => true,
             // Compiler-internal pointers are never refcounted (TRMC holes); this is
             // what keeps ARC from tracking hole/head locals.
             .ptr, .box_of_zst => false,
             .zst => false,
+            // A hole stands for an element no procedure body touches.
+            .hole => false,
+            // A dynamic local is one opaque owned unit: its descriptor decides
+            // at runtime whether anything in it is refcounted.
+            .dynamic => true,
             .struct_ => self.getStructData(l.getStruct().idx).contains_refcounted,
             .tag_union => self.getTagUnionData(l.getTagUnion().idx).contains_refcounted,
             .closure => blk: {
@@ -2952,6 +2884,98 @@ pub const Store = struct {
                 break :blk self.layoutContainsRefcounted(captures);
             },
         };
+    }
+
+    /// The number of ownership slots a value of this layout occupies inside a
+    /// struct. Every layout but a struct holding refcounted data is one slot,
+    /// padding spacers included. A struct holding refcounted data numbers its
+    /// fields' slots by semantic index, a refcounted struct field expanding
+    /// into its own slots in place: a field's first slot is its semantic
+    /// index plus the extra slots of the expanded fields before it. A flat
+    /// struct's slots are therefore exactly its semantic field indices, and
+    /// a refcounted struct nested in a field covers a contiguous slot range.
+    /// ARC field takes, residual releases, and residual shells name stored
+    /// units by slot. Struct counts are precomputed when the struct commits.
+    pub fn ownershipSlotCount(self: *const Self, layout_idx: Idx) u32 {
+        const l = self.getLayout(layout_idx);
+        if (l.tag != .struct_) return 1;
+        const data = self.getStructData(l.getStruct().idx);
+        return if (data.contains_refcounted) data.ownership_slots else 1;
+    }
+
+    /// The first ownership slot of a struct's field, by semantic index.
+    pub fn ownershipSlotBase(self: *const Self, struct_layout_idx: Idx, field_index: u32) u32 {
+        const l = self.getLayout(struct_layout_idx);
+        if (!self.getStructData(l.getStruct().idx).expands_fields) return field_index;
+        const info = self.getStructInfo(l);
+        var slot_base = field_index;
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (field.index >= field_index or field.is_padding) continue;
+            slot_base += self.ownershipSlotCount(field.layout) - 1;
+        }
+        return slot_base;
+    }
+
+    /// Ownership slot facts of a struct about to commit, from its already
+    /// committed field layouts.
+    fn computeStructOwnershipSlots(self: *const Self, fields: []const StructField, contains_refcounted: bool) struct { count: u32, expands_fields: bool } {
+        if (!contains_refcounted) return .{ .count = 1, .expands_fields = false };
+        var end: u32 = 0;
+        var extra: u32 = 0;
+        for (fields) |field| {
+            end = @max(end, field.index + 1);
+            if (field.is_padding) continue;
+            extra += self.ownershipSlotCount(field.layout) - 1;
+        }
+        return .{ .count = end + extra, .expands_fields = extra != 0 };
+    }
+
+    /// One ownership slot that holds refcounted data: a slot whose layout is
+    /// not a refcounted struct (those expand into their own slots).
+    pub const RcSlot = struct {
+        slot: u32,
+        layout: Idx,
+    };
+
+    /// Append the refcounted ownership slots of a struct layout, in slot
+    /// order, numbered from `slot_base`.
+    pub fn appendRcSlots(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+        struct_layout_idx: Idx,
+        slot_base: u32,
+        out: *std.ArrayList(RcSlot),
+    ) std.mem.Allocator.Error!void {
+        const start = out.items.len;
+        try self.appendRcSlotsUnordered(allocator, struct_layout_idx, slot_base, out);
+        std.sort.pdq(RcSlot, out.items[start..], {}, rcSlotLessThan);
+    }
+
+    fn appendRcSlotsUnordered(
+        self: *const Self,
+        allocator: std.mem.Allocator,
+        struct_layout_idx: Idx,
+        slot_base: u32,
+        out: *std.ArrayList(RcSlot),
+    ) std.mem.Allocator.Error!void {
+        const info = self.getStructInfo(self.getLayout(struct_layout_idx));
+        for (0..info.fields.len) |i| {
+            const field = info.fields.get(@intCast(i));
+            if (field.is_padding) continue;
+            const field_layout = self.getLayout(field.layout);
+            if (!self.layoutContainsRefcounted(field_layout)) continue;
+            const field_base = slot_base + self.ownershipSlotBase(struct_layout_idx, field.index);
+            if (field_layout.tag == .struct_) {
+                try self.appendRcSlotsUnordered(allocator, field.layout, field_base, out);
+            } else {
+                try out.append(allocator, .{ .slot = field_base, .layout = field.layout });
+            }
+        }
+    }
+
+    fn rcSlotLessThan(_: void, a: RcSlot, b: RcSlot) bool {
+        return a.slot < b.slot;
     }
 
     /// Compute whether a struct contains refcounted data from its already-committed
@@ -3028,8 +3052,15 @@ pub const Store = struct {
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
         const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
-        self.digest_cache.invalidate();
-        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx);
+        self.digest_cache.invalidateLayout(idx);
+        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx) orelse .none;
+    }
+
+    /// Overwrite a layout that the running graph commit reserved. The commit
+    /// resolves list layouts once its layouts are finished.
+    fn setCommitLayout(self: *Self, idx: Idx, layout: Layout) void {
+        self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx)))).* = layout;
+        self.digest_cache.invalidateLayout(idx);
     }
 
     fn computeResolvedListLayoutIdx(self: *const Self, start: Idx) ?Idx {
@@ -3051,9 +3082,26 @@ pub const Store = struct {
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        return self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        const resolved = self.resolved_list_layouts.items[@backingInt(layout_idx)];
+        return if (resolved == Idx.none) null else resolved;
     }
 };
+
+fn askListItemSizeOfScalar() std.mem.Allocator.Error!void {
+    var store = try Store.init(std.testing.allocator, .u64);
+    defer store.deinit();
+    _ = store.listItemSizeAtMost(.u8, 8);
+}
+
+// In builds without runtime safety the invariant is the same `unreachable`
+// the site states, so release codegen of `listItemSizeAtMost` is unchanged.
+test "listItemSizeAtMost reports a non-list layout as a violated invariant" {
+    try base.death_test.expectPanic(
+        "layout.Store invariant violated: listItemSizeAtMost expects a list layout, got scalar",
+        askListItemSizeOfScalar,
+        .{},
+    );
+}
 
 test "layout store commits struct fields in canonical structural order" {
     const testing = std.testing;
@@ -3140,6 +3188,39 @@ test "putNominalStructFields keeps declared order and inserts C-style padding" {
     try testing.expectEqual(@as(u32, 4), store.getStructFieldOffsetByOriginalIndex(struct_idx, 1));
     try testing.expectEqual(@as(u32, 6), store.getStructFieldOffsetByOriginalIndex(struct_idx, 2));
     try testing.expectEqual(@as(u32, 8), store.getStructSize(struct_idx));
+}
+
+test "commitGraph interns an acyclic graph without placeholder layouts" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `{ names : List(Str), count : U64 }`
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const struct_node = try graph.reserveNode(testing.allocator);
+    const list_node = try graph.reserveNode(testing.allocator);
+    graph.setNode(list_node, .{ .list = .{ .canonical = .str } });
+    graph.setNode(struct_node, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = list_node } },
+        .{ .index = 1, .child = .{ .canonical = .u64 } },
+    }) });
+
+    const layouts_before = store.layoutCount();
+    const struct_rows_before = store.struct_data.len();
+    var commit = try store.commitGraph(&graph, .{ .local = struct_node });
+    defer commit.deinit(testing.allocator);
+
+    // Exactly the list and the struct are added, each once.
+    try testing.expectEqual(layouts_before + 2, store.layoutCount());
+    try testing.expectEqual(struct_rows_before + 1, store.struct_data.len());
+    try testing.expectEqual(try store.insertList(.str), commit.value_layouts[@backingInt(list_node)]);
+    try testing.expectEqual(commit.root_idx, try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = commit.value_layouts[@backingInt(list_node)] },
+        .{ .index = 1, .layout = .u64 },
+    }));
+    try testing.expectEqual(layouts_before + 2, store.layoutCount());
 }
 
 test "commitGraph keeps a nominal struct with a `_` field in declared order" {
@@ -3278,7 +3359,7 @@ test "layout store records explicit resolved list layout facts for boxed lists" 
     try testing.expectEqual(@as(?Idx, null), store.resolvedListLayoutIdx(.u8));
 }
 
-test "ZST containers and erased boxes have distinct RC semantics" {
+test "ZST containers have distinct RC semantics" {
     const testing = std.testing;
 
     var store = try Store.init(testing.allocator, .u64);
@@ -3286,14 +3367,10 @@ test "ZST containers and erased boxes have distinct RC semantics" {
 
     const list_zst_idx = try store.insertLayout(Layout.listOfZst());
     const box_zst_idx = try store.insertLayout(Layout.boxOfZst());
-    const erased_box_idx = try store.insertErasedBox();
-    const list_erased_box_idx = try store.insertList(erased_box_idx);
 
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(.zst)));
     try testing.expect(store.layoutContainsRefcounted(store.getLayout(list_zst_idx)));
     try testing.expect(!store.layoutContainsRefcounted(store.getLayout(box_zst_idx)));
-    try testing.expect(store.layoutContainsRefcounted(store.getLayout(erased_box_idx)));
-    try testing.expectEqual(store.targetUsize().size(), store.layoutSize(store.getLayout(erased_box_idx)));
 
     const list_abi = store.builtinListAbi(list_zst_idx);
     try testing.expectEqual(@as(?Idx, null), list_abi.elem_layout_idx);
@@ -3305,19 +3382,62 @@ test "ZST containers and erased boxes have distinct RC semantics" {
     try testing.expectEqual(@as(u32, 0), box_abi.elem_size);
     try testing.expect(!box_abi.contains_refcounted);
 
-    const list_erased_box_abi = store.builtinListAbi(list_erased_box_idx);
-    try testing.expectEqual(erased_box_idx, list_erased_box_abi.elem_layout_idx.?);
-    try testing.expectEqual(store.targetUsize().size(), list_erased_box_abi.elem_size);
-    try testing.expectEqual(
-        @as(u32, @intCast(store.targetUsize().alignment().toByteUnits())),
-        list_erased_box_abi.elem_alignment,
-    );
-    try testing.expect(list_erased_box_abi.contains_refcounted);
-
     try testing.expectEqual(
         rc_helper.Plan.noop,
         store.rcHelperPlan(.{ .op = .decref, .layout_idx = box_zst_idx }),
     );
+}
+
+test "ownership slots follow semantic indices and expand nested refcounted structs" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // A flat struct's slots are its semantic indices, sparse ones included.
+    const sparse_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 128, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 128), store.ownershipSlotBase(sparse_idx, 128));
+    try testing.expectEqual(@as(u32, 129), store.ownershipSlotCount(sparse_idx));
+
+    // A struct without refcounted data stays one slot.
+    const scalars_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = .i64 },
+    });
+    const with_scalars_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = scalars_idx },
+        .{ .index = 1, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 1), store.ownershipSlotBase(with_scalars_idx, 1));
+    try testing.expectEqual(@as(u32, 2), store.ownershipSlotCount(with_scalars_idx));
+
+    // inner = { 0: Str, 1: I64, 2: Str } expands in place inside
+    // outer = { 0: I64, 1: inner, 2: Str }.
+    const inner_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .str },
+        .{ .index = 1, .layout = .i64 },
+        .{ .index = 2, .layout = .str },
+    });
+    const outer_idx = try store.putStructFields(&.{
+        .{ .index = 0, .layout = .i64 },
+        .{ .index = 1, .layout = inner_idx },
+        .{ .index = 2, .layout = .str },
+    });
+    try testing.expectEqual(@as(u32, 0), store.ownershipSlotBase(outer_idx, 0));
+    try testing.expectEqual(@as(u32, 1), store.ownershipSlotBase(outer_idx, 1));
+    try testing.expectEqual(@as(u32, 4), store.ownershipSlotBase(outer_idx, 2));
+    try testing.expectEqual(@as(u32, 5), store.ownershipSlotCount(outer_idx));
+
+    var slots = std.ArrayList(Store.RcSlot).empty;
+    defer slots.deinit(testing.allocator);
+    try store.appendRcSlots(testing.allocator, outer_idx, 0, &slots);
+    try testing.expectEqual(@as(usize, 3), slots.items.len);
+    try testing.expectEqual(Store.RcSlot{ .slot = 1, .layout = .str }, slots.items[0]);
+    try testing.expectEqual(Store.RcSlot{ .slot = 3, .layout = .str }, slots.items[1]);
+    try testing.expectEqual(Store.RcSlot{ .slot = 4, .layout = .str }, slots.items[2]);
 }
 
 test "RC helper plans recurse through only refcounted struct fields" {
@@ -3645,8 +3765,9 @@ test "commitGraph keeps distinct-field recursive struct payloads apart" {
     }
     graph.setNode(union_node, .{ .tag_union = try graph.appendRefs(testing.allocator, &variants) });
 
-    var analysis = try Store.RecursiveGraphAnalysis.init(testing.allocator, &graph, &store.recursive_unfoldings);
-    defer analysis.deinit();
+    var analysis_arena = collections.SingleThreadArena.init(testing.allocator);
+    defer analysis_arena.deinit();
+    const analysis = try Store.RecursiveGraphAnalysis.init(analysis_arena.allocator(), &graph, &store.recursive_digests);
     var seen_keys = std.AutoHashMap(Store.RecursiveGraphAnalysis.RecursiveKey, void).init(testing.allocator);
     defer seen_keys.deinit();
     for (variants) |variant| {
@@ -3700,6 +3821,107 @@ test "commitGraph interns a recursive layout identically regardless of how its c
     try testing.expectEqual(loop_commit.root_idx, pair_commit.value_layouts[@backingInt(first_union)]);
     try testing.expectEqual(loop_commit.value_layouts[@backingInt(loop_box)], pair_commit.value_layouts[@backingInt(first_box)]);
     try testing.expectEqual(loop_commit.value_layouts[@backingInt(loop_box)], pair_commit.value_layouts[@backingInt(second_box)]);
+}
+
+test "commitGraph gives an unrolled spelling of a recursive union the union's layout" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `B = [Leaf, Branch({ f0 : B, f1 : List(B) })]` spelled self-contained,
+    // and `A`, the same type spelled with `f0` pointing back to `A` while
+    // `f1` points into `B`. `A` and `B` land in separate components, and the
+    // root record `{ f0 : A, f1 : List(B) }` is an unrolled `Branch` payload.
+    var graph = LayoutGraph{};
+    defer graph.deinit(testing.allocator);
+    const record = try graph.reserveNode(testing.allocator);
+    const a = try graph.reserveNode(testing.allocator);
+    const a_branch = try graph.reserveNode(testing.allocator);
+    const b = try graph.reserveNode(testing.allocator);
+    const b_branch = try graph.reserveNode(testing.allocator);
+    const b_list = try graph.reserveNode(testing.allocator);
+    graph.setNode(b_list, .{ .list = .{ .local = b } });
+    graph.setNode(b_branch, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = b } },
+        .{ .index = 1, .child = .{ .local = b_list } },
+    }) });
+    graph.setNode(b, .{ .tag_union = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = b_branch } }) });
+    graph.setNode(a_branch, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = a } },
+        .{ .index = 1, .child = .{ .local = b_list } },
+    }) });
+    graph.setNode(a, .{ .tag_union = try graph.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a_branch } }) });
+    graph.setNode(record, .{ .struct_ = try graph.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = a } },
+        .{ .index = 1, .child = .{ .local = b_list } },
+    }) });
+    var commit = try store.commitGraph(&graph, .{ .local = record });
+    defer commit.deinit(testing.allocator);
+
+    try testing.expectEqual(commit.value_layouts[@backingInt(b)], commit.value_layouts[@backingInt(a)]);
+    try testing.expectEqual(commit.value_layouts[@backingInt(b_branch)], commit.value_layouts[@backingInt(a_branch)]);
+    try testing.expectEqual(commit.value_layouts[@backingInt(b_branch)], commit.root_idx);
+
+    // `B` alone, committed afresh, is the same layout.
+    var alone = LayoutGraph{};
+    defer alone.deinit(testing.allocator);
+    const alone_b = try alone.reserveNode(testing.allocator);
+    const alone_branch = try alone.reserveNode(testing.allocator);
+    const alone_list = try alone.reserveNode(testing.allocator);
+    alone.setNode(alone_list, .{ .list = .{ .local = alone_b } });
+    alone.setNode(alone_branch, .{ .struct_ = try alone.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = alone_b } },
+        .{ .index = 1, .child = .{ .local = alone_list } },
+    }) });
+    alone.setNode(alone_b, .{ .tag_union = try alone.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = alone_branch } }) });
+    var alone_commit = try store.commitGraph(&alone, .{ .local = alone_b });
+    defer alone_commit.deinit(testing.allocator);
+    try testing.expectEqual(commit.value_layouts[@backingInt(b)], alone_commit.root_idx);
+}
+
+test "commitGraph gives an unrolled spelling the layout of the committed union it unrolls" {
+    const testing = std.testing;
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    // `B = [Leaf, Branch({ f0 : B, f1 : List(B) })]`, committed on its own.
+    var first = LayoutGraph{};
+    defer first.deinit(testing.allocator);
+    const b = try first.reserveNode(testing.allocator);
+    const b_branch = try first.reserveNode(testing.allocator);
+    const b_list = try first.reserveNode(testing.allocator);
+    first.setNode(b_list, .{ .list = .{ .local = b } });
+    first.setNode(b_branch, .{ .struct_ = try first.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = b } },
+        .{ .index = 1, .child = .{ .local = b_list } },
+    }) });
+    first.setNode(b, .{ .tag_union = try first.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = b_branch } }) });
+    var first_commit = try store.commitGraph(&first, .{ .local = b });
+    defer first_commit.deinit(testing.allocator);
+    var first_analysis_arena = collections.SingleThreadArena.init(testing.allocator);
+    defer first_analysis_arena.deinit();
+    const first_analysis = try Store.RecursiveGraphAnalysis.init(first_analysis_arena.allocator(), &first, &store.recursive_digests);
+
+    // `A`, the same type spelled with `f0` pointing back to `A` while `f1`
+    // reaches the committed `B`.
+    var second = LayoutGraph{};
+    defer second.deinit(testing.allocator);
+    const a = try second.reserveNode(testing.allocator);
+    const a_branch = try second.reserveNode(testing.allocator);
+    const committed_list = try second.addCommitted(
+        testing.allocator,
+        first_commit.value_layouts[@backingInt(b_list)],
+        first_analysis.digests[@backingInt(b_list)].?,
+    );
+    second.setNode(a_branch, .{ .struct_ = try second.appendFields(testing.allocator, &[_]graph_mod.Field{
+        .{ .index = 0, .child = .{ .local = a } },
+        .{ .index = 1, .child = .{ .local = committed_list } },
+    }) });
+    second.setNode(a, .{ .tag_union = try second.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = a_branch } }) });
+    var second_commit = try store.commitGraph(&second, .{ .local = a });
+    defer second_commit.deinit(testing.allocator);
+
+    try testing.expectEqual(first_commit.root_idx, second_commit.root_idx);
 }
 
 test "commitGraph keeps distinguishable nodes of one cycle distinct" {
@@ -3799,7 +4021,7 @@ test "commitGraph collapses interchangeable copies of a recursive closure layout
 
     // The store remembers one union, one box and one capture record, not
     // one of each per copy.
-    try testing.expectEqual(@as(usize, 3), store.interned_recursive_graphs.count());
+    try testing.expectEqual(@as(usize, 3), store.recursiveLayoutKeys().len);
 }
 
 test "commitGraph resolves locally built container children inside struct fields" {
@@ -4096,4 +4318,98 @@ test "tag union discriminant offsets beyond 16 bits are committed exactly" {
     });
     const with_str = try store.putTagUnion(&[_]Idx{ .zst, payload_with_str });
     try expectTagUnionMetrics(&store, with_str, 65_552, 65_560, 65_560, 65_568);
+}
+
+test "a list or box of holes accepts any list or box, alone or inside a struct" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const hole = try store.insertLayout(Layout.hole());
+    const list_of_holes = try store.insertList(hole);
+    const box_of_holes = try store.insertBox(hole);
+    const list_of_strs = try store.insertList(.str);
+    const box_of_u64 = try store.insertBox(.u64);
+    const list_of_zsts = try store.insertLayout(Layout.listOfZst());
+
+    // A list of holes is an ordinary list, not a list of zero-sized items.
+    try testing.expectEqual(LayoutTag.list, store.getLayout(list_of_holes).tag);
+    try testing.expectEqual(@as(?Idx, null), store.builtinListAbi(list_of_holes).elem_layout_idx);
+    try testing.expect(store.layoutHoldsHole(list_of_holes));
+    try testing.expect(!store.layoutHoldsHole(list_of_strs));
+
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, list_of_strs, list_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, list_of_zsts, list_of_holes));
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, box_of_u64, box_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, box_of_u64, list_of_holes));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, list_of_holes, list_of_strs));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, .u64, list_of_holes));
+
+    const shaped = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_holes },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const concrete = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_strs },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const mismatched = try store.putStructFields(&.{
+        .{ .index = 0, .layout = list_of_strs },
+        .{ .index = 1, .layout = .u32 },
+    });
+    try testing.expect(try store.acceptsAtHoles(testing.allocator, concrete, shaped));
+    try testing.expect(!try store.acceptsAtHoles(testing.allocator, mismatched, shaped));
+}
+
+test "RC helper plans are noop exactly for layouts without refcounted data" {
+    const testing = std.testing;
+
+    var store = try Store.init(testing.allocator, .u64);
+    defer store.deinit();
+
+    const plain_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .u64 },
+    });
+    const str_struct = try store.putStructFields(&[_]StructField{
+        .{ .index = 0, .layout = .u64 },
+        .{ .index = 1, .layout = .str },
+    });
+    const elems = [_]Idx{
+        .bool,
+        .str,
+        .u64,
+        .dec,
+        .opaque_ptr,
+        .zst,
+        .u8x16,
+        try store.insertList(.u64),
+        try store.insertList(.str),
+        try store.insertBox(.u64),
+        try store.insertBox(.str),
+        try store.insertBox(.zst),
+        try store.insertPtr(.str),
+        try store.insertErasedCallable(),
+        plain_struct,
+        str_struct,
+        try store.putTagUnion(&[_]Idx{ .zst, .u64 }),
+        try store.putTagUnion(&[_]Idx{ .zst, str_struct }),
+    };
+
+    for (elems) |elem| {
+        const contains_refcounted = store.layoutContainsRefcounted(store.getLayout(elem));
+        for ([_]rc_helper.RcOp{ .incref, .decref, .free, .host_drop }) |op| {
+            const plan = store.rcHelperPlan(.{ .op = op, .layout_idx = elem });
+            try testing.expectEqual(!contains_refcounted, plan == .noop);
+        }
+
+        // A list builtin's "items are refcounted" flag agrees with whether
+        // its item callbacks exist.
+        const list = try store.insertList(elem);
+        if (store.getLayout(list).tag != .list) continue;
+        const abi = store.builtinListAbi(list);
+        const item_plan = store.rcHelperPlan(.{ .op = .decref, .layout_idx = abi.elem_layout_idx.? });
+        try testing.expectEqual(abi.contains_refcounted, item_plan != .noop);
+    }
 }

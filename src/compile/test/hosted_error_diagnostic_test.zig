@@ -1,4 +1,10 @@
-//! Host provenance supplements, rather than replaces, closed-row diagnostics.
+//! A hosted function's tag rows are the host's and never widen (design.md "Row
+//! Joins"): a `?` on the hosted function, on an alias of it, or on a wrapper
+//! that forwards its result unchanged is rejected where it meets a wider error
+//! row, and the report names the host function and says how to rebuild the
+//! value. A wrapper that rebuilds the error, or forwards a row that is not the
+//! host's, is accepted. Every case runs with the host's error row written
+//! inline and named through an alias, which fixes the row the same way.
 const std = @import("std");
 const roc_target = @import("roc_target");
 const compile_build = @import("../compile_build.zig");
@@ -10,15 +16,23 @@ const DiagnosticTestError = compile_build.InitError ||
     std.Io.Writer.Error ||
     error{ TestUnexpectedResult, TestExpectedEqual };
 
-test "host error diagnostic follows imported function aliases" {
+test "a question on a hosted function alias cannot widen the host's error row" {
     try checkHostErrorDiagnostic("line! = Host.stdout_line!", .hosted);
 }
 
-test "host error diagnostic follows unchanged function results" {
+test "host error diagnostic names the host function on a payload mismatch through an alias" {
+    try checkHostErrorDiagnosticAgainst("line! = Host.stdout_line!", "[Exit(I32), StdoutErr(I64)]", .hosted);
+}
+
+test "host error diagnostic names the host function on a payload mismatch through a wrapper" {
+    try checkHostErrorDiagnosticAgainst("line! = |s| Host.stdout_line!(s)", "[Exit(I32), StdoutErr(I64)]", .hosted);
+}
+
+test "a wrapper returning a host result unchanged cannot widen the host's error row" {
     try checkHostErrorDiagnostic("line! = |s| Host.stdout_line!(s)", .hosted);
 }
 
-test "host error diagnostic follows a question forwarding wrapper" {
+test "a question forwarding wrapper cannot widen the host's error row" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Stdout.alias!(s)?
@@ -28,7 +42,7 @@ test "host error diagnostic follows a question forwarding wrapper" {
     , .hosted);
 }
 
-test "host error diagnostic rejects implicit widening through a direct hosted question" {
+test "a wrapper forwarding a direct hosted question cannot widen the host's error row" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    Host.stdout_line!(s)?
@@ -37,7 +51,7 @@ test "host error diagnostic rejects implicit widening through a direct hosted qu
     , .hosted);
 }
 
-test "host error diagnostic follows a saved result in an imported question wrapper" {
+test "a wrapper forwarding a saved host result cannot widen the host's error row" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    result = Host.stdout_line!(s)
@@ -47,7 +61,7 @@ test "host error diagnostic follows a saved result in an imported question wrapp
     , .hosted);
 }
 
-test "host error diagnostic does not blame a saved unrelated host result" {
+test "a wrapper forwarding an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    hosted_result = Host.stdout_line!(s)
@@ -58,7 +72,7 @@ test "host error diagnostic does not blame a saved unrelated host result" {
         \\    result?
         \\    Ok({})
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
 test "host error diagnostic stops at explicit reconstruction" {
@@ -70,7 +84,7 @@ test "host error diagnostic stops at explicit reconstruction" {
     , .accepted);
 }
 
-test "host error diagnostic does not blame an unrelated host call" {
+test "a wrapper returning an unrelated closed result is widened at its caller's call" {
     try checkHostErrorDiagnostic(
         \\line! = |s| {
         \\    close : Try({}, [StdoutErr(Str)]) -> Try({}, [StdoutErr(Str)])
@@ -78,27 +92,56 @@ test "host error diagnostic does not blame an unrelated host call" {
         \\    _ = Host.stdout_line!(s)
         \\    close(Err(StdoutErr("local")))
         \\}
-    , .ordinary);
+    , .accepted);
 }
 
-const Expected = enum { hosted, ordinary, accepted };
+const Expected = enum { hosted, accepted };
 
 fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticTestError!void {
+    try checkHostErrorDiagnosticAgainst(wrapper, "[Exit(I32), StdoutErr(Str)]", expected);
+}
+
+/// The hosted `Host.stdout_line! : Str => Try({}, [StdoutErr(Str)])`, with its
+/// error row written inline and named through an alias.
+const host_sources = [_][]const u8{
+    \\Host := [].{
+    \\    stdout_line! : Str => Try({}, [StdoutErr(Str)])
+    \\}
+    ,
+    \\Host := [].{
+    \\    LineError : [StdoutErr(Str)]
+    \\    stdout_line! : Str => Try({}, LineError)
+    \\}
+    ,
+};
+
+/// Build an app whose `main!` declares the error row `main_err_row` and calls
+/// `Stdout.line!(..)?`, with `Stdout.line!` defined by `wrapper` over each of
+/// `host_sources`.
+fn checkHostErrorDiagnosticAgainst(wrapper: []const u8, main_err_row: []const u8, expected: Expected) DiagnosticTestError!void {
+    for (host_sources) |host_source| {
+        errdefer std.debug.print("with Host.roc:\n{s}\n", .{host_source});
+        try checkHostErrorDiagnosticWithHost(host_source, wrapper, main_err_row, expected);
+    }
+}
+
+fn checkHostErrorDiagnosticWithHost(host_source: []const u8, wrapper: []const u8, main_err_row: []const u8, expected: Expected) DiagnosticTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+    const app_source = try std.fmt.allocPrint(gpa,
+        \\app [main!] {{ pf: platform "./platform.roc" }}
+        \\import pf.Stdout
+        \\main! : List(Str) => Try({{}}, {s})
+        \\main! = |_args| {{
+        \\    Stdout.line!("Hello,World!")?
+        \\    Ok({{}})
+        \\}}
+    , .{main_err_row});
+    defer gpa.free(app_source);
+    try tmp.dir.writeFile(io, .{ .sub_path = "app.roc", .data = app_source });
     const files = .{
-        .{
-            "app.roc",
-            \\app [main!] { pf: platform "./platform.roc" }
-            \\import pf.Stdout
-            \\main! : List(Str) => Try({}, [Exit(I32), StdoutErr(Str)])
-            \\main! = |_args| {
-            \\    Stdout.line!("Hello,World!")?
-            \\    Ok({})
-            \\}
-        },
         .{
             "platform.roc",
             \\platform ""
@@ -116,14 +159,9 @@ fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticT
             \\    Err(_) => 1
             \\}
         },
-        .{
-            "Host.roc",
-            \\Host := [].{
-            \\    stdout_line! : Str => Try({}, [StdoutErr(Str)])
-            \\}
-        },
     };
     inline for (files) |file| try tmp.dir.writeFile(io, .{ .sub_path = file[0], .data = file[1] });
+    try tmp.dir.writeFile(io, .{ .sub_path = "Host.roc", .data = host_source });
     const stdout_source = try std.fmt.allocPrint(gpa,
         \\import Host
         \\Stdout := [].{{
@@ -153,13 +191,9 @@ fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticT
             const message = rendered.written();
             errdefer std.debug.print("{s}\n", .{message});
             try std.testing.expectEqualStrings("Type Mismatch", report.title);
-            try std.testing.expectEqual(expected == .hosted, std.mem.find(u8, message, "This error is forwarded from host function") != null);
-            if (expected == .hosted) {
-                try std.testing.expect(std.mem.find(u8, message, "Host.stdout_line!") != null);
-                try std.testing.expect(std.mem.find(u8, message, "fixed representation at the host boundary") != null);
-            }
-            try std.testing.expect(std.mem.find(u8, message, "This error payload is a closed tag union.") != null);
-            try std.testing.expect(std.mem.find(u8, message, "Forwarding the unchanged error payload does not convert it.") != null);
+            try std.testing.expect(std.mem.find(u8, message, "host function") != null);
+            try std.testing.expect(std.mem.find(u8, message, "Host.stdout_line!") != null);
+            try std.testing.expect(std.mem.find(u8, message, "rebuild") != null);
         }
     }
     try std.testing.expectEqual(@as(usize, if (expected == .accepted) 0 else 1), count);

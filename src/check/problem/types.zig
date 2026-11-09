@@ -19,18 +19,22 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 
 pub const Context = context_mod.Context;
 pub const Category = context_mod.Category;
+pub const CopiedRequirement = context_mod.CopiedRequirement;
+pub const SharedMethodUses = context_mod.SharedMethodUses;
 
-const ByteListRange = struct { start: usize, count: usize };
+const ByteListRange = struct { start: u64, count: u64 };
 
 /// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
 
 /// A range of patterns
-pub const MissingPatternsRange = struct { start: usize, count: usize };
+pub const MissingPatternsRange = struct { start: u64, count: u64 };
 
 /// The checker relation that recorded a problem, or whose unification queued
-/// a dispatch obligation whose problems then belong to it (design.md "Every
-/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// a dispatch obligation whose problems then belong to it, unless the
+/// obligation is an expression's own dispatch, which that expression's
+/// relation owns wherever it is queued (design.md "Every Rejection Is
+/// Explicit Recovery"). A relation is void at the settled state
 /// when it read an erroneous value, and a void relation's problems are
 /// withdrawn: an erroneous value relates to nothing. `kind` says which
 /// values the relation read.
@@ -83,10 +87,12 @@ pub const Problem = union(enum) {
     where_alias_in_type_position: WhereAliasInTypePosition,
     recursive_where_alias: RecursiveWhereAlias,
     where_clause_receiver_not_introduced: WhereClauseReceiverNotIntroduced,
+    where_requirement_not_function: WhereRequirementNotFunction,
     redundant_open_tag_union: RedundantOpenTagUnion,
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    polymorphic_recursion: PolymorphicRecursion,
     row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
@@ -97,6 +103,7 @@ pub const Problem = union(enum) {
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
+    hosted_where_requirement: HostedWhereRequirement,
     derived_method_value_use: DerivedMethodValueUse,
     capturing_method: CapturingMethod,
     unsupported_generated_method: UnsupportedGeneratedMethod,
@@ -131,8 +138,7 @@ pub const Problem = union(enum) {
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
-    unreachable_code: UnreachableCode,
-    comptime_unused_branch: ComptimeUnusedBranch,
+    discarded_var_update: DiscardedVarUpdate,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
     derived_codec_open_record: DerivedCodecOpenRecord,
@@ -184,6 +190,13 @@ pub const PlatformDefNotFound = struct {
     ctx: enum { not_found, found_but_not_exported },
 };
 
+/// A use of a generic definition that is on a recursion cycle and gives the
+/// definition different types from the ones it was itself used at (design.md
+/// "Polymorphic Recursion").
+pub const PolymorphicRecursion = struct {
+    region: base.Region,
+};
+
 /// Host-visible callable values must be directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
@@ -222,6 +235,20 @@ pub const AnnotationOnlyValue = struct {
 /// nothing to evaluate.
 pub const AnnotationOnlyValueUse = struct {
     region: base.Region,
+};
+
+/// A hosted declaration was selected to satisfy a `where` requirement whose
+/// result holds a tag union. The requiring function's body may use that union
+/// as part of a wider one, and a host's unions have the representation the host
+/// was compiled with, so a hosted declaration never serves such a requirement
+/// (design.md "Row Joins").
+pub const HostedWhereRequirement = struct {
+    /// The use that selected the hosted declaration.
+    region: base.Region,
+    /// The dispatcher type that owns the hosted declaration.
+    dispatcher_name: Ident.Idx,
+    /// The method the requirement names.
+    method_name: Ident.Idx,
 };
 
 /// A compiler-derived associated method was used as a value instead of being
@@ -410,7 +437,7 @@ pub const InvalidNominalDeclRecursion = struct {
     type_name: Ident.Idx,
     kind: Kind,
 
-    pub const Kind = enum { infinite, anonymous, growing_args };
+    pub const Kind = enum { infinite, anonymous, growing_args, reordered_args };
 };
 
 // generic errors //
@@ -628,6 +655,65 @@ pub const TypeMismatch = struct {
     /// a nested mismatch hidden behind the root operands. This is populated
     /// only for contexts that consume it.
     evidence: TypeMismatchEvidence = .none,
+    /// The pair whose relation failed, snapshotted before the root operands
+    /// were poisoned.
+    leaf: ?TypePair = null,
+    /// Set when `leaf` failed because the use gave one instantiated
+    /// interpolation's values different types.
+    interpolation_tie: ?InterpolationTie = null,
+    /// Set when the actual type carries a tag row a host-boundary annotation
+    /// wrote, which never widens (design.md "Row Joins"); the report says
+    /// how to write the value again, tag by tag, instead.
+    host_fixed_row: bool = false,
+    /// The hosted function the actual value's row is forwarded from, when the
+    /// forwarding path is unchanged. Diagnostic-only provenance.
+    host_fixed_origin: ?Ident.Idx = null,
+    /// Set when the relation failed because it required one type to have two
+    /// different methods of the same name.
+    method_conflict: ?MethodConflict = null,
+    /// How the report suggests turning the actual value into the expected
+    /// builtin `Str`.
+    str_conversion: StrConversion = .none,
+};
+
+/// Two requirements of one method on the same type that cannot agree. A type
+/// has one method of each name, so no type can satisfy both.
+pub const MethodConflict = struct {
+    method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator, which the
+    /// report names alongside the method it calls.
+    from_operator: bool,
+    /// Display text of each required method type.
+    first_type: ExtraStringIdx,
+    second_type: ExtraStringIdx,
+};
+
+/// The way a report suggests turning a value into a `Str` when it is used
+/// where the builtin `Str` is needed, decided by the checker from the value's
+/// type and that type's methods.
+pub const StrConversion = enum {
+    /// The value's type is not one a hint applies to.
+    none,
+    /// The value's type has a `to_str` method.
+    to_str,
+    /// The value's type is a nominal type declared in the module being
+    /// checked, and it has no `to_str` method.
+    define_to_str,
+    /// The value's type has no `to_str` method, and `Str.inspect` gives a
+    /// representation of it for debugging.
+    inspect,
+};
+
+/// A use of a generalized definition gave the values one of its
+/// interpolations shares between them different types: the interpolation
+/// converts them all with one `from_interpolation` call, so they have one
+/// item type (design.md "Builtin Str Interpolation Part Compatibility").
+pub const InterpolationTie = struct {
+    /// The interpolation in this module's source, or null when the
+    /// definition is in another module.
+    interpolation_region: ?base.Region,
+    /// The use that instantiated the definition.
+    use_region: base.Region,
 };
 
 /// The expected and actual types in a type mismatch
@@ -687,16 +773,6 @@ pub const NonExhaustiveDestructure = struct {
     empirical: bool = false,
 };
 
-/// A compile-time-only branch or match alternative was not taken by compile-time evaluation.
-pub const ComptimeUnusedBranch = struct {
-    kind: enum {
-        match,
-        if_,
-    },
-    site_region: base.Region,
-    branch_region: base.Region,
-};
-
 /// A conditional expression was known while checking, so it will always make the same choice.
 pub const ComptimeCondition = struct {
     kind: enum {
@@ -707,18 +783,36 @@ pub const ComptimeCondition = struct {
     region: base.Region,
 };
 
+/// The part of a match branch that a redundant or unmatchable pattern problem
+/// is about: either every `|` alternative of the branch, or one alternative.
+pub const MatchBranchPart = enum(u32) {
+    whole_branch = std.math.maxInt(u32),
+    _,
+
+    /// The alternative at this zero-based index within its branch.
+    pub fn alternative(index: u32) MatchBranchPart {
+        std.debug.assert(index != std.math.maxInt(u32));
+        return @fromBackingInt(index);
+    }
+
+    /// The zero-based alternative index, or null for the whole branch.
+    pub fn alternativeIndex(self: MatchBranchPart) ?u32 {
+        return if (self == .whole_branch) null else @backingInt(self);
+    }
+};
+
 /// Problem data for a redundant pattern in a match
 pub const RedundantPattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// Problem data for an unmatchable pattern (pattern on uninhabited type)
 pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
-    num_branches: u32,
-    problem_branch_index: u32,
+    branch_index: u32,
+    part: MatchBranchPart,
 };
 
 /// A name bound by one `|` alternative of a match branch but not by another,
@@ -735,9 +829,13 @@ pub const MatchAltBinderMissing = struct {
     missing_pattern_index: u32,
 };
 
-/// Code that appears after an expression or statement that never returns.
-pub const UnreachableCode = struct {
-    region: base.Region,
+/// A statement that calls a method on a `var` and discards the result, which
+/// could have been assigned back to that `var` (e.g. `$acc.append(e)`).
+pub const DiscardedVarUpdate = struct {
+    /// The discarded method call.
+    expr_region: base.Region,
+    /// The `var` the method was called on.
+    var_ident: Ident.Idx,
 };
 
 // static dispatch //
@@ -752,13 +850,23 @@ pub const StaticDispatch = union(enum) {
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
     undetermined_type: UndeterminedType,
+    local_value_method: LocalValueMethod,
 };
 
-/// A requirement failed on a type that nothing in the program determined: a
+/// A dispatch selected an associated binding of a type declared in a function
+/// body that is a value of that body, not a local procedure: nothing
+/// dispatches to such a binding (design.md "Methods Never Capture").
+pub const LocalValueMethod = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+};
+
+/// A requirement failed on a type that never resolved to a concrete type: a
 /// defaulting decision chose the type, and the chosen default cannot satisfy
-/// every requirement on it. Reported once per defaulted type, in terms of the
-/// type as the program wrote it—never the default the checker chose, which
-/// the user did not write.
+/// every requirement on it. Reported once per defaulted type as a missing
+/// method, in terms of the type as the program wrote it—never the default the
+/// checker chose, which the user did not write.
 pub const UndeterminedType = struct {
     /// Where the undetermined type comes from: the literal itself, or the
     /// expression that owns the failed requirement.
@@ -835,6 +943,14 @@ pub const DispatcherNotNominal = struct {
     /// Region of the expression that owns the failed obligation (see
     /// `DispatcherDoesNotImplMethod.owner_region`).
     owner_region: ?base.Region = null,
+    /// Numeric literal info for `from_literal` constraints of kind `numeral`
+    num_literal: ?types_mod.NumeralInfo = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 };
 
 /// Error when you try to static dispatch but the dispatcher does not have that method
@@ -853,11 +969,18 @@ pub const DispatcherDoesNotImplMethod = struct {
     owner_region: ?base.Region = null,
     /// Optional numeric literal info for `from_literal` constraints of kind `numeral`
     num_literal: ?types_mod.NumeralInfo = null,
-    /// Source region of the string literal for `from_literal` constraints of kind `quote`
-    quote_region: ?base.Region = null,
+    /// Source region of the string literal for `from_literal` constraints of
+    /// kind `quote` or `interpolation`
+    string_literal_region: ?base.Region = null,
     /// Set when the dispatcher is a record's or tag union's `..` extension,
     /// whose obligation came from deriving the method for that whole type.
     row_extension_of: ?RowExtension = null,
+    /// How the report suggests turning the literal into the builtin `Str`
+    /// when the dispatcher is `Str`.
+    str_conversion: StrConversion = .none,
+    /// Set when the obligation is a copy a use made out of another
+    /// definition's type.
+    copied: ?CopiedRequirement = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -897,9 +1020,9 @@ pub const TypeDoesNotSupportMap = struct {
 };
 
 /// Error when a compiler-derived `parser_for` or `encoder_for` is used at a type
-/// that nothing in the program ever determines fully (for example the element
+/// part of which never resolves to a concrete type (for example the element
 /// type of `List.parser_for(format)` when the parsed list is never used), so
-/// there is no single codec to derive.
+/// that part has no method to derive the codec from.
 pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
@@ -981,6 +1104,12 @@ pub const RecursiveWhereAlias = struct {
 /// variable introduced by a different annotation.
 pub const WhereClauseReceiverNotIntroduced = struct {
     type_var_name: base.Ident.Idx,
+    method_name: base.Ident.Idx,
+    region: base.Region,
+};
+
+/// Error when a where clause requires a method whose type is not a function.
+pub const WhereRequirementNotFunction = struct {
     method_name: base.Ident.Idx,
     region: base.Region,
 };

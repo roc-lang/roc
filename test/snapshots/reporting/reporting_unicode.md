@@ -74,8 +74,6 @@ The type was determined to be:<br>
 ~~~
 # LSP
 ~~~text
-type mismatch
-
 This string literal is being used where a non-string type is needed.
 greeting = "héllo 🐢"
            ^^^^^^^^^^

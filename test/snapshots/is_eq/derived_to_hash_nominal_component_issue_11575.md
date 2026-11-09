@@ -61,7 +61,12 @@ MISSING METHOD - derived_to_hash_nominal_component_issue_11575.md:14:5:14:31
 			(reflow " ")
 			(annotated code "frob")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "associated with it in the type's declaration.")
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "derived_to_hash_nominal_component_issue_11575.md") (start 6 23) (end 6 37) (annotation error) (line-text "        NotNull(v) => v.frob(hasher)")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -221,7 +226,7 @@ y = Dict.empty().insert(k, 99)
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "frob") (constraint-fn-var 339)
+								(e-dispatch-call (method "frob") (constraint-fn-var 344)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "v"))))
@@ -264,7 +269,7 @@ y = Dict.empty().insert(k, 99)
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "erroneous_value_expr")
-			(e-call (constraint-fn-var 386)
+			(e-call (constraint-fn-var 391)
 				(e-lookup-external
 					(builtin)))
 			(e-lookup-local

@@ -85,7 +85,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")
@@ -99,7 +99,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result4")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result4")
@@ -113,7 +113,7 @@ UNUSED VARIABLE - type_var_name_avoids_collision.md:61:5:61:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result5")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result5")
@@ -566,20 +566,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 550)
+					(e-call (constraint-fn-var 555)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "123"))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-call (constraint-fn-var 561)
+					(e-call (constraint-fn-var 566)
 						(e-lookup-local
 							(p-assign (ident "anotherIdentity")))
 						(e-string
 							(e-literal (string "test")))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 566)
+					(e-call (constraint-fn-var 571)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -588,17 +588,17 @@ main! = |_| {
 							(p-assign (ident "result2")))))
 				(s-let
 					(p-assign (ident "result4"))
-					(e-call (constraint-fn-var 570)
+					(e-call (constraint-fn-var 575)
 						(e-lookup-local
 							(p-assign (ident "yetAnotherIdentity")))
 						(e-tag (name "True"))))
 				(s-let
 					(p-assign (ident "result5"))
-					(e-call (constraint-fn-var 580)
+					(e-call (constraint-fn-var 585)
 						(e-lookup-local
 							(p-assign (ident "finalIdentity")))
 						(e-dec-small (numerator "314") (denominator-power-of-ten "2") (value "3.14"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 581)
+				(e-dispatch-call (method "plus") (constraint-fn-var 586)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "a"))))

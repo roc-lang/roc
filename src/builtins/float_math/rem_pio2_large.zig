@@ -380,7 +380,7 @@ pub fn rem_pio2_large(x: []const f64, y: []f64, e0: i32, nx: i32, prec: usize) i
                 switch (q0) {
                     1 => iq[@intCast(jz - 1)] &= 0x7fffff,
                     2 => iq[@intCast(jz - 1)] &= 0x3fffff,
-                    else => unreachable,
+                    else => unreachable, // q0 = e0 - 24 * (jv + 1) is at most 2 by the choice of jv above
                 }
             }
             if (ih == 2) {
@@ -515,7 +515,7 @@ pub fn rem_pio2_large(x: []const f64, y: []f64, e0: i32, nx: i32, prec: usize) i
                     y[2] = -fw;
                 }
             },
-            else => unreachable,
+            else => unreachable, // prec indexes init_jk above, which has entries only for 0 through 3
         }
 
         return n & 7;

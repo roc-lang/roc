@@ -76,7 +76,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:19
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "first")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_first")
@@ -90,7 +90,7 @@ UNUSED VARIABLE - list_patterns.md:3:15:3:19
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rest")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rest")

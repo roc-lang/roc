@@ -69,7 +69,7 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
             try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
             const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
             defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobBytes(bytes.list.packed_bytes.bytes));
+            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.packed_bytes.bytes));
         }
     }
     try std.testing.expectEqual(@as(usize, 1), constants);
@@ -77,60 +77,46 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
     // Count reachable emitted LIR, excluding abandoned rewrite nodes. This
     // measures the actual CTFE program without depending on CPU scheduling,
     // target instruction selection, or the compiler's optimization level.
-    const store = &session.host.?.lir_result.store;
     var result: Measurement = .{};
-    for (store.getProcSpecs()) |proc| {
-        var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body orelse continue);
-        defer walk.deinit();
-        while (try walk.next()) |stmt| {
-            result.statements += 1;
-            switch (store.getCFStmt(stmt)) {
-                .decref, .decref_if_initialized, .free => result.releases += 1,
-                .init_uninitialized,
-                .assign_ref,
-                .assign_literal,
-                .assign_call,
-                .assign_call_erased,
-                .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .boxy_tag_match,
-                .assign_call_dict,
-                .assign_low_level,
-                .assign_list,
-                .assign_struct,
-                .assign_tag,
-                .store_struct,
-                .store_tag,
-                .set_local,
-                .debug,
-                .expect,
-                .expect_err,
-                .runtime_error,
-                .comptime_exhaustiveness_failed,
-                .comptime_branch_taken,
-                .incref,
-                .switch_stmt,
-                .switch_initialized_payload,
-                .str_match,
-                .str_match_set,
-                .loop_continue,
-                .loop_break,
-                .join,
-                .jump,
-                .ret,
-                .crash,
-                => {},
+    for (session.completed.?.stages.items) |program| {
+        const store = &program.lir_result.store;
+        for (store.getProcSpecs()) |proc| {
+            var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body orelse continue);
+            defer walk.deinit();
+            while (try walk.next()) |stmt| {
+                result.statements += 1;
+                switch (store.getCFStmtImmediate(stmt).*) {
+                    .decref, .decref_if_initialized, .free => result.releases += 1,
+                    .init_uninitialized,
+                    .assign_ref,
+                    .assign_literal,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_low_level,
+                    .assign_list,
+                    .assign_struct,
+                    .assign_tag,
+                    .store_struct,
+                    .store_tag,
+                    .set_local,
+                    .debug,
+                    .expect,
+                    .expect_err,
+                    .runtime_error,
+                    .comptime_exhaustiveness_failed,
+                    .incref,
+                    .switch_stmt,
+                    .switch_initialized_payload,
+                    .str_match,
+                    .str_match_set,
+                    .join,
+                    .jump,
+                    .ret,
+                    .crash,
+                    .dyn,
+                    => {},
+                }
             }
         }
     }

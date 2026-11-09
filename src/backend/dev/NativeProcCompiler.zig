@@ -1,8 +1,8 @@
-//! Shared native procedure compilation and owned, same-program artifact reuse.
+//! Shared native procedure compilation and owned, same-program excerpt reuse.
 //!
 //! A reuse handle is a capability supplied by the caller: its LIR and layout
 //! domain must be the very same transferred program, never an independently
-//! lowered program with matching identities. Artifacts outlive executable images.
+//! lowered program with matching identities. Excerpts outlive executable images.
 //! Each wave freezes borrowed inputs until every accepted callback has drained;
 //! only then may the coordinator append code or destroy fragment owners.
 
@@ -12,8 +12,9 @@ const lir = @import("lir");
 const layout = @import("layout");
 const roc_target = @import("roc_target");
 const Emitter = @import("LirCodeGen.zig");
-const Artifact = @import("ProcArtifact.zig");
-const StackPlan = @import("StackPlan.zig");
+const Excerpt = @import("CodeExcerpt.zig");
+const task_waves = @import("../task_waves.zig");
+const StackPlan = lir.StackPlan;
 const tasks = base.post_check_task_executor;
 const Allocator = std.mem.Allocator;
 const ProcId = lir.LIR.LirProcSpecId;
@@ -62,13 +63,13 @@ pub const Procedure = struct {
     id: ProcId,
     identity: lir.ProcIdentity,
     revision: u64,
-    fragment: Artifact.Fragment,
+    fragment: Excerpt.Fragment,
 };
 
 /// An owned explicit LIR reference-count helper fragment.
 pub const Helper = struct {
     key: u64,
-    fragment: Artifact.Fragment,
+    fragment: Excerpt.Fragment,
 };
 
 /// Owns reusable fragments independently of workers and executable images.
@@ -80,23 +81,19 @@ pub const Retained = struct {
 
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
-    pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Artifact.DataItem {
-        var items: std.ArrayList(Artifact.DataItem) = .empty;
+    pub fn dataItems(self: *const Retained, allocator: Allocator) Allocator.Error![]const Excerpt.DataItem {
+        var collector = Excerpt.DataCollector{ .allocator = allocator };
+        defer collector.deinit();
+        for (self.procedures.items) |proc| for (proc.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        for (self.helpers.items) |helper| for (helper.fragment.set.excerpts) |excerpt| try collector.add(excerpt);
+        var items = std.ArrayList(Excerpt.DataItem).empty;
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
-        for (self.procedures.items) |proc| try collectData(allocator, &proc.fragment, &items, &names);
-        for (self.helpers.items) |helper| try collectData(allocator, &helper.fragment, &items, &names);
-        return items.toOwnedSlice(allocator);
-    }
-
-    fn collectData(allocator: Allocator, fragment: *const Artifact.Fragment, items: *std.ArrayList(Artifact.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
-        for (fragment.set.artifacts) |artifact| {
-            for (artifact.data) |item| {
-                const entry = try names.getOrPut(item.name);
-                if (!entry.found_existing) try items.append(allocator, item);
-            }
+        for (collector.items.items) |item| {
+            if (!(try names.getOrPut(item.name)).found_existing) try items.append(allocator, item);
         }
+        return items.toOwnedSlice(allocator);
     }
 
     /// Release all fragment and collection storage.
@@ -109,7 +106,7 @@ pub const Retained = struct {
     }
 };
 
-fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
+fn invariant(err: (Excerpt.ExtractError || Excerpt.AssembleError)) Allocator.Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         else => base.invariant("native fragment compiler invariant: {s}", .{@errorName(err)}),
@@ -123,14 +120,10 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
     }
     // Static-data ordinals are rebound by runtime compaction. String symbols
     // are relocatable and deliberately do not count as static-data dependencies.
-    const hook_transition = source.hooks_enabled and !target.hooks_enabled and !deps.comptime_hooks;
     if (source.hot_reload != target.hot_reload or
         source.default_platform_runtime != target.default_platform_runtime or
         (source.static_data_readonly != target.static_data_readonly and deps.static_data) or
-        (source.hooks_enabled != target.hooks_enabled and !hook_transition) or
-        deps.comptime_hooks or deps.static_data or
-        (source.dict_seed_mode != target.dict_seed_mode and deps.dict_seed) or
-        (source.initialize_boxy_runtime != target.initialize_boxy_runtime and deps.boxy_runtime_entry))
+        deps.static_data)
     {
         metrics.rejected_context +|= 1;
         return false;
@@ -141,14 +134,18 @@ fn reusable(source: Emitter.FragmentContract, target: Emitter.FragmentContract, 
 fn Job(comptime CG: type) type {
     return struct {
         source: *const CG,
-        data: *const Artifact.PreparedData,
+        data: *const Excerpt.PreparedData,
         proc: ?ProcId = null,
         helper: u64 = 0,
-        fragment: ?Artifact.Fragment = null,
+        fragment: ?Excerpt.Fragment = null,
         oom: bool = false,
         reused: bool = false,
 
-        fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
+        pub fn skipped(self: *const @This()) bool {
+            return self.reused;
+        }
+
+        pub fn execute(context: *anyopaque, worker: tasks.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(context));
             self.compile(worker) catch |err| {
                 switch (invariant(err)) {
@@ -158,30 +155,26 @@ fn Job(comptime CG: type) type {
             return self;
         }
 
-        fn compile(self: *@This(), worker: tasks.Worker) Artifact.ExtractError!void {
+        fn compile(self: *@This(), worker: tasks.Worker) Excerpt.ExtractError!void {
             const source = self.source;
-            var cg = try CG.initWithBoxyMetadata(
+            var cg = try CG.initWithCapturePrefix(
                 worker.scratch,
                 source.store,
                 source.layout_store,
                 source.static_strings,
-                source.erased_arg_desc_offsets,
-                source.erased_arg_desc_params,
-                source.boxy_worker_procs,
+                source.erased_capture_prefix,
                 source.cpu_level,
             );
             defer cg.deinit();
             cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
-            cg.dict_seed_mode = source.dict_seed_mode;
-            cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
-            cg.comptime_hooks = source.comptime_hooks;
+            cg.relocatable_expect_sites = source.relocatable_expect_sites;
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
-                try Artifact.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
+                try Excerpt.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)
             else
-                try Artifact.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
+                try Excerpt.compileRcHelperFragmentPrepared(CG, worker.allocator, &cg, self.helper, source.store.getProcSpecs(), source.layout_store, self.data);
         }
     };
 }
@@ -211,67 +204,26 @@ fn destroyStackPlanIndexes(opaque_indexes: *anyopaque) void {
 
 const wave_capacity = 32;
 
-/// Runs the same callback path with or without an executor. Admission stops on
-/// any observed OOM, but all accepted callbacks finish before owners are touched.
-/// Without an executor, every wave runs on `sequential_lane`, which outlives
-/// the waves so lane state carries from one to the next as on a worker.
-fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
-    var failed = false;
-    if (executor) |exec| {
-        var session = exec.begin();
-        var next: usize = 0;
-        var accepted: usize = 0;
-        while (next < jobs.len or session.outstanding != 0) {
-            while (!failed and next < jobs.len and session.canSubmit()) {
-                if (jobs[next].reused) {
-                    next += 1;
-                    continue;
-                }
-                session.submit(.{ .id = next, .context = &jobs[next], .run = Job(CG).execute }) catch {
-                    failed = true;
-                    break;
-                };
-                next += 1;
-                accepted += 1;
-                metrics.tasks_submitted +|= 1;
-                metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            }
-            if (session.outstanding != 0) {
-                const completion = session.receive();
-                if (jobs[completion.id].oom) failed = true;
-            } else if (failed) break;
-        }
-        session.end();
-    } else {
-        var scratch = std.heap.ArenaAllocator.init(allocator);
-        defer scratch.deinit();
-        var accepted: usize = 0;
-        for (jobs) |*job| {
-            if (job.reused) continue;
-            _ = scratch.reset(.retain_capacity);
-            metrics.tasks_submitted +|= 1;
-            accepted += 1;
-            metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = sequential_lane });
-            if (job.oom) {
-                failed = true;
-                break;
-            }
-        }
+/// Runs one bounded wave; see `task_waves.execute`.
+fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, sequential_scratch: *base.SingleThreadArena, metrics: *Metrics) Allocator.Error!void {
+    var admission: task_waves.Admission = .{ .submitted = metrics.tasks_submitted, .peak = metrics.peak_inflight_fragments };
+    defer {
+        metrics.tasks_submitted = admission.submitted;
+        metrics.peak_inflight_fragments = admission.peak;
     }
-    if (failed) return error.OutOfMemory;
+    return task_waves.execute(Job(CG), allocator, jobs, executor, sequential_lane, sequential_scratch, &admission);
 }
 
-fn requireHelpers(allocator: Allocator, fragment: *const Artifact.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
+fn requireHelpers(allocator: Allocator, fragment: *const Excerpt.Fragment, queue: *std.ArrayList(u64), seen: *std.AutoHashMap(u64, void)) Allocator.Error!void {
     for (fragment.required_helpers) |key| {
         const entry = try seen.getOrPut(key);
         if (!entry.found_existing) try queue.append(allocator, key);
     }
 }
 
-fn account(metrics: *Metrics, fragment: *const Artifact.Fragment, reused: bool, helper: bool) void {
+fn account(metrics: *Metrics, fragment: *const Excerpt.Fragment, reused: bool, helper: bool) void {
     var bytes: u64 = 0;
-    for (fragment.set.artifacts) |artifact| bytes +|= artifact.code.len;
+    for (fragment.set.excerpts) |excerpt| bytes +|= excerpt.code.len;
     if (reused) {
         metrics.code_bytes_reused +|= bytes;
         if (helper) metrics.helpers_reused +|= 1 else metrics.procedures_reused +|= 1;
@@ -298,10 +250,12 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     errdefer retained.deinit();
     var sequential_lane = tasks.LaneState.init(allocator);
     defer sequential_lane.deinit();
+    var sequential_scratch = base.SingleThreadArena.init(allocator);
+    defer sequential_scratch.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
-    var data = Artifact.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
+    var data = Excerpt.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
     var demanded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, specs.len);
@@ -317,7 +271,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         for (cache.procedures.items) |*proc| try cached_procs.putNoClobber(proc.identity, proc);
         for (cache.helpers.items) |*helper| try cached_helpers.putNoClobber(helper.key, helper);
     }
-    var helper_keys = Artifact.HelperKeys.init(allocator);
+    var helper_keys = Excerpt.HelperKeys.init(allocator);
     defer {
         var names = helper_keys.keyIterator();
         while (names.next()) |name| allocator.free(name.*);
@@ -358,12 +312,11 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
-            destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             const id = job.proc.?;
             const spec = specs[@backingInt(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
@@ -371,33 +324,45 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             job.fragment = null;
         }
     }
+    // Each helper wave takes only keys already queued when it starts, and
+    // commits in queue order, so every helper's requirements land in the queue
+    // exactly where a one-helper-at-a-time drain would put them.
     cursor = 0;
-    while (cursor < helper_queue.items.len) : (cursor += 1) {
-        const key = helper_queue.items[cursor];
-        if (destination.compiledRcHelperOffset(key) != null) continue;
-        var job = Job(CG){ .source = destination, .data = &data, .helper = key };
-        defer if (job.fragment) |*fragment| fragment.deinit();
-        if (cached_helpers.get(key)) |cached| {
-            if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
-                job.fragment = try cached.fragment.clone(allocator);
-                job.reused = true;
+    while (cursor < helper_queue.items.len) {
+        const frontier = helper_queue.items.len;
+        var storage: [wave_capacity]Job(CG) = undefined;
+        var count: usize = 0;
+        defer for (storage[0..count]) |*job| {
+            if (job.fragment) |*fragment| fragment.deinit();
+        };
+        while (cursor < frontier and count < wave_capacity) : (cursor += 1) {
+            const key = helper_queue.items[cursor];
+            if (destination.compiledRcHelperOffset(key) != null) continue;
+            storage[count] = .{ .source = destination, .data = &data, .helper = key };
+            const job = &storage[count];
+            count += 1;
+            if (cached_helpers.get(key)) |cached| {
+                if (reusable(options.reuse_same_program.?.contract, contract, cached.fragment.context_dependencies, &metrics)) {
+                    job.fragment = try cached.fragment.clone(allocator);
+                    job.reused = true;
+                }
             }
         }
-        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &metrics);
-        const fragment = &job.fragment.?;
-        try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
-        const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, key);
-        helper_keys.putNoClobber(name, key) catch |err| {
-            allocator.free(name);
-            return err;
-        };
-        destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-        Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
-        try retained.helpers.append(allocator, .{ .key = key, .fragment = fragment.* });
-        account(&metrics, fragment, job.reused, true);
-        job.fragment = null;
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &sequential_scratch, &metrics);
+        for (storage[0..count]) |*job| {
+            const fragment = &job.fragment.?;
+            try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
+            const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, job.helper);
+            helper_keys.putNoClobber(name, job.helper) catch |err| {
+                allocator.free(name);
+                return err;
+            };
+            Excerpt.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            try retained.helpers.append(allocator, .{ .key = job.helper, .fragment = fragment.* });
+            account(&metrics, fragment, job.reused, true);
+            job.fragment = null;
+        }
     }
-    destination.generateBoxyDictProcThunks() catch |err| return invariant(err);
     destination.resolveAssembledSymbolicRefs() catch |err| return invariant(err);
     return retained;
 }
@@ -415,10 +380,12 @@ const TestExecutor = struct {
     lanes: usize,
 
     fn executor(self: *@This()) tasks.Executor {
-        return .{ .context = self, .worker_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .endFn = end };
+        return .{ .context = self, .worker_count = self.lanes, .lane_count = self.lanes, .beginFn = begin, .submitFn = submit, .receiveFn = receive, .tryReceiveFn = tryReceive, .endFn = end };
     }
-    fn begin(_: *anyopaque) void {}
-    fn submit(context: *anyopaque, task: tasks.Task) Allocator.Error!void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+        return context;
+    }
+    fn submit(context: *anyopaque, _: *anyopaque, task: tasks.Task) Allocator.Error!void {
         const self: *@This() = @ptrCast(@alignCast(context));
         if (self.submitted == self.fail_after) return error.OutOfMemory;
         std.debug.assert(self.len < self.lanes);
@@ -426,7 +393,7 @@ const TestExecutor = struct {
         self.len += 1;
         self.submitted += 1;
     }
-    fn receive(context: *anyopaque) tasks.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) tasks.Completion {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.pending[self.len];
@@ -444,7 +411,10 @@ const TestExecutor = struct {
         self.received += 1;
         return .{ .id = task.id, .worker_id = self.len, .value = value };
     }
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?tasks.Completion {
+        return null;
+    }
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *@This() = @ptrCast(@alignCast(context));
         std.debug.assert(self.len == 0 and self.received == self.submitted);
     }
@@ -467,7 +437,7 @@ fn testProc(store: *lir.LirStore, value: i64) Allocator.Error!ProcId {
     }, .none);
 }
 
-test "native driver serial reverse lanes own identical executable artifacts and reuse" {
+test "native driver serial reverse lanes own identical executable excerpts and reuse" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     const a = std.testing.allocator;
     var store = lir.LirStore.init(a);
@@ -484,7 +454,7 @@ test "native driver serial reverse lanes own identical executable artifacts and 
     for ([_]usize{ 0, 1, 2, 4 }) |lanes| {
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = lanes };
         defer executor.lane.deinit();
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &demand, .{
@@ -510,7 +480,7 @@ test "native driver serial reverse lanes own identical executable artifacts and 
         cache = retained;
     }
     // Every source CG, executable and executor lane is dead before reuse.
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     var metrics: Metrics = .{};
     var reused = try run(CG, a, &cg, &demand, .{ .target = cg.getFragmentContract().target, .reuse_same_program = &cache.?, .metrics_out = &metrics });
@@ -544,7 +514,7 @@ test "native driver drains submission output and scratch OOM before cleanup" {
             .fail_scratch = failure == 2,
         };
         defer executor.lane.deinit();
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         try std.testing.expectError(error.OutOfMemory, run(CG, a, &cg, &demand, .{
@@ -564,21 +534,15 @@ test "native driver reuse contract is directional and dependency sensitive" {
         .cpu_level = .default,
         .hot_reload = false,
         .default_platform_runtime = false,
-        .dict_seed_mode = .comptime_zero,
-        .hooks_enabled = true,
-        .initialize_boxy_runtime = false,
         .static_data_readonly = false,
     };
     var runtime = source;
-    runtime.hooks_enabled = false;
-    runtime.dict_seed_mode = .runtime;
     var metrics: Metrics = .{};
     try std.testing.expect(reusable(source, runtime, .{}, &metrics));
-    try std.testing.expect(!reusable(runtime, source, .{}, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .comptime_hooks = true }, &metrics));
-    try std.testing.expect(!reusable(source, runtime, .{ .dict_seed = true }, &metrics));
+    runtime.hot_reload = true;
+    try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
+    runtime.hot_reload = false;
     try std.testing.expect(!reusable(source, source, .{ .static_data = true }, &metrics));
-    try std.testing.expect(reusable(source, runtime, .{ .boxy_runtime = true }, &metrics));
     runtime.target = .arm64linux;
     try std.testing.expect(!reusable(source, runtime, .{}, &metrics));
     runtime.target = source.target;
@@ -589,6 +553,22 @@ test "native driver reuse contract is directional and dependency sensitive" {
     totals.add(.{ .tasks_submitted = 1, .peak_inflight_fragments = 2 });
     try std.testing.expectEqual(std.math.maxInt(u64), totals.tasks_submitted);
     try std.testing.expectEqual(@as(u64, 4), totals.peak_inflight_fragments);
+}
+
+test "native driver retained libc fragments remain target specific" {
+    const source = Emitter.FragmentContract{
+        .target = .x64musl,
+        .cpu_level = .default,
+        .hot_reload = false,
+        .default_platform_runtime = false,
+        .static_data_readonly = false,
+    };
+    var target = source;
+    target.target = .x64glibc;
+    var metrics: Metrics = .{};
+    try std.testing.expect(!reusable(source, target, .{}, &metrics));
+    try std.testing.expectEqual(@as(u64, 1), metrics.rejected_target);
+    try std.testing.expectEqual(@as(u64, 0), metrics.rejected_context);
 }
 
 test "native driver reuse survives procedure compaction and rejects changed revisions" {
@@ -602,7 +582,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
     try program.root_procs.append(a, original);
     const CG = Emitter.HostLirCodeGen;
     var cache = blk: {
-        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, .default);
         defer cg.deinit();
         break :blk try run(CG, a, &cg, &.{original}, .{ .target = cg.getFragmentContract().target });
     };
@@ -612,7 +592,7 @@ test "native driver reuse survives procedure compaction and rejects changed revi
     try std.testing.expect(compacted != original);
     for (0..2) |revision| {
         store.getProcSpecPtr(compacted).native_code_revision = revision;
-        var cg = try CG.init(a, store, &program.layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, store, &program.layouts, .{}, .default);
         defer cg.deinit();
         var metrics: Metrics = .{};
         var retained = try run(CG, a, &cg, &.{ compacted, compacted }, .{
@@ -647,7 +627,7 @@ test "native driver owns and reuses complete static helper closure" {
     var cache: ?Retained = null;
     defer if (cache) |*owner| owner.deinit();
     for (0..2) |iteration| {
-        var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
         defer cg.deinit();
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 4 };
         defer executor.lane.deinit();
@@ -669,11 +649,65 @@ test "native driver owns and reuses complete static helper closure" {
             try std.testing.expectEqual(@as(u64, 0), metrics.tasks_submitted);
             for (cache.?.helpers.items, retained.helpers.items) |old, new| {
                 try std.testing.expectEqual(old.key, new.key);
-                try std.testing.expectEqualSlices(u8, old.fragment.set.artifacts[0].code, new.fragment.set.artifacts[0].code);
+                try std.testing.expectEqualSlices(u8, old.fragment.set.excerpts[0].code, new.fragment.set.excerpts[0].code);
             }
         }
         if (cache) |*owner| owner.deinit();
         cache = retained;
+    }
+}
+
+test "native driver helper waves keep the serial queue order at every lane count" {
+    if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
+    const a = std.testing.allocator;
+    var store = lir.LirStore.init(a);
+    defer store.deinit();
+    var layouts = try layout.Store.init(a, .u64);
+    defer layouts.deinit();
+    const strs = try layouts.insertList(.str);
+    const nested = try layouts.insertList(strs);
+    const boxed = try layouts.insertBox(nested);
+    const tuple = try layouts.putTuple(&.{ layouts.getLayout(strs), layouts.getLayout(boxed), layouts.getLayout(nested) });
+    const roots = [_]layout.RcHelperKey{
+        .{ .op = .decref, .layout_idx = tuple },
+        .{ .op = .decref, .layout_idx = try layouts.insertList(tuple) },
+        .{ .op = .free, .layout_idx = boxed },
+    };
+    const CG = Emitter.HostLirCodeGen;
+    var baseline_keys: std.ArrayList(u64) = .empty;
+    defer baseline_keys.deinit(a);
+    var baseline_code: ?[]u8 = null;
+    defer if (baseline_code) |code| a.free(code);
+    for ([_]usize{ 0, 1, 2, 4 }) |lanes| {
+        var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = lanes };
+        defer executor.lane.deinit();
+        var cg = try CG.init(a, &store, &layouts, .{}, .default);
+        defer cg.deinit();
+        var metrics: Metrics = .{};
+        var retained = try run(CG, a, &cg, &.{}, .{
+            .target = cg.getFragmentContract().target,
+            .static_helpers = &roots,
+            .executor = if (lanes == 0) null else executor.executor(),
+            .metrics_out = &metrics,
+        });
+        defer retained.deinit();
+        try std.testing.expect(retained.helpers.items.len > roots.len);
+        try std.testing.expectEqual(retained.helpers.items.len, metrics.helpers_emitted);
+        try std.testing.expect(metrics.peak_inflight_fragments > 1);
+        // Commit order fixes each helper's region, so equal keys, code, and
+        // region bounds mean an identical code buffer.
+        var layout_record: std.ArrayList(u8) = .empty;
+        defer layout_record.deinit(a);
+        for (retained.helpers.items) |helper| try layout_record.appendSlice(a, helper.fragment.set.excerpts[0].code);
+        for (cg.codeRegions()) |region| try layout_record.appendSlice(a, std.mem.asBytes(&[2]usize{ region.start, region.end }));
+        if (baseline_code) |expected| {
+            try std.testing.expectEqual(baseline_keys.items.len, retained.helpers.items.len);
+            for (baseline_keys.items, retained.helpers.items) |key, helper| try std.testing.expectEqual(key, helper.key);
+            try std.testing.expectEqualSlices(u8, expected, layout_record.items);
+        } else {
+            for (retained.helpers.items) |helper| try baseline_keys.append(a, helper.key);
+            baseline_code = try layout_record.toOwnedSlice(a);
+        }
     }
 }
 
@@ -685,7 +719,7 @@ fn testCoordinatorAllocationFailure(a: Allocator) Allocator.Error!void {
     defer layouts.deinit();
     const id = try testProc(&store, 42);
     const CG = Emitter.HostLirCodeGen;
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     // Workers succeed independently; enumerate coordinator/append allocations.
     var executor = TestExecutor{ .allocator = backing, .lane = tasks.LaneState.init(backing), .lanes = 2 };
@@ -731,7 +765,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     var cache = blk: {
         var strings = try @import("StaticStringData.zig").build(a, &store, roc_target.RocTarget.detectNative());
         defer strings.deinit();
-        var cg = try CG.init(a, &store, &layouts, strings.view(), &.{}, .default);
+        var cg = try CG.init(a, &store, &layouts, strings.view(), .default);
         defer cg.deinit();
         var executor = TestExecutor{ .allocator = a, .lane = tasks.LaneState.init(a), .lanes = 2 };
         defer executor.lane.deinit();
@@ -742,7 +776,7 @@ test "native driver shared literal data outlives source and reused fragment owne
     };
     var cache_live = true;
     defer if (cache_live) cache.deinit();
-    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    var cg = try CG.init(a, &store, &layouts, .{}, .default);
     defer cg.deinit();
     var metrics: Metrics = .{};
     var retained = try run(CG, a, &cg, &demand, .{

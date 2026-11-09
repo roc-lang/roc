@@ -37,7 +37,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 8 11) (end 8 12) (annotation warning) (line-text "\tnested(s)?"))
 			(line-break)
@@ -118,7 +118,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 14 19) (end 14 20) (annotation warning) (line-text "\t\treturn nested(s)?"))
 			(line-break)
@@ -199,7 +199,7 @@ TRAILING `?` - try_suffix_trailing_warning.md:16:23:16:24
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_trailing_warning.md") (start 16 23) (end 16 24) (annotation warning) (line-text "\tif s == \"y\" nested(s)? else Ok(s)"))
 			(line-break)
@@ -391,7 +391,23 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+# A `?` applied to a function's return value only type-checks when the Ok
+# payload is itself a Try, and even then it is confusing to read, so it warns.
+nested : Str -> Try(Try(Str, [Bad]), [Bad])
+nested = |s| if (s == "") Err(Bad) else Ok(Ok(s))
+
+tail : Str -> Try(Str, [Bad])
+tail = |s| {
+	nested(s)?
+}
+
+returned : Str -> Try(Str, [Bad])
+returned = |s| {
+	if s == "x" {
+		return nested(s)?
+	}
+	if (s == "y") nested(s)? else Ok(s)
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -440,7 +456,7 @@ NO CHANGE
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 442)
+							(e-call (constraint-fn-var 453)
 								(e-lookup-local
 									(p-assign (ident "nested")))
 								(e-lookup-local
@@ -496,7 +512,7 @@ NO CHANGE
 										(e-match
 											(match
 												(cond
-													(e-call (constraint-fn-var 505)
+													(e-call (constraint-fn-var 516)
 														(e-lookup-local
 															(p-assign (ident "nested")))
 														(e-lookup-local
@@ -538,7 +554,7 @@ NO CHANGE
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 565)
+										(e-call (constraint-fn-var 579)
 											(e-lookup-local
 												(p-assign (ident "nested")))
 											(e-lookup-local

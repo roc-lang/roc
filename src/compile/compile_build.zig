@@ -8,6 +8,7 @@
 //! repeatedly, you should always see the same errors be reported in the same order - but you
 //! shouldn't have to wait until the end of the build to start seeing them appear.
 
+const backend = @import("backend");
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
@@ -24,6 +25,8 @@ const CoreCtx = @import("ctx").CoreCtx;
 /// Runtime demand fixed before post-check finalization. Explicit plans may be
 /// declared from prepared checked modules after the frontend completes.
 pub const RuntimeLoweringConfig = struct {
+    /// Roots with cached runtime outcomes still owe literal-conversion checking.
+    compile_time_discovery_roots: lir.CheckedPipeline.RootRequestSet = .{},
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
     root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     target: lir.CheckedPipeline.TargetConfig,
@@ -40,7 +43,7 @@ const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 
 /// The set of errors that can occur during a build (including `roc check`).
-pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, ExpectedString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
+pub const BuildError = Allocator.Error || std.Thread.SpawnError || error{ ExpectedPlatformString, FileNotFound, AccessDenied, StreamTooLong, IoError, InvalidNullByteInPath, PathOutsideWorkspace, UnsupportedHeader, Internal, DownloadFailed, FileError, InvalidUrl, NoCacheDir, NoPackageSource, UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound, InvalidDependency, MissingFilesDirectory, MissingTargetFile, InvalidTargetConfiguration };
 /// Errors that can occur while initializing build inputs.
 pub const InitError = Allocator.Error || BuiltinModules.InitError;
 /// Errors that can occur while compiling discovered modules.
@@ -54,6 +57,7 @@ const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Can = can.Can;
 const SemanticModuleData = compile_package.SemanticModuleData;
+const CheckedModuleData = compile_package.CheckedModuleData;
 const ModuleTimingInfo = compile_package.TimingInfo;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const package_source = @import("package_source.zig");
@@ -64,8 +68,10 @@ const watch_inputs = @import("watch_inputs.zig");
 const module_discovery = @import("module_discovery.zig");
 
 // Actor model components
+const boxy_interface = @import("boxy_interface.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
+const DiscoveredParse = @import("messages.zig").DiscoveredParse;
 const roc_target = @import("roc_target");
 const targets_config_mod = @import("targets_config.zig");
 
@@ -135,25 +141,36 @@ fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
 
-// Rooted path + normalization helper
-const PathUtils = struct {
-    fn normalizeAndJoin(gpa: Allocator, root: []const u8, rel: []const u8) Allocator.Error![]const u8 {
-        const joined = try std.fs.path.join(gpa, &.{ root, rel });
-        errdefer gpa.free(joined);
-        // Resolve .. and . components
-        const canon = try std.fs.path.resolve(gpa, &.{joined});
-        gpa.free(joined);
-        return canon;
+/// The roc cache directory for downloaded packages:
+/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
+/// - Windows: %LOCALAPPDATA%\roc\packages\
+pub fn packagesCacheDir(fs: CoreCtx, allocator: Allocator) error{ OutOfMemory, NoCacheDir }![]const u8 {
+    if (try optionalEnvVar(fs, allocator, "XDG_CACHE_HOME")) |xdg_cache| {
+        defer allocator.free(xdg_cache);
+        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
     }
-
-    fn makeAbsolute(gpa: Allocator, base_dir: []const u8, path: []const u8) Allocator.Error![]const u8 {
-        if (std.fs.path.isAbsolute(path)) {
-            return try std.fs.path.resolve(gpa, &.{path});
-        } else {
-            return try normalizeAndJoin(gpa, base_dir, path);
+    if (comptime builtin.os.tag == .windows) {
+        if (try optionalEnvVar(fs, allocator, "LOCALAPPDATA")) |local_app_data| {
+            defer allocator.free(local_app_data);
+            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
         }
     }
+    if (try optionalEnvVar(fs, allocator, "HOME")) |home| {
+        defer allocator.free(home);
+        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
+    }
+    return error.NoCacheDir;
+}
 
+fn optionalEnvVar(fs: CoreCtx, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
+    return fs.getEnvVar(key, allocator) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.EnvironmentVariableMissing => null,
+    };
+}
+
+// Rooted path + normalization helper
+const PathUtils = struct {
     fn isWithinRoot(candidate: []const u8, roots: []const []const u8) bool {
         for (roots) |root| {
             if (!std.mem.startsWith(u8, candidate, root)) continue;
@@ -214,21 +231,36 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots (`Coordinator.specialization_strategy`).
+    specialization_strategy: base.SpecializationStrategy = .lss,
+    debug_observer: ?eval.CompileTimeFinalization.DebugObserver = null,
     /// Instrumentation only; never participates in checked or object identity.
     detailed_monotype_diagnostics: bool = false,
-    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
-    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
-    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
+    /// The lowering of the module objects a `.boxy` compile-time evaluation
+    /// links against.
+    boxy_object_lowering: ?@import("coordinator.zig").BoxyObjectLowering = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
+    /// See `recordBoxyObjects`.
+    boxy_objects_restored: u32 = 0,
+    boxy_objects_built: u32 = 0,
+    /// See `recordWasmUnits`.
+    wasm_units_restored: u32 = 0,
+    wasm_units_built: u32 = 0,
     // I/O abstraction for all OS operations (filesystem, stdio, env vars, etc.)
     filesystem: CoreCtx,
     // Explicit working directory for resolving relative paths
     cwd: []const u8,
     /// Whether to retain exact source byte states for watch-mode refreshes.
     track_watch_inputs: bool = false,
+    /// Set by an embedder that abandons builds whose result it no longer
+    /// needs (the LSP, when a newer edit arrives). Compilation reads it
+    /// between units of work and fails with `error.Canceled` once it is set;
+    /// a canceled build environment is only ever deinitialized.
+    cancel_request: ?*const std.atomic.Value(bool) = null,
 
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
@@ -250,8 +282,8 @@ pub const BuildEnv = struct {
     /// Whether executable artifacts were published for this build. User
     /// diagnostics do not change this: checked recovery nodes remain valid
     /// lowering input and crash only if execution reaches them. A build whose
-    /// app root never finished checking (for example because it depends on an
-    /// import cycle) has no program to publish.
+    /// app root never finished checking (for example because it depends on a
+    /// module whose source was rejected) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
     /// Post-canonicalization validation of the module this build was pointed
@@ -266,6 +298,10 @@ pub const BuildEnv = struct {
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
+    diagnostic_observer: ?struct {
+        context: *anyopaque,
+        record: *const fn (*anyopaque, *const reporting.Report) Allocator.Error!void,
+    } = null,
 
     /// Source mapping for a temporary synthetic root created by the CLI for a
     /// headerless default app. These slices are borrowed from CLI-owned storage
@@ -276,6 +312,9 @@ pub const BuildEnv = struct {
     synthetic_root_header_lines: u32 = 0,
     synthetic_root_identity: bool = false,
     synthetic_root_platform_identity: bool = false,
+    /// The user's file when the root is a staged copy of it, so crash reports
+    /// name the user's file. Borrowed like the source mapping above.
+    staged_entry_user_path: ?[]const u8 = null,
 
     /// The bundle URL the root itself came from, when the build was launched
     /// from a URL or installed source. The URL—never the extracted path—
@@ -318,12 +357,24 @@ pub const BuildEnv = struct {
     /// identity, derived once when the entry is set.
     entry_module_logical_path: ?[]const u8 = null,
 
+    /// Source files dependency discovery read and parsed in full that the
+    /// coordinator compiles as modules: the discovery root, a separate entry
+    /// module, and the selected platform's root. `compileDiscovered` hands
+    /// each to its module's parse task, so these files are read and parsed
+    /// once per build.
+    discovered_root_parse: ?DiscoveredParse = null,
+    /// Whether the held root parse's syntax errors were reported because the
+    /// build stopped before the root's parse task, which reports them.
+    discovered_root_syntax_reported: bool = false,
+    discovered_entry_parse: ?DiscoveredParse = null,
+    discovered_platform_parse: ?DiscoveredParse = null,
+
     pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget, cwd: []const u8, std_io: std.Io) InitError!BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
 
-        builtin_modules.* = try BuiltinModules.init(gpa);
+        builtin_modules.* = try BuiltinModules.init(gpa, std_io);
         errdefer builtin_modules.deinit();
 
         return initWithBuiltinModules(gpa, mode, max_threads, target, cwd, std_io, builtin_modules, true);
@@ -416,6 +467,7 @@ pub const BuildEnv = struct {
 
         // Deinit cache manager if present
         if (self.cache_manager) |cm| {
+            cm.deinit();
             self.gpa.destroy(cm);
         }
 
@@ -424,6 +476,9 @@ pub const BuildEnv = struct {
         if (self.discovered_root_dir) |rd| self.gpa.free(rd);
         if (self.entry_module_abs) |entry| self.gpa.free(@constCast(entry));
         if (self.entry_module_logical_path) |logical| self.gpa.free(@constCast(logical));
+        replaceDiscoveredParse(&self.discovered_root_parse, null);
+        replaceDiscoveredParse(&self.discovered_entry_parse, null);
+        replaceDiscoveredParse(&self.discovered_platform_parse, null);
         // discovered_pkg_name is borrowed from the packages map key.
 
         if (comptime trace_build) {
@@ -446,8 +501,6 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
-        // Last: the coordinator's retained programs may borrow cached code.
-        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -471,12 +524,21 @@ pub const BuildEnv = struct {
         self.cache_manager = manager;
     }
 
-    /// Get the TargetsConfig from the platform package, if any.
     pub fn getPlatformTargetsConfig(self: *const BuildEnv) ?targets_config_mod.TargetsConfig {
         const name = self.selected_platform_package_name orelse return null;
         const platform = self.packages.get(name) orelse return null;
         std.debug.assert(platform.kind == .platform);
         return platform.targets_config;
+    }
+
+    /// The linker symbols the selected platform's header names: its
+    /// `provides` section's and its `hosted` section's, in header order.
+    /// Null when no platform is selected.
+    pub fn getPlatformLinkSymbols(self: *const BuildEnv) ?struct { provides: []const ProvidesEntry, hosted: []const []const u8 } {
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        return .{ .provides = platform.provides_entries.items, .hosted = platform.hosted_symbols.items };
     }
 
     /// Get the root_file of the platform package, if any.
@@ -485,6 +547,18 @@ pub const BuildEnv = struct {
         const platform = self.packages.get(name) orelse return null;
         std.debug.assert(platform.kind == .platform);
         return platform.root_file;
+    }
+
+    /// The verified content hash of the selected platform's bundle, or null
+    /// when the platform is not a downloaded bundle. The platform's directory
+    /// in the package cache is content-addressed by this hash, so it
+    /// identifies every file in that directory.
+    pub fn getPlatformBundleHash(self: *const BuildEnv) ?[]const u8 {
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        const url = platform.url orelse return null;
+        return url.hash;
     }
 
     /// Set the target for this build environment.
@@ -526,6 +600,7 @@ pub const BuildEnv = struct {
     ) void {
         self.synthetic_root_original_path = original_path;
         self.synthetic_root_original_source = original_source;
+        self.setStagedEntryUserPath(original_path);
         self.synthetic_root_header_len = header_len;
         self.synthetic_root_header_lines = 0;
         self.setSyntheticRootPackageIdentity();
@@ -541,6 +616,12 @@ pub const BuildEnv = struct {
     ) void {
         self.setSyntheticRootSourceMapping(original_path, original_source, header_len);
         self.synthetic_root_header_lines = header_lines;
+    }
+
+    /// Declare that the root is a staged copy of the user's file at
+    /// `user_path`; see the `staged_entry_user_path` field.
+    pub fn setStagedEntryUserPath(self: *BuildEnv, user_path: []const u8) void {
+        self.staged_entry_user_path = user_path;
     }
 
     pub fn setSyntheticRootPackageIdentity(self: *BuildEnv) void {
@@ -562,7 +643,7 @@ pub const BuildEnv = struct {
             // dangling pointer for deinit to double-free.
             self.root_url = null;
         }
-        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     /// Declare that an explicitly supplied `--main` came from this bundle
@@ -573,7 +654,7 @@ pub const BuildEnv = struct {
             existing.deinit(self.gpa);
             self.main_url = null;
         }
-        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
@@ -615,7 +696,7 @@ pub const BuildEnv = struct {
             const candidate = try std.fs.path.join(gpa, &.{ current, "main.roc" });
             defer gpa.free(candidate);
 
-            if (filesystem.fileExists(candidate)) {
+            if (filesystem.fileExists(candidate) and try isExactlyMainRoc(gpa, filesystem, current, candidate)) {
                 const abs = try std.fs.path.resolve(gpa, &.{candidate});
                 gpa.free(current);
                 return abs;
@@ -633,6 +714,39 @@ pub const BuildEnv = struct {
             gpa.free(current);
             current = next;
         }
+    }
+
+    /// A case-insensitive filesystem also reports `Main.roc` as `main.roc`.
+    /// Only an entry spelled exactly `main.roc` owns its directory.
+    fn isExactlyMainRoc(gpa: Allocator, filesystem: CoreCtx, dir: []const u8, candidate: []const u8) Allocator.Error!bool {
+        const canonical = filesystem.canonicalize(candidate, gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A file whose stored spelling cannot be read, such as a virtual
+            // file, answers only to the name it was asked for.
+            error.FileNotFound, error.AccessDenied, error.IoError => return true,
+        };
+        defer gpa.free(canonical);
+        if (std.mem.eql(u8, std.fs.path.basename(canonical), "main.roc")) return true;
+        // A symlink canonicalizes to its target's name; the entry itself decides.
+        const entries = filesystem.listDirTop(dir, gpa) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.FileNotFound, error.AccessDenied, error.IoError => return false,
+        };
+        defer {
+            for (entries) |entry| gpa.free(entry.path);
+            gpa.free(entries);
+        }
+        for (entries) |entry| {
+            if (std.mem.eql(u8, std.fs.path.basename(entry.path), "main.roc")) return true;
+        }
+        return false;
+    }
+
+    /// Set or clear the request that cancels this environment's builds (see
+    /// `cancel_request`).
+    pub fn setCancelRequest(self: *BuildEnv, request: ?*const std.atomic.Value(bool)) void {
+        self.cancel_request = request;
+        if (self.coordinator) |coord| coord.cancel_request = request;
     }
 
     /// Build `root_file`, using package aliases from an owning app/package/platform
@@ -658,10 +772,21 @@ pub const BuildEnv = struct {
         const root_abs = try self.makeAbsolute(root_file);
         defer self.gpa.free(root_abs);
 
-        const kind = self.peekPackageKind(root_abs) catch null;
+        // A root that cannot be read is reported by whichever discovery below
+        // reads it.
+        var root_parse: ?DiscoveredParse = blk: {
+            const source_read = self.readSourceFile(root_abs) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.FileNotFound, error.AccessDenied, error.StreamTooLong, error.IoError => break :blk null,
+            };
+            break :blk try self.parseSource(root_abs, source_read);
+        };
+        defer if (root_parse) |parsed| parsed.deinit();
+
+        const kind = if (root_parse) |parsed| try headerPackageKind(self.gpa, parsed.ast) else null;
         const carries_packages = kind == .app or kind == .default_app or kind == .package or kind == .platform;
         if (carries_packages) {
-            try self.discoverDependencies(root_file);
+            try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
             return;
         }
 
@@ -669,7 +794,7 @@ pub const BuildEnv = struct {
             const main_abs = try self.makeAbsolute(main_path);
             defer self.gpa.free(main_abs);
             if (std.mem.eql(u8, root_abs, main_abs)) {
-                try self.discoverDependencies(root_file);
+                try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
             } else {
                 // The main file is the discovery root here, so its bundle
                 // provenance—not the checked file's—is the root identity.
@@ -681,6 +806,7 @@ pub const BuildEnv = struct {
                     self.root_url = try package_source.UrlSource.init(self.gpa, main_url.view());
                 }
                 try self.discoverWithMain(root_file, main_path);
+                replaceDiscoveredParse(&self.discovered_entry_parse, takeDiscoveredParse(&root_parse));
             }
             return;
         }
@@ -690,28 +816,18 @@ pub const BuildEnv = struct {
             defer self.gpa.free(main_abs);
             if (!std.mem.eql(u8, root_abs, main_abs)) {
                 try self.discoverWithMain(root_file, main_abs);
+                replaceDiscoveredParse(&self.discovered_entry_parse, takeDiscoveredParse(&root_parse));
                 return;
             }
         }
 
-        try self.discoverDependencies(root_file);
+        try self.discoverDependenciesParsed(root_file, takeDiscoveredParse(&root_parse));
     }
 
-    /// Silently read the package/header kind of `file_abs` without emitting reports.
-    /// Returns null when the file cannot be read or parsed.
-    fn peekPackageKind(self: *BuildEnv, file_abs: []const u8) Allocator.Error!?PackageKind {
-        const src = self.readFile(file_abs) catch return null;
-        defer self.gpa.free(src);
-
-        var env = try ModuleEnv.init(self.gpa, src);
-        defer env.deinit();
-
-        try env.common.calcLineStarts(self.gpa);
-
-        const ast = try parse.file(self.gpa, &env.common);
-        defer ast.deinit();
-
-        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
+    /// The package kind a parsed file's header declares, or null when the
+    /// header has syntax errors.
+    fn headerPackageKind(gpa: Allocator, ast: *const parse.AST) Allocator.Error!?PackageKind {
+        if (ast.hasErrors() and !try parse.fileHeaderIsUsable(gpa, ast)) {
             return null;
         }
 
@@ -727,6 +843,17 @@ pub const BuildEnv = struct {
             .default_app => .default_app,
             .malformed => null,
         };
+    }
+
+    fn takeDiscoveredParse(slot: *?DiscoveredParse) ?DiscoveredParse {
+        const taken = slot.*;
+        slot.* = null;
+        return taken;
+    }
+
+    fn replaceDiscoveredParse(slot: *?DiscoveredParse, parsed: ?DiscoveredParse) void {
+        if (slot.*) |old| old.deinit();
+        slot.* = parsed;
     }
 
     fn setDiscoveredEntryModule(self: *BuildEnv, root_file: []const u8) BuildError!void {
@@ -803,39 +930,29 @@ pub const BuildEnv = struct {
             self.cache_manager,
             self.filesystem,
         );
+        coord.specialization_strategy = self.specialization_strategy;
         coord.source_pin_version = self.source_pin_version;
+        if (self.staged_entry_user_path) |user_path| {
+            if (self.discovered_root_abs) |staged_path| coord.staged_entry = .{ .staged_path = staged_path, .user_path = user_path };
+        }
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
+        coord.cancel_request = self.cancel_request;
         coord.runtime_lowering = self.runtime_lowering;
+        coord.debug_observer = self.debug_observer;
         coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
-        coord.compile_time_object_cache = self.compile_time_object_cache;
+        coord.boxy_object_lowering = self.boxy_object_lowering;
         if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
     }
 
-    /// The storage behind a compile-time object cache, which this build
-    /// environment owns once attached.
-    pub const CompileTimeObjectCacheOwner = struct {
-        context: *anyopaque,
-        /// Gives the cache this build environment, whose module set decides
-        /// which packs it loads, before compile-time evaluation reads it.
-        bind: *const fn (*anyopaque, *BuildEnv) void,
-        deinit: *const fn (*anyopaque) void,
-    };
-
-    /// Every command that checks a program attaches this the same way, so
-    /// compile-time evaluation reads one object cache whatever the command.
-    pub fn setCompileTimeObjectCache(
-        self: *BuildEnv,
-        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
-        owner: CompileTimeObjectCacheOwner,
-    ) void {
-        std.debug.assert(self.compile_time_object_cache_owner == null);
-        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
-        self.compile_time_object_cache = cache;
-        self.compile_time_object_cache_owner = owner;
+    /// Set the strategy whose compile-time evaluator completes every
+    /// module's compile-time roots, before any module is checked.
+    pub fn setSpecializationStrategy(self: *BuildEnv, strategy: base.SpecializationStrategy) void {
+        if (self.coordinator) |coordinator| coordinator.specialization_strategy = strategy;
+        self.specialization_strategy = strategy;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -850,8 +967,18 @@ pub const BuildEnv = struct {
     /// retained lowering session rather than begin another specialization pass.
     pub fn runtimeProgramSession(self: *BuildEnv) ?*eval.CompileTimeFinalization.ProgramSession {
         if (self.runtime_lowering == null) return null;
-        const coordinator = self.coordinator orelse unreachable;
-        return if (coordinator.program_session) |*session| session else unreachable;
+        const coordinator = self.coordinator orelse
+            base.invariant("build env invariant violated: runtime lowering is configured before coordinator initialization", .{});
+        if (coordinator.program_session) |*session| return session;
+        base.invariant("build env invariant violated: runtime lowering is configured but the checked program retained no program session", .{});
+    }
+
+    /// The programs compile-time evaluation lowered and completed, while
+    /// its program session retains them.
+    pub fn compileTimeStages(self: *BuildEnv) ?*const eval.CompileTimeFinalization.CompletedStages {
+        const coordinator = self.coordinator orelse return null;
+        const session = if (coordinator.program_session) |*session| session else return null;
+        return if (session.completed) |*completed| completed else null;
     }
 
     /// Reuse compilation workers for post-check lowering after checking finishes.
@@ -863,17 +990,33 @@ pub const BuildEnv = struct {
     }
 
     /// Register a directory as a workspace root, skipping it if an existing root
-    /// already contains it. Takes ownership of nothing; copies `dir` when stored.
+    /// already contains it. The root is stored resolved, the form every sandbox
+    /// check resolves its candidate path into before comparing bytes, so the
+    /// spelling a caller found the directory under (a cache root taken from the
+    /// environment, say) never decides whether a path is inside it.
     fn addWorkspaceRoot(self: *BuildEnv, dir: []const u8) Allocator.Error!void {
-        if (PathUtils.isWithinRoot(dir, self.workspace_roots.items)) return;
-        try self.workspace_roots.append(try self.gpa.dupe(u8, dir));
+        const resolved = try std.fs.path.resolve(self.gpa, &.{dir});
+        errdefer self.gpa.free(resolved);
+        if (PathUtils.isWithinRoot(resolved, self.workspace_roots.items)) {
+            self.gpa.free(resolved);
+            return;
+        }
+        try self.workspace_roots.append(resolved);
     }
 
     /// Phase 1: Parse headers, create package entries, extract TargetsConfig, and populate
     /// shorthands. Does NOT init the Coordinator, allowing the caller to inspect
     /// discovered state (e.g., TargetsConfig) and change the target before compilation.
     pub fn discoverDependencies(self: *BuildEnv, root_file: []const u8) BuildError!void {
-        // Parse root file header
+        try self.discoverDependenciesParsed(root_file, null);
+    }
+
+    /// `discoverDependencies` for a root that may already be parsed; this
+    /// takes ownership of `root_parse`.
+    fn discoverDependenciesParsed(self: *BuildEnv, root_file: []const u8, root_parse: ?DiscoveredParse) BuildError!void {
+        var unused_root_parse = root_parse;
+        defer if (unused_root_parse) |parsed| parsed.deinit();
+
         const root_abs = try self.makeAbsolute(root_file);
         // Store immediately so deinit() frees on any subsequent error
         self.discovered_root_abs = root_abs;
@@ -882,8 +1025,12 @@ pub const BuildEnv = struct {
 
         try self.addWorkspaceRoot(root_dir);
 
-        var header_info = try self.parseHeaderDeps(root_abs);
+        var header_info = if (takeDiscoveredParse(&unused_root_parse)) |parsed|
+            try self.headerInfo(parsed)
+        else
+            try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
+        replaceDiscoveredParse(&self.discovered_root_parse, takeDiscoveredParse(&header_info.parsed));
 
         // Absolute platform specs are rejected for every command, matching the
         // run path, so a project cannot pass `roc check` and then fail on its
@@ -938,6 +1085,8 @@ pub const BuildEnv = struct {
             if (self.packages.getPtr(key_pkg)) |pkg| {
                 pkg.provides_entries = header_info.provides_entries;
                 header_info.provides_entries = .empty; // Prevent double-free in deinit
+                pkg.hosted_symbols = header_info.hosted_symbols;
+                header_info.hosted_symbols = .empty; // Prevent double-free in deinit
                 pkg.targets_config = header_info.targets_config;
                 header_info.targets_config = null; // Prevent double-free in deinit
             }
@@ -1030,7 +1179,7 @@ pub const BuildEnv = struct {
                 try coord.ensurePackageWithUrl(entry.key_ptr.*, pkg.root_dir, url.view())
             else
                 try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
-            try coord_pkg.setRootInput(self.gpa, pkg.root_file, pkg.root_file_state);
+            try coord_pkg.setRootFile(self.gpa, pkg.root_file);
             for (pkg.public_surface.modules.items) |public_module| {
                 try coord_pkg.addPublicModule(
                     self.gpa,
@@ -1047,6 +1196,7 @@ pub const BuildEnv = struct {
             // and app-less builds (platform/package/module roots) record that
             // explicitly so every module takes the transform.
             if (is_main_pkg) {
+                coord.markRootPackage(coord_pkg.name);
                 if (pkg.kind == .app or pkg.kind == .default_app) {
                     coord.markAppPackage(coord_pkg.name);
                 } else {
@@ -1108,7 +1258,11 @@ pub const BuildEnv = struct {
         try coord.start();
 
         // Queue initial parse task
-        try coord.enqueueParseTask(pkg_name, root_id);
+        if (takeDiscoveredParse(&self.discovered_root_parse)) |parsed| {
+            try coord.enqueueDiscoveredParseTask(pkg_name, root_id, parsed);
+        } else {
+            try coord.enqueueParseTask(pkg_name, root_id);
+        }
 
         if (self.entry_module_abs) |entry_file| {
             if (!std.mem.eql(u8, entry_file, pkg_root_file)) {
@@ -1126,7 +1280,11 @@ pub const BuildEnv = struct {
                     entry_module.depth = 0;
                     coord_pkg.remaining_modules += 1;
                     coord.total_remaining += 1;
-                    try coord.enqueueParseTask(pkg_name, entry_id);
+                    if (takeDiscoveredParse(&self.discovered_entry_parse)) |parsed| {
+                        try coord.enqueueDiscoveredParseTask(pkg_name, entry_id, parsed);
+                    } else {
+                        try coord.enqueueParseTask(pkg_name, entry_id);
+                    }
                 }
             }
         }
@@ -1148,7 +1306,11 @@ pub const BuildEnv = struct {
                         platform_coord_pkg.root_module_id = plat_root_id;
                         platform_coord_pkg.remaining_modules += 1;
                         coord.total_remaining += 1;
-                        try coord.enqueueParseTask(platform_name, plat_root_id);
+                        if (takeDiscoveredParse(&self.discovered_platform_parse)) |parsed| {
+                            try coord.enqueueDiscoveredParseTask(platform_name, plat_root_id, parsed);
+                        } else {
+                            try coord.enqueueParseTask(platform_name, plat_root_id);
+                        }
                         if (comptime trace_build) {
                             std.debug.print("[BUILD] Queued platform root module: {s} in package {s}\n", .{ plat_module_name, platform_name });
                         }
@@ -1156,6 +1318,11 @@ pub const BuildEnv = struct {
                 }
             }
         }
+
+        // A discovered parse whose module was not queued above belongs to a
+        // module this coordinator already compiled.
+        replaceDiscoveredParse(&self.discovered_entry_parse, null);
+        replaceDiscoveredParse(&self.discovered_platform_parse, null);
 
         // Run coordinator loop. On failure, still move whatever reports have
         // accumulated into the ordered sink so callers can drain and render
@@ -1170,9 +1337,9 @@ pub const BuildEnv = struct {
     }
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
-        const coord = self.coordinator orelse unreachable;
-        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
-        const test_modules = try self.collectProgramTestModules(self.gpa);
+        const coord = self.coordinator orelse
+            base.invariant("build env invariant violated: checked program finished before coordinator initialization", .{});
+        const test_modules = try self.collectProgramTestModules(self.gpa, coord);
         defer self.gpa.free(test_modules);
         coord.program_test_modules = test_modules;
         defer coord.program_test_modules = &.{};
@@ -1272,6 +1439,8 @@ pub const BuildEnv = struct {
         /// Source-local public declarations from a package or platform header.
         public_surface: PublicSurface = .{},
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
+        /// The symbol strings of a platform header's `hosted` section.
+        hosted_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
         targets_config: ?targets_config_mod.TargetsConfig = null,
 
         fn deinit(self: *Package, gpa: Allocator) void {
@@ -1283,6 +1452,8 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, entry.ffi_symbol);
             }
             self.provides_entries.deinit(gpa);
+            for (self.hosted_symbols.items) |symbol| freeConstSlice(gpa, symbol);
+            self.hosted_symbols.deinit(gpa);
             var it = self.shorthands.iterator();
             while (it.next()) |e| {
                 freeConstSlice(gpa, e.key_ptr.*);
@@ -1304,10 +1475,15 @@ pub const BuildEnv = struct {
         resolver_root: package_resolution.FetchedPackage,
         /// Platform provides entries (roc_ident -> ffi_symbol mapping)
         provides_entries: std.ArrayListUnmanaged(ProvidesEntry) = .empty,
+        /// The symbol strings of a platform header's `hosted` section.
+        hosted_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
         /// Targets configuration extracted from platform header
         targets_config: ?targets_config_mod.TargetsConfig = null,
+        /// The file this header was read from, parsed in full.
+        parsed: ?DiscoveredParse = null,
 
         fn deinit(self: *HeaderInfo, gpa: Allocator) void {
+            if (self.parsed) |parsed| parsed.deinit();
             if (self.targets_config) |tc| tc.deinit(gpa);
             self.resolver_root.deinit(gpa);
             self.public_surface.deinit(gpa);
@@ -1316,6 +1492,8 @@ pub const BuildEnv = struct {
                 freeConstSlice(gpa, entry.ffi_symbol);
             }
             self.provides_entries.deinit(gpa);
+            for (self.hosted_symbols.items) |symbol| freeConstSlice(gpa, symbol);
+            self.hosted_symbols.deinit(gpa);
         }
     };
 
@@ -1346,16 +1524,15 @@ pub const BuildEnv = struct {
         info.public_surface = surface;
     }
 
+    /// Read and parse `file_path` in full, then read its header. A file that
+    /// cannot be read is reported here.
     fn parseHeaderDeps(self: *BuildEnv, file_path: []const u8) BuildError!HeaderInfo {
-        // Read source
         const file_abs = try std.fs.path.resolve(self.gpa, &.{file_path});
         defer self.gpa.free(file_abs);
-        const source_read = self.readHeaderSourceFile(file_abs) catch |err| {
+        const source_read = self.readSourceFile(file_abs) catch |err| {
             const report = blk: switch (err) {
                 error.FileNotFound => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not find the file {s}.", .{file_abs});
-                    defer self.gpa.free(headline);
-                    var report = try Report.init(self.gpa, "File Not Found", headline, .fatal);
+                    var report = try Report.initWithPath(self.gpa, "File Not Found", "I could not find the file ", file_abs, ".", .fatal);
                     try report.document.addText("Make sure the file exists and you do not have any typos in its name or path.");
                     break :blk report;
                 },
@@ -1365,9 +1542,7 @@ pub const BuildEnv = struct {
                 error.OutOfMemory,
                 error.StreamTooLong,
                 => {
-                    const headline = try std.fmt.allocPrint(self.gpa, "I could not read the file {s}.", .{file_abs});
-                    defer self.gpa.free(headline);
-                    var other_report = try Report.init(self.gpa, "Could Not Read File", headline, .fatal);
+                    var other_report = try Report.initWithPath(self.gpa, "Could Not Read File", "I could not read the file ", file_abs, ".", .fatal);
                     try other_report.document.addText("I did get the following error: ");
                     try other_report.addErrorMessage(@errorName(err));
                     try other_report.document.addText("Make sure the file can be read.");
@@ -1379,20 +1554,24 @@ pub const BuildEnv = struct {
             self.sink.tryEmit();
             return err;
         };
-        const src = source_read.source;
-        defer self.gpa.free(src);
+        return try self.headerInfo(try self.parseSource(file_abs, source_read));
+    }
 
-        var env = try ModuleEnv.init(self.gpa, src);
-        defer env.deinit();
+    /// Read the kind and dependencies from the header of `parsed`, which the
+    /// returned info takes ownership of.
+    ///
+    /// Only syntax errors in the header stop this. Syntax errors after it are
+    /// reported, along with everything later stages find, when the
+    /// coordinator compiles the file.
+    fn headerInfo(self: *BuildEnv, parsed: DiscoveredParse) BuildError!HeaderInfo {
+        errdefer parsed.deinit();
+        const file_abs = parsed.path;
+        const src = parsed.module_env.common.source;
+        const ast = parsed.ast;
 
-        try env.common.calcLineStarts(self.gpa);
-
-        const ast = try parse.file(self.gpa, &env.common);
-        defer ast.deinit();
-
-        // Check for parse errors - if any exist, we cannot proceed
-        if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) {
-            // Convert diagnostics to reports and emit them
+        if (ast.hasErrors() and !try parse.fileHeaderIsUsable(self.gpa, ast)) {
+            // The header names no kind or dependencies to build from, so the
+            // file's syntax errors are the build's only reports.
             // Use placeholder package name since we haven't determined it yet
             const pkg_name = "main";
             const module_name = file_abs;
@@ -1402,7 +1581,7 @@ pub const BuildEnv = struct {
                 try self.sink.emitReport(pkg_name, module_name, report);
             }
             for (ast.parse_diagnostics.items) |diagnostic| {
-                const report = try ast.parseDiagnosticToReport(&env.common, diagnostic, self.gpa, file_abs);
+                const report = try ast.parseDiagnosticToReport(&parsed.module_env.common, diagnostic, self.gpa, file_abs);
                 try self.sink.emitReport(pkg_name, module_name, report);
             }
 
@@ -1418,13 +1597,10 @@ pub const BuildEnv = struct {
         const file = ast.store.getFile();
         const header = ast.store.getHeader(file.header);
 
-        const resolver_root = package_resolution.scanParsedHeader(self.gpa, file_abs, src, ast, header) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.HeaderParseFailed => return error.ExpectedString,
-        };
+        const resolver_root = try package_resolution.scanParsedHeader(self.gpa, file_abs, src, ast, header);
         var info = HeaderInfo{
             .kind = .package,
-            .source_file_state = source_read.file_state,
+            .source_file_state = parsed.source_file_state,
             .resolver_root = resolver_root,
         };
         errdefer info.deinit(self.gpa);
@@ -1454,13 +1630,18 @@ pub const BuildEnv = struct {
                     });
                 }
 
+                for (ast.store.symbolMapEntrySlice(p.hosted)) |entry_idx| {
+                    const entry = ast.store.getSymbolMapEntry(entry_idx);
+                    try info.hosted_symbols.append(self.gpa, try self.gpa.dupe(u8, ast.resolve(entry.symbol)));
+                }
+
                 // Extract targets config from the platform AST
-                var path_diagnostic: targets_config_mod.InvalidTargetPathDiagnostic = undefined;
-                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast, &path_diagnostic) catch |err| switch (err) {
+                var config_diagnostic: targets_config_mod.TargetsConfigDiagnostic = undefined;
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast, &config_diagnostic) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.InvalidTargetPath => {
+                    error.InvalidTargetConfig => {
                         const pkg_name = "main";
-                        const report = try path_diagnostic.toReport(self.gpa, &env.common, file_abs);
+                        const report = try config_diagnostic.toReport(self.gpa, &parsed.module_env.common, file_abs);
                         try self.sink.emitReport(pkg_name, file_abs, report);
                         try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]u32{0});
                         self.sink.tryEmit();
@@ -1488,7 +1669,31 @@ pub const BuildEnv = struct {
             .malformed => return error.UnsupportedHeader,
         }
 
+        info.parsed = parsed;
         return info;
+    }
+
+    /// Parse `source_read`, which this takes ownership of, read from
+    /// `file_abs`, exactly as the coordinator's parse task would, so that task
+    /// can take the result over.
+    fn parseSource(self: *BuildEnv, file_abs: []const u8, source_read: SourceRead) Allocator.Error!DiscoveredParse {
+        const allocator = Coordinator.workerAllocatorFor(self.gpa, self.mode);
+        errdefer allocator.free(source_read.source);
+        const path = try allocator.dupe(u8, file_abs);
+        errdefer allocator.free(path);
+        const env = try allocator.create(ModuleEnv);
+        errdefer allocator.destroy(env);
+        env.* = try ModuleEnv.init(allocator, source_read.source);
+        errdefer env.deinit();
+        try env.initCIRFields(base.module_path.getModuleName(path));
+        try env.common.calcLineStarts(allocator);
+        const ast = try parse.file(allocator, &env.common);
+        return .{
+            .path = path,
+            .module_env = env,
+            .ast = ast,
+            .source_file_state = source_read.file_state,
+        };
     }
 
     fn makeAbsolute(self: *BuildEnv, path: []const u8) Allocator.Error![]u8 {
@@ -1496,48 +1701,27 @@ pub const BuildEnv = struct {
         return try std.fs.path.resolve(self.gpa, &.{ self.cwd, path });
     }
 
-    fn readFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{FileNotFound})![]u8 {
-        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
-            error.FileNotFound => return error.FileNotFound,
-            error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied,
-            error.IoError,
-            error.StreamTooLong,
-            => return error.FileNotFound,
-        };
-
-        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
-    }
-
     const SourceRead = struct {
         source: []u8,
         file_state: ?watch_inputs.State,
     };
 
-    fn readHeaderSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
-        if (!self.track_watch_inputs) {
-            return .{
-                .source = try self.readFile(path),
-                .file_state = null,
-            };
-        }
-
-        return try self.readSourceFileWithState(path);
-    }
-
-    fn readSourceFileWithState(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
-        const data = self.filesystem.readFile(path, self.gpa) catch |err| switch (err) {
+    /// Read a source file with the allocator the coordinator's workers use for
+    /// module sources, so its parse can be handed to the coordinator.
+    fn readSourceFile(self: *BuildEnv, path: []const u8) (Allocator.Error || error{ FileNotFound, AccessDenied, StreamTooLong, IoError })!SourceRead {
+        const allocator = Coordinator.workerAllocatorFor(self.gpa, self.mode);
+        const data = self.filesystem.readFile(path, allocator) catch |err| switch (err) {
             error.FileNotFound => return error.FileNotFound,
             error.AccessDenied => return error.AccessDenied,
             error.StreamTooLong => return error.StreamTooLong,
             error.IoError => return error.IoError,
             error.OutOfMemory => return error.OutOfMemory,
         };
-        const file_state: watch_inputs.State = .{ .hash = watch_inputs.hashBytes(data) };
+        const file_state: ?watch_inputs.State = if (self.track_watch_inputs) .{ .hash = watch_inputs.hashBytes(data) } else null;
 
-        const source = base.source_utils.normalizeLineEndingsRealloc(self.gpa, data) catch |err| {
-            self.gpa.free(data);
+        // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
+        const source = base.source_utils.normalizeLineEndingsRealloc(allocator, data) catch |err| {
+            allocator.free(data);
             return err;
         };
 
@@ -1561,60 +1745,31 @@ pub const BuildEnv = struct {
     /// Cross-platform environment variable lookup.
     /// Uses the filesystem vtable which works on both POSIX, Windows, and wasm
     /// (unlike std.posix.getenv which only works on POSIX systems).
-    fn getEnvVar(self: *BuildEnv, allocator: Allocator, key: []const u8) Allocator.Error!?[]const u8 {
-        return self.filesystem.getEnvVar(key, allocator) catch |err| switch (err) {
-            error.OutOfMemory => error.OutOfMemory,
-            error.EnvironmentVariableMissing => null,
-        };
-    }
-
-    /// Get the roc cache directory for downloaded packages.
-    /// Standard cache locations by platform:
-    /// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-    /// - Windows: %LOCALAPPDATA%\roc\packages\
-    fn getRocCacheDir(self: *BuildEnv, allocator: Allocator) BuildError![]const u8 {
-        // Check XDG_CACHE_HOME first (Linux/macOS)
-        if (try self.getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-            defer allocator.free(xdg_cache);
-            return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-        }
-
-        // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-        if (comptime builtin.os.tag == .windows) {
-            if (try self.getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-                defer allocator.free(local_app_data);
-                return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-            }
-        }
-
-        // Fall back to ~/.cache/roc/packages (Unix)
-        if (try self.getEnvVar(allocator, "HOME")) |home| {
-            defer allocator.free(home);
-            return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-        }
-
-        return error.NoCacheDir;
-    }
-
     fn logicalModuleToPath(self: *BuildEnv, root_dir: []const u8, logical_name: []const u8) (Allocator.Error || error{PathOutsideWorkspace})![]const u8 {
+        // `std.fs.path.join` of `root_dir` and the logical name's non-empty
+        // segments, then the extension, built in one buffer. Every segment
+        // adds at most its length plus one separator, so the capacity holds
+        // the whole path.
+        var with_ext = std.ArrayList(u8).empty;
+        defer with_ext.deinit(self.gpa);
+        try with_ext.ensureTotalCapacityPrecise(self.gpa, root_dir.len + logical_name.len + 1 + ".roc".len);
+        with_ext.appendSliceAssumeCapacity(root_dir);
         var parts = std.mem.splitScalar(u8, logical_name, '/');
-        var segs = std.ArrayList([]const u8).empty;
-        defer segs.deinit(self.gpa);
-
-        try segs.append(self.gpa, root_dir);
-        while (parts.next()) |p| {
-            if (p.len == 0) continue;
-            try segs.append(self.gpa, p);
+        while (parts.next()) |part| {
+            if (part.len == 0) continue;
+            if (with_ext.items.len == 0) {
+                with_ext.appendSliceAssumeCapacity(part);
+                continue;
+            }
+            const prev_sep = std.fs.path.isSep(with_ext.items[with_ext.items.len - 1]);
+            const this_sep = std.fs.path.isSep(part[0]);
+            if (!prev_sep and !this_sep) with_ext.appendAssumeCapacity(std.fs.path.sep);
+            with_ext.appendSliceAssumeCapacity(if (prev_sep and this_sep) part[1..] else part);
         }
-
-        const joined = try std.fs.path.join(self.gpa, segs.items);
-        defer self.gpa.free(joined);
-
-        const with_ext = try std.fmt.allocPrint(self.gpa, "{s}.roc", .{joined});
-        defer self.gpa.free(with_ext);
+        with_ext.appendSliceAssumeCapacity(".roc");
 
         // Canonicalize and sandbox
-        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext});
+        const canon = try std.fs.path.resolve(self.gpa, &.{with_ext.items});
         // Enforce sandbox for dotted resolution: must be within the current package root (first workspace root).
         // If multiple roots are registered, we still require the resolved path to match at least one.
         if (!PathUtils.isWithinRoot(canon, self.workspace_roots.items)) {
@@ -1705,35 +1860,9 @@ pub const BuildEnv = struct {
     /// no URL dependencies; URL specs report a download failure.
     fn ensurePackageCacheDir(self: *BuildEnv) Allocator.Error!void {
         if (self.package_cache_dir == null) {
-            self.package_cache_dir = self.getRocCacheDir(self.gpa) catch |err| switch (err) {
+            self.package_cache_dir = packagesCacheDir(self.filesystem, self.gpa) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.BuiltinLowLevelAnnotationMustBeFunction,
-                error.DownloadFailed,
-                error.ExpectedPlatformString,
-                error.ExpectedString,
-                error.FileError,
-                error.FileNotFound,
-                error.Internal,
-                error.InvalidDependency,
-                error.InvalidNullByteInPath,
-                error.InvalidUrl,
-                error.IoError,
-                error.LockedMemoryLimitExceeded,
-                error.LowLevelOperationsNotFound,
-                error.MissingFilesDirectory,
-                error.MissingTargetFile,
-                error.InvalidTargetConfiguration,
-                error.NoCacheDir,
-                error.NoPackageSource,
-                error.PathOutsideWorkspace,
-                error.StreamTooLong,
-                error.SystemResources,
-                error.ThreadQuotaExceeded,
-                error.Unexpected,
-                error.UnsupportedBuiltinAnnotationOnly,
-                error.UnsupportedHeader,
-                => null,
+                error.NoCacheDir => null,
             };
         }
     }
@@ -1747,14 +1876,18 @@ pub const BuildEnv = struct {
         };
     }
 
-    fn emitResolutionFailure(self: *BuildEnv, resolver: *const package_resolution.Resolver) Allocator.Error!void {
-        for (resolver.diagnostics.items) |diagnostic| {
-            try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+    fn emitResolutionFailure(self: *BuildEnv, resolver: *package_resolution.Resolver) Allocator.Error!void {
+        for (resolver.diagnostics.items) |*diagnostic| {
+            if (diagnostic.takeLocated()) |located| {
+                var report = located;
+                errdefer report.deinit();
+                try self.sink.emitReport("workspace", "root", report);
+            } else {
+                try self.emitWorkspaceReport(diagnostic.title, diagnostic.message);
+            }
         }
-        // Build the sink order so the reports above are drainable:
-        // the build aborts here, so nothing else will order them.
-        try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
-        self.sink.tryEmit();
+        // The build aborts here, so nothing else will order the reports above.
+        try self.makeWorkspaceReportsDrainable();
     }
 
     fn resolveAndMaterialize(
@@ -1808,6 +1941,7 @@ pub const BuildEnv = struct {
             const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
                 .url = url.url,
                 .url_id = url.url_id,
+                .hash = url.hash,
             } else null;
             const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
                 if (url_view == null)
@@ -1841,11 +1975,16 @@ pub const BuildEnv = struct {
 
             var child_info = try self.parseHeaderDeps(package.root_file);
             defer child_info.deinit(self.gpa);
+            if (resolved.selected_platform_index == @as(u32, @intCast(i))) {
+                replaceDiscoveredParse(&self.discovered_platform_parse, takeDiscoveredParse(&child_info.parsed));
+            }
 
             if (self.packages.getPtr(package_keys.identity(i))) |child_pkg| {
                 if (package.kind == .platform and child_pkg.provides_entries.items.len == 0) {
                     child_pkg.provides_entries = child_info.provides_entries;
                     child_info.provides_entries = .empty; // Prevent double-free in deinit
+                    child_pkg.hosted_symbols = child_info.hosted_symbols;
+                    child_info.hosted_symbols = .empty; // Prevent double-free in deinit
                 }
                 if (package.kind == .platform and child_pkg.targets_config == null) {
                     child_pkg.targets_config = child_info.targets_config;
@@ -1946,9 +2085,37 @@ pub const BuildEnv = struct {
         try self.sink.emitReport("workspace", "root", rep);
     }
 
+    /// Order the reports of a build that stops before compiling, so they can
+    /// be drained. The root's syntax errors, which its parse task would have
+    /// reported, come first, ahead of what stopped the build.
     fn makeWorkspaceReportsDrainable(self: *BuildEnv) Allocator.Error!void {
+        if (self.discovered_root_parse) |*parsed| {
+            if (parsed.ast.hasErrors()) {
+                if (!self.discovered_root_syntax_reported) {
+                    try self.emitSyntaxReports("main", parsed);
+                    self.discovered_root_syntax_reported = true;
+                }
+                try self.sink.buildOrder(&[_][]const u8{ "main", "workspace" }, &[_][]const u8{ parsed.path, "root" }, &[_]u32{ 0, 0 });
+                self.sink.tryEmit();
+                return;
+            }
+        }
         try self.sink.buildOrder(&[_][]const u8{"workspace"}, &[_][]const u8{"root"}, &[_]u32{0});
         self.sink.tryEmit();
+    }
+
+    /// Report the syntax errors of a file dependency discovery parsed, filed
+    /// under `pkg_name` and the file's own path.
+    fn emitSyntaxReports(self: *BuildEnv, pkg_name: []const u8, parsed: *const DiscoveredParse) Allocator.Error!void {
+        const ast = parsed.ast;
+        for (ast.tokenize_diagnostics.items) |diagnostic| {
+            const report = try ast.tokenizeDiagnosticToReport(diagnostic, self.gpa, parsed.path);
+            try self.sink.emitReport(pkg_name, parsed.path, report);
+        }
+        for (ast.parse_diagnostics.items) |diagnostic| {
+            const report = try ast.parseDiagnosticToReport(&parsed.module_env.common, diagnostic, self.gpa, parsed.path);
+            try self.sink.emitReport(pkg_name, parsed.path, report);
+        }
     }
 
     /// Emit the same "Absolute Platform Path" report the CLI run path produces
@@ -1963,7 +2130,7 @@ pub const BuildEnv = struct {
         );
         errdefer report.deinit();
         try report.document.addText("    ");
-        try report.document.addAnnotated(platform_spec, .path);
+        try report.document.addAnnotated(platform_spec, .inline_code);
         try report.document.addLineBreaks(2);
         try report.document.addText("Tip: Use a relative path like ");
         try report.document.addAnnotated("../path/to/platform", .emphasized);
@@ -1997,7 +2164,7 @@ pub const BuildEnv = struct {
         return error.MissingTargetFile;
     }
 
-    fn validateDiscoveredPlatformTargetFilesForCurrentTarget(self: *BuildEnv) BuildError!void {
+    pub fn validateDiscoveredPlatformTargetFilesForCurrentTarget(self: *BuildEnv) BuildError!void {
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr;
@@ -2154,7 +2321,7 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootSourceRegion(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         region: *reporting.SourceCodeDisplayRegion,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
@@ -2172,9 +2339,7 @@ pub const BuildEnv = struct {
         // the staging appended, which is not the user's code; that region
         // keeps its own text and only its file name maps back.
         if (original_line_starts.len == 0 or original_end_line > original_line_starts.len) {
-            const owned_filename = try allocator.dupe(u8, original_path);
-            if (region.filename) |old_filename| allocator.free(old_filename);
-            region.filename = owned_filename;
+            region.filename = try document.ownString(original_path);
             return;
         }
 
@@ -2185,13 +2350,8 @@ pub const BuildEnv = struct {
             .end_col_idx = region.end_column - 1,
         };
 
-        const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-        errdefer allocator.free(line_text);
-        const owned_filename = try allocator.dupe(u8, original_path);
-        errdefer allocator.free(owned_filename);
-
-        allocator.free(region.line_text);
-        if (region.filename) |old_filename| allocator.free(old_filename);
+        const line_text = try document.ownString(region_info.calculateLineText(original_source, original_line_starts));
+        const owned_filename = try document.ownString(original_path);
 
         region.line_text = line_text;
         region.filename = owned_filename;
@@ -2201,15 +2361,15 @@ pub const BuildEnv = struct {
 
     fn remapSyntheticRootDocumentElement(
         self: *BuildEnv,
-        allocator: Allocator,
+        document: *reporting.Document,
         element: *reporting.DocumentElement,
         original_line_starts: []const u32,
     ) Allocator.Error!void {
         switch (element.*) {
-            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(allocator, region, original_line_starts),
+            .source_code_region => |*region| try self.remapSyntheticRootSourceRegion(document, region, original_line_starts),
             .source_code_with_underlines => |*underlines| {
                 const old_start_line = underlines.display_region.start_line;
-                try self.remapSyntheticRootSourceRegion(allocator, &underlines.display_region, original_line_starts);
+                try self.remapSyntheticRootSourceRegion(document, &underlines.display_region, original_line_starts);
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines == 0 or old_start_line <= header_lines) return;
                 for (underlines.underline_regions) |*underline| {
@@ -2229,9 +2389,7 @@ pub const BuildEnv = struct {
                 const header_lines = self.synthetic_root_header_lines;
                 if (header_lines > 0 and location.line <= header_lines) return;
 
-                const owned_filename = try allocator.dupe(u8, original_path);
-                if (location.filename) |old_filename| allocator.free(old_filename);
-                location.filename = owned_filename;
+                location.filename = try document.ownString(original_path);
                 if (location.line > header_lines) location.line -= header_lines;
             },
             .text,
@@ -2255,11 +2413,15 @@ pub const BuildEnv = struct {
     fn remapSyntheticRootReport(self: *BuildEnv, report: *Report) Allocator.Error!void {
         if (self.synthetic_root_original_path == null or self.synthetic_root_original_source == null) return;
 
+        if (report.file) |file| {
+            if (self.syntheticRootDisplayPath(file)) |original_path| try report.setFile(original_path);
+        }
+
         var original_line_starts = try base.RegionInfo.findLineStarts(self.gpa, self.synthetic_root_original_source.?);
         defer original_line_starts.deinit(self.gpa);
         for (report.document.elements.items) |*element| {
             try self.remapSyntheticRootDocumentElement(
-                report.document.allocator,
+                &report.document,
                 element,
                 original_line_starts.items.items,
             );
@@ -2369,9 +2531,19 @@ pub const BuildEnv = struct {
         /// Canonicalized-module cache entries this build wrote.
         canonicalized_cache_stores: u32 = 0,
 
+        /// Objects of a `.boxy` build restored from the per-module Boxy
+        /// object cache, and lowered and compiled by this build.
+        boxy_objects_restored: u32 = 0,
+        boxy_objects_built: u32 = 0,
+        /// Wasm units (a wasm link's own units, beside the native objects
+        /// compile-time evaluation runs) restored and built by this build.
+        wasm_units_restored: u32 = 0,
+        wasm_units_built: u32 = 0,
+
         /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
-
+        /// Producer interface constructions, with no inference hidden in hashing.
+        checking_interfaces_built: u32 = 0,
         /// Module compile time tracking (for non-cached modules)
         /// Time is for full module compilation: parse -> canonicalize -> type-check
         module_time_min_ns: u64 = std.math.maxInt(u64),
@@ -2381,33 +2553,68 @@ pub const BuildEnv = struct {
 
     /// Get build statistics from the coordinator
     pub fn getBuildStats(self: *BuildEnv) BuildStats {
-        if (self.coordinator) |coord| {
-            return coord.getBuildStats();
-        }
-        return .{};
+        var stats: BuildStats = if (self.coordinator) |coord| coord.getBuildStats() else .{};
+        stats.boxy_objects_restored = self.boxy_objects_restored;
+        stats.boxy_objects_built = self.boxy_objects_built;
+        stats.wasm_units_restored = self.wasm_units_restored;
+        stats.wasm_units_built = self.wasm_units_built;
+        return stats;
     }
 
-    pub fn freeWatchInputs(self: *BuildEnv, inputs: []const []const u8) void {
-        for (inputs) |path| self.gpa.free(path);
-        self.gpa.free(inputs);
+    /// `artifact`'s object with the cache key `key`, when this compilation's
+    /// compile-time evaluation built or restored it: its bytes, its hosted
+    /// symbols, and whether it was restored.
+    pub fn boxyObjectWithKey(self: *BuildEnv, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, key: @import("boxy_object_cache.zig").Key) ?BoxyKnownObject {
+        const coordinator = self.coordinator orelse return null;
+        const objects = &(coordinator.boxy_objects orelse return null);
+        const known = objects.objectWithKey(artifact, key) orelse return null;
+        return .{ .pieces = objects.piecesOf(artifact), .image = objects.imageOf(artifact), .hosted_symbols = known.object.?.hosted_symbols, .restored = known.restored };
+    }
+
+    /// Record in `digests` the exports of `artifact`'s object, which this
+    /// compilation's compile-time evaluation built or restored.
+    pub fn boxyAdoptExports(self: *BuildEnv, digests: *boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try digests.adoptExports(&objects.digests, artifact);
+    }
+
+    /// Transfer the calling contracts of objects already prepared by CTFE
+    /// before the consumer compiles its own units against those objects.
+    pub fn boxyAdoptInterfaces(self: *BuildEnv, interfaces: *eval.CompileTimeFinalization.ExportInterfaces) Allocator.Error!void {
+        const coordinator = self.coordinator orelse return;
+        const objects = &(coordinator.boxy_objects orelse return);
+        try interfaces.copyFrom(objects.interfaces);
+    }
+
+    pub const BoxyKnownObject = struct {
+        /// The object's pieces, when it was recorded with them: on a host
+        /// that loads pieces for compile-time evaluation, or for a link
+        /// that composes them (`BoxyObjectLowering.link_reads_pieces`).
+        pieces: ?*const backend.dev.UnitPieces.Pieces,
+        /// The object's unit image, owned by the compilation, for a target
+        /// that `boxy_unit.producesImage`.
+        image: ?@import("boxy_unit.zig").Image,
+        hosted_symbols: []const []const u8,
+        restored: bool,
+    };
+
+    /// Count the objects a `.boxy` build restored from and filed in the
+    /// per-module Boxy object cache (`BuildStats`).
+    pub fn recordBoxyObjects(self: *BuildEnv, restored: u32, built: u32) void {
+        self.boxy_objects_restored += restored;
+        self.boxy_objects_built += built;
+    }
+
+    /// Count the wasm units a wasm build restored from and filed in the
+    /// per-module Boxy object cache (`BuildStats`).
+    pub fn recordWasmUnits(self: *BuildEnv, restored: u32, built: u32) void {
+        self.wasm_units_restored += restored;
+        self.wasm_units_built += built;
     }
 
     pub fn freeWatchInputStates(self: *BuildEnv, inputs: []const watch_inputs.Input) void {
         watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInput(
-        self: *BuildEnv,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-    ) Allocator.Error!void {
-        if (seen.contains(path)) return;
-        const owned = try self.gpa.dupe(u8, path);
-        errdefer self.gpa.free(owned);
-        try paths.append(self.gpa, owned);
-        errdefer _ = paths.pop();
-        try seen.put(self.gpa, owned, {});
     }
 
     fn appendWatchInputState(
@@ -2425,21 +2632,6 @@ pub const BuildEnv = struct {
         try seen.put(self.gpa, owned, {});
     }
 
-    fn appendFileDependencyWatchInputs(
-        self: *BuildEnv,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInput(paths, seen, full_path);
-        }
-    }
-
     fn appendFileDependencyWatchInputStates(
         self: *BuildEnv,
         inputs: *std.ArrayList(watch_inputs.Input),
@@ -2455,43 +2647,10 @@ pub const BuildEnv = struct {
                 .present => .{ .hash = dep.content_hash },
                 .missing => .missing,
                 .unreadable => .unreadable,
-                .pending => unreachable,
+                .pending => base.invariant("build env invariant violated: file dependency {s} is still pending after canonicalization read it", .{relative_path}),
             };
             try self.appendWatchInputState(inputs, seen, full_path, state);
         }
-    }
-
-    /// Collect exact filesystem inputs read by the current build. Returned paths
-    /// are owned by the BuildEnv allocator and must be released with
-    /// `freeWatchInputs`.
-    pub fn collectWatchInputs(self: *BuildEnv) Allocator.Error![]const []const u8 {
-        var paths = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (paths.items) |path| self.gpa.free(path);
-            paths.deinit(self.gpa);
-        }
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var build_pkg_it = self.packages.iterator();
-        while (build_pkg_it.next()) |entry| {
-            if (entry.value_ptr.url == null) try self.appendWatchInput(&paths, &seen, entry.value_ptr.root_file);
-        }
-
-        if (self.coordinator) |coord| {
-            var pkg_it = coord.packages.iterator();
-            while (pkg_it.next()) |entry| {
-                const pkg = entry.value_ptr.*;
-                if (pkg.url != null) continue;
-                for (pkg.modules.items) |*mod| {
-                    try self.appendWatchInput(&paths, &seen, mod.path);
-                    const module_env = mod.moduleEnv() orelse continue;
-                    try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), module_env);
-                }
-            }
-        }
-
-        return paths.toOwnedSlice(self.gpa);
     }
 
     /// Collect exact filesystem inputs read by the current build, paired with
@@ -2499,8 +2658,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
-            unreachable;
+            base.invariant("build env invariant violated: collectWatchInputStates called without watch input tracking enabled", .{});
         }
 
         var inputs = std.ArrayList(watch_inputs.Input).empty;
@@ -2515,10 +2673,8 @@ pub const BuildEnv = struct {
         while (build_pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
-            const state = pkg.root_file_state orelse {
-                if (builtin.mode == .debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
-                unreachable;
-            };
+            const state = pkg.root_file_state orelse
+                base.invariant("build env invariant violated: build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
         }
 
@@ -2528,10 +2684,8 @@ pub const BuildEnv = struct {
                 const pkg = entry.value_ptr.*;
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
-                    const state = mod.source_file_state orelse {
-                        if (builtin.mode == .debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
-                        unreachable;
-                    };
+                    const state = mod.source_file_state orelse
+                        base.invariant("build env invariant violated: coordinator module {s} has no source_file_state", .{mod.name});
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
                     const module_env = mod.moduleEnv() orelse continue;
                     try self.appendFileDependencyWatchInputStates(&inputs, &seen, mod.canonicalSourceDir(), module_env);
@@ -2540,6 +2694,49 @@ pub const BuildEnv = struct {
         }
 
         return inputs.toOwnedSlice(self.gpa);
+    }
+
+    /// Complete-command admission needs fetched sources too. Preserve repeated
+    /// reads: if a source changed between discovery and checking, validation
+    /// must reject publication rather than select one of the observed states.
+    pub fn collectConsumedInputStates(self: *BuildEnv, allocator: Allocator) Allocator.Error![]const watch_inputs.Input {
+        std.debug.assert(self.track_watch_inputs);
+        var inputs = std.ArrayList(watch_inputs.Input).empty;
+        errdefer {
+            for (inputs.items) |input| allocator.free(input.path);
+            inputs.deinit(allocator);
+        }
+        const Owned = struct {
+            fn append(gpa: Allocator, out: *std.ArrayList(watch_inputs.Input), path: []const u8, state: watch_inputs.State) Allocator.Error!void {
+                const owned = try gpa.dupe(u8, path);
+                errdefer gpa.free(owned);
+                try out.append(gpa, .{ .path = owned, .state = state });
+            }
+        };
+        var packages = self.packages.valueIterator();
+        while (packages.next()) |pkg| {
+            try Owned.append(allocator, &inputs, pkg.root_file, pkg.root_file_state.?);
+        }
+        if (self.coordinator) |coord| {
+            var coordinator_packages = coord.packages.valueIterator();
+            while (coordinator_packages.next()) |pkg| {
+                for (pkg.*.modules.items) |*mod| {
+                    try Owned.append(allocator, &inputs, mod.path, mod.source_file_state.?);
+                    if (mod.moduleEnv()) |env| for (env.file_dependencies.items.items) |dep| {
+                        const path = try std.fs.path.resolve(allocator, &.{ mod.canonicalSourceDir(), env.fileDependencyRelativePath(dep) });
+                        defer allocator.free(path);
+                        const state: watch_inputs.State = switch (dep.state) {
+                            .present => .{ .hash = dep.content_hash },
+                            .missing => .missing,
+                            .unreadable => .unreadable,
+                            .pending => base.invariant("completed command has a pending imported file", .{}),
+                        };
+                        try Owned.append(allocator, &inputs, path, state);
+                    };
+                }
+            }
+        }
+        return inputs.toOwnedSlice(allocator);
     }
 
     pub fn hasCompiledModules(self: *BuildEnv) bool {
@@ -2648,6 +2845,20 @@ pub const BuildEnv = struct {
         return self.findModuleByNameInPackage(null, module_name);
     }
 
+    /// The environment that the import named `import_name` of the module at
+    /// `importer_path` was type-checked against.
+    pub fn importedModuleEnv(self: *BuildEnv, importer_path: []const u8, import_name: []const u8) ?*ModuleEnv {
+        const coord = self.coordinator orelse return null;
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            for (pkg.modules.items) |*mod| {
+                if (std.mem.eql(u8, mod.path, importer_path)) return coord.importedModuleEnv(pkg, mod, import_name);
+            }
+        }
+        return null;
+    }
+
     pub fn findModuleByPath(self: *BuildEnv, path: []const u8) ?*coordinator_mod.ModuleState {
         const coord = self.coordinator orelse return null;
         var pkg_it = coord.packages.iterator();
@@ -2714,7 +2925,7 @@ pub const BuildEnv = struct {
     pub const PublicModuleInfo = struct {
         name: []const u8,
         path: []const u8,
-        semantic: SemanticModuleData,
+        checked: CheckedModuleData,
         package_name: []const u8,
         /// Root-owned names to retain when extracting documentation.
         docs_exposed_names: ?[]const []const u8 = null,
@@ -2802,8 +3013,8 @@ pub const BuildEnv = struct {
     fn collectProgramTestModules(
         self: *BuildEnv,
         allocator: Allocator,
+        coord: *Coordinator,
     ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
-        const coord = self.coordinator orelse unreachable;
         var test_owned_packages = try self.collectTestOwnedPackages(allocator);
         defer test_owned_packages.deinit(allocator);
 
@@ -2932,6 +3143,8 @@ pub const BuildEnv = struct {
 
     /// Resolve the root package or platform's explicit public module list to
     /// completed compiler outputs. Dependency modules are deliberately absent.
+    /// Callers query only builds without error reports, in which every module
+    /// completed successfully.
     pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             base.invariant("build env invariant violated: public modules requested before dependency discovery", .{});
@@ -2967,35 +3180,39 @@ pub const BuildEnv = struct {
                 );
             };
             const module_state = root_coord_pkg.getModule(module_id).?;
-            const module_data = module_state.semanticData() orelse {
+            const module_data = module_state.checkedModule() orelse {
                 base.invariant(
-                    "build env invariant violated: public module '{s}' has no completed compiler output",
+                    "build env invariant violated: public module '{s}' did not complete successfully",
                     .{module_name},
                 );
+            };
+            const public_type_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
+                .type_decl => |statement| statement,
+                .whole_module => null,
+                // The header's own diagnostic reports it; no type is public.
+                .missing_nested_type => continue,
+                .unresolved_nested_type => base.invariant(
+                    "build env invariant violated: public module '{s}' has an unresolved nested type",
+                    .{module_name},
+                ),
             };
             try public_modules.append(allocator, .{
                 .name = module_name,
                 .path = module_state.path,
-                .semantic = module_data,
+                .checked = module_data,
                 .package_name = root_name,
                 .public_order = @intCast(public_index),
-                .public_type_decl = switch (public_target.selection) {
-                    .type_decl => |statement| statement,
-                    .whole_module => null,
-                    .unresolved_nested_type => base.invariant(
-                        "build env invariant violated: public module '{s}' has an unresolved nested type",
-                        .{module_name},
-                    ),
-                },
+                .public_type_decl = public_type_decl,
             });
         }
 
         return public_modules.toOwnedSlice(allocator);
     }
 
-    /// Return every compiled public module view in the resolved package graph.
-    /// Consumers use the public spelling here instead of exposing private
-    /// source-module names; type views additionally carry their exact root.
+    /// Return every successfully compiled public module view in the resolved
+    /// package graph. Consumers use the public spelling here instead of
+    /// exposing private source-module names; type views additionally carry
+    /// their exact root.
     pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const coord = self.coordinator orelse {
             base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
@@ -3013,11 +3230,12 @@ pub const BuildEnv = struct {
             for (package.public_surface.modules.items, 0..) |public_module, public_index| {
                 const module_id = coord_package.getPublicModuleId(public_module.name) orelse continue;
                 const module_state = coord_package.getModule(module_id) orelse continue;
-                const semantic = module_state.semanticData() orelse continue;
-                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable;
+                const checked = module_state.checkedModule() orelse continue;
+                const public_target = coord_package.getPublicModuleTarget(public_module.name) orelse unreachable; // getPublicModuleId above found this name in the same public surface
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
+                    .missing_nested_type => continue,
                     .unresolved_nested_type => base.invariant(
                         "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
                         .{public_module.name},
@@ -3026,7 +3244,7 @@ pub const BuildEnv = struct {
                 try public_modules.append(allocator, .{
                     .name = public_module.name,
                     .path = module_state.path,
-                    .semantic = semantic,
+                    .checked = checked,
                     .package_name = package_name,
                     .public_type_decl = source_decl,
                     .public_order = @intCast(public_index),
@@ -3039,7 +3257,9 @@ pub const BuildEnv = struct {
 
     /// Return the compiled modules that belong in generated documentation.
     /// Package roots use their public modules. Platform roots additionally use
-    /// their root module when the header exposes root-owned names.
+    /// their root module when the header exposes root-owned names. Callers
+    /// query only builds without error reports, in which every module
+    /// completed successfully.
     pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
             base.invariant("build env invariant violated: documentation requested before dependency discovery", .{});
@@ -3067,13 +3287,13 @@ pub const BuildEnv = struct {
                 const root_module = self.rootModule(root_name) orelse {
                     base.invariant("build env invariant violated: platform documentation root module is unavailable", .{});
                 };
-                const root_data = root_module.semanticData() orelse {
-                    base.invariant("build env invariant violated: platform documentation root module has no completed compiler output", .{});
+                const root_data = root_module.checkedModule() orelse {
+                    base.invariant("build env invariant violated: platform documentation root module did not complete successfully", .{});
                 };
                 docs_modules.appendAssumeCapacity(.{
                     .name = root_module.name,
                     .path = root_module.path,
-                    .semantic = root_data,
+                    .checked = root_data,
                     .package_name = root_name,
                     .docs_exposed_names = root_pkg.public_surface.root_names.items,
                 });
@@ -3082,8 +3302,12 @@ pub const BuildEnv = struct {
             return docs_modules.toOwnedSlice(allocator);
         }
 
-        const all_modules = try self.getCompiledModules(allocator);
-        defer allocator.free(all_modules);
+        const coord = self.coordinator orelse {
+            base.invariant("build env invariant violated: documentation requested before coordinator initialization", .{});
+        };
+        const root_coord_pkg = coord.packages.get(root_name) orelse {
+            base.invariant("build env invariant violated: documentation root coordinator package is unavailable", .{});
+        };
         const public_modules = try self.getCompiledPublicModules(allocator);
         defer allocator.free(public_modules);
 
@@ -3091,17 +3315,17 @@ pub const BuildEnv = struct {
         errdefer docs_modules.deinit(allocator);
 
         // The root's own compiled modules are its documentation surface.
-        for (all_modules) |mod| {
-            if (!std.mem.eql(u8, mod.package_name, root_name)) continue;
-            switch (mod.semantic.env.module_kind) {
+        for (root_coord_pkg.modules.items) |*mod| {
+            const checked = mod.checkedModule() orelse continue;
+            switch (checked.env.module_kind) {
                 .package, .platform => continue,
                 .type_module, .default_app, .app, .hosted, .module, .malformed => {},
             }
             try docs_modules.append(allocator, .{
                 .name = mod.name,
                 .path = mod.path,
-                .semantic = mod.semantic,
-                .package_name = mod.package_name,
+                .checked = checked,
+                .package_name = root_name,
             });
         }
 
@@ -3187,6 +3411,18 @@ pub const BuildEnv = struct {
         return root.semanticData();
     }
 
+    /// The checked artifact of the module the command names: its root
+    /// package's root module, whatever kind of module it is.
+    pub fn rootModuleCheckedArtifact(self: *BuildEnv) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const root_name = self.discovered_pkg_name orelse return null;
+        const coord = self.coordinator orelse return null;
+        const pkg = coord.packages.get(root_name) orelse return null;
+        const root_id = pkg.root_module_id orelse return null;
+        const root = pkg.getModule(root_id) orelse return null;
+        const semantic = root.semanticData() orelse return null;
+        return semantic.checked_artifact;
+    }
+
     /// Get the root semantic data for the platform package (convenience method).
     pub fn getPlatformSemanticData(self: *BuildEnv) ?SemanticModuleData {
         const platform_name = self.selected_platform_package_name orelse return null;
@@ -3212,68 +3448,14 @@ pub const BuildEnv = struct {
     }
 
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
-        const semantic = self.getExecutableRootSemanticData() orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root semantic data is missing", .{});
-            }
-            unreachable;
-        };
-        return semantic.checked_artifact orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("build env invariant violated: executable root has no checked artifact", .{});
-            }
-            unreachable;
-        };
-    }
-
-    /// How the object cache files a module's pack: `pkg` for a module of a
-    /// package or platform that arrived as a URL bundle, written once per
-    /// package version and only ever read; `local` for a module reached by
-    /// path, rewritten on every edit.
-    pub const PackOrigin = enum { local, pkg };
-
-    /// Where the object cache files a module's packs and how.
-    pub const PackPlacement = struct {
-        origin: PackOrigin,
-        /// Digest of what stays the same across edits of the module: for a
-        /// URL package its URL, otherwise the package's root directory, plus
-        /// the module's path within it. Every version of the module's pack
-        /// files under this one directory, so an edit still finds the
-        /// previous version's entries.
-        identity: [32]u8,
-    };
-
-    /// The pack placement of the module `key` names, or null when the build
-    /// does not know the module.
-    pub fn packPlacementForArtifactKey(
-        self: *const BuildEnv,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) ?PackPlacement {
-        const coord = self.coordinator orelse return null;
-        const location = coord.checked_artifact_index.get(key.bytes) orelse return null;
-        const pkg = self.packages.get(location.pkg_name) orelse return null;
-        const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
-        const module = coord_pkg.getModule(location.module_id) orelse return null;
-        var hasher = base.Sha256.init(.{});
-        if (pkg.url) |url| {
-            hasher.update("pkg\x00");
-            hasher.update(url.url);
-        } else {
-            hasher.update("local\x00");
-            hasher.update(pkg.root_dir);
-        }
-        hasher.update("\x00");
-        hasher.update(module.path);
-        return .{
-            .origin = if (pkg.url != null) .pkg else .local,
-            .identity = hasher.finalResult(),
-        };
+        const semantic = self.getExecutableRootSemanticData() orelse
+            base.invariant("build env invariant violated: executable root semantic data is missing", .{});
+        return semantic.checked_artifact orelse
+            base.invariant("build env invariant violated: executable root has no checked artifact", .{});
     }
 
     /// Every checked artifact `root_artifact` can lower against, other than
     /// itself and the builtin module: its lowering-visible modules in order.
-    /// Builtins get no pack of their own; their instantiations belong to the
-    /// pack of the module that requests them.
     pub fn collectVisibleArtifacts(
         self: *const BuildEnv,
         allocator: Allocator,
@@ -3283,104 +3465,52 @@ pub const BuildEnv = struct {
         errdefer artifacts.deinit(allocator);
         const builtin_artifact = &self.builtin_modules.checked_artifact;
         for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (checkedArtifactKeysEqual(key, root_artifact.key)) continue;
-            if (checkedArtifactKeysEqual(key, builtin_artifact.key)) continue;
+            if (checkedArtifactKeysEqual(key, root_artifact.key.digest())) continue;
+            if (checkedArtifactKeysEqual(key, builtin_artifact.key.digest())) continue;
             const artifact = self.artifactByKey(key) orelse continue;
             try artifacts.append(allocator, artifact);
         }
         return artifacts.toOwnedSlice(allocator);
     }
 
+    /// The digests of every checked module of this build, its link.
+    pub fn boxyLinkDigests(self: *BuildEnv) Allocator.Error!boxy_interface.Digests {
+        return self.builtCoordinator().boxyLinkDigests();
+    }
+
+    /// Collect published checked artifacts available to post-check lowering.
     pub fn collectImportedArtifactViews(
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        errdefer views.deinit(allocator);
-
-        try appendImportedArtifactViewIfMissing(
-            &views,
-            allocator,
-            root_artifact.key,
-            &self.builtin_modules.checked_artifact,
-        );
-
-        for (root_artifact.lowering_visibility.module_ids) |key| {
-            if (rootRelationContainsArtifact(root_artifact, key)) continue;
-            const artifact = self.artifactByKey(key) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("build env invariant violated: missing lowering visibility artifact", .{});
-                }
-                unreachable;
-            };
-            try appendImportedArtifactViewIfMissing(&views, allocator, root_artifact.key, artifact);
-        }
-
-        return views.toOwnedSlice(allocator);
+        return self.builtCoordinator().collectImportedArtifactViews(allocator, root_artifact);
     }
 
+    /// Collect the app artifacts a platform root's required bindings name.
     pub fn collectRelationArtifactViews(
         self: *BuildEnv,
         allocator: Allocator,
         root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     ) Allocator.Error![]check.CheckedArtifact.ImportedModuleView {
-        var views = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-        errdefer views.deinit(allocator);
+        return self.builtCoordinator().collectRelationArtifactViews(allocator, root_artifact);
+    }
 
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
-            const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("build env invariant violated: missing relation artifact", .{});
-                }
-                unreachable;
-            };
-            var seen = false;
-            for (views.items) |view| {
-                if (checkedArtifactKeysEqual(view.key, artifact.key)) {
-                    seen = true;
-                    break;
-                }
-            }
-            if (!seen) try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-        }
-
-        return views.toOwnedSlice(allocator);
+    fn builtCoordinator(self: *BuildEnv) *Coordinator {
+        return self.coordinator orelse
+            base.invariant("build env invariant violated: artifact views requested before a build", .{});
     }
 
     fn checkedArtifactKeysEqual(
-        a: check.CheckedArtifact.CheckedModuleArtifactKey,
-        b: check.CheckedArtifact.CheckedModuleArtifactKey,
+        a: check.CheckedArtifact.ModuleId,
+        b: check.CheckedArtifact.ModuleId,
     ) bool {
-        return std.mem.eql(u8, &a.bytes, &b.bytes);
-    }
-
-    fn appendImportedArtifactViewIfMissing(
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        root_key: check.CheckedArtifact.CheckedModuleArtifactKey,
-        artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    ) Allocator.Error!void {
-        if (checkedArtifactKeysEqual(artifact.key, root_key)) return;
-        for (views.items) |view| {
-            if (checkedArtifactKeysEqual(view.key, artifact.key)) return;
-        }
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-    }
-
-    fn rootRelationContainsArtifact(
-        root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) bool {
-        for (root_artifact.platform_required_bindings.bindings) |binding| {
-            if (checkedArtifactKeysEqual(binding.app_value.artifact, key)) return true;
-        }
-        return false;
+        return a.eql(b);
     }
 
     fn artifactByKey(
         self: *const BuildEnv,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
+        key: check.CheckedArtifact.ModuleId,
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         const coord = self.coordinator orelse return null;
         return coord.checkedArtifactByKey(key);
@@ -3402,6 +3532,7 @@ pub const BuildEnv = struct {
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
+                if (self.diagnostic_observer) |observer| try observer.record(observer.context, report);
                 if (report.severity.isError()) total_error_count += 1 else total_warning_count += 1;
                 reporting.renderReportToTerminal(report, writer, palette, config) catch {};
             }
@@ -3420,6 +3551,7 @@ pub const BuildEnv = struct {
         self: *BuildEnv,
         writer: anytype,
         opt_name: []const u8,
+        debug_opt_name: []const u8,
         config: reporting.ReportingConfig,
     ) Allocator.Error!usize {
         const modules = try self.getCompiledModules(self.gpa);
@@ -3427,16 +3559,17 @@ pub const BuildEnv = struct {
 
         var total: usize = 0;
         for (modules) |mod| {
-            // A module that never finished checking (for example, a member of
-            // an import cycle) is not part of any built artifact, and its
-            // canonical tree still holds unresolved import references.
+            // A module that never finished checking (for example, a dependent
+            // of a module whose source was rejected) is not part of any built
+            // artifact, and its canonical tree still holds unresolved import
+            // references.
             if (mod.semantic.checked_artifact == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);
 
             try collectDbgRegionsInModule(self.gpa, mod.semantic.env, &regions);
             for (regions.items) |region| {
-                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, region, config);
+                try self.renderOptimizedDbgWarning(writer, mod.semantic.env, mod.path, opt_name, debug_opt_name, region, config);
                 total += 1;
             }
         }
@@ -3449,6 +3582,7 @@ pub const BuildEnv = struct {
         env: *const ModuleEnv,
         path: []const u8,
         opt_name: []const u8,
+        debug_opt_name: []const u8,
         region: base.Region,
         config: reporting.ReportingConfig,
     ) Allocator.Error!void {
@@ -3472,6 +3606,15 @@ pub const BuildEnv = struct {
         try report.document.addReflowingText(" output, but ");
         try report.document.addInlineCode("dbg");
         try report.document.addReflowingText(" is intended for debugging.");
+
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("To build for debugging, use ");
+        const debug_opt_arg = try std.fmt.allocPrint(self.gpa, "--opt={s}", .{debug_opt_name});
+        defer self.gpa.free(debug_opt_arg);
+        const owned_debug_opt_arg = try report.addOwnedString(debug_opt_arg);
+        try report.document.addInlineCode(owned_debug_opt_arg);
+        try report.document.addReflowingText(".");
 
         const palette = reporting.ColorUtils.getPaletteForConfig(config);
         reporting.renderReportToTerminal(&report, writer, palette, config) catch {};
@@ -3501,7 +3644,10 @@ pub const BuildEnv = struct {
                             line_starts.items.items,
                             mapped_region.start.offset,
                             mapped_region.end.offset,
-                        ) catch unreachable;
+                        ) catch |err| base.invariant(
+                            "build env invariant violated: a staged root region past its synthetic header does not map into the original source: {s}",
+                            .{@errorName(err)},
+                        );
 
                         const owned_path = try report.addOwnedString(original_path);
                         try report.document.addSourceRegion(
@@ -3815,7 +3961,6 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
-    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = @as([32]u8, @splat(1)) });
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);
@@ -4227,6 +4372,38 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
 }
 
+test "issue 12374: a workspace root keeps paths inside it however its directory was spelled" {
+    const gpa = std.testing.allocator;
+
+    // addWorkspaceRoot and logicalModuleToPath only read `gpa` and
+    // `workspace_roots`, so a minimal BuildEnv with just those fields set is
+    // enough to exercise them.
+    var env: BuildEnv = undefined;
+    env.gpa = gpa;
+    env.workspace_roots = std.array_list.Managed([]const u8).init(gpa);
+    defer {
+        for (env.workspace_roots.items) |root| gpa.free(root);
+        env.workspace_roots.deinit();
+    }
+
+    // A URL package's directory is registered as the cache root was spelled in
+    // the environment joined with its hash. A doubled separator (or, on
+    // Windows, a `/` inside a `\` path) is the same directory, and the
+    // resolved module path inside it must count as inside the workspace.
+    try env.addWorkspaceRoot("/roc-issue-12374//packages/hash");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
+
+    const module_path = try env.logicalModuleToPath("/roc-issue-12374/packages/hash", "Mod");
+    defer gpa.free(module_path);
+    const expected = try std.fs.path.resolve(gpa, &.{"/roc-issue-12374/packages/hash/Mod.roc"});
+    defer gpa.free(expected);
+    try std.testing.expectEqualStrings(expected, module_path);
+
+    // Registering the same directory under another spelling adds nothing.
+    try env.addWorkspaceRoot("/roc-issue-12374/packages//hash/");
+    try std.testing.expectEqual(@as(usize, 1), env.workspace_roots.items.len);
+}
+
 // Regression test for https://github.com/roc-lang/roc/issues/11714
 // `roc check` and `roc build` must reject an absolute platform path with the
 // same report `roc run` produces.
@@ -4245,10 +4422,11 @@ test "discoverDependencies rejects absolute platform spec with Absolute Platform
     const platform_spec = try std.fs.path.join(allocator, &.{ tmp_root, "pf", "main.roc" });
     defer allocator.free(platform_spec);
 
-    // Windows paths contain backslashes, which must be escaped inside a Roc
-    // string literal.
-    const platform_spec_literal = try std.mem.replaceOwned(u8, allocator, platform_spec, "\\", "\\\\");
+    // Dependency sources are written without escape sequences, so a Windows
+    // path is written with forward slashes, which Windows also accepts.
+    const platform_spec_literal = try allocator.dupe(u8, platform_spec);
     defer allocator.free(platform_spec_literal);
+    std.mem.replaceScalar(u8, platform_spec_literal, '\\', '/');
 
     const app_source = try std.fmt.allocPrint(
         allocator,

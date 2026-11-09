@@ -63,7 +63,7 @@ UNDECLARED TYPE - type_app_complex_nested.md:18:51:18:56
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "maybeList")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_maybeList")
@@ -275,7 +275,7 @@ main! = |_| processComplex(Ok([Some(42), None]))
 		(e-lambda
 			(args
 				(p-underscore))
-			(e-call (constraint-fn-var 374)
+			(e-call (constraint-fn-var 379)
 				(e-runtime-error (tag "erroneous_value_expr"))
 				(e-tag (name "Ok")
 					(args

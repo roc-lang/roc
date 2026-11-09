@@ -103,8 +103,45 @@ foo = 0
 foo = 1
 ```
 
+Calling a method on a `var` doesn't change it. A method like `List.append` returns
+an updated copy, so to update the `var`, you reassign it to that copy:
+
+```roc
+var $names = []
+$names = $names.append("Sam")
+```
+
+Calling the method without reassigning, as in `$names.append("Sam")` on a line by
+itself, gives a warning, because the updated copy is thrown away and `$names` stays
+the same.
+
 An [`expect`](#expect) cannot reassign a `var` declared outside of it. (See
 [control flow and variables inside `expect`](#expect-control-flow).)
+
+Only an assignment with `=` changes a `var`. A [`match`](pattern-matching) branch
+pattern or a [`for`](loops) pattern can't bind a `var` at all, so this gives an
+error at compile time:
+
+```roc
+var $latest = ""
+
+for $latest in names { # Error: a for pattern can't bind a var
+    …
+}
+```
+
+That's because a pattern there looks like it might change the `var` but doesn't
+read like an assignment, so it's not obvious whether the `var` changes. Bind an
+ordinary name in the pattern, and assign it to the `var` with `=` if you want the
+`var` to change:
+
+```roc
+var $latest = ""
+
+for name in names {
+    $latest = name
+}
+```
 
 ## [`import`](#import) {#import}
 
@@ -205,8 +242,25 @@ expect double(21) == 42
 ```
 
 Top-level `expect`s are run by the `roc test` command, which reports how many passed and failed.
-When one fails, the report shows the failing expression, along with the values of any top-level
-names it referenced.
+When one fails, the report shows the failing expression, along with the definition of referenced
+top-level (non-function) values. Ideally, the actual values would be shown, that is a planned feature.
+For now you can achieve that with a helper function:
+
+```roc
+check = |received, expected| {
+    equal = received == expected
+
+    if !equal {
+        dbg { expected, received }
+    }
+    
+    equal
+}
+
+double = |n| n * 3 # intentionally incorrect to see output on failure
+
+expect check(double(21), 42)
+```
 
 `roc test` runs the top-level `expect`s in the given module and in every module it imports (including
 modules in packages that are imported through a filesystem path, but not packages downloaded
@@ -307,18 +361,31 @@ my_func = |arg| {
 }
 ```
 
+Code written after a `return` in the same block can never run, so the compiler gives
+a warning for it. The same goes for code after an `if` or `match` where every branch
+returns, and code after a [`crash`](#crash) or [`break`](#break).
+
+```roc
+my_func = |arg| {
+    return 0
+
+    arg - 1 # This gives a warning.
+}
+```
+
 ## [`break`](#break) {#break}
 
 The `break` statement immediately exits the innermost `for` or `while` loop. See [loops](loops#break-statement) for details.
 
 ## [`continue`](#continue) {#continue}
 
-(This has not been implemented yet. It will continue to the next iteration of a `for` or `while` loop.)
+⚠️ `continue` is planned for after 0.1.0 and has not been implemented yet. It is intended to skip to the next iteration of a `for` or `while` loop.
 
 ## [`crash`](#crash) {#crash}
 
 A `crash` statement crashes the running application. All code following the `crash`
-becomes unreachable and will not be executed.
+becomes unreachable and will not be executed. Code written after a `crash` in the same
+block gives a warning, just like code after a [`return`](#return).
 
 ```roc
 if some_condition {

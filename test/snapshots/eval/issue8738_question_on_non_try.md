@@ -180,7 +180,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 345)
+		(e-call (constraint-fn-var 350)
 			(e-lookup-local
 				(p-assign (ident "do_something"))))))
 ~~~
@@ -189,10 +189,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
-		(patt (type "({}) -> Try({}, err)"))
+		(patt (type "() -> Try({}, err)"))
 		(patt (type "Try({}, err)")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
-		(expr (type "({}) -> Try({}, err)"))
+		(expr (type "() -> Try({}, err)"))
 		(expr (type "Try({}, err)"))))
 ~~~

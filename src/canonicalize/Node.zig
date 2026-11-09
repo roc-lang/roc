@@ -235,7 +235,6 @@ pub const Tag = enum {
     diag_default_app_missing_main,
     diag_default_app_wrong_arity,
     diag_cannot_import_default_app,
-    diag_execution_requires_app_or_default_app,
     diag_type_name_case_mismatch,
     diag_module_header_deprecated,
     diag_roc_version_mismatch,
@@ -244,6 +243,7 @@ pub const Tag = enum {
     diag_var_across_function_boundary,
     diag_shadowing_warning,
     diag_binding_name_does_not_match_mutability,
+    diag_var_in_binder_pattern,
     diag_type_redeclared,
     diag_undeclared_type,
     diag_undeclared_type_var,
@@ -260,6 +260,7 @@ pub const Tag = enum {
     diag_private_type_in_exposed_field,
     diag_type_from_missing_module,
     diag_module_not_imported,
+    diag_public_type_not_defined,
     diag_nested_type_not_found,
     diag_internal_builtin_type,
     diag_nested_value_not_found,
@@ -287,6 +288,7 @@ pub const Tag = enum {
     diag_trailing_try_suffix,
     diag_return_outside_fn,
     diag_redundant_return,
+    diag_unreachable_code,
     diag_control_flow_in_expect,
     diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
@@ -374,7 +376,6 @@ pub const Payload = extern union {
     expr_type_method_call: ExprTypeMethodCall,
     expr_type_dispatch_call: ExprTypeDispatchCall,
     expr_hosted_lambda: ExprHostedLambda,
-    expr_low_level: ExprLowLevel,
     expr_run_low_level: ExprRunLowLevel,
     expr_zero_argument_tag: ExprZeroArgumentTag,
     expr_for: ExprFor,
@@ -453,7 +454,6 @@ pub const Payload = extern union {
     ty_record_field_defaulted: TyRecordFieldDefaulted,
     exposed_item: ExposedItem,
     if_branch: IfBranch,
-    type_var_slot: TypeVarSlot,
 
     // Payload struct definitions - all must be exactly 16 bytes, with every byte declared
 
@@ -836,12 +836,6 @@ pub const Payload = extern union {
         symbol_name: u32,
         args_span2_idx: u32, // Index into span2_data: (args.start, args.len)
         _reserved: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
-    pub const ExprLowLevel = extern struct {
-        op: u32,
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprRunLowLevel = extern struct {
@@ -1247,8 +1241,11 @@ pub const Payload = extern union {
             /// for annotations the compiler synthesizes, which have no name in
             /// source.
             has_name_region: bool = false,
+            /// Set by type checking when the annotation's generated type
+            /// contains an error (see `CIR.Annotation.erroneous`).
+            erroneous: bool = false,
             /// Unused bits, kept zero so the byte compares equal across builds.
-            unused: u3 = 0,
+            unused: u2 = 0,
         };
     };
 
@@ -1362,18 +1359,13 @@ pub const Payload = extern union {
         name: u32,
         alias: u32,
         flags: u32,
-        _reserved: [4]u8 = .{ 0, 0, 0, 0 },
+        target: u32 = 0,
     };
 
     pub const IfBranch = extern struct {
         cond: u32,
         body: u32,
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
-    };
-
-    pub const TypeVarSlot = extern struct {
-        parent_node_idx: u32,
-        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // Compile-time size and byte-coverage verification.

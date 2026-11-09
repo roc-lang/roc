@@ -124,7 +124,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -138,7 +138,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -152,7 +152,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "one")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_one")
@@ -166,7 +166,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -180,7 +180,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -194,7 +194,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "one")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_one")
@@ -208,7 +208,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -222,7 +222,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "two")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_two")
@@ -236,7 +236,7 @@ MOD NOT FOUND - trailing_comma_layout.md:1:1:4:2
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "one")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_one")

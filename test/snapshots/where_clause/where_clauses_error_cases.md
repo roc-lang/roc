@@ -313,11 +313,9 @@ EndOfFile,
 broken_fn1 : a -> b
 	where []
 
-
 # Empty where clause
 broken_fn2 : a -> b
 	where []
-
 
 # Referencing undefined type variable
 broken_fn3 : a -> b

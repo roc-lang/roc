@@ -69,7 +69,7 @@ TYPE REDECLARED - record_default_duplicate_associated_forward_lookup.md:11:1:14:
 				(file "record_default_duplicate_associated_forward_lookup.md")
 				(line 7)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "record_default_duplicate_associated_forward_lookup.md") (start 7 1) (end 9 2) (annotation dim) (line-text "Foo := [A].{\n    Bar := { x : U8 }\n}")))))
 ~~~

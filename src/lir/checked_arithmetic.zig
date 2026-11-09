@@ -1,6 +1,7 @@
 //! Shared checked-integer arithmetic metadata for LIR producers and consumers.
 
 const std = @import("std");
+const base = @import("base");
 const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
@@ -75,7 +76,7 @@ pub fn member(operation: Operation, mode: Mode) LIR.LowLevel {
     inline for (family) |entry| {
         if (entry.operation == operation and entry.mode == mode) return entry.op;
     }
-    unreachable;
+    unreachable; // family lists one member for every Operation and Mode pair
 }
 
 /// Returns whether an operation is a pre-LIR source-policy marker.
@@ -114,7 +115,7 @@ pub fn intBits(layout_idx: layout.Idx) u16 {
     if (layout_idx == .u32 or layout_idx == .i32) return 32;
     if (layout_idx == .u64 or layout_idx == .i64) return 64;
     if (layout_idx == .u128 or layout_idx == .i128) return 128;
-    unreachable;
+    base.invariant("checked arithmetic invariant violated: intBits expects a fixed-width integer layout, got layout {d}", .{@backingInt(layout_idx)});
 }
 
 /// Returns the lowest representable value for a signed numeric layout.
@@ -151,18 +152,22 @@ pub fn checkedOp(op: LIR.LowLevel, layout_idx: layout.Idx) ?LIR.LowLevel {
 pub fn lowerOp(op: LIR.LowLevel, layout_idx: layout.Idx) LIR.LowLevel {
     if (op == .num_plus) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_add;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     if (op == .num_minus) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_sub;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     if (op == .num_times) {
         if (layout_idx == .f32 or layout_idx == .f64) return .num_float_mul;
         if (layout_idx == .dec) return .dec_mul;
-        return checkedOp(op, layout_idx) orelse unreachable;
+        return checkedOp(op, layout_idx) orelse numericLayoutInvariant(op, layout_idx);
     }
     return checkedOp(op, layout_idx) orelse op;
+}
+
+fn numericLayoutInvariant(op: LIR.LowLevel, layout_idx: layout.Idx) noreturn {
+    base.invariant("checked arithmetic invariant violated: {s} has non-numeric layout {d}", .{ @tagName(op), @backingInt(layout_idx) });
 }
 
 /// Returns the plain wrapping LIR operation for a checked arithmetic operation.
@@ -207,46 +212,38 @@ pub fn zeroDenominatorMessage(op: LIR.LowLevel, layout_idx: layout.Idx) ?[]const
     return null;
 }
 
-fn divisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    if (layout_idx == .u8) return "U8 division by zero";
-    if (layout_idx == .i8) return "I8 division by zero";
-    if (layout_idx == .u16) return "U16 division by zero";
-    if (layout_idx == .i16) return "I16 division by zero";
-    if (layout_idx == .u32) return "U32 division by zero";
-    if (layout_idx == .i32) return "I32 division by zero";
-    if (layout_idx == .u64) return "U64 division by zero";
-    if (layout_idx == .i64) return "I64 division by zero";
-    if (layout_idx == .u128) return "U128 division by zero";
-    if (layout_idx == .i128) return "I128 division by zero";
+/// The integer widths with a zero-denominator message, with the name each
+/// message spells.
+const int_width_names = [_]struct { layout_idx: layout.Idx, name: []const u8 }{
+    .{ .layout_idx = .u8, .name = "U8" },
+    .{ .layout_idx = .i8, .name = "I8" },
+    .{ .layout_idx = .u16, .name = "U16" },
+    .{ .layout_idx = .i16, .name = "I16" },
+    .{ .layout_idx = .u32, .name = "U32" },
+    .{ .layout_idx = .i32, .name = "I32" },
+    .{ .layout_idx = .u64, .name = "U64" },
+    .{ .layout_idx = .i64, .name = "I64" },
+    .{ .layout_idx = .u128, .name = "U128" },
+    .{ .layout_idx = .i128, .name = "I128" },
+};
+
+fn zeroDenominatorMessageFor(comptime suffix: []const u8, layout_idx: layout.Idx) ?[]const u8 {
+    inline for (int_width_names) |width| {
+        if (layout_idx == width.layout_idx) return width.name ++ suffix;
+    }
     return null;
+}
+
+fn divisionByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
+    return zeroDenominatorMessageFor(" division by zero", layout_idx);
 }
 
 fn remainderByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    if (layout_idx == .u8) return "U8 remainder by zero";
-    if (layout_idx == .i8) return "I8 remainder by zero";
-    if (layout_idx == .u16) return "U16 remainder by zero";
-    if (layout_idx == .i16) return "I16 remainder by zero";
-    if (layout_idx == .u32) return "U32 remainder by zero";
-    if (layout_idx == .i32) return "I32 remainder by zero";
-    if (layout_idx == .u64) return "U64 remainder by zero";
-    if (layout_idx == .i64) return "I64 remainder by zero";
-    if (layout_idx == .u128) return "U128 remainder by zero";
-    if (layout_idx == .i128) return "I128 remainder by zero";
-    return null;
+    return zeroDenominatorMessageFor(" remainder by zero", layout_idx);
 }
 
 fn moduloByZeroMessage(layout_idx: layout.Idx) ?[]const u8 {
-    if (layout_idx == .u8) return "U8 modulo by zero";
-    if (layout_idx == .i8) return "I8 modulo by zero";
-    if (layout_idx == .u16) return "U16 modulo by zero";
-    if (layout_idx == .i16) return "I16 modulo by zero";
-    if (layout_idx == .u32) return "U32 modulo by zero";
-    if (layout_idx == .i32) return "I32 modulo by zero";
-    if (layout_idx == .u64) return "U64 modulo by zero";
-    if (layout_idx == .i64) return "I64 modulo by zero";
-    if (layout_idx == .u128) return "U128 modulo by zero";
-    if (layout_idx == .i128) return "I128 modulo by zero";
-    return null;
+    return zeroDenominatorMessageFor(" modulo by zero", layout_idx);
 }
 
 test "checkedOp maps integer arithmetic and checked Dec absolute value" {

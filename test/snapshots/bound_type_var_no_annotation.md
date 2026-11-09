@@ -43,7 +43,7 @@ UNUSED VARIABLE - bound_type_var_no_annotation.md:19:5:19:9
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "pair")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_pair")
@@ -210,7 +210,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 288)
+			(e-dispatch-call (method "plus") (constraint-fn-var 293)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "n"))))
@@ -228,20 +228,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 303)
+					(e-call (constraint-fn-var 308)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "text"))
-					(e-call (constraint-fn-var 314)
+					(e-call (constraint-fn-var 319)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "pair"))
-					(e-call (constraint-fn-var 319)
+					(e-call (constraint-fn-var 324)
 						(e-lookup-local
 							(p-assign (ident "combine")))
 						(e-lookup-local
@@ -250,7 +250,7 @@ main! = |_| {
 							(p-assign (ident "text")))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 322)
+					(e-call (constraint-fn-var 327)
 						(e-lookup-local
 							(p-assign (ident "addOne")))
 						(e-num (value "5"))))

@@ -30,12 +30,12 @@ written_method = written.foo()
 ~~~
 # EXPECTED
 MISSING METHOD - defaulted_type_diagnostics.md:22:26:22:29
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:15:18:15:25
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:17:17:17:20
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:9:18:9:20
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:11:21:11:23
+MISSING METHOD - defaulted_type_diagnostics.md:15:18:15:25
+MISSING METHOD - defaulted_type_diagnostics.md:17:17:17:20
+MISSING METHOD - defaulted_type_diagnostics.md:9:18:9:20
+MISSING METHOD - defaulted_type_diagnostics.md:11:21:11:23
 TYPE MISMATCH - defaulted_type_diagnostics.md:13:34:13:37
-TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
+MISSING METHOD - defaulted_type_diagnostics.md:7:16:7:17
 # PROBLEMS
 ~~~clojure
 (reports
@@ -74,10 +74,18 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 15 18) (end 15 25))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "is_gt")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code ">")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 15 18) (end 15 25) (annotation error) (line-text "string_compare = \"apple\" > \"banana\""))
 			(line-break)
@@ -90,13 +98,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated operator ">")
-			(reflow " ")
-			(reflow "to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in string types")
@@ -107,10 +108,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 17 17) (end 17 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 17 17) (end 17 20) (annotation error) (line-text "string_method = \"s\".foo()"))
 			(line-break)
@@ -123,13 +128,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "foo")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in string types")
@@ -140,10 +138,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 9 18) (end 9 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "foo")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 9 18) (end 9 20) (annotation error) (line-text "literal_method = 35.foo()"))
 			(line-break)
@@ -156,13 +158,6 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "foo")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
 			(reflow "None of the built-in number types")
@@ -173,10 +168,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow ".")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 11 21) (end 11 23))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "plus")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 11 21) (end 11 23) (annotation error) (line-text "literal_signature = 35.plus(\"s\")"))
 			(line-break)
@@ -189,22 +188,13 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "plus")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a suffix or a type annotation saying which type it should be.")))
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
 		(region (start 13 34) (end 13 37))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 13 34) (end 13 37) (annotation error) (line-text "shared_literals = if True 1 else \"s\""))
 			(line-break)
@@ -213,10 +203,14 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(reflow "Add a type annotation saying which type it should be.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 7 16) (end 7 17))
 		(headline
-			(reflow "Nothing in this program determines a type this needs:"))
+			(reflow "A type this needs never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "d")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "defaulted_type_diagnostics.md") (start 7 16) (end 7 17) (annotation error) (line-text "materialized = g(|n| n + 1)"))
 			(line-break)
@@ -229,16 +223,7 @@ TYPE NOT DETERMINED - defaulted_type_diagnostics.md:7:16:7:17
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "d")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -369,7 +354,7 @@ literal_method = (35).foo()
 
 literal_signature = (35).plus("s")
 
-shared_literals = if True 1 else "s"
+shared_literals = if (True) 1 else "s"
 
 string_compare = "apple" > "banana"
 
@@ -391,12 +376,12 @@ written_method = written.foo()
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-dispatch-call (method "encode") (constraint-fn-var 311)
+				(e-dispatch-call (method "encode") (constraint-fn-var 316)
 					(receiver
-						(e-call (constraint-fn-var 310)
+						(e-call (constraint-fn-var 315)
 							(e-lookup-local
 								(p-assign (ident "f")))
-							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 306)
+							(e-type-dispatch-call (method "d") (type-dispatch-stmt 20) (constraint-fn-var 311)
 								(args
 									(e-num (value "41"))))))
 					(args))))
@@ -418,12 +403,12 @@ written_method = written.foo()
 						(ty-lookup (name "I64") (builtin)))))))
 	(d-let
 		(p-assign (ident "materialized"))
-		(e-call (constraint-fn-var 331)
+		(e-call (constraint-fn-var 336)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 329)
+				(e-dispatch-call (method "plus") (constraint-fn-var 334)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "n"))))
@@ -431,18 +416,14 @@ written_method = written.foo()
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "literal_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 339)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args)))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "35"))))
 	(d-let
 		(p-assign (ident "literal_signature"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 356)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-string
-					(e-literal (string "s"))))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "35"))
+			(e-string
+				(e-literal (string "s")))))
 	(d-let
 		(p-assign (ident "shared_literals"))
 		(e-if
@@ -454,17 +435,16 @@ written_method = written.foo()
 				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "string_compare"))
-		(e-dispatch-call (method "is_gt") (constraint-fn-var 395)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args
-				(e-runtime-error (tag "erroneous_value_expr")))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-string
+				(e-literal (string "apple")))
+			(e-string
+				(e-literal (string "banana")))))
 	(d-let
 		(p-assign (ident "string_method"))
-		(e-dispatch-call (method "foo") (constraint-fn-var 405)
-			(receiver
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(args)))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-string
+				(e-literal (string "s")))))
 	(d-let
 		(p-assign (ident "written"))
 		(e-num (value "35"))

@@ -179,41 +179,52 @@ pub const Resolver = struct {
 
     /// Plan the RC behavior for a canonical helper key.
     ///
+    /// The plan is `.noop` exactly when `Store.layoutContainsRefcounted` is
+    /// false for the key's layout. Builtins rely on this: a backend passes an
+    /// item or payload RC callback exactly when the builtin's
+    /// "items are refcounted" flag, which is that same predicate, is set.
+    ///
     /// A `host_drop` adapter performs its layout's `decref`, so it plans as
     /// one; the two differ only in the signature the backend gives the
     /// generated function.
     pub fn plan(self: *const Resolver, key: HelperKey) Plan {
         const op = key.op.performed();
         const l = self.store.getLayout(key.layout_idx);
+        if (self.store.layoutHoldsHole(key.layout_idx)) {
+            base.invariant("layout/ARC invariant violated: a value holding a demand hole has no refcount plan", .{});
+        }
         if (!self.nestedContainsRefcounted(l)) {
             return .noop;
         }
 
         return switch (l.tag) {
-            // ptr is never refcounted, so the early return above already handled it.
-            .zst, .ptr => .noop,
-            .scalar => if (l.getScalar().tag == .str)
-                switch (op) {
+            .zst, .ptr, .box_of_zst => base.invariant(
+                "layout/ARC invariant violated: a layout without refcounted data reached RC planning",
+                .{},
+            ),
+            .hole => base.invariant("layout/ARC invariant violated: a demand hole has no refcount plan", .{}),
+            .dynamic => base.invariant("layout/ARC invariant violated: a dynamic local is reference counted through its runtime descriptor, never a layout plan", .{}),
+            .scalar => switch (l.getScalar().tag) {
+                .str => switch (op) {
                     .incref => .str_incref,
                     .decref => .str_decref,
                     .free => .str_free,
-                }
-            else
-                .noop,
+                },
+                .int, .frac, .opaque_ptr, .vector => base.invariant(
+                    "layout/ARC invariant violated: a non-Str scalar reached RC planning",
+                    .{},
+                ),
+            },
             .list, .list_of_zst => switch (op) {
                 .incref => .{ .list_incref = self.listPlan(key.layout_idx) },
                 .decref => .{ .list_decref = self.listPlan(key.layout_idx) },
                 .free => .{ .list_free = self.listPlan(key.layout_idx) },
             },
-            .box, .box_of_zst => switch (op) {
+            .box => switch (op) {
                 .incref => .box_incref,
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
-            .erased_box => base.invariant(
-                "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
-                .{},
-            ),
             .erased_callable => switch (op) {
                 .incref => .erased_callable_incref,
                 .decref => .erased_callable_decref,

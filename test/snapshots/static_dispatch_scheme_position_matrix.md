@@ -42,8 +42,8 @@ roundtrip = parse_show("hi")
 UNBOUND WHERE RECEIVER - static_dispatch_scheme_position_matrix.md:24:32:24:50
 UNBOUND WHERE RECEIVER - static_dispatch_scheme_position_matrix.md:24:52:24:69
 POLYMORPHIC VALUE - static_dispatch_scheme_position_matrix.md:22:1:22:13
-TYPE NOT DETERMINED - static_dispatch_scheme_position_matrix.md:19:5:19:14
-TYPE NOT DETERMINED - static_dispatch_scheme_position_matrix.md:28:9:28:19
+MISSING METHOD - static_dispatch_scheme_position_matrix.md:19:5:19:14
+MISSING METHOD - static_dispatch_scheme_position_matrix.md:28:9:28:19
 # PROBLEMS
 ~~~clojure
 (reports
@@ -108,50 +108,53 @@ TYPE NOT DETERMINED - static_dispatch_scheme_position_matrix.md:28:9:28:19
 			(reflow "Add an annotation or use this value in a way that fixes its concrete type.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 19 5) (end 19 14))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "gen")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value of type")
+			(reflow " ")
+			(annotated code "a")
+			(reflow ",")
+			(reflow " ")
+			(reflow "which never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "gen")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 19 5) (end 19 14) (annotation error) (line-text "    A.gen({})"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "gen")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 28 9) (end 28 19))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "show")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "show")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "static_dispatch_scheme_position_matrix.md") (start 28 9) (end 28 19) (annotation error) (line-text "    v = A.parse(s)"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "show")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -361,7 +364,7 @@ roundtrip = parse_show("hi")
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 345)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 350)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -377,7 +380,7 @@ roundtrip = parse_show("hi")
 						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_arg"))
-		(e-call (constraint-fn-var 352)
+		(e-call (constraint-fn-var 357)
 			(e-lookup-local
 				(p-assign (ident "via_arg")))
 			(e-typed-int (value "5") (type "U8"))))
@@ -401,7 +404,7 @@ roundtrip = parse_show("hi")
 												(p-assign (ident "x")))
 											(rest-at (index 1)))))
 								(value
-									(e-dispatch-call (method "to_i128") (constraint-fn-var 367)
+									(e-dispatch-call (method "to_i128") (constraint-fn-var 372)
 										(receiver
 											(e-lookup-local
 												(p-assign (ident "x"))))
@@ -425,7 +428,7 @@ roundtrip = parse_show("hi")
 						(ty-lookup (name "I128") (builtin)))))))
 	(d-let
 		(p-assign (ident "ok_data"))
-		(e-call (constraint-fn-var 387)
+		(e-call (constraint-fn-var 392)
 			(e-lookup-local
 				(p-assign (ident "via_data")))
 			(e-list
@@ -451,7 +454,7 @@ roundtrip = parse_show("hi")
 						(ty-rigid-var-lookup (ty-rigid-var (name "a"))))))))
 	(d-let
 		(p-assign (ident "unpinned_ret"))
-		(e-call (constraint-fn-var 409)
+		(e-call (constraint-fn-var 414)
 			(e-lookup-local
 				(p-assign (ident "gen")))
 			(e-empty_record)))

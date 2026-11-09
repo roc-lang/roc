@@ -30,18 +30,34 @@ pub const SafeRange = @import("safe_list.zig").SafeRange;
 pub const SafeMultiList = @import("safe_list.zig").SafeMultiList;
 pub const validateRelocatedSpan = @import("safe_list.zig").validateRelocatedSpan;
 pub const GuardedList = @import("GuardedList.zig");
+/// Backings a growing list replaced while readers may still hold slices of them.
+pub const SupersededBackings = @import("SupersededBackings.zig");
 
 pub const IndexedStack = @import("IndexedStack.zig").IndexedStack;
+pub const WorkStacks = @import("WorkStacks.zig").WorkStacks;
 
 pub const DenseMap = @import("DenseMap.zig").DenseMap;
+/// A direct-indexed map over dense IDs that takes its allocator per call.
+pub const DenseMapUnmanaged = @import("DenseMap.zig").DenseMapUnmanaged;
 pub const RingQueue = @import("RingQueue.zig").RingQueue;
+/// A multimap whose buckets are chains through one shared node list.
+pub const ChainedBuckets = @import("ChainedBuckets.zig").ChainedBuckets;
+pub const AutoChainedBuckets = @import("ChainedBuckets.zig").AutoChainedBuckets;
 pub const VersionedDenseMap = @import("VersionedMap.zig").VersionedDenseMap;
 pub const VersionedHashMap = @import("VersionedMap.zig").VersionedHashMap;
 pub const DenseMapPool = @import("DenseMap.zig").DenseMapPool;
+/// A write-once slot for a fact computed by whichever consumer first needs it.
+pub const OnceSlot = @import("OnceSlot.zig").OnceSlot;
 pub const ScopedBitSet = @import("ScopedBitSet.zig");
 pub const RekeyingHashMap = @import("RekeyingHashMap.zig").RekeyingHashMap;
 /// Loop-nesting forest of a reducible directed graph.
 pub const LoopForest = @import("LoopForest.zig");
+/// Union-find over dense indices.
+pub const DisjointSets = @import("DisjointSets.zig");
+/// Strongly connected components in topological order.
+pub const scc = @import("scc.zig");
+/// Compressed adjacency lists.
+pub const csr = @import("csr.zig");
 
 /// Any/all evaluation over nested groups of leaves on explicit stacks.
 pub const AnyAll = @import("any_all.zig");
@@ -56,6 +72,10 @@ pub const validateSerializedRelocations = serde_validation.validateSerializedRel
 /// Single-threaded arena allocator; the non-atomic counterpart to
 /// `std.heap.ArenaAllocator`.
 pub const SingleThreadArena = @import("SingleThreadArena.zig");
+
+/// Allocator that refuses in-place growth, so allocation-failure tests count
+/// the same allocations on every run.
+pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
 
 /// Serialization format definitions for embedded module data.
 pub const serialization = @import("serialization.zig");
@@ -90,15 +110,23 @@ test "collections tests" {
     std.testing.refAllDecls(@import("ExposedItems.zig"));
     std.testing.refAllDecls(@import("safe_list.zig"));
     std.testing.refAllDecls(@import("GuardedList.zig"));
+    std.testing.refAllDecls(@import("SupersededBackings.zig"));
     std.testing.refAllDecls(@import("serialization.zig"));
     std.testing.refAllDecls(@import("SortedArrayBuilder.zig"));
     std.testing.refAllDecls(@import("SingleThreadArena.zig"));
+    std.testing.refAllDecls(@import("DeterministicAllocator.zig"));
     std.testing.refAllDecls(@import("DenseMap.zig"));
     std.testing.refAllDecls(@import("RingQueue.zig"));
+    std.testing.refAllDecls(@import("OnceSlot.zig"));
+    std.testing.refAllDecls(@import("ChainedBuckets.zig"));
     std.testing.refAllDecls(@import("any_all.zig"));
     std.testing.refAllDecls(@import("VersionedMap.zig"));
     std.testing.refAllDecls(@import("IndexedStack.zig"));
+    std.testing.refAllDecls(@import("WorkStacks.zig"));
     std.testing.refAllDecls(@import("ScopedBitSet.zig"));
     std.testing.refAllDecls(@import("RekeyingHashMap.zig"));
     std.testing.refAllDecls(@import("LoopForest.zig"));
+    std.testing.refAllDecls(@import("DisjointSets.zig"));
+    std.testing.refAllDecls(@import("scc.zig"));
+    std.testing.refAllDecls(@import("csr.zig"));
 }

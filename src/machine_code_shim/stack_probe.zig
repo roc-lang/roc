@@ -39,7 +39,7 @@ pub inline fn retain() void {
 /// The body mirrors Zig 0.16's `compiler_rt/stack_probe.zig` implementation.
 fn zigProbeStack() callconv(.naked) void {
     @setRuntimeSafety(false);
-    if (!needs_zig_probe) unreachable;
+    if (!needs_zig_probe) unreachable; // retain references this helper only when needs_zig_probe holds
 
     const symbol = if (builtin.object_format == .macho)
         "___zig_probe_stack:\n"
@@ -86,7 +86,7 @@ fn zigProbeStack() callconv(.naked) void {
         );
     }
 
-    unreachable;
+    unreachable; // needs_zig_probe limits this to x86 and x86_64, whose asm above returns to the caller
 }
 
 /// Windows stack-growth ABI, private to the shim just like the ELF helper.
@@ -128,5 +128,5 @@ fn windowsProbeStack() callconv(.naked) void {
             \\ ret
         );
     } else @compileError("unsupported Windows stack-probe architecture");
-    unreachable;
+    unreachable; // the asm above returns to the caller
 }

@@ -41,7 +41,6 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
@@ -80,7 +79,6 @@ const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const RecordFieldSafeList = RecordField.SafeList;
 const TagSafeList = Tag.SafeList;
-const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
@@ -92,8 +90,31 @@ const RawTypePair = struct {
     actual: Var,
 };
 
+/// Two requirements of one method on the same type whose method types do not
+/// agree. A type has one method of each name, so no type can satisfy both.
+const RawMethodConflict = struct {
+    method_name: Ident.Idx,
+    /// Whether one of the requirements came from an operator.
+    from_operator: bool,
+    /// The two variables whose requirements were being merged.
+    receivers: RawTypePair,
+    /// False when the requirements are an annotation's own, whose variable
+    /// keeps the requirement it declared first.
+    poison_receivers: bool,
+    /// The two required method types.
+    methods: RawTypePair,
+};
+
 const RawMismatchEvidence = struct {
     record: ?RawTypePair = null,
+    /// The pair whose relation failed when the mismatch left the unifier,
+    /// when that failure came from relating a pair of variables.
+    leaf: ?RawTypePair = null,
+    /// The first same-method requirement pair that failed to agree.
+    method_conflict: ?RawMethodConflict = null,
+    /// The row whose own repeated label failed to relate to its other
+    /// occurrence (design.md "Row Union Normalization").
+    repeated_label_row: ?Var = null,
 };
 
 /// Exact checker evidence produced when a fresh record construction omits a
@@ -133,7 +154,9 @@ pub const Result = union(enum) {
     suppressed_by_error,
     /// A mismatch recorded as a diagnostic.
     problem: Problem.Idx,
-    /// A mismatch detected under `write_no_report`: nothing recorded and the
+    /// A mismatch detected under `write_no_report`, or under
+    /// `repeated_label_rows = .return_row` when a row's repeated label stopped
+    /// the relation (`Scratch.repeatedLabelRow`): nothing recorded and the
     /// top-level operands are not poisoned. Successful child unifications that
     /// completed before the mismatch remain committed.
     mismatch,
@@ -162,9 +185,6 @@ pub const Result = union(enum) {
 /// Borrowed bundle of the stable dependencies every unification needs.
 /// All fields are borrowed; construct cheaply from the owner on each call.
 pub const Env = struct {
-    /// Allocator that owns `problems`; used to grow it. Must be the same
-    /// allocator that created the problem store (see `appendProblem` below).
-    problems_gpa: Allocator,
     ident_store: *const Ident.Store,
     self_module_identity: base.ModuleIdentity.Idx,
     types: *types_mod.Store,
@@ -304,11 +324,36 @@ pub const Options = struct {
     /// Retain the outer nominal record opening with this semantic role if the
     /// relation rejects and its reporter needs the instantiated backing.
     nominal_record_mismatch_role: NominalRecordMismatchRole = .none,
+    /// Set when the two operands are requirements of one method on the same
+    /// type, so a mismatch is reported as that type needing two different
+    /// methods of one name.
+    method_requirements: ?MethodRequirements = null,
     /// Source-backed record construction whose omission decisions this
     /// relation owns. The checker publishes successful default absorptions
     /// against this exact expression when the empty row operand is an
     /// internal extension variable rather than the expression's own var.
     record_construction_var: ?Var = null,
+    /// What a relation does when a row repeats a label whose occurrences do
+    /// not relate.
+    repeated_label_rows: RepeatedLabelRows = .mismatch,
+};
+
+/// What a relation does when one operand's row repeats a label along its
+/// extension chain and the occurrences do not relate.
+pub const RepeatedLabelRows = enum {
+    /// Treat it as a mismatch of the relation.
+    mismatch,
+    /// Return `Result.mismatch` with the row in `Scratch.repeatedLabelRow`,
+    /// so the caller can normalize the row, which reports the conflict as the
+    /// row's own, and relate the operands again.
+    return_row,
+};
+
+/// The method whose two requirements on one annotation's type variable a
+/// relation compares.
+pub const MethodRequirements = struct {
+    method_name: Ident.Idx,
+    receiver: Var,
 };
 
 /// Unify two type variables.
@@ -346,7 +391,14 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
     );
     unifier.root_operands = .{ a, b };
     unifier.deferred_callables = env.deferred_callables;
-    unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
+    const root_mismatch: MismatchHandling = if (opts.method_requirements) |requirements| .{ .record_method_conflict = .{
+        .method_name = requirements.method_name,
+        .from_operator = false,
+        .receivers = .{ .expected = requirements.receiver, .actual = requirements.receiver },
+        .poison_receivers = false,
+        .methods = .{ .expected = a, .actual = b },
+    } } else .propagate;
+    unifier.scheduleRootPair(a, b, opts.root_relation, root_mismatch) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
     unifier.runWorkLoop() catch |err| {
@@ -354,6 +406,10 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             error.OutOfMemory => return error.OutOfMemory,
             error.ErroneousType => return .suppressed_by_error,
             error.TypeMismatch => {},
+        }
+
+        if (opts.repeated_label_rows == .return_row and env.unify_scratch.repeatedLabelRow() != null) {
+            return Result.mismatch;
         }
 
         // write_no_report: keep completed child writes, but do not record or
@@ -364,7 +420,13 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
-        const problem_idx = try env.problems.appendProblem(env.problems_gpa, .{ .type_mismatch = .{
+        const leaf = try snapshotMismatchLeaf(env);
+        env.unify_scratch.rejected_roots = .{
+            .expected = env.types.resolveThroughAliases(a).desc.content,
+            .actual = env.types.resolveThroughAliases(b).desc.content,
+        };
+        const method_conflict = try snapshotMismatchMethodConflict(env);
+        const problem_idx = try env.problems.appendProblem(.{ .type_mismatch = .{
             .types = .{
                 .expected_var = a,
                 .expected_snapshot = expected_snapshot,
@@ -373,8 +435,11 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
             },
             .context = opts.context,
             .evidence = evidence,
+            .leaf = leaf,
+            .method_conflict = method_conflict,
         } });
         try env.types.poisonOnMismatch(a, b);
+        try poisonMethodConflictReceivers(env);
         return Result{ .problem = problem_idx };
     };
 
@@ -452,6 +517,45 @@ pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMis
         try snapshotRawRecordEvidence(env, record)
     else
         .none;
+}
+
+/// Snapshot the pair whose relation failed, before the top-level operands are
+/// poisoned, so a reporter that recognizes it can show the conflicting types.
+pub fn snapshotMismatchLeaf(env: *const Env) std.mem.Allocator.Error!?problem_mod.TypePair {
+    const raw = env.unify_scratch.mismatch_evidence.leaf orelse return null;
+    return .{
+        .expected_var = raw.expected,
+        .expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.expected),
+        .actual_var = raw.actual,
+        .actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, raw.actual),
+    };
+}
+
+/// Record the method requirements whose disagreement rejected the relation, so
+/// the report can say that no type has two different methods of one name.
+pub fn snapshotMismatchMethodConflict(env: *const Env) std.mem.Allocator.Error!?problem_mod.MethodConflict {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return null;
+    return .{
+        .method_name = raw.method_name,
+        .from_operator = raw.from_operator,
+        .first_type = try methodTypeDisplay(env, raw.methods.expected, raw.receivers.expected),
+        .second_type = try methodTypeDisplay(env, raw.methods.actual, raw.receivers.actual),
+    };
+}
+
+/// A method type's display text. Its where clause leaves out the receiver's
+/// own requirements, which are the ones that conflict.
+pub fn methodTypeDisplay(env: *const Env, method_var: Var, receiver: Var) std.mem.Allocator.Error!problem_mod.ExtraStringIdx {
+    env.type_writer.writeMethodType(method_var, receiver) catch return error.OutOfMemory;
+    return env.problems.putExtraString(env.type_writer.get());
+}
+
+/// A type whose requirements conflict is erroneous: no type satisfies them,
+/// so later checks of it report nothing further.
+pub fn poisonMethodConflictReceivers(env: *const Env) std.mem.Allocator.Error!void {
+    const raw = env.unify_scratch.mismatch_evidence.method_conflict orelse return;
+    if (!raw.poison_receivers) return;
+    try env.types.poisonOnMismatch(raw.receivers.expected, raw.receivers.actual);
 }
 
 /// A temporary unification context used to unify two type variables within a `Store`.
@@ -574,10 +678,10 @@ const Unifier = struct {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .record => |record| {
-                        return Content{ .structure = FlatType{ .record = try self.recordForMerge(vars, record) } };
+                        return Content{ .structure = FlatType{ .record = try self.rowForMerge(.record, vars, record) } };
                     },
                     .tag_union => |tag_union| {
-                        return Content{ .structure = FlatType{ .tag_union = try self.tagUnionForMerge(vars, tag_union) } };
+                        return Content{ .structure = FlatType{ .tag_union = try self.rowForMerge(.tag_union, vars, tag_union) } };
                     },
                     .fn_pure => |func| {
                         // A pure function's effect formula is discharged: every
@@ -787,10 +891,37 @@ const Unifier = struct {
         while (self.popWorkFrame(&frame)) {
             self.processFrame(frame) catch |err| switch (err) {
                 error.ErroneousType => return error.ErroneousType,
-                error.TypeMismatch => try self.handleTypeMismatch(),
+                error.TypeMismatch => {
+                    // The first failed pair is the leaf: a child mismatch a
+                    // handler flags is raised again by its parent's frame,
+                    // which relates no pair of its own.
+                    const leaf_was_set = self.scratch.mismatch_evidence.leaf != null;
+                    if (!leaf_was_set) self.scratch.mismatch_evidence.leaf = framePair(frame);
+                    if (try self.handleTypeMismatch() == .ignored and !leaf_was_set) {
+                        self.scratch.mismatch_evidence.leaf = null;
+                    }
+                },
                 error.OutOfMemory => return error.OutOfMemory,
             };
         }
+    }
+
+    /// The pair of variables a frame relates, if it relates one.
+    fn framePair(frame: WorkFrame) ?RawTypePair {
+        return switch (frame) {
+            .root_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
+            .guarded_pair => |pair| .{ .expected = pair.a, .actual = pair.b },
+            .unify_vars => |vars| .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+            .merge => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .merge_to_nominal => |merge_frame| .{ .expected = merge_frame.vars.a.var_, .actual = merge_frame.vars.b.var_ },
+            .mismatch_handler,
+            .guard_handler,
+            .restore_enclosing_records,
+            .same_alias_after_args,
+            .shared_fields_after_children,
+            .shared_tags_after_children,
+            => null,
+        };
     }
 
     fn processFrame(self: *Self, frame: WorkFrame) Error!void {
@@ -866,7 +997,10 @@ const Unifier = struct {
         }
     }
 
-    fn handleTypeMismatch(self: *Self) Error!void {
+    /// How a handler absorbed a mismatch instead of propagating it.
+    const AbsorbedMismatch = enum { ignored, flagged };
+
+    fn handleTypeMismatch(self: *Self) Error!AbsorbedMismatch {
         var frame: WorkFrame = undefined;
         while (self.popWorkFrame(&frame)) {
             const frame_tag = std.meta.activeTag(frame);
@@ -886,15 +1020,26 @@ const Unifier = struct {
         return error.TypeMismatch;
     }
 
-    fn applyMismatchHandling(self: *Self, handling: MismatchHandling) Error!void {
+    fn applyMismatchHandling(self: *Self, handling: MismatchHandling) Error!AbsorbedMismatch {
         switch (handling) {
             .propagate => return error.TypeMismatch,
-            .ignore => return,
+            .ignore => return .ignored,
             .set_flag => |flag_idx| {
                 self.scratch.mismatch_flags.items.items[flag_idx] = true;
+                return .flagged;
             },
             .record_then_propagate => |record| {
                 self.scratch.mismatch_evidence.record = record;
+                return error.TypeMismatch;
+            },
+            .record_method_conflict => |conflict| {
+                if (self.scratch.mismatch_evidence.method_conflict == null) {
+                    self.scratch.mismatch_evidence.method_conflict = conflict;
+                }
+                return error.TypeMismatch;
+            },
+            .record_repeated_label_row => |row| {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
                 return error.TypeMismatch;
             },
         }
@@ -904,20 +1049,21 @@ const Unifier = struct {
         return self.types_store.resolveVar(var_).desc.flags.bounded_row_ext;
     }
 
-    /// Whether a row reaches a bounded extension along its extension chain,
-    /// so that tags added at the end of the chain would extend it.
-    fn rowChainIsBounded(self: *Self, tag_union: TagUnion) bool {
+    /// The bounded extension a row reaches along its extension chain, so that
+    /// tags added at the end of the chain would extend it; null when the chain
+    /// reaches none.
+    fn boundedExtOfRow(self: *Self, tag_union: TagUnion) ?Var {
         var ext = tag_union.ext;
         var remaining = self.types_store.len();
         while (remaining > 0) : (remaining -= 1) {
-            if (self.isBoundedRowExt(ext)) return true;
+            if (self.isBoundedRowExt(ext)) return self.types_store.resolveVar(ext).var_;
             switch (self.types_store.resolveVar(ext).desc.content) {
                 .alias => |alias| ext = self.types_store.getAliasBackingVar(alias),
                 .structure => |flat_type| switch (flat_type) {
                     .tag_union => |next| ext = next.ext,
-                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return false,
+                    .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => return null,
                 },
-                .flex, .rigid, .field_presence, .err => return false,
+                .flex, .rigid, .field_presence, .err => return null,
             }
         }
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
@@ -947,7 +1093,7 @@ const Unifier = struct {
     /// a tagless row hands the bound to that row's own extension.
     fn refuseTagsIntoBoundedExt(self: *Self, ext: ResolvedVarDesc, other: Var) Error!void {
         if (ext.desc.content != .flex or !ext.desc.flags.bounded_row_ext) return;
-        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag);
+        if (self.firstRowTag(other)) |tag| return self.refuseBoundedRowTag(tag, ext.var_);
         if (self.rowTail(other)) |tail| try self.types_store.markBoundedRowExt(tail);
     }
 
@@ -973,9 +1119,9 @@ const Unifier = struct {
         base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
-    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
+    fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx, ext: Var) Error!void {
         if (self.scratch.bounded_row_violation == null) {
-            self.scratch.bounded_row_violation = .{ .tag = tag };
+            self.scratch.bounded_row_violation = .{ .tag = tag, .ext = ext };
         }
         return error.TypeMismatch;
     }
@@ -1092,7 +1238,11 @@ const Unifier = struct {
                     }
                 };
 
-                const merged_constraints = try self.unifyStaticDispatchConstraints(a_flex.constraints, b_flex.constraints);
+                const merged_constraints = try self.unifyStaticDispatchConstraints(
+                    .{ .expected = vars.a.var_, .actual = vars.b.var_ },
+                    a_flex.constraints,
+                    b_flex.constraints,
+                );
                 try self.merge(vars, Content{ .flex = .{
                     .name = mb_ident,
                     .constraints = merged_constraints,
@@ -1634,10 +1784,7 @@ const Unifier = struct {
             if (nominal.sourceDecl().present) {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
-                if (builtin.mode == .debug) {
-                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
-                }
-                unreachable;
+                base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
             }
             return .no_decl;
         };
@@ -1850,9 +1997,9 @@ const Unifier = struct {
         };
     }
 
-    fn recordExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
+    fn rowExtReachesDesc(self: *Self, comptime kind: RowKind, ext: Var, targets: RowMergeTargets) bool {
         var ext_var = ext;
-        var guard = types_mod.debug.IterationGuard.init("recordExtReachesDesc");
+        var guard = types_mod.debug.IterationGuard.init("rowExtReachesDesc");
 
         while (true) {
             guard.tick();
@@ -1865,103 +2012,43 @@ const Unifier = struct {
                     ext_var = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |record| {
-                            ext_var = record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return false,
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return false;
+                    ext_var = ext_row.ext;
                 },
                 .flex, .rigid, .field_presence, .err => return false,
             }
         }
     }
 
-    fn tagExtReachesDesc(self: *Self, ext: Var, targets: RowMergeTargets) bool {
-        var ext_var = ext;
-        var guard = types_mod.debug.IterationGuard.init("tagExtReachesDesc");
-
-        while (true) {
-            guard.tick();
-
-            const resolved = self.types_store.resolveVar(ext_var);
-            if (targets.contains(resolved.desc_idx)) return true;
-
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |tag_union| {
-                            ext_var = tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return false,
-                    }
-                },
-                .flex, .rigid, .field_presence, .err => return false,
-            }
-        }
-    }
-
-    fn mergeRecordFieldsIntoScratch(self: *Self, range: *RecordFieldSafeList.Range, fields: RecordFieldSafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next_fields = self.types_store.record_fields.sliceRange(fields);
-        try self.scratch.mergeSortedExtensionFields(
+    fn mergeRowEntriesIntoScratch(self: *Self, comptime kind: RowKind, range: *kind.Entry().SafeList.Range, entries: kind.Entry().SafeMultiList.Range) std.mem.Allocator.Error!void {
+        const next = kind.storeEntries(self.types_store).sliceRange(entries);
+        try self.scratch.mergeSortedExtension(
+            kind,
             range,
-            next_fields.items(.name),
-            next_fields.items(.presence),
+            next.items(.name),
+            next.items(kind.payloadField()),
             self.ident_store,
         );
     }
 
-    fn mergeTagsIntoScratch(self: *Self, range: *TagSafeList.Range, tags: TagSafeMultiList.Range) std.mem.Allocator.Error!void {
-        const next_tags = self.types_store.tags.sliceRange(tags);
-        try self.scratch.mergeSortedExtensionTags(
-            range,
-            next_tags.items(.name),
-            next_tags.items(.args),
-            self.ident_store,
-        );
+    fn finishRowForMerge(self: *Self, comptime kind: RowKind, range: kind.Entry().SafeList.Range, ext: Var) std.mem.Allocator.Error!kind.Row() {
+        const entries = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "gathered_").sliceRange(range));
+        return kind.row(entries, ext);
     }
 
-    fn finishRecordForMerge(self: *Self, range: RecordFieldSafeList.Range, ext: Var) std.mem.Allocator.Error!types_mod.Record {
-        const fields = try self.types_store.appendRecordFields(self.scratch.gathered_fields.sliceRange(range));
-        return .{ .fields = fields, .ext = ext };
-    }
-
-    fn finishTagUnionForMerge(self: *Self, range: TagSafeList.Range, ext: Var) std.mem.Allocator.Error!TagUnion {
-        const tags = try self.types_store.appendTags(self.scratch.gathered_tags.sliceRange(range));
-        return .{ .tags = tags, .ext = ext };
-    }
-
-    fn recordForMerge(self: *Self, vars: *const ResolvedVarDescs, record: types_mod.Record) std.mem.Allocator.Error!types_mod.Record {
+    fn rowForMerge(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, start: kind.Row()) std.mem.Allocator.Error!kind.Row() {
         const targets = self.rowExtMergeTargets(vars);
-        if (!self.recordExtReachesDesc(record.ext, targets)) return record;
+        if (!self.rowExtReachesDesc(kind, start.ext, targets)) return start;
 
-        var range = try self.scratch.copyGatherFieldsFromMultiList(
-            &self.types_store.record_fields,
-            record.fields,
+        var range = try self.scratch.copyGatherFromMultiList(
+            kind,
+            kind.storeEntries(self.types_store),
+            kind.entriesOf(start),
         );
-        var ext_var = record.ext;
+        var ext_var = start.ext;
         var spliced_a = false;
         var spliced_b = false;
-        var guard = types_mod.debug.IterationGuard.init("recordForMerge");
+        var guard = types_mod.debug.IterationGuard.init("rowForMerge");
 
         while (true) {
             guard.tick();
@@ -1970,30 +2057,16 @@ const Unifier = struct {
             if (targets.contains(resolved.desc_idx)) {
                 const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
                 if (spliced.*) {
-                    return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content));
+                    return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
                 }
 
                 spliced.* = true;
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .record => |target_record| {
-                                try self.mergeRecordFieldsIntoScratch(&range, target_record.fields);
-                                ext_var = target_record.ext;
-                            },
-                            .tuple,
-                            .nominal_type,
-                            .fn_pure,
-                            .fn_effectful,
-                            .fn_unbound,
-                            .empty_record,
-                            .tag_union,
-                            .empty_tag_union,
-                            => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                        }
-                    },
-                    .flex, .rigid, .alias, .field_presence, .err => return try self.finishRecordForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                }
+                const target_row = switch (resolved.desc.content) {
+                    .structure => |flat_type| kind.rowOf(flat_type),
+                    .flex, .rigid, .alias, .field_presence, .err => null,
+                } orelse return try self.finishRowForMerge(kind, range, try self.fresh(vars, resolved.desc.content));
+                try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(target_row));
+                ext_var = target_row.ext;
                 continue;
             }
 
@@ -2002,96 +2075,11 @@ const Unifier = struct {
                     ext_var = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |ext_record| {
-                            try self.mergeRecordFieldsIntoScratch(&range, ext_record.fields);
-                            ext_var = ext_record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return try self.finishRecordForMerge(range, ext_var),
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return try self.finishRowForMerge(kind, range, ext_var);
+                    try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
+                    ext_var = ext_row.ext;
                 },
-                .flex, .rigid, .field_presence, .err => return try self.finishRecordForMerge(range, ext_var),
-            }
-        }
-    }
-
-    fn tagUnionForMerge(self: *Self, vars: *const ResolvedVarDescs, tag_union: TagUnion) std.mem.Allocator.Error!TagUnion {
-        const targets = self.rowExtMergeTargets(vars);
-        if (!self.tagExtReachesDesc(tag_union.ext, targets)) return tag_union;
-
-        var range = try self.scratch.copyGatherTagsFromMultiList(
-            &self.types_store.tags,
-            tag_union.tags,
-        );
-        var ext_var = tag_union.ext;
-        var spliced_a = false;
-        var spliced_b = false;
-        var guard = types_mod.debug.IterationGuard.init("tagUnionForMerge");
-
-        while (true) {
-            guard.tick();
-
-            const resolved = self.types_store.resolveVar(ext_var);
-            if (targets.contains(resolved.desc_idx)) {
-                const spliced = if (resolved.desc_idx == targets.a) &spliced_a else &spliced_b;
-                if (spliced.*) {
-                    return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content));
-                }
-
-                spliced.* = true;
-                switch (resolved.desc.content) {
-                    .structure => |flat_type| {
-                        switch (flat_type) {
-                            .tag_union => |target_tag_union| {
-                                try self.mergeTagsIntoScratch(&range, target_tag_union.tags);
-                                ext_var = target_tag_union.ext;
-                            },
-                            .record,
-                            .tuple,
-                            .nominal_type,
-                            .fn_pure,
-                            .fn_effectful,
-                            .fn_unbound,
-                            .empty_record,
-                            .empty_tag_union,
-                            => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                        }
-                    },
-                    .flex, .rigid, .alias, .field_presence, .err => return try self.finishTagUnionForMerge(range, try self.fresh(vars, resolved.desc.content)),
-                }
-                continue;
-            }
-
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |ext_tag_union| {
-                            try self.mergeTagsIntoScratch(&range, ext_tag_union.tags);
-                            ext_var = ext_tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return try self.finishTagUnionForMerge(range, ext_var),
-                    }
-                },
-                .flex, .rigid, .field_presence, .err => return try self.finishTagUnionForMerge(range, ext_var),
+                .flex, .rigid, .field_presence, .err => return try self.finishRowForMerge(kind, range, ext_var),
             }
         }
     }
@@ -2113,21 +2101,7 @@ const Unifier = struct {
             }});
         }
 
-        if (post.mb_a_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_a_fields.sliceRange(extended_fields),
-            );
-        }
-        if (post.mb_b_extended_fields) |extended_fields| {
-            _ = try self.types_store.appendRecordFields(
-                self.scratch.only_in_b_fields.sliceRange(extended_fields),
-            );
-        }
-
-        try self.merge(&post.vars, Content{ .structure = FlatType{ .record = .{
-            .fields = self.types_store.record_fields.rangeToEnd(range_start),
-            .ext = post.ext,
-        } } });
+        try self.mergeRowAppendedFrom(.record, &post.vars, range_start, post.mb_a_extended_fields, post.mb_b_extended_fields, post.ext);
     }
 
     fn processSharedTagsAfterChildren(self: *Self, post: SharedTagsAfterChildren) Error!void {
@@ -2140,21 +2114,34 @@ const Unifier = struct {
             }});
         }
 
-        if (post.mb_a_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_a_tags.sliceRange(extended_tags),
-            );
+        try self.mergeRowAppendedFrom(.tag_union, &post.vars, range_start, post.mb_a_extended_tags, post.mb_b_extended_tags, post.ext);
+    }
+
+    /// Append each side's unshared entries after the shared entries already
+    /// appended from `range_start`, then merge the row built from all of them.
+    fn mergeRowAppendedFrom(
+        self: *Self,
+        comptime kind: RowKind,
+        vars: *const ResolvedVarDescs,
+        range_start: u32,
+        mb_a_extended: ?kind.Entry().SafeList.Range,
+        mb_b_extended: ?kind.Entry().SafeList.Range,
+        ext: Var,
+    ) std.mem.Allocator.Error!void {
+        if (mb_a_extended) |extended| {
+            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_a_").sliceRange(extended));
         }
-        if (post.mb_b_extended_tags) |extended_tags| {
-            _ = try self.types_store.appendTags(
-                self.scratch.only_in_b_tags.sliceRange(extended_tags),
-            );
+        if (mb_b_extended) |extended| {
+            _ = try kind.appendToStore(self.types_store, self.scratch.rowList(kind, "only_in_b_").sliceRange(extended));
         }
 
-        try self.merge(&post.vars, Content{ .structure = FlatType{ .tag_union = .{
-            .tags = self.types_store.tags.rangeToEnd(range_start),
-            .ext = post.ext,
-        } } });
+        try self.merge(vars, kind.content(kind.row(kind.storeEntries(self.types_store).rangeToEnd(range_start), ext)));
+    }
+
+    /// A fresh row holding `entries` over `ext`.
+    fn freshRow(self: *Self, comptime kind: RowKind, vars: *const ResolvedVarDescs, entries: []const kind.Entry(), ext: Var) std.mem.Allocator.Error!Var {
+        const range = try kind.appendToStore(self.types_store, entries);
+        return try self.fresh(vars, kind.content(kind.row(range, ext)));
     }
 
     fn unifyTagUnionWithNominal(
@@ -2354,7 +2341,7 @@ const Unifier = struct {
             .b_is_nominal => vars.a.var_,
         };
         const evidence: RawTypePair = switch (self.nominal_record_mismatch_role) {
-            .none => unreachable,
+            .none => unreachable, // the early return above handles .none
             .expected => .{ .expected = opened_backing, .actual = anonymous_var },
             .actual => .{ .expected = anonymous_var, .actual = opened_backing },
         };
@@ -2427,12 +2414,12 @@ const Unifier = struct {
         var iter = self.types_store.iterRecordFields(fields);
         while (iter.next()) |field| {
             const unknown = switch (field.presence.decode()) {
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required fields before recording
                 .unknown => |unknown| unknown,
             };
             const presence = switch (self.types_store.resolveVar(unknown.presence).desc.content) {
                 .field_presence => |presence| presence,
-                .flex, .rigid, .alias, .structure, .err => unreachable,
+                .flex, .rigid, .alias, .structure, .err => unreachable, // validateAbsorbableRecordRow rejects unresolved field presences before recording
             };
             switch (presence) {
                 .optional => {},
@@ -2444,7 +2431,7 @@ const Unifier = struct {
                         .enclosing_records = self.enclosing_records,
                     });
                 },
-                .required => unreachable,
+                .required => unreachable, // validateAbsorbableRecordRow rejects required presences before recording
             }
         }
     }
@@ -2477,9 +2464,9 @@ const Unifier = struct {
                     .fn_unbound,
                     .tag_union,
                     .empty_tag_union,
-                    => unreachable,
+                    => unreachable, // validateAbsorbableRecordRow rejects non-record row extensions before recording
                 },
-                .rigid, .field_presence, .err => unreachable,
+                .rigid, .field_presence, .err => unreachable, // validateAbsorbableRecordRow rejects these row extensions before recording
             }
         }
     }
@@ -2669,14 +2656,19 @@ const Unifier = struct {
 
         try self.enterRecordRelation(vars);
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_fields.items.len == 0);
         // First, unwrap all fields for record, erroring if we encounter an
         // invalid record ext var
-        const a_gathered_fields = try self.gatherRecordFields(a_fields, a_ext);
-        const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
-        try self.relateChainDuplicateFields(vars);
+        const a_gathered_fields = try self.gatherRow(.record, .{ .fields = a_fields, .ext = a_ext });
+        const a_duplicates_end = self.scratch.chain_duplicate_fields.items.len;
+        const b_gathered_fields = try self.gatherRow(.record, .{ .fields = b_fields, .ext = b_ext });
+        try self.relateChainDuplicateFields(vars, a_duplicates_end);
 
         // Then partition the fields
-        const partitioned = try self.partitionFields(
+        const partitioned = try self.partitionRow(
+            .record,
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
@@ -2686,7 +2678,7 @@ const Unifier = struct {
         const a_has_uniq_fields = partitioned.only_in_a.len() > 0;
         const b_has_uniq_fields = partitioned.only_in_b.len() > 0;
 
-        var fields_ext: FieldsExtension = .exactly_the_same;
+        var fields_ext: RowExtension = .exactly_the_same;
         if (a_has_uniq_fields and b_has_uniq_fields) {
             fields_ext = .both_extend;
         } else if (a_has_uniq_fields) {
@@ -2717,13 +2709,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_a_fields_range,
-                    .ext = a_gathered_ext,
-                } } });
+                const only_in_a_var = try self.freshRow(.record, vars, self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a), a_gathered_ext);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2741,13 +2727,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_b_fields_range,
-                    .ext = b_gathered_ext,
-                } } });
+                const only_in_b_var = try self.freshRow(.record, vars, self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b), b_gathered_ext);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2768,23 +2748,11 @@ const Unifier = struct {
 
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_a_fields_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_a_var = try self.freshRow(.record, vars, self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a), new_ext_var);
 
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = try self.types_store.appendRecordFields(
-                    self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
-                    .fields = only_in_b_fields_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_b_var = try self.freshRow(.record, vars, self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b), new_ext_var);
 
                 // Unify shared fields
                 // This copies fields from scratch into type_store
@@ -2805,43 +2773,37 @@ const Unifier = struct {
         }
     }
 
-    const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
+    const RowExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-    const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
-
-    /// Recursively unwraps the fields of an extensible record, flattening all visible fields
-    /// into `scratch.gathered_fields` and following through:
-    /// * aliases (by chasing `.backing_var`)
-    /// * record extension chains (via nested `.record.ext`)
-    ///
-    /// Returns:
-    /// * a `Range` indicating the location of the gathered fields in `gathered_fields`
-    /// * the final tail extension variable, which is either a flex var or an empty record
-    ///
-    /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
+    fn GatheredRow(comptime kind: RowKind) type {
+        return struct { ext: Var, range: kind.Entry().SafeList.Range };
+    }
     /// A field repeated along one row's extension chain is the same field:
     /// its value types and kinds are equal exactly (design.md "Row Union
-    /// Normalization"), with no relation-specific kind relaxation.
-    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs) Error!void {
+    /// Normalization"), with no relation-specific kind relaxation. The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateFields(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_fields.pop()) |duplicate| {
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = repeatedLabelRow(vars, self.scratch.chain_duplicate_fields.items.len, a_duplicates_end) };
             const first = duplicate.first.decode();
             const repeated = duplicate.repeated.decode();
             switch (first) {
                 .required => |first_var| switch (repeated) {
-                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, .propagate),
+                    .required => |repeated_var| try self.scheduleGuardedPair(first_var, repeated_var, on_mismatch),
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_var, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_var, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(try self.fresh(vars, .{ .field_presence = .required }), unknown.presence, on_mismatch);
                     },
                 },
                 .unknown => |first_unknown| switch (repeated) {
                     .required => |repeated_var| {
-                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, repeated_var, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, try self.fresh(vars, .{ .field_presence = .required }), on_mismatch);
                     },
                     .unknown => |unknown| {
-                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, .propagate);
-                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, .propagate);
+                        try self.scheduleGuardedPair(first_unknown.var_, unknown.var_, on_mismatch);
+                        try self.scheduleGuardedPair(first_unknown.presence, unknown.presence, on_mismatch);
                     },
                 },
             }
@@ -2849,161 +2811,174 @@ const Unifier = struct {
     }
 
     /// A tag repeated along one row's extension chain is the same tag: its
-    /// payloads are equal (design.md "Row Union Normalization").
-    fn relateChainDuplicateTags(self: *Self) Error!void {
+    /// payloads are equal (design.md "Row Union Normalization"). The
+    /// duplicates before `a_duplicates_end` repeat along `vars.a`'s chain and
+    /// the rest along `vars.b`'s; a failure is that row's conflict.
+    fn relateChainDuplicateTags(self: *Self, vars: *const ResolvedVarDescs, a_duplicates_end: usize) Error!void {
         while (self.scratch.chain_duplicate_tags.pop()) |duplicate| {
-            if (duplicate.first.len() != duplicate.repeated.len()) return error.TypeMismatch;
+            const row = repeatedLabelRow(vars, self.scratch.chain_duplicate_tags.items.len, a_duplicates_end);
+            if (duplicate.first.len() != duplicate.repeated.len()) {
+                self.scratch.mismatch_evidence.repeated_label_row = row;
+                return error.TypeMismatch;
+            }
+            const on_mismatch: MismatchHandling = .{ .record_repeated_label_row = row };
             var arg_idx: u32 = duplicate.first.len();
             while (arg_idx > 0) {
                 arg_idx -= 1;
                 try self.scheduleGuardedPair(
                     self.types_store.getVarAt(duplicate.first, arg_idx),
                     self.types_store.getVarAt(duplicate.repeated, arg_idx),
-                    .propagate,
+                    on_mismatch,
                 );
             }
         }
     }
 
-    fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: Var) Error!GatheredFields {
-        // first, copy from the store's MultiList record fields array into scratch's
-        // regular list, capturing the insertion range
-        var range = try self.scratch.copyGatherFieldsFromMultiList(
-            &self.types_store.record_fields,
-            record_fields,
+    /// The operand row along whose chain the duplicate at `index` repeats.
+    fn repeatedLabelRow(vars: *const ResolvedVarDescs, index: usize, a_duplicates_end: usize) Var {
+        return if (index < a_duplicates_end) vars.a.var_ else vars.b.var_;
+    }
+
+    /// Recursively unwraps the entries of an extensible row, flattening all visible entries
+    /// into the kind's gathered scratch list and following through:
+    /// * aliases (by chasing `.backing_var`)
+    /// * row extension chains (via nested `.ext`)
+    ///
+    /// Returns:
+    /// * a `Range` indicating the location of the gathered entries in the gathered list
+    /// * the final tail extension variable, which is either a flex var or an empty row
+    ///
+    /// An entry repeated along the chain keeps its first occurrence here;
+    /// `relateChainDuplicateFields` / `relateChainDuplicateTags` relates each repeat to it.
+    fn gatherRow(self: *Self, comptime kind: RowKind, start: kind.Row()) Error!GatheredRow(kind) {
+        // first, copy from the store's MultiList into scratch's regular list,
+        // capturing the insertion range
+        var range = try self.scratch.copyGatherFromMultiList(
+            kind,
+            kind.storeEntries(self.types_store),
+            kind.entriesOf(start),
         );
 
-        // A field repeated along the chain keeps its first occurrence here;
-        // `relateChainDuplicateFields` relates each repeat to it.
-
-        // Recursively gather fields from extensions
-        var ext = record_ext;
-        var guard = types_mod.debug.IterationGuard.init("gatherRecordFields");
+        // then loop gathering extension entries
+        var ext = start.ext;
+        var guard = types_mod.debug.IterationGuard.init("gatherRow");
         while (true) {
             guard.tick();
             switch (self.types_store.resolveVar(ext).desc.content) {
-                .flex, .rigid => return .{ .ext = ext, .range = range },
                 .alias => |alias| {
                     ext = self.types_store.getAliasBackingVar(alias);
                 },
                 .structure => |flat_type| {
-                    switch (flat_type) {
-                        .record => |ext_record| {
-                            const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
-
-                            // Merge extension fields while maintaining sorted order
-                            try self.scratch.mergeSortedExtensionFields(
-                                &range,
-                                next_fields.items(.name),
-                                next_fields.items(.presence),
-                                self.ident_store,
-                            );
-
-                            ext = ext_record.ext;
-                        },
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .tag_union,
-                        .empty_tag_union,
-                        => return .{ .ext = ext, .range = range },
-                    }
+                    const ext_row = kind.rowOf(flat_type) orelse return .{ .ext = ext, .range = range };
+                    // Merge extension entries while maintaining sorted order
+                    try self.mergeRowEntriesIntoScratch(kind, &range, kind.entriesOf(ext_row));
+                    ext = ext_row.ext;
                 },
-                // A presence variable can never be a record extension tail.
-                .field_presence => return .{ .ext = ext, .range = range },
-                .err => return .{ .ext = ext, .range = range },
+                // A presence variable can never be a row extension tail.
+                .flex, .rigid, .field_presence, .err => return .{ .ext = ext, .range = range },
             }
         }
     }
 
-    const PartitionedRecordFields = struct {
-        only_in_a: RecordFieldSafeList.Range,
-        only_in_b: RecordFieldSafeList.Range,
-        in_both: TwoRecordFieldsSafeList.Range,
-    };
+    fn PartitionedRow(comptime kind: RowKind) type {
+        return struct {
+            only_in_a: kind.Entry().SafeList.Range,
+            only_in_b: kind.Entry().SafeList.Range,
+            in_both: MkSafeList(kind.Two()).Range,
+        };
+    }
 
-    /// Given two ranges of record fields stored in `scratch.gathered_fields`, this function:
-    /// * sorts both slices in-place by field name
+    /// Given two ranges of entries stored in the kind's gathered scratch list, this function:
+    /// * sorts both slices in-place by name
     /// * partitions them into three disjoint groups:
-    ///     - fields only in `a`
-    ///     - fields only in `b`
-    ///     - fields present in both (by name)
+    ///     - entries only in `a`
+    ///     - entries only in `b`
+    ///     - entries present in both (by name)
     ///
-    /// These groups are stored into dedicated scratch buffers:
-    /// * `only_in_a_fields`
-    /// * `only_in_b_fields`
-    /// * `in_both_fields`
+    /// These groups are stored into the kind's dedicated scratch buffers
+    /// (`only_in_a_*`, `only_in_b_*`, `in_both_*`), and the result is a set
+    /// of ranges that can be used to slice those buffers.
     ///
-    /// The result is a set of ranges that can be used to slice those buffers.
-    ///
-    /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
-    fn partitionFields(
+    /// The caller must not mutate the ranges between `gatherRow` and `partitionRow`.
+    fn partitionRow(
         self: *const Self,
+        comptime kind: RowKind,
         scratch: *Scratch,
-        a_fields_range: RecordFieldSafeList.Range,
-        b_fields_range: RecordFieldSafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedRecordFields {
-        // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
-        const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, self.ident_store, comptime RecordField.sortByNameAsc);
-        const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, self.ident_store, comptime RecordField.sortByNameAsc);
+        a_range: kind.Entry().SafeList.Range,
+        b_range: kind.Entry().SafeList.Range,
+    ) std.mem.Allocator.Error!PartitionedRow(kind) {
+        const Entry = kind.Entry();
+        const gathered = scratch.rowList(kind, "gathered_");
+        const only_in_a = scratch.rowList(kind, "only_in_a_");
+        const only_in_b = scratch.rowList(kind, "only_in_b_");
+        const in_both = scratch.rowList(kind, "in_both_");
+
+        // Sort the entries (gathering maintains partial order, but unification may create unsorted rows)
+        const a_entries = gathered.sliceRange(a_range);
+        self.sortRowByName(Entry, a_entries);
+        const b_entries = gathered.sliceRange(b_range);
+        self.sortRowByName(Entry, b_entries);
 
         // Get the start of index of the new range
-        const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
-        const b_fields_start: u32 = @intCast(scratch.only_in_b_fields.len());
-        const both_fields_start: u32 = @intCast(scratch.in_both_fields.len());
+        const a_start: u32 = @intCast(only_in_a.len());
+        const b_start: u32 = @intCast(only_in_b.len());
+        const both_start: u32 = @intCast(in_both.len());
 
-        // Iterate over the fields in order, grouping them
+        // Iterate over the entries in order, grouping them
         var a_i: usize = 0;
         var b_i: usize = 0;
-        while (a_i < a_fields.len and b_i < b_fields.len) {
-            const a_next = a_fields[a_i];
-            const b_next = b_fields[b_i];
-            const ord = RecordField.orderByName(self.ident_store, a_next, b_next);
-            switch (ord) {
+        while (a_i < a_entries.len and b_i < b_entries.len) {
+            const a_next = a_entries[a_i];
+            const b_next = b_entries[b_i];
+            switch (Entry.orderByName(self.ident_store, a_next, b_next)) {
                 .eq => {
-                    _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
-                        .a = a_next,
-                        .b = b_next,
-                    });
-                    a_i = a_i + 1;
-                    b_i = b_i + 1;
+                    _ = try in_both.append(scratch.gpa, .{ .a = a_next, .b = b_next });
+                    a_i += 1;
+                    b_i += 1;
                 },
                 .lt => {
-                    _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
-                    a_i = a_i + 1;
+                    _ = try only_in_a.append(scratch.gpa, a_next);
+                    a_i += 1;
                 },
                 .gt => {
-                    _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
-                    b_i = b_i + 1;
+                    _ = try only_in_b.append(scratch.gpa, b_next);
+                    b_i += 1;
                 },
             }
         }
 
         // If b was shorter, add the extra a elems
-        while (a_i < a_fields.len) {
-            const a_next = a_fields[a_i];
-            _ = try scratch.only_in_a_fields.append(scratch.gpa, a_next);
-            a_i = a_i + 1;
+        while (a_i < a_entries.len) : (a_i += 1) {
+            _ = try only_in_a.append(scratch.gpa, a_entries[a_i]);
         }
 
         // If a was shorter, add the extra b elems
-        while (b_i < b_fields.len) {
-            const b_next = b_fields[b_i];
-            _ = try scratch.only_in_b_fields.append(scratch.gpa, b_next);
-            b_i = b_i + 1;
+        while (b_i < b_entries.len) : (b_i += 1) {
+            _ = try only_in_b.append(scratch.gpa, b_entries[b_i]);
         }
 
         // Return the ranges
         return .{
-            .only_in_a = scratch.only_in_a_fields.rangeToEnd(a_fields_start),
-            .only_in_b = scratch.only_in_b_fields.rangeToEnd(b_fields_start),
-            .in_both = scratch.in_both_fields.rangeToEnd(both_fields_start),
+            .only_in_a = only_in_a.rangeToEnd(a_start),
+            .only_in_b = only_in_b.rangeToEnd(b_start),
+            .in_both = in_both.rangeToEnd(both_start),
         };
+    }
+
+    /// Order entries by name text. A row gathered from one built by an
+    /// earlier merge is already ordered, and a merge of two ordered rows is
+    /// linear, so the ordered case is confirmed in one pass before sorting.
+    fn sortRowByName(self: *const Self, comptime Entry: type, entries: []Entry) void {
+        var ordered = true;
+        var index: usize = 1;
+        while (index < entries.len) : (index += 1) {
+            if (Entry.orderByName(self.ident_store, entries[index - 1], entries[index]) == .gt) {
+                ordered = false;
+                break;
+            }
+        }
+        if (ordered) return;
+        std.mem.sort(Entry, entries, self.ident_store, comptime Entry.sortByNameAsc);
     }
 
     /// An effect-polymorphic function's effect is the disjunction of the
@@ -3018,19 +2993,12 @@ const Unifier = struct {
         }
     }
 
-    /// A function made pure whose own dependencies are still being demanded.
-    const PureDemand = struct {
-        var_: Var,
-        func: Func,
-        next: u32 = 0,
-    };
-
     fn demandPureFunction(self: *Self, dep_var: Var) Error!void {
-        const allocator = self.scratch.gpa;
-        var pending = std.ArrayList(PureDemand).empty;
-        defer pending.deinit(allocator);
-        self.demandPureStep(&pending, dep_var) catch |err| return self.undoPureDemands(&pending, err);
-        while (pending.items.len > 0) {
+        const pending = &self.scratch.pure_demands;
+        const pending_base = pending.items.len;
+        defer pending.shrinkRetainingCapacity(pending_base);
+        self.demandPureStep(dep_var) catch |err| return self.undoPureDemands(pending_base, err);
+        while (pending.items.len > pending_base) {
             const top = &pending.items[pending.items.len - 1];
             const deps = top.func.effect_deps;
             if (top.next == deps.len()) {
@@ -3039,15 +3007,17 @@ const Unifier = struct {
             }
             const next = self.types_store.getVarAt(deps, top.next);
             top.next += 1;
-            self.demandPureStep(&pending, next) catch |err| return self.undoPureDemands(&pending, err);
+            self.demandPureStep(next) catch |err| return self.undoPureDemands(pending_base, err);
         }
     }
 
     /// A dependency that fails the demand fails every function waiting on
     /// it, and each of those functions' effects then still depends on it, so
     /// their pure writes are undone.
-    fn undoPureDemands(self: *Self, pending: *std.ArrayList(PureDemand), err: Error) Error {
-        while (pending.pop()) |demand| {
+    fn undoPureDemands(self: *Self, pending_base: usize, err: Error) Error {
+        const pending = &self.scratch.pure_demands;
+        while (pending.items.len > pending_base) {
+            const demand = pending.pop().?;
             try self.types_store.setVarContent(demand.var_, .{ .structure = .{ .fn_unbound = demand.func } });
         }
         return err;
@@ -3055,7 +3025,8 @@ const Unifier = struct {
 
     /// Demands one function be pure. An effect-polymorphic function becomes
     /// pure in place and is queued so its own dependencies are demanded.
-    fn demandPureStep(self: *Self, pending: *std.ArrayList(PureDemand), dep_var: Var) Error!void {
+    fn demandPureStep(self: *Self, dep_var: Var) Error!void {
+        const pending = &self.scratch.pure_demands;
         var current = dep_var;
         while (true) {
             const resolved = self.types_store.resolveVar(current);
@@ -3083,9 +3054,7 @@ const Unifier = struct {
                     .empty_tag_union,
                     => return,
                 },
-                // An effect dependency is recorded from a call, which has
-                // already given the callee a function shape.
-                .flex, .rigid, .field_presence => unreachable,
+                .flex, .rigid, .field_presence => unreachable, // effect dependencies are recorded from calls, which already gave the callee a function shape
                 .err => return,
             }
         }
@@ -3309,13 +3278,18 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        // Every relation drains its chain duplicates before returning, so the
+        // ones gathered here split exactly into `a`'s and then `b`'s.
+        std.debug.assert(self.scratch.chain_duplicate_tags.items.len == 0);
         // Unwrap all fields for tag unions, erroring on invalid ext var
-        const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
-        const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
-        try self.relateChainDuplicateTags();
+        const a_gathered_tags = try self.gatherRow(.tag_union, a_tag_union);
+        const a_duplicates_end = self.scratch.chain_duplicate_tags.items.len;
+        const b_gathered_tags = try self.gatherRow(.tag_union, b_tag_union);
+        try self.relateChainDuplicateTags(vars, a_duplicates_end);
 
         // Then partition the tags
-        const partitioned = try self.partitionTags(
+        const partitioned = try self.partitionRow(
+            .tag_union,
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
@@ -3325,7 +3299,7 @@ const Unifier = struct {
         const a_has_uniq_tags = partitioned.only_in_a.len() > 0;
         const b_has_uniq_tags = partitioned.only_in_b.len() > 0;
 
-        var tags_ext: TagsExtension = .exactly_the_same;
+        var tags_ext: RowExtension = .exactly_the_same;
         if (a_has_uniq_tags and b_has_uniq_tags) {
             tags_ext = .both_extend;
         } else if (a_has_uniq_tags) {
@@ -3359,11 +3333,15 @@ const Unifier = struct {
         }
         // A bounded annotation row refuses unlisted tags exactly as a closed
         // row does, and for the same reason this check precedes any merge.
-        if ((tags_ext == .b_extends_a or tags_ext == .both_extend) and self.rowChainIsBounded(a_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name);
+        if (tags_ext == .b_extends_a or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(a_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b)[0].name, bounded_ext);
+            }
         }
-        if ((tags_ext == .a_extends_b or tags_ext == .both_extend) and self.rowChainIsBounded(b_tag_union)) {
-            return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name);
+        if (tags_ext == .a_extends_b or tags_ext == .both_extend) {
+            if (self.boundedExtOfRow(b_tag_union)) |bounded_ext| {
+                return self.refuseBoundedRowTag(self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a)[0].name, bounded_ext);
+            }
         }
 
         // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
@@ -3386,13 +3364,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_a_tags_range,
-                    .ext = a_gathered_tags.ext,
-                } } });
+                const only_in_a_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a), a_gathered_tags.ext);
 
                 // Unify shared tags
                 // This copies tags from scratch into type_store
@@ -3410,13 +3382,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_b_tags_range,
-                    .ext = b_gathered_tags.ext,
-                } } });
+                const only_in_b_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b), b_gathered_tags.ext);
 
                 // Unify shared tags
                 // This copies tags from scratch into type_store
@@ -3439,23 +3405,11 @@ const Unifier = struct {
 
                 // Create a new variable of a tag_union with only a's uniq tags
                 // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
-                const only_in_a_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                );
-                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_a_tags_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_a_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a), new_ext_var);
 
                 // Create a new variable of a tag_union with only b's uniq tags
                 // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
-                const only_in_b_tags_range = try self.types_store.appendTags(
-                    self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                );
-                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
-                    .tags = only_in_b_tags_range,
-                    .ext = new_ext_var,
-                } } });
+                const only_in_b_var = try self.freshRow(.tag_union, vars, self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b), new_ext_var);
 
                 // Unify shared tags
                 // Include all tags in the merged type - both shared and unique
@@ -3475,173 +3429,6 @@ const Unifier = struct {
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
             },
         }
-    }
-
-    const TagsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
-
-    const GatheredTags = struct { ext: Var, range: TagSafeList.Range };
-
-    /// Recursively unwraps the tags of an extensible tag_union, flattening all visible tags
-    /// into `scratch.gathered_tags` and following through:
-    /// * aliases (by chasing `.backing_var`)
-    /// * tag_union extension chains (via nested `.tag_union.ext`)
-    ///
-    /// Returns:
-    /// * a `Range` indicating the location of the gathered tags in `gathered_tags`
-    /// * the final tail extension variable, which is either a flex var or an empty tag_union
-    ///
-    /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
-    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) Error!GatheredTags {
-        // first, copy from the store's MultiList record fields array into scratch's
-        // regular list, capturing the insertion range
-        var range = try self.scratch.copyGatherTagsFromMultiList(
-            &self.types_store.tags,
-            tag_union.tags,
-        );
-
-        // then loop gathering extensible tags
-        var ext_var = tag_union.ext;
-        var guard = types_mod.debug.IterationGuard.init("gatherTagUnionTags");
-        while (true) {
-            guard.tick();
-            switch (self.types_store.resolveVar(ext_var).desc.content) {
-                .flex, .rigid => {
-                    return .{ .ext = ext_var, .range = range };
-                },
-                .alias => |alias| {
-                    ext_var = self.types_store.getAliasBackingVar(alias);
-                },
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .tag_union => |ext_tag_union| {
-                            const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
-
-                            // Merge extension tags while maintaining sorted order
-                            try self.scratch.mergeSortedExtensionTags(
-                                &range,
-                                next_tags.items(.name),
-                                next_tags.items(.args),
-                                self.ident_store,
-                            );
-
-                            ext_var = ext_tag_union.ext;
-                        },
-                        .record,
-                        .tuple,
-                        .nominal_type,
-                        .fn_pure,
-                        .fn_effectful,
-                        .fn_unbound,
-                        .empty_record,
-                        .empty_tag_union,
-                        => return .{ .ext = ext_var, .range = range },
-                    }
-                },
-                // A presence variable can never be a tag-union extension tail.
-                .field_presence => return .{ .ext = ext_var, .range = range },
-                .err => return .{ .ext = ext_var, .range = range },
-            }
-        }
-    }
-
-    const PartitionedTags = struct {
-        only_in_a: TagSafeList.Range,
-        only_in_b: TagSafeList.Range,
-        in_both: TwoTagsSafeList.Range,
-    };
-
-    /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
-    /// * sorts both slices in-place by tag name
-    /// * partitions them into three disjoint groups:
-    ///     - tags only in `a`
-    ///     - tags only in `b`
-    ///     - tags present in both (by name)
-    ///
-    /// These groups are stored into dedicated scratch buffers:
-    /// * `only_in_a_tags`
-    /// * `only_in_b_tags`
-    /// * `in_both_tags`
-    ///
-    /// The result is a set of ranges that can be used to slice those buffers.
-    ///
-    /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
-    fn partitionTags(
-        self: *const Self,
-        scratch: *Scratch,
-        a_tags_range: TagSafeList.Range,
-        b_tags_range: TagSafeList.Range,
-    ) std.mem.Allocator.Error!PartitionedTags {
-        // Sort the tags (gathering maintains partial order, but unification may create unsorted unions)
-        const a_tags = scratch.gathered_tags.sliceRange(a_tags_range);
-        self.sortTagsByName(a_tags);
-        const b_tags = scratch.gathered_tags.sliceRange(b_tags_range);
-        self.sortTagsByName(b_tags);
-
-        // Get the start of index of the new range
-        const a_tags_start: u32 = @intCast(scratch.only_in_a_tags.len());
-        const b_tags_start: u32 = @intCast(scratch.only_in_b_tags.len());
-        const both_tags_start: u32 = @intCast(scratch.in_both_tags.len());
-
-        // Iterate over the tags in order, grouping them
-        var a_i: usize = 0;
-        var b_i: usize = 0;
-        while (a_i < a_tags.len and b_i < b_tags.len) {
-            const a_next = a_tags[a_i];
-            const b_next = b_tags[b_i];
-            const ord = Tag.orderByName(self.ident_store, a_next, b_next);
-            switch (ord) {
-                .eq => {
-                    _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
-                    a_i = a_i + 1;
-                    b_i = b_i + 1;
-                },
-                .lt => {
-                    _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
-                    a_i = a_i + 1;
-                },
-                .gt => {
-                    _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
-                    b_i = b_i + 1;
-                },
-            }
-        }
-
-        // If b was shorter, add the extra a elems
-        while (a_i < a_tags.len) {
-            const a_next = a_tags[a_i];
-            _ = try scratch.only_in_a_tags.append(scratch.gpa, a_next);
-            a_i = a_i + 1;
-        }
-
-        // If a was shorter, add the extra b elems
-        while (b_i < b_tags.len) {
-            const b_next = b_tags[b_i];
-            _ = try scratch.only_in_b_tags.append(scratch.gpa, b_next);
-            b_i = b_i + 1;
-        }
-
-        // Return the ranges
-        return .{
-            .only_in_a = scratch.only_in_a_tags.rangeToEnd(a_tags_start),
-            .only_in_b = scratch.only_in_b_tags.rangeToEnd(b_tags_start),
-            .in_both = scratch.in_both_tags.rangeToEnd(both_tags_start),
-        };
-    }
-
-    /// Order tags by name text. A row gathered from a union built by an
-    /// earlier merge is already ordered, and a merge of two ordered rows is
-    /// linear, so the ordered case is confirmed in one pass before sorting.
-    fn sortTagsByName(self: *const Self, tags: []Tag) void {
-        var ordered = true;
-        var index: usize = 1;
-        while (index < tags.len) : (index += 1) {
-            if (Tag.orderByName(self.ident_store, tags[index - 1], tags[index]) == .gt) {
-                ordered = false;
-                break;
-            }
-        }
-        if (ordered) return;
-        std.mem.sort(Tag, tags, self.ident_store, comptime Tag.sortByNameAsc);
     }
 
     /// Given a list of shared tags & a list of extended tags, unify the shared tags.
@@ -3688,6 +3475,7 @@ const Unifier = struct {
 
     fn unifyStaticDispatchConstraints(
         self: *Self,
+        receivers: RawTypePair,
         a_constraints: StaticDispatchConstraint.SafeList.Range,
         b_constraints: StaticDispatchConstraint.SafeList.Range,
     ) Error!StaticDispatchConstraint.SafeList.Range {
@@ -3717,9 +3505,23 @@ const Unifier = struct {
                 // Re-fetch on each iteration since the backing array may have moved
                 const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
-                try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
+                try self.unifyStaticDispatchConstraint(receivers, two_constraints.a, two_constraints.b);
             }
         }
+
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had, so its list grows in place.
+        // A receiver gaining requirements one use at a time keeps every one
+        // it had: its list is reused as it is, or grows in place, rather
+        // than being copied whole for each use.
+        const kept_a = self.scratch.only_in_a_static_dispatch_constraints.sliceRange(partitioned.only_in_a);
+        const kept_b = self.scratch.only_in_b_static_dispatch_constraints.sliceRange(partitioned.only_in_b);
+        const a_whole = self.keptWhole(kept_a, a_constraints, partitioned.a_order, &self.scratch.a_static_dispatch_constraint_indices);
+        const b_whole = self.keptWhole(kept_b, b_constraints, partitioned.b_order, &self.scratch.b_static_dispatch_constraint_indices);
+        if (a_whole and kept_b.len == 0) return a_constraints;
+        if (b_whole and kept_a.len == 0) return b_constraints;
+        if (a_whole and a_len >= b_len) return try self.types_store.appendStaticDispatchConstraintsAfter(a_constraints, kept_b);
+        if (b_whole) return try self.types_store.appendStaticDispatchConstraintsAfter(b_constraints, kept_a);
 
         const top: u32 = @intCast(self.types_store.static_dispatch_constraints.len());
 
@@ -3741,9 +3543,31 @@ const Unifier = struct {
         return self.types_store.static_dispatch_constraints.rangeToEnd(top);
     }
 
-    /// Unify two static dispatch constraints
+    /// Whether a partition kept every constraint of `range`, unchanged and in
+    /// `range`'s own order: `kept` lists them in partition order, which
+    /// `order` gives by position.
+    fn keptWhole(
+        self: *const Self,
+        kept: []const StaticDispatchConstraint,
+        range: StaticDispatchConstraint.SafeList.Range,
+        order: u32Range,
+        indices: anytype,
+    ) bool {
+        if (kept.len != range.len()) return false;
+        const original = self.types_store.static_dispatch_constraints.sliceRange(range);
+        const positions = indices.items.items[order.start..][0..order.len];
+        for (kept, positions, 0..) |constraint, position, index| {
+            if (position != index or !std.meta.eql(constraint, original[position])) return false;
+        }
+        return true;
+    }
+
+    /// Unify two static dispatch constraints. A type has one method of each
+    /// name, so two requirements of that method on the same type must agree;
+    /// when they cannot, the mismatch records them as a method conflict.
     fn unifyStaticDispatchConstraint(
         self: *Self,
+        receivers: RawTypePair,
         a_constraint: StaticDispatchConstraint,
         b_constraint: StaticDispatchConstraint,
     ) Error!void {
@@ -3769,7 +3593,13 @@ const Unifier = struct {
         defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
-        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+        try self.scheduleGuardedPair(a_constraint.fn_var, b_constraint.fn_var, .{ .record_method_conflict = .{
+            .method_name = a_constraint.fn_name,
+            .from_operator = a_constraint.origin.isOperator() or b_constraint.origin.isOperator(),
+            .receivers = receivers,
+            .poison_receivers = true,
+            .methods = .{ .expected = a_constraint.fn_var, .actual = b_constraint.fn_var },
+        } });
     }
 
     fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
@@ -3778,20 +3608,26 @@ const Unifier = struct {
         try hook.link(hook.ctx, resolved.var_);
     }
 
+    /// A run of a scratch index list.
+    const u32Range = struct { start: u32, len: u32 };
+
     const PartitionedStaticDispatchConstraints = struct {
         only_in_a: StaticDispatchConstraint.SafeList.Range,
         only_in_b: StaticDispatchConstraint.SafeList.Range,
         in_both: TwoStaticDispatchConstraints.SafeList.Range,
+        /// `a`'s and `b`'s constraints by position, in partition order.
+        a_order: u32Range,
+        b_order: u32Range,
     };
 
-    fn retainDeclarativeStaticDispatchConstraint(
+    fn retainFixedLiteralStaticDispatchConstraint(
         self: *const Self,
         retained_group_start: usize,
         constraint: StaticDispatchConstraint,
     ) Error!void {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
-            if (!sameDeclarativeOriginClass(existing.origin, constraint.origin)) continue;
-            existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            if (!sameFixedLiteralClass(existing.origin, constraint.origin)) continue;
+            existing.* = try mergeStaticDispatchConstraintMetadata(self.types_store, constraint, existing.*);
             try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                 .dropped_fn_var = constraint.fn_var,
                 .retained_fn_var = existing.fn_var,
@@ -3804,12 +3640,18 @@ const Unifier = struct {
         );
     }
 
-    /// Match relations that deliberately share one callable type while leaving
-    /// independent same-name method calls separate. When a same-name group
-    /// contains any declarative relation (where clause, literal, or operator),
-    /// the whole group unifies through one representative declarative; a group
-    /// of dot calls alone stays separate so each use can instantiate a selected
-    /// rank-1 method scheme independently.
+    /// Match relations that share one callable type while leaving independent
+    /// same-name requirements separate. A number or string literal's
+    /// conversion has one callable type for every literal of its kind, so a
+    /// same-name group containing one unifies through one representative
+    /// literal relation; relating them can neither fail nor bind anything
+    /// else. Every other group stays separate, so each requirement can
+    /// instantiate the selected rank-1 method scheme at its own type once the
+    /// receiver resolves: a receiver whose `parser_for` one callee requires at
+    /// `Json` and another at `Tiny`, or whose `+` one use applies to a `U8` and
+    /// another to a `Str`, holds both requirements until then. Generalization
+    /// relates a receiver's same-name requirements into one
+    /// (`relateSameMethodRequirementsAtBoundary`).
     fn partitionStaticDispatchConstraints(
         self: *const Self,
         a_constraints_range: StaticDispatchConstraint.SafeList.Range,
@@ -3849,12 +3691,11 @@ const Unifier = struct {
                     );
                 }
 
-                // Put declarative/defaulting relations before independent
-                // dot-call relations so each same-name group can be matched
-                // with a linear scan.
-                const a_is_method_call = a.origin == .method_call;
-                const b_is_method_call = b.origin == .method_call;
-                if (a_is_method_call != b_is_method_call) return !a_is_method_call;
+                // Put literal relations before independent relations so each
+                // same-name group can be matched with a linear scan.
+                const a_is_literal = isFixedLiteralOrigin(a.origin);
+                const b_is_literal = isFixedLiteralOrigin(b.origin);
+                if (a_is_literal != b_is_literal) return a_is_literal;
 
                 // Preserve producer order within each semantic class.
                 return a_index < b_index;
@@ -3869,14 +3710,18 @@ const Unifier = struct {
             .start = @fromBackingInt(@intCast(b_indices_start)),
             .count = @intCast(b_constraints.len),
         });
-        std.mem.sort(u32, a_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = a_constraints,
-        }, ConstraintOrder.lessThan);
-        std.mem.sort(u32, b_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = b_constraints,
-        }, ConstraintOrder.lessThan);
+        // Constraint lists are usually already in evidence order, so an
+        // ordered pass costs one comparison per constraint where a sort
+        // would compare each constraint's name text several times.
+        const a_order = ConstraintOrder{ .unifier = self, .constraints = a_constraints };
+        if (!std.sort.isSorted(u32, a_indices, a_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, a_indices, a_order, ConstraintOrder.lessThan);
+        }
+
+        const b_order = ConstraintOrder{ .unifier = self, .constraints = b_constraints };
+        if (!std.sort.isSorted(u32, b_indices, b_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, b_indices, b_order, ConstraintOrder.lessThan);
+        }
 
         var a_group_start: usize = 0;
         var b_group_start: usize = 0;
@@ -3957,78 +3802,77 @@ const Unifier = struct {
                 }
             }
 
-            var a_non_method_end = a_group_start;
-            while (a_non_method_end < a_group_end and
-                a_constraints[a_indices[a_non_method_end]].origin != .method_call)
+            var a_literal_end = a_group_start;
+            while (a_literal_end < a_group_end and
+                isFixedLiteralOrigin(a_constraints[a_indices[a_literal_end]].origin))
             {
-                a_non_method_end += 1;
+                a_literal_end += 1;
             }
-            var b_non_method_end = b_group_start;
-            while (b_non_method_end < b_group_end and
-                b_constraints[b_indices[b_non_method_end]].origin != .method_call)
+            var b_literal_end = b_group_start;
+            while (b_literal_end < b_group_end and
+                isFixedLiteralOrigin(b_constraints[b_indices[b_literal_end]].origin))
             {
-                b_non_method_end += 1;
+                b_literal_end += 1;
             }
 
-            const a_has_declarative = a_non_method_end > a_group_start;
-            const b_has_declarative = b_non_method_end > b_group_start;
-            if (a_has_declarative or b_has_declarative) {
-                // A written/defaulting requirement describes the one method
-                // available to the body, so every same-name declarative must
-                // agree on a single callable type and every independent call
-                // on either side must satisfy it. Retain one metadata-bearing
-                // declarative per semantic origin, then validate every callable
-                // against one representative. Method-call entries are subsumed
-                // by that relation; their function vars remain unified with it.
-                const representative = if (a_has_declarative)
+            const a_has_literal = a_literal_end > a_group_start;
+            const b_has_literal = b_literal_end > b_group_start;
+            if (a_has_literal or b_has_literal) {
+                // A literal conversion has one callable type per literal kind,
+                // so every same-name relation agrees with it. Retain one
+                // metadata-bearing relation per literal kind, then validate
+                // every callable against one representative. Independent
+                // entries are subsumed by that relation; their function vars
+                // remain unified with it.
+                const representative = if (a_has_literal)
                     a_constraints[a_indices[a_group_start]]
                 else
                     b_constraints[b_indices[b_group_start]];
                 const retained_group_start: usize = @intCast(
                     scratch.only_in_a_static_dispatch_constraints.len(),
                 );
-                var a_declarative = a_group_start;
-                while (a_declarative < a_non_method_end) : (a_declarative += 1) {
-                    try self.retainDeclarativeStaticDispatchConstraint(
+                var a_literal = a_group_start;
+                while (a_literal < a_literal_end) : (a_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        a_constraints[a_indices[a_declarative]],
+                        a_constraints[a_indices[a_literal]],
                     );
                 }
-                var b_declarative = b_group_start;
-                while (b_declarative < b_non_method_end) : (b_declarative += 1) {
-                    try self.retainDeclarativeStaticDispatchConstraint(
+                var b_literal = b_group_start;
+                while (b_literal < b_literal_end) : (b_literal += 1) {
+                    try self.retainFixedLiteralStaticDispatchConstraint(
                         retained_group_start,
-                        b_constraints[b_indices[b_declarative]],
+                        b_constraints[b_indices[b_literal]],
                     );
                 }
-                var a_index = if (a_has_declarative) a_group_start + 1 else a_group_start;
+                var a_index = if (a_has_literal) a_group_start + 1 else a_group_start;
                 while (a_index < a_group_end) : (a_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = a_constraints[a_indices[a_index]],
                     });
                 }
-                var b_index = if (a_has_declarative) b_group_start else b_group_start + 1;
+                var b_index = if (a_has_literal) b_group_start else b_group_start + 1;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = b_constraints[b_indices[b_index]],
                     });
                 }
-                for (a_indices[a_non_method_end..a_group_end]) |constraint_index| {
+                for (a_indices[a_literal_end..a_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = a_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
                     });
                 }
-                for (b_indices[b_non_method_end..b_group_end]) |constraint_index| {
+                for (b_indices[b_literal_end..b_group_end]) |constraint_index| {
                     try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
                         .dropped_fn_var = b_constraints[constraint_index].fn_var,
                         .retained_fn_var = representative.fn_var,
                     });
                 }
             } else {
-                // Only independent dot-call relations: keep each side's calls
+                // Only independent relations: keep each side's requirements
                 // separate so every use can instantiate the selected rank-1
                 // method scheme at its own type.
                 var a_index = a_group_start;
@@ -4038,6 +3882,7 @@ const Unifier = struct {
                         a_constraints[a_indices[a_index]],
                     );
                 }
+
                 var b_index = b_group_start;
                 while (b_index < b_group_end) : (b_index += 1) {
                     _ = try scratch.only_in_b_static_dispatch_constraints.append(
@@ -4069,6 +3914,8 @@ const Unifier = struct {
             .only_in_a = scratch.only_in_a_static_dispatch_constraints.rangeToEnd(a_constraints_start),
             .only_in_b = scratch.only_in_b_static_dispatch_constraints.rangeToEnd(b_constraints_start),
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
+            .a_order = .{ .start = a_indices_start, .len = @intCast(a_constraints.len) },
+            .b_order = .{ .start = b_indices_start, .len = @intCast(b_constraints.len) },
         };
     }
 
@@ -4107,45 +3954,51 @@ const Unifier = struct {
     }
 };
 
-fn sameDeclarativeOriginClass(
-    a: StaticDispatchConstraint.Origin,
-    b: StaticDispatchConstraint.Origin,
-) bool {
-    return switch (a) {
-        .method_call => false,
-        .where_clause => b == .where_clause,
-        .desugared_unaryop => b == .desugared_unaryop,
-        .desugared_binop => |a_binop| b == .desugared_binop and
-            a_binop.negated == b.desugared_binop.negated,
-        .from_literal => |a_literal| b == .from_literal and switch (a_literal) {
-            // Each interpolation carries its own part vars and source regions;
-            // sharing one callable relation must not discard those checks.
+/// A number or string literal's conversion, whose callable type is the same
+/// for every literal of its kind. Operators, interpolations, dot calls, and
+/// instantiated where-clause requirements are independent uses of a rank-1
+/// method scheme: an interpolation's callable mentions its parts' types.
+fn isFixedLiteralOrigin(origin: StaticDispatchConstraint.Origin) bool {
+    return switch (origin) {
+        .from_literal => |literal| switch (literal) {
+            .numeral, .quote => true,
             .interpolation => false,
-            .numeral, .quote => std.meta.activeTag(a_literal) ==
-                std.meta.activeTag(b.from_literal),
         },
+        .desugared_binop, .desugared_unaryop, .method_call, .where_clause => false,
     };
 }
 
+fn sameFixedLiteralClass(
+    a: StaticDispatchConstraint.Origin,
+    b: StaticDispatchConstraint.Origin,
+) bool {
+    const a_literal = a.literalKind() orelse return false;
+    const b_literal = b.literalKind() orelse return false;
+    return a_literal == b_literal;
+}
+
 fn mergeStaticDispatchConstraintMetadata(
+    store: *types_mod.Store,
     other: StaticDispatchConstraint,
     retained: StaticDispatchConstraint,
-) StaticDispatchConstraint {
+) std.mem.Allocator.Error!StaticDispatchConstraint {
     var merged = retained;
-    if (other.origin == .from_literal and retained.origin == .from_literal) {
-        if (mergeFromNumeralLiteralInfo(
-            other.origin.numeralInfo(),
-            retained.origin.numeralInfo(),
-        )) |numeral_info| {
-            merged.origin = .{ .from_literal = .{ .numeral = numeral_info } };
+    if (retained.origin.literalKind() == .numeral) {
+        // Same-class numeral relations each carry their literal's facts.
+        // Recorded facts are never mutated: copies of either constraint
+        // share them, so a merge whose facts neither side already holds
+        // records its own. Facts equal to the retained side's keep its row,
+        // so the merged constraint stays equal to the retained one and the
+        // receiver's list is kept whole.
+        const other_info = store.constraintNumeralInfo(other).?;
+        const retained_info = store.constraintNumeralInfo(retained).?;
+        const merged_info = types_mod.NumeralInfo.merged(other_info, retained_info);
+        if (!std.meta.eql(merged_info, retained_info)) {
+            merged.numeral = if (std.meta.eql(merged_info, other_info))
+                other.numeral
+            else
+                try store.appendNumeralInfo(merged_info);
         }
-    }
-
-    const other_forced = other.origin == .where_clause and other.origin.where_clause.body_required;
-    const retained_forced = retained.origin == .where_clause and retained.origin.where_clause.body_required;
-    if (other_forced or retained_forced) {
-        std.debug.assert(merged.origin == .where_clause);
-        merged.origin.where_clause.body_required = true;
     }
 
     // Provenance is excluded from constraint identity. Keep the retained
@@ -4158,15 +4011,6 @@ fn mergeStaticDispatchConstraintMetadata(
         merged.interpolation = other.interpolation;
     }
     return merged;
-}
-
-fn mergeFromNumeralLiteralInfo(
-    a: ?types_mod.NumeralInfo,
-    b: ?types_mod.NumeralInfo,
-) ?types_mod.NumeralInfo {
-    const a_info = a orelse return b;
-    const b_info = b orelse return a;
-    return types_mod.NumeralInfo.merged(a_info, b_info);
 }
 
 /// A list of constraint that should apply to concrete type
@@ -4183,6 +4027,12 @@ pub const DeferredConstraintCheck = struct {
     /// receiver is concrete—re-processing it before the target's group is
     /// checked would just re-defer it again.
     waiting_on_target_def: bool = false,
+    /// True when the constraint's selection would repeat a same-target
+    /// ancestor's state up to renaming, with variables its ancestor doesn't
+    /// share. Selecting it now would decide on types still being inferred, so
+    /// it waits for those variables. Such an entry is not "resolvable" for the
+    /// literal-defaulting cascade even though its receiver is concrete.
+    waiting_on_repeated_state: bool = false,
     /// The binding group whose checking created this obligation (for an
     /// instantiated scheme copy, the group that instantiated it), or null when
     /// it was created outside any group frame (REPL, expect bodies, module
@@ -4192,9 +4042,6 @@ pub const DeferredConstraintCheck = struct {
     /// leave the obligation waiting (Invariant D). The checker stamps this
     /// where an obligation enters the deferred queue.
     owner_group_index: ?u32 = null,
-    /// The creating scheme, or null outside a scheme. Component derivations
-    /// inherit this identity instead of borrowing the draining frame's scheme.
-    owner_scheme_root: ?Var = null,
     /// For an obligation waiting on its target, the checker's waiting-context
     /// epoch when it was last re-deferred; while the epoch is unchanged the
     /// obligation would be re-deferred exactly as before.
@@ -4214,6 +4061,10 @@ const MismatchHandling = union(enum) {
     ignore,
     set_flag: u32,
     record_then_propagate: RawTypePair,
+    record_method_conflict: RawMethodConflict,
+    /// A row's repeated label failed to relate to its other occurrence: the
+    /// whole relation stops and reports the row.
+    record_repeated_label_row: Var,
 };
 
 const SameAliasAfterArgs = struct {
@@ -4275,32 +4126,19 @@ const WorkFrame = union(enum) {
     pub const SafeList = MkSafeList(@This());
 };
 
-/// Public helper functions for tests
-pub fn partitionFields(
+/// Public helper function for tests
+pub fn partitionRow(
+    comptime kind: RowKind,
     ident_store: *const Ident.Store,
     self_module_identity: base.ModuleIdentity.Idx,
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
-    a_fields_range: RecordFieldSafeList.Range,
-    b_fields_range: RecordFieldSafeList.Range,
-) std.mem.Allocator.Error!Unifier.PartitionedRecordFields {
+    a_range: kind.Entry().SafeList.Range,
+    b_range: kind.Entry().SafeList.Range,
+) std.mem.Allocator.Error!Unifier.PartitionedRow(kind) {
     var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
-    return try unifier.partitionFields(scratch, a_fields_range, b_fields_range);
-}
-
-/// Partitions tags from two tag ranges for unification.
-pub fn partitionTags(
-    ident_store: *const Ident.Store,
-    self_module_identity: base.ModuleIdentity.Idx,
-    types_store: *types_mod.Store,
-    scratch: *Scratch,
-    occurs_scratch: *occurs.Scratch,
-    a_tags_range: TagSafeList.Range,
-    b_tags_range: TagSafeList.Range,
-) std.mem.Allocator.Error!Unifier.PartitionedTags {
-    var unifier = Unifier.init(ident_store, self_module_identity, types_store, scratch, occurs_scratch, .construction, .ordinary, .none, null, null);
-    return try unifier.partitionTags(scratch, a_tags_range, b_tags_range);
+    return try unifier.partitionRow(kind, scratch, a_range, b_range);
 }
 
 const TwoRecordFields = struct {
@@ -4310,25 +4148,151 @@ const TwoRecordFields = struct {
 };
 const TwoRecordFieldsSafeList = MkSafeList(TwoRecordFields);
 
-/// A record field that reappears further along its row's extension chain.
-pub const ChainDuplicateField = struct {
-    first: RecordField.Presence,
-    repeated: RecordField.Presence,
+/// The two row families the unifier gathers, partitions, and merges with the
+/// same helpers: record fields and tag-union tags. A helper generic over the
+/// family takes the kind at comptime and reaches the family's types, type
+/// store list, and scratch lists through these accessors.
+const RowKind = enum {
+    record,
+    tag_union,
+
+    /// The row content: a range of entries in the type store plus an extension.
+    fn Row(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => types_mod.Record,
+            .tag_union => TagUnion,
+        };
+    }
+
+    /// One named entry of a row.
+    fn Entry(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => RecordField,
+            .tag_union => Tag,
+        };
+    }
+
+    /// What an entry carries besides its name.
+    fn Payload(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => RecordField.Presence,
+            .tag_union => Var.SafeList.Range,
+        };
+    }
+
+    /// Same-named entries from the two operand rows.
+    fn Two(comptime kind: RowKind) type {
+        return switch (kind) {
+            .record => TwoRecordFields,
+            .tag_union => TwoTags,
+        };
+    }
+
+    /// The entry field holding the payload.
+    fn payloadField(comptime kind: RowKind) std.meta.FieldEnum(kind.Entry()) {
+        return switch (kind) {
+            .record => .presence,
+            .tag_union => .args,
+        };
+    }
+
+    /// The name of the row field holding its entries, which also suffixes the
+    /// family's scratch lists (`gathered_fields` / `gathered_tags`, ...).
+    fn suffix(comptime kind: RowKind) []const u8 {
+        return switch (kind) {
+            .record => "fields",
+            .tag_union => "tags",
+        };
+    }
+
+    fn entry(comptime kind: RowKind, name: Ident.Idx, payload: kind.Payload()) kind.Entry() {
+        return switch (kind) {
+            .record => .{ .name = name, .presence = payload },
+            .tag_union => .{ .name = name, .args = payload },
+        };
+    }
+
+    fn payloadOf(comptime kind: RowKind, e: kind.Entry()) kind.Payload() {
+        return @field(e, @tagName(kind.payloadField()));
+    }
+
+    fn row(comptime kind: RowKind, entries: kind.Entry().SafeMultiList.Range, ext: Var) kind.Row() {
+        return switch (kind) {
+            .record => .{ .fields = entries, .ext = ext },
+            .tag_union => .{ .tags = entries, .ext = ext },
+        };
+    }
+
+    fn entriesOf(comptime kind: RowKind, r: kind.Row()) kind.Entry().SafeMultiList.Range {
+        return @field(r, kind.suffix());
+    }
+
+    /// The row of this kind that `flat_type` carries, if it is one.
+    fn rowOf(comptime kind: RowKind, flat_type: FlatType) ?kind.Row() {
+        return switch (flat_type) {
+            .record => |record| if (kind == .record) record else null,
+            .tag_union => |tag_union| if (kind == .tag_union) tag_union else null,
+            .tuple,
+            .nominal_type,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .empty_tag_union,
+            => null,
+        };
+    }
+
+    fn content(comptime kind: RowKind, r: kind.Row()) Content {
+        return Content{ .structure = @unionInit(FlatType, @tagName(kind), r) };
+    }
+
+    /// The type store's list of this family's entries.
+    fn storeEntries(comptime kind: RowKind, store: *types_mod.Store) *kind.Entry().SafeMultiList {
+        return switch (kind) {
+            .record => &store.record_fields,
+            .tag_union => &store.tags,
+        };
+    }
+
+    fn appendToStore(comptime kind: RowKind, store: *types_mod.Store, entries: []const kind.Entry()) std.mem.Allocator.Error!kind.Entry().SafeMultiList.Range {
+        return switch (kind) {
+            .record => store.appendRecordFields(entries),
+            .tag_union => store.appendTags(entries),
+        };
+    }
 };
 
-/// A tag that reappears further along its row's extension chain.
-pub const ChainDuplicateTag = struct {
-    first: Var.SafeList.Range,
-    repeated: Var.SafeList.Range,
-};
+/// An entry that reappears further along its row's extension chain.
+fn ChainDuplicate(comptime kind: RowKind) type {
+    return struct {
+        first: kind.Payload(),
+        repeated: kind.Payload(),
+    };
+}
 
-/// A tag a unification refused to add to a bounded annotation extension.
+/// A tag a unification refused to add to a bounded annotation extension, and
+/// that extension.
 pub const BoundedRowViolation = struct {
     tag: Ident.Idx,
+    ext: Var,
 };
 
 /// An unordered pair of resolved type descriptors.
 const VisitedPairKey = struct { low: u32, high: u32 };
+
+/// A function made pure whose own dependencies are still being demanded.
+const PureDemand = struct {
+    var_: Var,
+    func: Func,
+    next: u32 = 0,
+};
+
+/// The contents of a reported mismatch's root operands before poisoning.
+pub const RejectedRoots = struct {
+    expected: Content,
+    actual: Content,
+};
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
 ///
@@ -4338,11 +4302,11 @@ const VisitedPairKey = struct { low: u32, high: u32 };
 /// * `fresh_vars`: type variables created during a unification pass
 /// * For records
 ///   * `gathered_fields`: accumulated record fields from recursive extensions
-///   * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionFields`
+///   * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionRow`
 ///   * `in_both_fields`: shared fields with matching names
 /// * For tag unions
 ///   * `gathered_tags`: accumulated tags from recursive extensions
-///   * `only_in_a_tags`, `only_in_b_tags`: disjoint tags after `partitionTags`
+///   * `only_in_a_tags`, `only_in_b_tags`: disjoint tags after `partitionRow`
 ///   * `in_both_tags`: shared tags with matching names
 /// * For occurs:
 ///   * `occurs_scratch`: Scratch data need by occurs
@@ -4361,10 +4325,10 @@ const VisitedPairKey = struct { low: u32, high: u32 };
 ///    high
 ///
 /// NOTE: Record fields and tags are merged in sorted order during gathering
-/// (via mergeSortedExtensionFields/mergeSortedExtensionTags). However, unification
-/// itself creates new tag unions that may not be sorted, so partitionFields/partitionTags
-/// still perform a final sort. To fully eliminate these sorts, we would need to ensure
-/// unifySharedTags also produces sorted output.
+/// (via mergeSortedExtension). However, unification itself creates new tag
+/// unions that may not be sorted, so partitionRow still performs a final sort.
+/// To fully eliminate these sorts, we would need to ensure unifySharedTags also
+/// produces sorted output.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -4377,6 +4341,9 @@ pub const Scratch = struct {
     /// Linear, merge-local union of directed effect formulas.
     effect_dependency_seen: collections.DenseMap(Var, void),
     effect_dependencies: std.ArrayListUnmanaged(Var) = .empty,
+    /// Functions made pure whose own dependencies a pure demand is still
+    /// visiting.
+    pure_demands: std.ArrayListUnmanaged(PureDemand) = .empty,
 
     // explicit unification work stack
     unify_work_stack: WorkFrame.SafeList,
@@ -4395,14 +4362,17 @@ pub const Scratch = struct {
     /// A label repeated along one row's extension chain names one field or
     /// tag (design.md "Row Union Normalization"). Gathering keeps the first
     /// occurrence; these pairs relate each repeated occurrence to it.
-    chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicateField),
-    chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicateTag),
+    chain_duplicate_fields: std.ArrayListUnmanaged(ChainDuplicate(.record)),
+    chain_duplicate_tags: std.ArrayListUnmanaged(ChainDuplicate(.tag_union)),
 
     // records - used internal by unification
     gathered_tags: TagSafeList,
     /// The bounded extension and the tag the current unify call refused to add
     /// to it, when a refusal caused its mismatch.
     bounded_row_violation: ?BoundedRowViolation,
+    /// The root operands' contents, read through aliases just before the
+    /// reported mismatch of the current unify call poisoned them.
+    rejected_roots: ?RejectedRoots,
     only_in_a_tags: TagSafeList,
     only_in_b_tags: TagSafeList,
     in_both_tags: TwoTagsSafeList,
@@ -4578,6 +4548,7 @@ pub const Scratch = struct {
             .absorbed_record_defaults = try AbsorbedRecordDefault.SafeList.initCapacity(gpa, 4),
             .gathered_tags = try TagSafeList.initCapacity(gpa, 32),
             .bounded_row_violation = null,
+            .rejected_roots = null,
             .only_in_a_tags = try TagSafeList.initCapacity(gpa, 32),
             .only_in_b_tags = try TagSafeList.initCapacity(gpa, 32),
             .in_both_tags = try TwoTagsSafeList.initCapacity(gpa, 32),
@@ -4607,6 +4578,7 @@ pub const Scratch = struct {
         self.fresh_vars.deinit(self.gpa);
         self.effect_dependency_seen.deinit();
         self.effect_dependencies.deinit(self.gpa);
+        self.pure_demands.deinit(self.gpa);
         self.unify_work_stack.deinit(self.gpa);
         self.mismatch_flags.deinit(self.gpa);
         self.gathered_fields.deinit(self.gpa);
@@ -4639,6 +4611,12 @@ pub const Scratch = struct {
         self.persistent_opening_args.deinit(self.gpa);
     }
 
+    /// The row whose own repeated label stopped the last relation, when one
+    /// did (design.md "Row Union Normalization").
+    pub fn repeatedLabelRow(self: *const Scratch) ?Var {
+        return self.mismatch_evidence.repeated_label_row;
+    }
+
     /// Reset the scratch arrays, retaining the allocated memory
     pub fn reset(self: *Scratch) void {
         self.unify_work_stack.items.clearRetainingCapacity();
@@ -4651,6 +4629,7 @@ pub const Scratch = struct {
         self.absorbed_record_defaults.items.clearRetainingCapacity();
         self.gathered_tags.items.clearRetainingCapacity();
         self.bounded_row_violation = null;
+        self.rejected_roots = null;
         self.only_in_a_tags.items.clearRetainingCapacity();
         self.only_in_b_tags.items.clearRetainingCapacity();
         self.in_both_tags.items.clearRetainingCapacity();
@@ -4663,7 +4642,9 @@ pub const Scratch = struct {
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();
-        self.visited_index.clearRetainingCapacity();
+        // Clearing a hash map rewrites its whole metadata array, so an empty
+        // index is left alone rather than paying for its retained capacity.
+        if (self.visited_index.count() != 0) self.visited_index.clearRetainingCapacity();
         self.visited_index_pairs = 0;
         self.constraint_visited_vars.items.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();
@@ -4675,75 +4656,83 @@ pub const Scratch = struct {
 
     // helpers //
 
-    /// Given a multi list of record fields and a range, copy from the multi list
-    /// into scratch's gathered fields array
-    fn copyGatherFieldsFromMultiList(
-        self: *Self,
-        multi_list: *const RecordFieldSafeMultiList,
-        range: RecordFieldSafeMultiList.Range,
-    ) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        const start_int = self.gathered_fields.len();
-        const record_fields_slice = multi_list.sliceRange(range);
-        for (record_fields_slice.items(.name), record_fields_slice.items(.presence)) |name, presence| {
-            _ = try self.gathered_fields.append(
-                self.gpa,
-                RecordField{ .name = name, .presence = presence },
-            );
-        }
-        return self.gathered_fields.rangeToEnd(@intCast(start_int));
+    /// One of the kind's scratch lists, named by prefix: `gathered_`,
+    /// `only_in_a_`, `only_in_b_`, `in_both_`, or `chain_duplicate_`.
+    fn rowList(self: *Self, comptime kind: RowKind, comptime prefix: []const u8) *@FieldType(Self, prefix ++ kind.suffix()) {
+        return &@field(self, prefix ++ kind.suffix());
     }
 
-    /// Merge sorted extension fields into an already-sorted gathered range.
-    /// Maintains sorted order; a field already gathered keeps its first
-    /// occurrence, and the repeat is recorded in `chain_duplicate_fields`.
-    /// The range is updated in-place to reflect the new count.
-    /// Returns whether any new fields were added.
-    fn mergeSortedExtensionFields(
+    /// Given a multi list of row entries and a range, copy from the multi list
+    /// into the kind's gathered scratch list
+    fn copyGatherFromMultiList(
         self: *Self,
-        range: *RecordFieldSafeList.Range,
+        comptime kind: RowKind,
+        multi_list: *const kind.Entry().SafeMultiList,
+        range: kind.Entry().SafeMultiList.Range,
+    ) std.mem.Allocator.Error!kind.Entry().SafeList.Range {
+        const gathered = self.rowList(kind, "gathered_");
+        const start_int = gathered.len();
+        const slice = multi_list.sliceRange(range);
+        for (slice.items(.name), slice.items(kind.payloadField())) |name, payload| {
+            _ = try gathered.append(self.gpa, kind.entry(name, payload));
+        }
+        return gathered.rangeToEnd(@intCast(start_int));
+    }
+
+    /// Merge sorted extension entries into an already-sorted gathered range.
+    /// Maintains sorted order; an entry already gathered keeps its first
+    /// occurrence, and the repeat is recorded in the kind's chain-duplicate list.
+    /// The range is updated in-place to reflect the new count.
+    fn mergeSortedExtension(
+        self: *Self,
+        comptime kind: RowKind,
+        range: *kind.Entry().SafeList.Range,
         ext_names: []const Ident.Idx,
-        ext_presences: []const RecordField.Presence,
+        ext_payloads: []const kind.Payload(),
         ident_store: *const Ident.Store,
     ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_presences.len);
+        std.debug.assert(ext_names.len == ext_payloads.len);
         if (ext_names.len == 0) return;
 
-        // Get current gathered fields
-        const current_fields = self.gathered_fields.sliceRange(range.*);
-        const current_len = current_fields.len;
+        const gathered = self.rowList(kind, "gathered_");
+        const chain_duplicates = self.rowList(kind, "chain_duplicate_");
 
-        // Count the extension fields that are not already gathered, recording
+        // Get current gathered entries
+        const current = gathered.sliceRange(range.*);
+        const current_len = current.len;
+
+        // Count the extension entries that are not already gathered, recording
         // each repeated one against its first occurrence.
         var new_count: usize = 0;
-        for (ext_names, ext_presences) |ext_name, ext_presence| {
-            const first = for (current_fields) |existing| {
+        for (ext_names, ext_payloads) |ext_name, ext_payload| {
+            const first = for (current) |existing| {
                 if (existing.name.eql(ext_name)) break existing;
             } else null;
             if (first) |existing| {
-                try self.chain_duplicate_fields.append(self.gpa, .{ .first = existing.presence, .repeated = ext_presence });
+                try chain_duplicates.append(self.gpa, .{ .first = kind.payloadOf(existing), .repeated = ext_payload });
             } else new_count += 1;
         }
 
         if (new_count == 0) return;
 
         // Allocate space for merged result
-        try self.gathered_fields.items.ensureUnusedCapacity(self.gpa, new_count);
+        try gathered.items.ensureUnusedCapacity(self.gpa, new_count);
 
-        // IMPORTANT: re-slice after the reserve—growing `gathered_fields`
-        // can reallocate its backing array, invalidating `current_fields`.
-        const current_fields_after = self.gathered_fields.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
+        // IMPORTANT: re-slice after the reserve—growing the gathered list can
+        // reallocate its backing array, invalidating `current`.
+        const current_after = gathered.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
 
         // We need to merge in-place. Strategy:
-        // 1. Append all new (non-duplicate) extension fields to the end
+        // 1. Append all new (non-duplicate) extension entries to the end
         // 2. Then do an in-place merge of the two sorted regions
 
-        // Append non-duplicate extension fields
-        for (ext_names, ext_presences) |name, presence| {
-            const is_dup = for (current_fields_after) |existing| {
+        // Append non-duplicate extension entries
+        for (ext_names, ext_payloads) |name, payload| {
+            const is_dup = for (current_after) |existing| {
                 if (existing.name.eql(name)) break true;
             } else false;
             if (!is_dup) {
-                self.gathered_fields.items.appendAssumeCapacity(RecordField{ .name = name, .presence = presence });
+                gathered.items.appendAssumeCapacity(kind.entry(name, payload));
             }
         }
 
@@ -4752,101 +4741,18 @@ pub const Scratch = struct {
         // Get the slice starting from range.start with the new total length
         const start_idx: usize = @backingInt(range.start);
         const total_len = current_len + new_count;
-        const items = self.gathered_fields.items.items[start_idx..][0..total_len];
+        const items = gathered.items.items[start_idx..][0..total_len];
 
         // In-place merge: we have [sorted_left | sorted_right]
-        // Use rotation-based merge which is O(n) for this case
-        inPlaceMergeFields(items, current_len, ident_store);
+        inPlaceMergeRow(kind.Entry(), items, current_len, ident_store);
 
         // Update range count
         range.count = @intCast(total_len);
     }
 
-    /// Merge sorted extension tags into an already-sorted gathered range.
-    /// Maintains sorted order; a tag already gathered keeps its first
-    /// occurrence, and the repeat is recorded in `chain_duplicate_tags`.
-    fn mergeSortedExtensionTags(
-        self: *Self,
-        range: *TagSafeList.Range,
-        ext_names: []const Ident.Idx,
-        ext_args: []const Var.SafeList.Range,
-        ident_store: *const Ident.Store,
-    ) std.mem.Allocator.Error!void {
-        std.debug.assert(ext_names.len == ext_args.len);
-        if (ext_names.len == 0) return;
-
-        // Get current gathered tags
-        const current_tags = self.gathered_tags.sliceRange(range.*);
-        const current_len = current_tags.len;
-
-        // Count the extension tags that are not already gathered, recording
-        // each repeated one against its first occurrence.
-        var new_count: usize = 0;
-        for (ext_names, ext_args) |ext_name, args| {
-            const first = for (current_tags) |existing| {
-                if (existing.name.eql(ext_name)) break existing;
-            } else null;
-            if (first) |existing| {
-                try self.chain_duplicate_tags.append(self.gpa, .{ .first = existing.args, .repeated = args });
-            } else new_count += 1;
-        }
-
-        if (new_count == 0) return;
-
-        // Allocate space for merged result
-        try self.gathered_tags.items.ensureUnusedCapacity(self.gpa, new_count);
-
-        // IMPORTANT: re-slice after the reserve—growing `gathered_tags` can
-        // reallocate its backing array, invalidating `current_tags`.
-        const current_tags_after = self.gathered_tags.sliceRange(.{ .start = range.start, .count = @intCast(current_len) });
-
-        // Append non-duplicate extension tags
-        for (ext_names, ext_args) |name, args| {
-            const is_dup = for (current_tags_after) |existing| {
-                if (existing.name.eql(name)) break true;
-            } else false;
-            if (!is_dup) {
-                self.gathered_tags.items.appendAssumeCapacity(Tag{ .name = name, .args = args });
-            }
-        }
-
-        // In-place merge
-        const start_idx: usize = @backingInt(range.start);
-        const total_len = current_len + new_count;
-        const items = self.gathered_tags.items.items[start_idx..][0..total_len];
-
-        inPlaceMergeTags(items, current_len, ident_store);
-
-        // Update range count
-        range.count = @intCast(total_len);
-    }
-
-    /// Given a multi list of tag and a range, copy from the multi list
-    /// into scratch's gathered fields array
-    fn copyGatherTagsFromMultiList(
-        self: *Self,
-        multi_list: *const TagSafeMultiList,
-        range: TagSafeMultiList.Range,
-    ) std.mem.Allocator.Error!TagSafeList.Range {
-        const start_int = self.gathered_tags.len();
-        const tag_slice = multi_list.sliceRange(range);
-        for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
-            _ = try self.gathered_tags.append(
-                self.gpa,
-                Tag{ .name = ident, .args = args },
-            );
-        }
-        return self.gathered_tags.rangeToEnd(@intCast(start_int));
-    }
-
     /// Exposed for tests
-    pub fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordFieldSafeList.Range {
-        return try self.gathered_fields.appendSlice(self.gpa, fields);
-    }
-
-    /// Exposed for tests
-    pub fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
-        return try self.gathered_tags.appendSlice(self.gpa, fields);
+    pub fn appendSliceGathered(self: *Self, comptime kind: RowKind, entries: []const kind.Entry()) std.mem.Allocator.Error!kind.Entry().SafeList.Range {
+        return try self.rowList(kind, "gathered_").appendSlice(self.gpa, entries);
     }
 };
 
@@ -4879,36 +4785,20 @@ fn sameNominalIdentity(a: NominalType, b: NominalType) bool {
     return a.ident.ident_idx.eql(b.ident.ident_idx);
 }
 
-/// In-place merge of two sorted regions of record fields.
+/// In-place merge of two sorted regions of row entries.
 /// Given an array [left_sorted | right_sorted], produces [merged_sorted].
 /// Uses insertion sort approach which is O(n*m) but efficient for small arrays.
-fn inPlaceMergeFields(items: []RecordField, left_len: usize, ident_store: *const Ident.Store) void {
+fn inPlaceMergeRow(comptime Entry: type, items: []Entry, left_len: usize, ident_store: *const Ident.Store) void {
     if (left_len == 0 or left_len == items.len) return;
 
     // Simple approach: insertion sort the right portion into the left
-    // This is O(n*m) but records typically have few fields
+    // This is O(n*m) but rows typically have few entries
     var i = left_len;
     while (i < items.len) : (i += 1) {
         const key = items[i];
         var j = i;
         // Shift elements right until we find the correct position
-        while (j > 0 and RecordField.orderByName(ident_store, items[j - 1], key) == .gt) {
-            items[j] = items[j - 1];
-            j -= 1;
-        }
-        items[j] = key;
-    }
-}
-
-/// In-place merge of two sorted regions of tags.
-fn inPlaceMergeTags(items: []Tag, left_len: usize, ident_store: *const Ident.Store) void {
-    if (left_len == 0 or left_len == items.len) return;
-
-    var i = left_len;
-    while (i < items.len) : (i += 1) {
-        const key = items[i];
-        var j = i;
-        while (j > 0 and Tag.orderByName(ident_store, items[j - 1], key) == .gt) {
+        while (j > 0 and Entry.orderByName(ident_store, items[j - 1], key) == .gt) {
             items[j] = items[j - 1];
             j -= 1;
         }
@@ -5063,5 +4953,5 @@ fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
             return;
         }
     }
-    unreachable;
+    unreachable; // the loop covers every field of U, one of which is active
 }

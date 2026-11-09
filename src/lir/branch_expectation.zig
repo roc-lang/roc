@@ -45,7 +45,7 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
     while (work.pop()) |stmt_id| {
         if ((try visited.getOrPut(stmt_id)).found_existing) continue;
         try BodyClone.appendSuccessors(store, &work, stmt_id, scratch_allocator);
-        switch (store.getCFStmt(stmt_id)) {
+        switch (store.getCFStmtImmediate(stmt_id).*) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -56,20 +56,8 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
             .assign_list,
             .assign_struct,
             .assign_tag,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             => |s| try define(&definitions, s.target, stmt_id),
+            .dyn => |s| if (s.target) |target| try define(&definitions, target, stmt_id),
             inline .store_struct, .store_tag => |s| try define(&definitions, s.dest, stmt_id),
             // A written local names different values at different points.
             .set_local => |s| try definitions.put(s.target, null),
@@ -78,12 +66,12 @@ pub fn runProc(store: *LirStore, proc_id: LIR.LirProcSpecId, scratch_allocator: 
                 for (0..GuardedList.borrowLen(params)) |i| try definitions.put(GuardedList.at(params, i), null);
             },
             .switch_stmt => try switches.append(scratch_allocator, stmt_id),
-            .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .jump, .ret, .crash => {},
+            .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => {},
         }
     }
 
     for (switches.items) |stmt_id| {
-        const sw = store.getCFStmt(stmt_id).switch_stmt;
+        const sw = store.getCFStmtImmediate(stmt_id).switch_stmt;
         if (sw.default_is_cold) continue;
         const branches = store.getCFSwitchBranches(sw.branches);
         if (GuardedList.borrowLen(branches) != 1 or GuardedList.at(branches, 0).value != 1) continue;
@@ -104,13 +92,13 @@ fn carriesExpectation(store: *const LirStore, definitions: *const collections.De
     var hops: usize = 0;
     while (hops < max_alias_hops) : (hops += 1) {
         const definition = (definitions.get(local) orelse return false) orelse return false;
-        switch (store.getCFStmt(definition)) {
+        switch (store.getCFStmtImmediate(definition).*) {
             .assign_low_level => |s| return s.op == .bool_likely,
-            .assign_ref => |s| switch (s.op) {
-                .local => |source| local = source,
+            .assign_ref => |s| switch (s.op.kind) {
+                .local => local = s.op.source,
                 .field, .discriminant, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return false,
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .store_struct, .store_tag, .set_local, .join, .switch_stmt, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .jump, .ret, .crash => return false,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .join, .switch_stmt, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_initialized_payload, .str_match, .str_match_set, .jump, .ret, .crash => return false,
         }
     }
     return false;
@@ -157,13 +145,13 @@ const Fixture = struct {
             current = try store.addCFStmt(.{ .set_local = .{ .target = cond, .value = compared, .mode = .replace_existing, .next = current } }, .test_fixture);
         }
         if (alias) {
-            current = try store.addCFStmt(.{ .assign_ref = .{ .target = aliased, .op = .{ .local = if (likely) marked else compared }, .next = current } }, .test_fixture);
+            current = try store.addCFStmt(.{ .assign_ref = .{ .target = aliased, .op = .local(if (likely) marked else compared), .next = current } }, .test_fixture);
         }
         if (likely) {
             current = try store.addCFStmt(.{ .assign_low_level = .{
                 .target = marked,
                 .op = .bool_likely,
-                .rc_effect = .none(),
+                .rc_effect = try store.addRcEffect(.none()),
                 .args = try store.addLocalSpan(&.{compared}),
                 .next = current,
             } }, .test_fixture);
@@ -171,7 +159,7 @@ const Fixture = struct {
         current = try store.addCFStmt(.{ .assign_low_level = .{
             .target = compared,
             .op = .num_is_lt,
-            .rc_effect = .none(),
+            .rc_effect = try store.addRcEffect(.none()),
             .args = try store.addLocalSpan(&.{ a, b }),
             .next = current,
         } }, .test_fixture);
@@ -185,7 +173,7 @@ const Fixture = struct {
     }
 
     fn coldDefault(self: *const Fixture) bool {
-        return self.store.getCFStmt(self.switch_stmt).switch_stmt.default_is_cold;
+        return self.store.getCFStmtImmediate(self.switch_stmt).switch_stmt.default_is_cold;
     }
 };
 

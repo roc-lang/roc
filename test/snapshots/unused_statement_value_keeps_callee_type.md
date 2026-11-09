@@ -60,7 +60,18 @@ TYPE MISMATCH - unused_statement_value_keeps_callee_type.md:5:14:5:15
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Write the number in quotes to make it a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow ", or convert it with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -128,12 +139,12 @@ run = |f| {
 					(e-runtime-error (tag "erroneous_value_expr")))
 				(s-let
 					(p-assign (ident "y"))
-					(e-call (constraint-fn-var 261)
+					(e-call (constraint-fn-var 266)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-string
 							(e-literal (string "world")))))
-				(e-dispatch-call (method "concat") (constraint-fn-var 264)
+				(e-dispatch-call (method "concat") (constraint-fn-var 269)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "y"))))

@@ -23,6 +23,7 @@ pub const redundantOpenExtensions = fmt.redundantOpenExtensions;
 pub const formatStatement = fmt.formatStatement;
 pub const formatExpr = fmt.formatExpr;
 pub const moduleFmtsStable = fmt.moduleFmtsStable;
+pub const moduleFmtsStableWithOptions = fmt.moduleFmtsStableWithOptions;
 
 test "fmt tests" {
     std.testing.refAllDecls(@This());

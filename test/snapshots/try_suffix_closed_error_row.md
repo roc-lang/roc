@@ -1,10 +1,12 @@
 # META
 ~~~ini
-description=Explain forwarding a closed error row into a larger error union without blaming a host
+description=A forwarded closed error row widens into a larger error union; an unlisted tag and a payload mismatch are reported at the ?
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
+# Forwarding a closed error row into a larger error union is accepted: the `?`
+# contributes the row's tags to the result (design.md "Row Subsumption").
 forward : Try({}, [StdoutErr(Str)]) -> Try({}, [Exit(I32), StdoutErr(Str)])
 forward = |result| {
     result?
@@ -18,7 +20,7 @@ reconstruct = |result| match result {
     Err(StdoutErr(message)) => Err(StdoutErr(message))
 }
 
-# A disjoint error row should retain the ordinary mismatch hint.
+# A tag the annotation does not list is reported at the `?` that produces it.
 disjoint : Try({}, [Other]) -> Try({}, [Exit(I32)])
 disjoint = |result| {
     result?
@@ -33,126 +35,34 @@ payload_mismatch = |result| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - try_suffix_closed_error_row.md:3:5:3:12
-TYPE MISMATCH - try_suffix_closed_error_row.md:17:5:17:12
-TYPE MISMATCH - try_suffix_closed_error_row.md:24:5:24:12
+TYPE MISMATCH - try_suffix_closed_error_row.md:19:5:19:12
+TYPE MISMATCH - try_suffix_closed_error_row.md:26:5:26:12
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 3 5) (end 3 12))
+		(region (start 19 5) (end 19 12))
 		(headline
-			(reflow "This")
+			(reflow "This expression produces the tag")
 			(reflow " ")
-			(annotated code "?")
+			(annotated code "Other")
 			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
+			(reflow "but the annotated tag union does not list it."))
 		(document
-			(source-region (file "try_suffix_closed_error_row.md") (start 3 5) (end 3 12) (annotation error) (line-text "    result?"))
+			(source-region (file "try_suffix_closed_error_row.md") (start 19 5) (end 19 12) (annotation error) (line-text "    result?"))
 			(line-break)
-			(reflow "If this")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow " ")
-			(reflow "is an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ",")
-			(reflow " ")
-			(reflow "then the")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "after it immediately returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow " ")
-			(reflow "whose payload has this type:")
+			(reflow "It has the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[StdoutErr(Str)]")
+			(text "Try({}, [Other])")
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Returning an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow " ")
-			(reflow "with that type only works if the function itself returns a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow " ")
-			(reflow "with a compatible error type, but this function's return type is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Try({}, [Exit(I32), StdoutErr(Str)])")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "This error payload is a closed tag union. It cannot gain the additional variants in the function's error type, even when all its variants are listed there. The two unions can have different runtime representations.")
-			(line-break)
-			(line-break)
-			(reflow "Use an explicit")
-			(reflow " ")
-			(annotated code "match")
-			(reflow " ")
-			(reflow "to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Reconstructed payloads must also match the expected payload types. Forwarding the unchanged error payload does not convert it.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 17 5) (end 17 12))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
-		(document
-			(source-region (file "try_suffix_closed_error_row.md") (start 17 5) (end 17 12) (annotation error) (line-text "    result?"))
-			(line-break)
-			(reflow "If this")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow " ")
-			(reflow "is an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ",")
-			(reflow " ")
-			(reflow "then the")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "after it immediately returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow " ")
-			(reflow "whose payload has this type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Other]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Returning an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow " ")
-			(reflow "with that type only works if the function itself returns a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow " ")
-			(reflow "with a compatible error type, but this function's return type is:")
+			(reflow "But the annotation says it should be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -161,17 +71,11 @@ TYPE MISMATCH - try_suffix_closed_error_row.md:24:5:24:12
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "The error types from all")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
+			(reflow "A tag union in an output position is open for the callers of this definition, which may use the result at a wider union, but the annotation still bounds the definition itself: it may only produce the tags the annotation lists.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 24 5) (end 24 12))
+		(region (start 26 5) (end 26 12))
 		(headline
 			(reflow "This")
 			(reflow " ")
@@ -179,7 +83,7 @@ TYPE MISMATCH - try_suffix_closed_error_row.md:24:5:24:12
 			(reflow " ")
 			(reflow "may return early with a type that doesn't match the function body."))
 		(document
-			(source-region (file "try_suffix_closed_error_row.md") (start 24 5) (end 24 12) (annotation error) (line-text "    result?"))
+			(source-region (file "try_suffix_closed_error_row.md") (start 26 5) (end 26 12) (annotation error) (line-text "    result?"))
 			(line-break)
 			(reflow "If this")
 			(reflow " ")
@@ -226,14 +130,11 @@ TYPE MISMATCH - try_suffix_closed_error_row.md:24:5:24:12
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "This error payload is a closed tag union. It cannot gain the additional variants in the function's error type, even when all its variants are listed there. The two unions can have different runtime representations.")
-			(line-break)
-			(line-break)
-			(reflow "Use an explicit")
+			(reflow "The error types from all")
 			(reflow " ")
-			(annotated code "match")
+			(annotated code "?")
 			(reflow " ")
-			(reflow "to reconstruct each error variant in the return type, or wrap the original error in a tag of that type. Reconstructed payloads must also match the expected payload types. Forwarding the unchanged error payload does not convert it."))))
+			(reflow "operators and the function body must be compatible, since any of them could be the actual return value."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -403,6 +304,8 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
+# Forwarding a closed error row into a larger error union is accepted: the `?`
+# contributes the row's tags to the result (design.md "Row Subsumption").
 forward : Try({}, [StdoutErr(Str)]) -> Try({}, [Exit(I32), StdoutErr(Str)])
 forward = |result| {
 	result?
@@ -416,7 +319,7 @@ reconstruct = |result| match result {
 	Err(StdoutErr(message)) => Err(StdoutErr(message))
 }
 
-# A disjoint error row should retain the ordinary mismatch hint.
+# A tag the annotation does not list is reported at the `?` that produces it.
 disjoint : Try({}, [Other]) -> Try({}, [Exit(I32)])
 disjoint = |result| {
 	result?
@@ -461,7 +364,12 @@ payload_mismatch = |result| {
 												(p-applied-tag))))
 									(value
 										(e-return
-											(e-runtime-error (tag "erroneous_value_expr")))))))))
+											(e-nominal-external
+												(builtin)
+												(e-tag (name "Err")
+													(args
+														(e-lookup-local
+															(p-assign (ident "#err")))))))))))))
 				(e-tag (name "Ok")
 					(args
 						(e-empty_record)))))

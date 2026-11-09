@@ -64,7 +64,7 @@ test "SpecConstr staged workers project loop results deterministically" {
         \\                if n <= p (if f == 1 Break((0, 1)) else Continue((p, 1))) else Continue((n, f))
         \\            },
         \\        )
-        \\        if res == 0 0 else 0
+        \\        _ = if res == 0 0 else 0
         \\    }
         \\    Ok({})
         \\}

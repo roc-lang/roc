@@ -89,9 +89,9 @@ main! = |_args| Ok({})
 			(e-block
 				(s-let
 					(p-assign (ident "total"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 256)
+					(e-dispatch-call (method "plus") (constraint-fn-var 261)
 						(receiver
-							(e-dispatch-call (method "plus") (constraint-fn-var 254)
+							(e-dispatch-call (method "plus") (constraint-fn-var 259)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "base"))))
@@ -120,12 +120,12 @@ main! = |_args| Ok({})
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "({}) -> Dec"))
+		(patt (type "() -> Dec"))
 		(patt (type "Dec"))
 		(patt (type "_arg -> [Ok({})]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "({}) -> Dec"))
+		(expr (type "() -> Dec"))
 		(expr (type "Dec"))
 		(expr (type "_arg -> [Ok({})]"))))
 ~~~

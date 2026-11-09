@@ -31,7 +31,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(proc_id);
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
-            if (store.getProcSpec(proc_id).body) |body| {
+            if (store.getProcSpecImmediate(proc_id).body) |body| {
                 try stack.append(allocator, .{ .stmt = body });
             }
         },
@@ -39,7 +39,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
-            switch (store.getCFStmt(stmt_id)) {
+            switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_low_level => |assign| {
                     if (assign.op == .list_set) return true;
                     try stack.append(allocator, .{ .stmt = assign.next });
@@ -73,32 +73,16 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                     }
                     try stack.append(allocator, .{ .stmt = str_match_set.on_miss });
                 },
-                .boxy_tag_match => |tag_match| {
-                    try stack.append(allocator, .{ .stmt = tag_match.on_match });
-                    try stack.append(allocator, .{ .stmt = tag_match.on_miss });
-                },
                 .join => |join_stmt| {
                     try stack.append(allocator, .{ .stmt = join_stmt.body });
                     try stack.append(allocator, .{ .stmt = join_stmt.remainder });
                 },
                 inline .assign_ref,
+                .dyn,
                 .assign_literal,
                 .init_uninitialized,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
                 .assign_list,
                 .assign_struct,
                 .assign_tag,
@@ -107,7 +91,6 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
@@ -119,8 +102,6 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         },
@@ -144,7 +125,7 @@ fn retainReachesListSetCall(
     var current = start;
     var remaining = store.cfStmtCount() + 1;
     while (remaining > 0) : (remaining -= 1) {
-        switch (store.getCFStmt(current)) {
+        switch (store.getCFStmtImmediate(current).*) {
             .assign_call => |assign| {
                 if (spanContainsLocal(store, assign.args, retained) and
                     try procReachesListSet(store, assign.proc))
@@ -168,23 +149,11 @@ fn retainReachesListSetCall(
                 current = rc.next;
             },
             inline .assign_ref,
+            .dyn,
             .assign_literal,
             .init_uninitialized,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -199,7 +168,6 @@ fn retainReachesListSetCall(
             },
             inline .debug,
             .expect,
-            .comptime_branch_taken,
             .store_struct,
             .store_tag,
             => |stmt| current = stmt.next,
@@ -209,14 +177,11 @@ fn retainReachesListSetCall(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
             .join,
-            .boxy_tag_match,
             => return false,
         }
     }

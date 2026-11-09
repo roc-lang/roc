@@ -26,7 +26,7 @@ DOES NOT EXIST - can_import_aliased_conflicts.md:5:9:5:20
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "MyMod")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "can_import_aliased_conflicts.md") (start 2 1) (end 2 28) (annotation error) (line-text "import http.Client as MyMod"))
 			(line-break)
@@ -37,7 +37,7 @@ DOES NOT EXIST - can_import_aliased_conflicts.md:5:9:5:20
 				(file "can_import_aliased_conflicts.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "can_import_aliased_conflicts.md") (start 1 1) (end 1 26) (annotation dim) (line-text "import json.Json as MyMod"))))
 	(report

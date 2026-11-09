@@ -18,6 +18,11 @@ Here, `1..<5` is a [range](numbers#ranges), which describes the numbers from 1 u
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 
+That includes the last line of the body. If a line in a loop body produces a
+value that nothing uses, like `f()` where `f` returns `Bool`, that's a compile-time
+error, just as it would be anywhere else in a block. (If you don't need the value,
+you can ignore it with `_ = f()`.)
+
 ### Iterating over types that have `iter`
 
 `for` can also be used on types that have an
@@ -87,8 +92,6 @@ for Ok(amount_to_add) in items {
 ```
 
 If you can't write an exhaustive pattern-match, you can name the entire iterator item and then use [`match`](pattern-matching#match) on it inside the loop body.
-
-(Note: the dedicated exhaustiveness error is not implemented yet for `for` patterns, even though it is for [assignments](statements#assignment). Currently, a non-exhaustive tag pattern like this one is reported as a type mismatch instead, and non-exhaustive patterns that the type checker can't rule out—such as a number literal pattern—are not caught at compile time and crash at runtime.)
 
 ## Looping over Streams with `for!`
 
@@ -186,8 +189,8 @@ the loop body, rather than at the beginning.
 If nothing ever exits the loop, it will run forever. For example, a server might have a loop
 that waits for a request, handles it, and then goes back to waiting for the next request.
 
-A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
-noted in [Pure Functions](functions#pure-functions).
+⚠️ A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
+noted in [Pure Functions](functions#pure-functions). Improvements to this behavior are planned for after 0.1.0.
 
 ## Performance
 

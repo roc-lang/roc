@@ -56,7 +56,19 @@ TYPE MISMATCH - issue_9075.md:6:11:6:12
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -136,7 +148,7 @@ main = "${y}"
 				(p-assign (ident "thing"))
 				(p-assign (ident "f")))
 			(e-block
-				(e-call (constraint-fn-var 252)
+				(e-call (constraint-fn-var 257)
 					(e-lookup-local
 						(p-assign (ident "f")))
 					(e-lookup-local
@@ -151,7 +163,7 @@ main = "${y}"
 				(ty-rigid-var-lookup (ty-rigid-var (name "b"))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-call (constraint-fn-var 275)
+		(e-call (constraint-fn-var 280)
 			(e-lookup-local
 				(p-assign (ident "call")))
 			(e-num (value "5"))
@@ -159,7 +171,7 @@ main = "${y}"
 				(args
 					(p-assign (ident "i")))
 				(e-block
-					(e-dispatch-call (method "plus") (constraint-fn-var 273)
+					(e-dispatch-call (method "plus") (constraint-fn-var 278)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "i"))))

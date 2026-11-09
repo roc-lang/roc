@@ -302,8 +302,7 @@ fn addElementVariant(comptime tag: std.meta.Tag(DocumentElement), doc: *Document
             &[_]u32{0},
         ),
         .source_code_with_underlines => {
-            // `addSourceCodeWithUnderlines` takes ownership of the line text.
-            const line_text = try doc.allocator.dupe(u8, "alpha payload\nbeta payload");
+            const line_text = "alpha payload\nbeta payload";
             try doc.addSourceCodeWithUnderlines(.{
                 .line_text = line_text,
                 .start_line = 1,
@@ -429,7 +428,7 @@ test "caret rows are byte-identical across all four targets" {
     try doc.addLineBreak();
 
     // Two spans on one line: gap padding between spans.
-    const line_text = try gpa.dupe(u8, "one two three");
+    const line_text = "one two three";
     try doc.addSourceCodeWithUnderlines(.{
         .line_text = line_text,
         .start_line = 1,
@@ -519,7 +518,7 @@ test "source rows preserve exact text and line count across all four targets" {
         defer doc.deinit();
         if (multiple_underlines) {
             try doc.addSourceCodeWithUnderlines(.{
-                .line_text = try gpa.dupe(u8, source),
+                .line_text = source,
                 .start_line = 3,
                 .start_column = 1,
                 .end_line = 5,
@@ -555,7 +554,7 @@ test "source lines appear on every render target" {
 
     var doc = Document.init(gpa);
     defer doc.deinit();
-    const line_text = try gpa.dupe(u8, "first source line\nsecond source line");
+    const line_text = "first source line\nsecond source line";
     try doc.addSourceCodeWithUnderlines(.{
         .line_text = line_text,
         .start_line = 3,
@@ -754,10 +753,11 @@ test "report wrapper entrypoints preserve headline and nested document content o
         const raw = out.written();
         const visible = if (target == .html) try visibleHtml(gpa, raw) else if (target == .color_terminal) try stripAnsi(gpa, raw) else try gpa.dupe(u8, raw);
         defer gpa.free(visible);
-        inline for (.{ "parity wrapper", "The headline survives.", "BeforePayload", "AnnotatedPayload", "AfterPayload", "SourcePayload = 42" }) |payload| {
-            // Markdown's title capitalization is a deliberate wrapper choice.
-            const expected = if (target == .markdown and std.mem.eql(u8, payload, "parity wrapper")) "Parity Wrapper" else payload;
-            try testing.expectEqual(@as(usize, 1), countOccurrences(visible, expected));
+        // LSP omits the category; other targets retain their title styling.
+        const title = if (target == .markdown) "Parity Wrapper" else "parity wrapper";
+        try testing.expectEqual(@as(usize, if (target == .language_server) 0 else 1), countOccurrences(visible, title));
+        inline for (.{ "The headline survives.", "BeforePayload", "AnnotatedPayload", "AfterPayload", "SourcePayload = 42" }) |payload| {
+            try testing.expectEqual(@as(usize, 1), countOccurrences(visible, payload));
         }
         const before = std.mem.find(u8, visible, "BeforePayload").?;
         const annotated = std.mem.find(u8, visible, "AnnotatedPayload").?;

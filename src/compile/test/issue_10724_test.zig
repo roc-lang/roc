@@ -62,7 +62,7 @@ test "issue 10724: dispatch whose argument is a canonicalization error reports i
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(

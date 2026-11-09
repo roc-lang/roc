@@ -32,6 +32,50 @@ pub const std_options: std.Options = .{
     // signal-safe handler runs and we get stable exit codes (134/136/139).
     .enable_segfault_handler = builtin.os.tag != .windows and std.debug.default_enable_segfault_handler,
 };
+/// Every compiler panic prints what the panicking thread was doing and the
+/// command that reproduces it (see `base.ice_context`), then the panic message
+/// and a stack trace, then aborts.
+pub const panic = std.debug.FullPanic(panicWithIceContext);
+
+threadlocal var panicking_thread = false;
+
+/// The stack trace uses only the unwinding strategies that cannot fault, and
+/// stops at the first frame they cannot unwind. Past that frame the trace is
+/// guesswork from frame pointers, and symbolizing those guesses against the
+/// compiler's debug info can take minutes.
+fn panicWithIceContext(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    @branchHint(.cold);
+    if (comptime builtin.os.tag == .freestanding) @trap();
+    // A panic while reporting a panic aborts without reporting again.
+    if (panicking_thread) std.process.abort();
+    panicking_thread = true;
+
+    std.Options.debug_io.vtable.crashHandler(std.Options.debug_io.userdata);
+    base.ice_context.reportPanicToStderr();
+
+    trace: {
+        const stderr = std.debug.lockStderr(&.{}).terminal();
+        defer std.debug.unlockStderr();
+        const writer = stderr.writer;
+        if (builtin.single_threaded) {
+            writer.print("panic: {s}\n", .{msg}) catch break :trace;
+        } else {
+            writer.print("thread {d} panic: {s}\n", .{ std.Thread.getCurrentId(), msg }) catch break :trace;
+        }
+        if (@errorReturnTrace()) |t| if (t.index > 0) {
+            writer.writeAll("error return context:\n") catch break :trace;
+            std.debug.writeErrorReturnTrace(t, stderr) catch break :trace;
+            writer.writeAll("\nstack trace:\n") catch break :trace;
+        };
+        std.debug.writeCurrentStackTrace(.{
+            .first_address = first_trace_addr orelse @returnAddress(),
+            .allow_unsafe_unwind = false,
+        }, stderr) catch break :trace;
+    }
+
+    std.process.abort();
+}
+
 var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
 /// initialized Threaded instance with a real allocator. Without this, the default
@@ -42,6 +86,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const dev_diagnostics = base.dev_diagnostics;
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
@@ -108,6 +153,8 @@ const cli_args = @import("cli_args.zig");
 const default_app = @import("default_app.zig");
 const install_store = @import("install.zig");
 const host_symbols = @import("host_symbols.zig");
+const link_artifacts = @import("link_artifacts.zig");
+const test_outcome_file = @import("test_outcome_file.zig");
 const roc_target = @import("target.zig");
 const target_selection = @import("target_selection.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -126,6 +173,7 @@ const renderProblem = cli_context.renderProblem;
 comptime {
     if (builtin.is_test) {
         std.testing.refAllDecls(cli_args);
+        std.testing.refAllDecls(@import("loc.zig"));
         std.testing.refAllDecls(default_app);
         std.testing.refAllDecls(progress);
         std.testing.refAllDecls(targets_validator);
@@ -133,9 +181,22 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
-        std.testing.refAllDecls(pack_store);
+        std.testing.refAllDecls(link_artifacts);
+        std.testing.refAllDecls(test_outcome_file);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
+        std.testing.refAllDecls(host_prelink);
+        std.testing.refAllDecls(macho_host_prelink);
+        std.testing.refAllDecls(macho_patch_link);
+        std.testing.refAllDecls(coff_host_prelink);
+        std.testing.refAllDecls(coff_import_library);
+        std.testing.refAllDecls(coff_patch_link);
+        std.testing.refAllDecls(run_image_link);
+        std.testing.refAllDecls(@import("patch_fanout.zig"));
+        std.testing.refAllDecls(@import("link_output.zig"));
+        std.testing.refAllDecls(patch_link);
+        std.testing.refAllDecls(wasm_link);
+        std.testing.refAllDecls(wasm_host_image);
         std.testing.refAllDecls(@import("test/platform_config.zig"));
         std.testing.refAllDecls(@import("ReplLine.zig"));
         std.testing.refAllDecls(@import("ReplSession.zig"));
@@ -143,7 +204,18 @@ comptime {
     }
 }
 const linker = @import("linker.zig");
-const pack_store = @import("pack_store.zig");
+const fast_dev_link = @import("fast_dev_link.zig");
+const host_prelink = @import("host_prelink.zig");
+const patch_link = @import("patch_link.zig");
+const macho_host_prelink = @import("macho/HostPrelink.zig");
+const macho_patch_link = @import("macho/PatchLink.zig");
+const coff_host_prelink = @import("coff/HostPrelink.zig");
+const coff_import_library = @import("coff/ImportLibrary.zig");
+const coff_patch_link = @import("coff/PatchLink.zig");
+const wasm_link = @import("wasm_link.zig");
+const wasm_host_image = @import("wasm_host_image.zig");
+const run_image_link = @import("run_image_link.zig");
+const unit_walk = @import("unit_walk.zig");
 const builder = @import("builder.zig");
 const llvm_codegen = @import("llvm_codegen");
 
@@ -182,14 +254,12 @@ const CliBuildEnvOptions = struct {
     timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
-    /// Identity-only synthetic marking for staged default-app roots (check
-    /// sites). Sites that also need diagnostics remapped call
-    /// `setSyntheticRootSourceMappingWithLineOffset` themselves, which
-    /// implies these identities.
-    synthetic_default_app: bool = false,
     source_dir_override: ?[]const u8 = null,
     post_check_publication_mode: compile.build.PostCheckPublicationMode = .executable_artifacts,
     runtime_lowering: ?compile.build.RuntimeLoweringConfig = null,
+    /// The strategy whose compile-time evaluator completes every module's
+    /// compile-time roots, part of each checked module's cache identity.
+    specialization_strategy: base.SpecializationStrategy = .lss,
     /// The bundle URL a URL/installed root came from; becomes the root's
     /// package identity in place of the extracted path.
     root_source_url: ?[]const u8 = null,
@@ -221,93 +291,39 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
+    build_env.setSpecializationStrategy(opts.specialization_strategy);
+    const object_target = roc_target.host_cpu.nativeTarget();
+    build_env.boxy_object_lowering = .{
+        .target = object_target,
+        .config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, object_target, false).target,
+        .opt = @tagName(cli_args.OptLevel.dev),
+        .inline_expects = inlineExpectModeForOpt(.dev) == .run,
+    };
     if (opts.runtime_lowering) |config| build_env.setRuntimeLowering(config);
-    if (opts.synthetic_default_app) {
-        // Staged default-app roots and their synthesized platform live in a
-        // per-invocation temp dir; identity must be the stable synthetic one
-        // so cache keys and nominal identity match across runs and pipelines.
-        build_env.setSyntheticRootPackageIdentity();
-        build_env.setSyntheticRootPlatformPackageIdentity();
-    }
     if (opts.source_dir_override) |source_dir| {
         build_env.setRootSourceDirOverride(source_dir);
     }
     if (opts.root_source_url) |url| {
-        // The URL was validated before any pipeline could receive it, so the
-        // only reachable failure here is allocation.
         build_env.setRootUrl(url) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidUrl => unreachable,
+            error.InvalidUrl => base.invariant("build env setup invariant violated: root source URL '{s}' reached the pipeline without validation", .{url}),
         };
     }
     if (opts.main_source_url) |url| {
         build_env.setMainUrl(url) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidUrl => unreachable,
+            error.InvalidUrl => base.invariant("build env setup invariant violated: --main source URL '{s}' reached the pipeline without validation", .{url}),
         };
     }
     if (!opts.no_cache) {
         try build_env.enableDefaultCacheManager(opts.verbose_cache);
-        try attachCompileTimeObjectCache(ctx, &build_env, opts.verbose_cache);
     }
 
     return build_env;
 }
 
-/// The object cache every command's compile-time evaluation reads: the host's
-/// dev-policy packs, whose procedures run expects, so the evaluator can run
-/// their code in place of compiling it.
-const CompileTimeObjectCache = struct {
-    allocator: Allocator,
-    io: std.Io,
-    store: pack_store.Store,
-    packs: pack_store.LoadedPacks,
-
-    fn bind(context: *anyopaque, build_env: *BuildEnv) void {
-        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        self.packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
-    }
-
-    fn deinit(context: *anyopaque) void {
-        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        self.packs.deinit();
-        self.store.deinit();
-        self.allocator.destroy(self);
-    }
-};
-
-/// The compile-time object cache, when a build's own runtime packs are the
-/// same store: a dev build for the host.
-fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cli_args.OptLevel) ?*CompileTimeObjectCache {
-    if (opt != .dev or target != RocTarget.detectNative()) return null;
-    const owner = build_env.compile_time_object_cache_owner orelse return null;
-    return @ptrCast(@alignCast(owner.context));
-}
-
-fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
-    const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
-    const store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        // Without a cache root there is no cache to read.
-        error.NoHomeDirectory => return,
-    };
-    const cache = try ctx.gpa.create(CompileTimeObjectCache);
-    cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
-    // One heap-owned collection supplies both lookup offers and splice artifacts.
-    // Runtime sharing must retain this exact provider, not merely its host domain.
-    build_env.setCompileTimeObjectCache(.{
-        .spec_cache = cache.packs.specCacheLookup(),
-        .splice_source = cache.packs.spliceSource(),
-    }, .{
-        .context = cache,
-        .bind = CompileTimeObjectCache.bind,
-        .deinit = CompileTimeObjectCache.deinit,
-    });
-}
-
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
-const cache_config_mod = compile.config;
 const backend = @import("backend");
 const layout = @import("layout");
 const docs = @import("docs");
@@ -399,17 +415,16 @@ const CliMainError =
         BuiltinsExtractionFailed,
         CheckFailed,
         CompilationFailed,
-        ComptimeExhaustiveness,
         Crash,
         DivisionByZero,
         DepsFailed,
+        LocFailed,
         DocsFailed,
         EmptyArchive,
         EntrypointNotFound,
         ExpectErr,
         ExpectedAppHeader,
         ExpectedPlatformString,
-        ExpectedString,
         FailedToCreateUniqueTempDir,
         FdConfigFailed,
         FileNotFound,
@@ -460,7 +475,7 @@ const CliMainError =
         WriteFailed,
     };
 
-/// Shim archive kind used by cached host executables.
+/// Shim archive kind used by host executables.
 const ShimLibraryKind = enum {
     lir,
     machine_code,
@@ -510,6 +525,12 @@ fn embeddedDigest(comptime name: []const u8) [32]u8 {
     return @field(@import("embedded_digests"), name);
 }
 
+/// Content identity for native immutable objects, computed at compiler build time.
+fn embeddedBlake3(comptime name: []const u8) [32]u8 {
+    if (builtin.is_test) return comptime link_artifacts.Identity.of(&.{}).digest;
+    return @field(@import("embedded_digests"), name ++ "_blake3");
+}
+
 /// The digest of `shimLibraryBytes(kind, target)`.
 fn shimLibraryBytesDigest(kind: ShimLibraryKind, _: ?RocTarget) [32]u8 {
     return switch (kind) {
@@ -541,94 +562,135 @@ fn shimLibraryCacheFilename(ctx: *CliCtx, kind: ShimLibraryKind, target: RocTarg
         std.fmt.allocPrint(ctx.arena, "lib{s}_{s}_{s}.a", .{ stem, @tagName(target), digest_hex[0..] });
 }
 
-/// Embedded pre-compiled builtins object files for each target.
-/// These contain the wrapper functions needed by the dev backend for string/list operations.
-/// Used by `roc build --opt=dev` to link the app object with builtins.
-/// Now using static libraries instead of object files to include compiler_rt
-/// (needed for 128-bit integer operations used by Dec type).
-const BuiltinsObjects = struct {
-    /// Native builtins (for host platform builds)
-    const native = if (builtin.is_test)
-        &[_]u8{}
-    else if (builtin.os.tag == .windows)
-        @import("embedded_assets").file("roc_builtins.obj")
-    else
-        @import("embedded_assets").file("roc_builtins.o");
-
-    /// Cross-compilation target builtins (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_builtins.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_builtins.o");
-
-    /// Cross-compilation target builtins (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_builtins.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_builtins.o");
-
-    /// WebAssembly target builtins (wasm32-freestanding)
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_builtins.o");
-
-    /// Cross-compilation target builtins (Windows targets)
-    const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_builtins.obj");
-    const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_builtins.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_builtins.obj");
-    const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_builtins.obj");
-
-    /// Cross-compilation target builtins (macOS targets)
-    const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_builtins.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_builtins.o");
-
-    /// Cross-compilation target builtins (BSD targets)
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_builtins.o");
-    const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_builtins.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_builtins.o");
-
+/// The link inputs embedded in `roc` for one target. Cross-compilation
+/// inputs live under `targets/<name>/` in the embedded assets; a target
+/// without its own builtins uses the native ones.
+const EmbeddedTargetObjects = struct {
     /// Extern-symbol-mode builtins: host operations are linker-resolved
-    /// symbols (the symbol ABI) instead of RocOps vtable calls.
-    const native_extern = if (builtin.is_test)
-        &[_]u8{}
-    else if (builtin.os.tag == .windows)
-        @import("embedded_assets").file("roc_builtins_extern.obj")
-    else
-        @import("embedded_assets").file("roc_builtins_extern.o");
+    /// symbols (the symbol ABI) instead of RocOps vtable calls. Used by
+    /// `roc build --opt=dev` to link the app object with builtins.
+    builtins_extern: []const u8,
+    builtins_extern_digest: [32]u8,
+    /// The Boxy runtime (`roc_desc_*`), which a `--specialize=no` program
+    /// the dev backend compiled links next to the builtins. Null for targets
+    /// whose backend emits no calls to it.
+    boxy_runtime: ?[]const u8 = null,
+    boxy_runtime_digest: ?[32]u8 = null,
+    /// The default platform's runtime library object.
+    default_runtime: ?[]const u8 = null,
+    /// The default platform's executable object.
+    default_platform: ?[]const u8 = null,
+    default_platform_link_digest: ?[32]u8 = null,
+    default_runtime_digest: ?[32]u8 = null,
+    /// The default platform's compiler-rt carrier: compiler-rt and the C math
+    /// and memory routines code generation calls, for the targets whose
+    /// default platform is freestanding and so has no platform runtime library
+    /// to provide them. Every other default platform links its target's C
+    /// runtime, which does, and has no carrier.
+    default_compiler_rt: ?[]const u8 = null,
+    default_compiler_rt_digest: ?[32]u8 = null,
+    default_compiler_rt_link_digest: ?[32]u8 = null,
+    /// A wasm target's builtins and boxy runtime for platforms that reserve
+    /// low memory, whose runtime functions check the stack bounds wherever
+    /// they recurse (`builtins.stack_guard`).
+    builtins_extern_stack_checked: ?[]const u8 = null,
+    boxy_runtime_stack_checked: ?[]const u8 = null,
+    /// The builtins and the Boxy runtime as one unit image
+    /// (`backend.dev.UnitImage`, converted by src/build/support_image.zig),
+    /// for the targets a fast dev link serves.
+    support_image: ?[]const u8 = null,
 
-    const x64musl_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_builtins_extern.o");
-    const arm64musl_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_builtins_extern.o");
-    const x64glibc_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_builtins_extern.o");
-    const arm64glibc_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_builtins_extern.o");
-    const wasm32_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_builtins_extern.o");
-    const x64win_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_builtins_extern.obj");
-    const x64mingw_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_builtins_extern.obj");
-    const arm64win_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_builtins_extern.obj");
-    const arm64mingw_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_builtins_extern.obj");
-    const x64mac_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_builtins_extern.o");
-    const arm64mac_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_builtins_extern.o");
-    const x64freebsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_builtins_extern.o");
-    const x64openbsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_builtins_extern.o");
-    const x64netbsd_extern = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_builtins_extern.o");
+    const DefaultPlatform = enum { none, runtime, runtime_and_compiler_rt };
 
-    /// Get the appropriate builtins object bytes for the given target
+    fn embedded(comptime path: []const u8) []const u8 {
+        return if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file(path);
+    }
+
+    const native: EmbeddedTargetObjects = .{
+        .builtins_extern_digest = embeddedBlake3("builtins_extern_native"),
+        .builtins_extern = embedded(if (builtin.os.tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o"),
+        .boxy_runtime = embedded(if (builtin.os.tag == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o"),
+        .boxy_runtime_digest = embeddedBlake3("boxy_runtime_native"),
+    };
+
+    fn cross(comptime target: RocTarget, comptime default_platform: DefaultPlatform) EmbeddedTargetObjects {
+        const name = @tagName(target);
+        const dir = "targets/" ++ name ++ "/";
+        const ext = if (target.isWindows()) ".obj" else ".o";
+        var objects: EmbeddedTargetObjects = .{
+            .builtins_extern = embedded(dir ++ "roc_builtins_extern" ++ ext),
+            .builtins_extern_digest = embeddedBlake3("builtins_extern_" ++ name),
+        };
+        objects.boxy_runtime = embedded(dir ++ "roc_boxy_runtime" ++ ext);
+        objects.boxy_runtime_digest = embeddedBlake3("boxy_runtime_" ++ name);
+        if (fastDevLinkFormat(target) != null) {
+            objects.support_image = embedded(dir ++ "roc_support.rbxu");
+        }
+        if (target.toCpuArch() == .wasm32) {
+            objects.builtins_extern_stack_checked = embedded(dir ++ "roc_builtins_extern_stack_checked.o");
+            objects.boxy_runtime_stack_checked = embedded(dir ++ "roc_boxy_runtime_stack_checked.o");
+        }
+        switch (default_platform) {
+            .none => {},
+            .runtime, .runtime_and_compiler_rt => {
+                objects.default_runtime = embedded(dir ++ "roc_default_runtime" ++ ext);
+                objects.default_platform = embedded(dir ++ "roc_default_platform" ++ ext);
+                objects.default_platform_link_digest = embeddedBlake3("default_platform_" ++ name);
+                objects.default_runtime_digest = embeddedDigest("default_runtime_" ++ name);
+            },
+        }
+        switch (default_platform) {
+            .none, .runtime => {},
+            .runtime_and_compiler_rt => {
+                objects.default_compiler_rt = embedded(dir ++ "roc_default_compiler_rt.o");
+                objects.default_compiler_rt_digest = embeddedDigest("default_compiler_rt_" ++ name);
+                objects.default_compiler_rt_link_digest = embeddedBlake3("default_compiler_rt_" ++ name);
+            },
+        }
+        return objects;
+    }
+
+    /// A generic Linux target uses the native builtins, and its glibc twin's
+    /// default platform and support image: the image's builtins and Boxy
+    /// runtime are the twin's, compiled for the same architecture and
+    /// operating system and calling no libc, like the native ones.
+    fn linuxAlias(comptime glibc: EmbeddedTargetObjects) EmbeddedTargetObjects {
+        var objects = glibc;
+        objects.builtins_extern = native.builtins_extern;
+        objects.builtins_extern_digest = native.builtins_extern_digest;
+        objects.boxy_runtime = native.boxy_runtime;
+        objects.boxy_runtime_digest = native.boxy_runtime_digest;
+        return objects;
+    }
+
+    /// The embedded objects for `requested`.
     ///
-    /// A `v1` target uses its default twin's object. The cross-compile target
-    /// queries in `build.zig` name no CPU model, so Zig resolves them to the
-    /// architecture baseline and these objects already contain no instruction
-    /// above it. `assertCrossTargetsAreBaseline` in `build.zig` keeps that true.
-    pub fn forTarget(requested: RocTarget) []const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
-            .wasm32 => wasm32,
-            .x64win => x64win,
-            .x64mingw => x64mingw,
-            .arm64win => arm64win,
-            .arm64mingw => arm64mingw,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64freebsd => x64freebsd,
-            .x64openbsd => x64openbsd,
-            .x64netbsd => x64netbsd,
-            .x64linux,
+    /// A `v1` target other than wasm32v1 uses its default twin's objects. The
+    /// cross-compile target queries in `build.zig` name no CPU model, so Zig
+    /// resolves them to the architecture baseline, which for x86-64 and
+    /// AArch64 is the v1 floor. Zig's wasm baseline includes extensions past
+    /// WebAssembly 1.0, so wasm32v1 has objects of its own, built for it.
+    fn forTarget(requested: RocTarget) EmbeddedTargetObjects {
+        if (requested == .wasm32v1) return comptime cross(.wasm32v1, .none);
+        return switch (requested.defaultCpuTarget()) {
+            inline .x64musl,
+            .arm64musl,
+            .x64glibc,
+            .arm64glibc,
+            .x64freebsd,
+            .x64netbsd,
+            => |target| comptime cross(target, .runtime_and_compiler_rt),
+            inline .x64mac,
+            .arm64mac,
+            .x64win,
+            .x64mingw,
+            .arm64win,
+            .arm64mingw,
+            .x64openbsd,
+            => |target| comptime cross(target, .runtime),
+            .wasm32 => comptime cross(.wasm32, .none),
+            .x64linux => comptime linuxAlias(cross(.x64glibc, .runtime_and_compiler_rt)),
+            .arm64linux => comptime linuxAlias(cross(.arm64glibc, .runtime_and_compiler_rt)),
             .x64elf,
             .x64v1mac,
             .x64v1win,
@@ -640,7 +702,6 @@ const BuiltinsObjects = struct {
             .x64v1glibc,
             .x64v1linux,
             .x64v1elf,
-            .arm64linux,
             .arm64v1win,
             .arm64v1mingw,
             .arm64v1linux,
@@ -653,344 +714,22 @@ const BuiltinsObjects = struct {
         };
     }
 
-    /// Get the extern-symbol-mode builtins object bytes for the given target.
-    /// See `forTarget` for why a `v1` target shares its twin's object.
-    pub fn forTargetExtern(requested: RocTarget) []const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl_extern,
-            .arm64musl => arm64musl_extern,
-            .x64glibc => x64glibc_extern,
-            .arm64glibc => arm64glibc_extern,
-            .wasm32 => wasm32_extern,
-            .x64win => x64win_extern,
-            .x64mingw => x64mingw_extern,
-            .arm64win => arm64win_extern,
-            .arm64mingw => arm64mingw_extern,
-            .x64mac => x64mac_extern,
-            .arm64mac => arm64mac_extern,
-            .x64freebsd => x64freebsd_extern,
-            .x64openbsd => x64openbsd_extern,
-            .x64netbsd => x64netbsd_extern,
-            .x64linux,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64linux,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => native_extern,
-        };
-    }
-
-    /// Get the filename for builtins object on given target
-    pub fn filename(target: RocTarget) []const u8 {
-        return switch (target.toOsTag()) {
-            .windows => "roc_builtins.obj",
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins.o",
-        };
-    }
-
-    /// Get the filename for the extern-symbol-mode builtins object on given target
-    pub fn filenameExtern(target: RocTarget) []const u8 {
-        return switch (target.toOsTag()) {
-            .windows => "roc_builtins_extern.obj",
-            .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .openbsd, .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => "roc_builtins_extern.o",
-        };
+    /// The scratch-directory filename to write an embedded object under.
+    fn filename(comptime base_name: []const u8, target: RocTarget) []const u8 {
+        return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
     }
 };
 
-/// Compiler implementation support for wasm32. This object is composed into
-/// the Roc-owned object and localized before any platform input participates
-/// in symbol resolution; it is never linked as a public archive member.
+/// Compiler implementation support for a wasm target. This object is
+/// composed into the Roc-owned object and localized before any platform input
+/// participates in symbol resolution; it is never linked as a public archive
+/// member.
 const WasmCompilerRtObject = struct {
-    const bytes = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
-};
-
-fn DefaultPlatformObjects(comptime base_name: []const u8) type {
-    return struct {
-        const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/" ++ base_name ++ ".o");
-        const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/" ++ base_name ++ ".o");
-        const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/" ++ base_name ++ ".o");
-        const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/" ++ base_name ++ ".o");
-        const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/" ++ base_name ++ ".o");
-        const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/" ++ base_name ++ ".o");
-        const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/" ++ base_name ++ ".obj");
-        const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/" ++ base_name ++ ".obj");
-        const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/" ++ base_name ++ ".obj");
-        const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/" ++ base_name ++ ".obj");
-        const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/" ++ base_name ++ ".o");
-        const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/" ++ base_name ++ ".o");
-        const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/" ++ base_name ++ ".o");
-
-        pub fn forTarget(requested: RocTarget) ?[]const u8 {
-            const target = requested.defaultCpuTarget();
-            return switch (target) {
-                .x64musl => x64musl,
-                .arm64musl => arm64musl,
-                .x64glibc, .x64linux => x64glibc,
-                .arm64glibc, .arm64linux => arm64glibc,
-                .x64mac => x64mac,
-                .arm64mac => arm64mac,
-                .x64win => x64win,
-                .x64mingw => x64mingw,
-                .arm64win => arm64win,
-                .arm64mingw => arm64mingw,
-                .x64freebsd => x64freebsd,
-                .x64openbsd => x64openbsd,
-                .x64netbsd => x64netbsd,
-                .x64elf,
-                .x64v1mac,
-                .x64v1win,
-                .x64v1mingw,
-                .x64v1freebsd,
-                .x64v1openbsd,
-                .x64v1netbsd,
-                .x64v1musl,
-                .x64v1glibc,
-                .x64v1linux,
-                .x64v1elf,
-                .arm64v1win,
-                .arm64v1mingw,
-                .arm64v1linux,
-                .arm64v1musl,
-                .arm64v1glibc,
-                .arm32linux,
-                .arm32musl,
-                .wasm32,
-                .wasm32v1,
-                => null,
-            };
-        }
-
-        pub fn filename(target: RocTarget) []const u8 {
-            return if (target.isWindows()) base_name ++ ".obj" else base_name ++ ".o";
-        }
-    };
-}
-
-const DefaultPlatformRuntimeObjects = DefaultPlatformObjects("roc_default_runtime");
-const DefaultPlatformExecutableObjects = DefaultPlatformObjects("roc_default_platform");
-
-/// The digest of `DefaultPlatformRuntimeObjects.forTarget(requested)`.
-fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
-    return switch (requested.defaultCpuTarget()) {
-        inline .x64musl,
-        .arm64musl,
-        .x64glibc,
-        .arm64glibc,
-        .x64mac,
-        .arm64mac,
-        .x64win,
-        .x64mingw,
-        .arm64win,
-        .arm64mingw,
-        .x64freebsd,
-        .x64openbsd,
-        .x64netbsd,
-        => |target| embeddedDigest("default_runtime_" ++ @tagName(target)),
-        .x64linux => embeddedDigest("default_runtime_x64glibc"),
-        .arm64linux => embeddedDigest("default_runtime_arm64glibc"),
-        .x64elf,
-        .x64v1mac,
-        .x64v1win,
-        .x64v1mingw,
-        .x64v1freebsd,
-        .x64v1openbsd,
-        .x64v1netbsd,
-        .x64v1musl,
-        .x64v1glibc,
-        .x64v1linux,
-        .x64v1elf,
-        .arm64v1win,
-        .arm64v1mingw,
-        .arm64v1linux,
-        .arm64v1musl,
-        .arm64v1glibc,
-        .arm32linux,
-        .arm32musl,
-        .wasm32,
-        .wasm32v1,
-        => null,
-    };
-}
-
-/// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
-fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
-    return switch (requested.defaultCpuTarget()) {
-        inline .x64musl,
-        .arm64musl,
-        .x64glibc,
-        .arm64glibc,
-        .x64freebsd,
-        .x64netbsd,
-        => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
-        .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
-        .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
-        .x64mac,
-        .arm64mac,
-        .x64win,
-        .arm64win,
-        .x64mingw,
-        .arm64mingw,
-        .x64openbsd,
-        .x64elf,
-        .x64v1mac,
-        .x64v1win,
-        .x64v1mingw,
-        .x64v1freebsd,
-        .x64v1openbsd,
-        .x64v1netbsd,
-        .x64v1musl,
-        .x64v1glibc,
-        .x64v1linux,
-        .x64v1elf,
-        .arm64v1win,
-        .arm64v1mingw,
-        .arm64v1linux,
-        .arm64v1musl,
-        .arm64v1glibc,
-        .arm32linux,
-        .arm32musl,
-        .wasm32,
-        .wasm32v1,
-        => null,
-    };
-}
-
-/// The default platform's compiler-rt carrier: compiler-rt and the C math and
-/// memory routines code generation calls, for the targets whose default
-/// platform is freestanding and so has no platform runtime library to provide
-/// them. Every other default platform links its target's C runtime, which
-/// does, and has no carrier.
-const DefaultPlatformCompilerRtObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_default_compiler_rt.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_default_compiler_rt.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_default_compiler_rt.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_default_compiler_rt.o");
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_default_compiler_rt.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_default_compiler_rt.o");
-
-    pub fn forTarget(requested: RocTarget) ?[]const u8 {
-        return switch (requested.defaultCpuTarget()) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64freebsd => x64freebsd,
-            .x64netbsd => x64netbsd,
-            .x64mac,
-            .arm64mac,
-            .x64win,
-            .arm64win,
-            .x64mingw,
-            .arm64mingw,
-            .x64openbsd,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32,
-            .wasm32v1,
-            => null,
-        };
-    }
-};
-
-/// Prebuilt boxy runtime objects (the `roc_boxy_*` C-ABI wrappers plus
-/// `roc_boxy_init_embedded`), linked by `roc build --opt=dev` into programs that
-/// emit boxy statements. Shipped for every target that carries a builtins
-/// object, so a standalone dev build of a generic program works wherever a
-/// standalone dev build works at all.
-const BoxyRuntimeObjects = struct {
-    const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_boxy_runtime.o");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_boxy_runtime.o");
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_boxy_runtime.o");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_boxy_runtime.o");
-    const x64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mac/roc_boxy_runtime.o");
-    const arm64mac = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mac/roc_boxy_runtime.o");
-    const x64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64win/roc_boxy_runtime.obj");
-    const arm64win = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64win/roc_boxy_runtime.obj");
-    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_boxy_runtime.o");
-    const x64openbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64openbsd/roc_boxy_runtime.o");
-    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_boxy_runtime.o");
-    const x64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64mingw/roc_boxy_runtime.obj");
-    const arm64mingw = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64mingw/roc_boxy_runtime.obj");
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/wasm32/roc_boxy_runtime.o");
-
-    /// The boxy runtime object bytes for `target`, or null when the target has
-    /// no runtime and boxy programs cannot be built standalone for it.
-    pub fn forTarget(requested: RocTarget) ?[]const u8 {
-        const target = requested.defaultCpuTarget();
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc, .x64linux => x64glibc,
-            .arm64glibc, .arm64linux => arm64glibc,
-            .x64mac => x64mac,
-            .arm64mac => arm64mac,
-            .x64win => x64win,
-            .arm64win => arm64win,
-            .x64mingw => x64mingw,
-            .arm64mingw => arm64mingw,
-            .x64freebsd => x64freebsd,
-            .x64openbsd => x64openbsd,
-            .x64netbsd => x64netbsd,
-            .wasm32 => wasm32,
-            .x64elf,
-            .x64v1mac,
-            .x64v1win,
-            .x64v1mingw,
-            .x64v1freebsd,
-            .x64v1openbsd,
-            .x64v1netbsd,
-            .x64v1musl,
-            .x64v1glibc,
-            .x64v1linux,
-            .x64v1elf,
-            .arm64v1win,
-            .arm64v1mingw,
-            .arm64v1linux,
-            .arm64v1musl,
-            .arm64v1glibc,
-            .arm32linux,
-            .arm32musl,
-            .wasm32v1,
-            => null,
-        };
-    }
-
-    /// The scratch-directory filename to write the runtime object under.
-    pub fn filename(target: RocTarget) []const u8 {
-        return if (target.isWindows()) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
+    fn forTarget(target: RocTarget) []const u8 {
+        if (builtin.is_test) return &[_]u8{};
+        std.debug.assert(target == .wasm32 or target == .wasm32v1);
+        if (target == .wasm32v1) return @import("embedded_assets").file("targets/wasm32v1/roc_compiler_rt.o");
+        return @import("embedded_assets").file("targets/wasm32/roc_compiler_rt.o");
     }
 };
 
@@ -1212,107 +951,30 @@ fn createExecutableSharedMemory(io: std.Io, page_size: usize) error{ CreateFileM
     return SharedMemoryAllocator.createExecutableWithMinSize(io, SHARED_MEMORY_SIZE, SHARED_MEMORY_MIN_SIZE, page_size);
 }
 
-/// Cross-platform hardlink creation
-fn createHardlink(ctx: *CliCtx, source: []const u8, dest: []const u8) (Allocator.Error || error{ InvalidUtf8, PathAlreadyExists, Unexpected })!void {
-    if (comptime builtin.target.os.tag == .windows) {
-        // On Windows, use CreateHardLinkW
-        const source_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, source);
-        const dest_w = try std.unicode.utf8ToUtf16LeAllocZ(ctx.arena, dest);
-
-        // Declare CreateHardLinkW since it's not in all versions of std
-        const kernel32 = struct {
-            extern "kernel32" fn CreateHardLinkW(
-                lpFileName: [*:0]const u16,
-                lpExistingFileName: [*:0]const u16,
-                lpSecurityAttributes: ?*anyopaque,
-            ) callconv(.winapi) std.os.windows.BOOL;
-        };
-
-        if (kernel32.CreateHardLinkW(dest_w, source_w, null) == .FALSE) {
-            const err = std.os.windows.GetLastError();
-            if (err == .ALREADY_EXISTS) return error.PathAlreadyExists;
-            return error.Unexpected;
-        }
-    } else {
-        // On POSIX systems, use the link system call
-        const source_c = try ctx.arena.dupeSentinel(u8, source, 0);
-        const dest_c = try ctx.arena.dupeSentinel(u8, dest, 0);
-
-        const result = c.link(source_c, dest_c);
-        if (result != 0) {
-            const errno = c._errno().*;
-            switch (errno) {
-                17 => return error.PathAlreadyExists, // EEXIST
-                else => return error.Unexpected,
-            }
-        }
-    }
-}
-
-/// Generate a cryptographically secure random ASCII string for directory names
-fn generateRandomSuffix(ctx: *CliCtx) Allocator.Error![]u8 {
-    // TODO: Consider switching to a library like https://github.com/abhinav/temp.zig
-    // for more robust temporary file/directory handling
-    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-
-    const suffix = try ctx.arena.alloc(u8, 32);
-
-    // Fill with cryptographically secure random bytes
-    ctx.io.std_io.random(suffix);
-
-    // Convert to ASCII characters from our charset
-    for (suffix) |*byte| {
-        byte.* = charset[byte.* % charset.len];
-    }
-
-    return suffix;
-}
-
-/// Create a unique scratch directory under {cache}/{version}/tmp/{random}/.
+/// Create an invocation-owned scratch directory.
 /// Returns the path to the directory (allocated from arena, no need to free).
 pub fn createUniqueTempDir(ctx: *CliCtx) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || error{ FailedToCreateUniqueTempDir, NoHomeDirectory })![]const u8 {
-    const cache_config = cache_config_mod.CacheConfig{ .roc_ctx = ctx.coreCtx() };
-    const scratch_dir = try cache_config.getScratchDir(ctx.arena);
+    const config = CacheConfig{ .roc_ctx = ctx.coreCtx() };
+    const root = try config.getEffectiveCacheDir(ctx.arena);
+    var scratch = compile.artifacts.Scratch.create(ctx.gpa, ctx.io.std_io, root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.FailedToCreateUniqueTempDir,
+    };
+    errdefer scratch.deinit();
+    // The caller's arena path remains valid after explicitly releasing the lease.
+    const path = try ctx.arena.dupe(u8, scratch.path());
+    try ctx.scratch.append(ctx.gpa, scratch);
+    return path;
+}
 
-    // createDirPath treats an already-existing directory as success
-    try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, scratch_dir);
-
-    // Try to create a unique subdirectory with random suffix
-    var attempt: u8 = 0;
-    while (attempt < 6) : (attempt += 1) {
-        const random_suffix = try generateRandomSuffix(ctx);
-        const dir_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, random_suffix });
-
-        // Try to create the directory
-        std.Io.Dir.cwd().createDir(ctx.io.std_io, dir_path, .default_dir) catch |err| switch (err) {
-            error.PathAlreadyExists => {
-                // Directory already exists, try again with a new random suffix
-                continue;
-            },
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.DiskQuota,
-            error.FileNotFound,
-            error.LinkQuotaExceeded,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => return err,
-        };
-
-        return dir_path;
+fn releaseScratchDir(ctx: *CliCtx, path: []const u8) void {
+    for (ctx.scratch.items, 0..) |*scratch, index| {
+        if (std.mem.eql(u8, scratch.path(), path)) {
+            scratch.deinit();
+            _ = ctx.scratch.swapRemove(index);
+            return;
+        }
     }
-
-    // Failed after 6 attempts
-    return error.FailedToCreateUniqueTempDir;
 }
 
 /// Write shared memory coordination file (.txt) next to the executable.
@@ -1387,12 +1049,9 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     // Install stack overflow handler early, before any significant work.
     // This gives us a helpful error message instead of a generic segfault
     // if the compiler blows the stack (e.g., due to infinite recursion in type translation).
-    const stack_overflow_installed = base.stack_overflow.installForCurrentThread();
-    if (comptime builtin.mode == .debug) {
-        std.debug.assert(stack_overflow_installed);
-    } else if (!stack_overflow_installed) {
-        unreachable;
-    }
+    // Installation depends on the OS granting an alternate signal stack; when it
+    // does not, the process keeps the default crash behavior, as worker threads do.
+    _ = base.stack_overflow.installForCurrentThread();
 
     var gpa_tracy: tracy.TracyAllocator(null) = undefined;
     var gpa, const is_safe = gpa: {
@@ -1435,6 +1094,18 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
     const args = args_list.items;
 
+    base.ice_context.setThreadRole(.{ .name = "main" });
+    base.ice_context.setInvocation(args);
+    defer base.ice_context.clearInvocation();
+    if (comptime base.ice_context.forced_ice_supported) {
+        if (init.environ_map.get(base.ice_context.forced_ice_env_var)) |spec| {
+            if (!base.ice_context.armForcedIce(spec)) {
+                std.debug.print("{s}={s} names no compiler phase\n", .{ base.ice_context.forced_ice_env_var, spec });
+                std.process.exit(1);
+            }
+        }
+    }
+
     mainArgs(gpa, arena, args, init.io) catch |err| {
         // Handle OutOfMemory specially - it may not have been printed
         switch (err) {
@@ -1461,43 +1132,6 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
     }
 }
 
-fn parsedArgsStartBackgroundCleanup(args: cli_args.CliArgs) bool {
-    return switch (args) {
-        .run, .build, .check, .test_cmd, .docs, .deps, .bump, .glue, .install, .experimental_lsp => true,
-        .fmt, .bundle, .unbundle, .repl, .version, .help, .licenses, .problem => false,
-    };
-}
-
-fn startBackgroundCacheCleanup(gpa: Allocator, arena: Allocator, std_io: std.Io) void {
-    // Start background cache cleanup on a separate thread.
-    // This is a fire-and-forget thread that:
-    // - Cleans up stale scratch directories (>5 min old)
-    // - Cleans up old persistent cache files (>30 days old)
-    // - Exits automatically when done
-    //
-    // We intentionally don't join the thread. If the main process exits before
-    // cleanup completes, the OS will automatically terminate the cleanup thread.
-    // This ensures cleanup never delays compilation or execution.
-    //
-    // Resolve the cache root here using the same resolver the cache writer
-    // uses, so cleanup can never target a different directory than where
-    // artifacts are written. The background thread itself is CoreCtx-free and
-    // allocation-free; it only borrows this path (copied in by value).
-    const cleanup_ctx = CoreCtx.default(gpa, arena, std_io);
-    const cache_base: []const u8 = blk: {
-        const cfg = cache_config_mod.CacheConfig{ .roc_ctx = cleanup_ctx };
-        break :blk cfg.getEffectiveCacheDir(arena) catch "";
-    };
-    if (cache_base.len != 0) {
-        if (compile.CacheCleanup.startBackgroundCleanup(cache_base, std_io)) |_| {
-            // Thread started successfully, will run in background.
-        } else |_| {
-            // Non-fatal: cleanup failure shouldn't prevent compilation.
-            std.log.debug("Failed to start background cleanup thread", .{});
-        }
-    }
-}
-
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -1516,9 +1150,6 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
 
     const parsed = try cli_args.parseWithGlobalOptions(arena, std_io, args[1..]);
     const parsed_args = parsed.command;
-    if (parsedArgsStartBackgroundCleanup(parsed_args)) {
-        startBackgroundCacheCleanup(gpa, arena, std_io);
-    }
 
     // Determine command for context
     const command: Command = switch (parsed_args) {
@@ -1531,7 +1162,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .unbundle => .unbundle,
         .bump => .bump,
         .install => .install,
-        .docs, .deps, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
+        .docs, .deps, .loc, .glue, .experimental_lsp, .repl, .version, .help, .licenses, .problem => .unknown,
     };
 
     // Create CLI context at the top level - this is passed to all command handlers
@@ -1596,6 +1227,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{@import("compiler_version").compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .deps => |deps_args| rocDeps(&ctx, deps_args),
+        .loc => |loc_args| rocLoc(&ctx, loc_args),
         .bump => |bump_args| rocBump(&ctx, bump_args),
         .install => |install_args| rocInstall(&ctx, install_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(gpa, std_io, ctx.coreCtx(), .{
@@ -1610,18 +1242,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: 
         .licenses => {
             try ctx.io.stdout().writeAll(legalDetailsFileContent);
         },
-        .problem => |problem| {
-            try switch (problem) {
-                .missing_flag_value => |details| ctx.io.stderr().print("Error: no value was supplied for {s}\n", .{details.flag}),
-                .unexpected_argument => |details| ctx.io.stderr().print("Error: roc {s} received an unexpected argument: `{s}`\n", .{ details.cmd, details.arg }),
-                .invalid_flag_value => |details| ctx.io.stderr().print("Error: `{s}` is not a valid value for {s}. The valid options are {s}\n", .{ details.value, details.flag, details.valid_options }),
-                .shorthand_requires_run => |details| ctx.io.stderr().print(
-                    "Error: `{s}` looks like an installed shorthand, and running one requires the `run` subcommand: `roc run {s}`\nIf you meant a local file named `{s}`, write it as `./{s}` instead.\n",
-                    .{ details.name, details.name, details.name, details.name },
-                ),
-            };
-            return error.InvalidArguments;
-        },
+        .problem => |problem| ctx.fail(.{ .invalid_arguments = problem }),
     }) catch |err| {
         // Commands report by recording a problem and returning `CliError`, and
         // a few print straight to stderr instead. Either way the user has been
@@ -1698,6 +1319,8 @@ fn generatePlatformHostShimFromLirData(
     store: *const lir.LirStore,
     layouts: *const layout.Store,
     platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    /// Runtime symbols the machine-code image resolves in the host.
+    package_symbols: []const []const u8,
     embedded_lir_image: ?[]const u8,
     image_cache_len: usize,
     default_run_start: bool,
@@ -1731,9 +1354,6 @@ fn generatePlatformHostShimFromLirData(
     var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
         ctx.gpa,
         store,
-        &.{},
-        &.{},
-        &.{},
         std_target,
     );
     codegen.layout_store = layouts;
@@ -1743,6 +1363,7 @@ fn generatePlatformHostShimFromLirData(
         "roc_platform_shim",
         shim_entrypoints,
         hosted_symbols,
+        package_symbols,
         embedded_lir_image,
         default_run_start,
     ) catch |err| {
@@ -1758,6 +1379,11 @@ fn generatePlatformHostShimFromLirData(
     const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
     for (hosted_symbols) |symbol| {
+        hash.update(symbol);
+        hash.update(&[_]u8{0});
+    }
+    hash.update("packages");
+    for (package_symbols) |symbol| {
         hash.update(symbol);
         hash.update(&[_]u8{0});
     }
@@ -1876,33 +1502,12 @@ fn generatePlatformHostShim(
         &view.store,
         &view.layouts,
         view.platform_entrypoints,
+        &.{},
         if (embed_image) lir_image else null,
         lir_image.len,
         default_run_start,
         debug,
     );
-}
-
-/// Removes a cached executable, if one exists, so a fresh link can take its place.
-fn deleteExistingCacheFile(ctx: *CliCtx, exe_cache_path: []const u8) void {
-    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-        error.FileNotFound => {},
-        error.AccessDenied,
-        error.BadPathName,
-        error.Canceled,
-        error.FileBusy,
-        error.FileSystem,
-        error.IsDir,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NotDir,
-        error.PermissionDenied,
-        error.ReadOnlyFileSystem,
-        error.SymLinkLoop,
-        error.SystemResources,
-        error.Unexpected,
-        => std.log.debug("Could not delete existing cache file: {}", .{err}),
-    };
 }
 
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
@@ -1952,71 +1557,11 @@ fn updateHashU32(hasher: *base.Sha256, value: u32) void {
     hasher.update(&buf);
 }
 
-fn updateHashBool(hasher: *base.Sha256, value: bool) void {
-    hasher.update(if (value) "\x01" else "\x00");
-}
-
 fn updateHashBytes(hasher: *base.Sha256, bytes: []const u8) void {
     var len_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_buf, @intCast(bytes.len), .little);
     hasher.update(&len_buf);
     hasher.update(bytes);
-}
-
-fn bytesDigest(bytes: []const u8) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update(bytes);
-    return hasher.finalResult();
-}
-
-fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
-    const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, path, .{}) catch |err| {
-        return ctx.fail(.{ .file_read_failed = .{
-            .path = path,
-            .err = err,
-        } });
-    };
-    defer file.close(ctx.io.std_io);
-
-    var hasher = base.Sha256.init(.{});
-    var read_buf: [64 * 1024]u8 = undefined;
-    while (true) {
-        const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
-            error.EndOfStream => break,
-            error.AccessDenied,
-            error.Canceled,
-            error.ConnectionResetByPeer,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NotOpenForReading,
-            error.SocketUnconnected,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => {
-                return ctx.fail(.{ .file_read_failed = .{
-                    .path = path,
-                    .err = err,
-                } });
-            },
-        };
-        if (bytes_read == 0) break;
-        hasher.update(read_buf[0..bytes_read]);
-    }
-    return hasher.finalResult();
-}
-
-fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-platform-host-shim-v1");
-    updateHashBytes(&hasher, target.toTriple());
-    updateHashBool(&hasher, debug);
-    updateHashU32(&hasher, @intCast(entrypoint_names.len));
-    for (entrypoint_names) |name| {
-        updateHashBytes(&hasher, name);
-    }
-    return hasher.finalResult();
 }
 
 const HostedCacheEntry = struct {
@@ -2123,10 +1668,7 @@ fn applyHostedBindings(
             .module_key = binding.target_checked_module.bytes,
             .def_idx = @backingInt(binding.target_def),
         }) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
-            }
-            unreachable;
+            base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
         };
         var entry = entries.items[entry_index];
         entry.dispatch_index = @intCast(dispatch_index);
@@ -2205,104 +1747,6 @@ fn checkedHostedTable(
     };
 }
 
-const LayoutHashContext = struct {
-    layouts: *const layout.Store,
-    seen: std.AutoHashMap(layout.Idx, u32),
-    next_seen: u32 = 0,
-
-    fn init(allocator: Allocator, layouts: *const layout.Store) LayoutHashContext {
-        return .{
-            .layouts = layouts,
-            .seen = std.AutoHashMap(layout.Idx, u32).init(allocator),
-        };
-    }
-
-    fn deinit(self: *LayoutHashContext) void {
-        self.seen.deinit();
-    }
-
-    fn hashIdx(
-        self: *LayoutHashContext,
-        hasher: *base.Sha256,
-        idx: layout.Idx,
-    ) Allocator.Error!void {
-        if (idx == layout.Idx.none) {
-            updateHashBytes(hasher, "layout-none");
-            return;
-        }
-
-        if (self.seen.get(idx)) |seen_index| {
-            updateHashBytes(hasher, "layout-ref");
-            updateHashU32(hasher, seen_index);
-            return;
-        }
-
-        const seen_index = self.next_seen;
-        self.next_seen += 1;
-        try self.seen.put(idx, seen_index);
-
-        const layout_val = self.layouts.getLayout(idx);
-        const size_align = self.layouts.layoutSizeAlign(layout_val);
-        updateHashBytes(hasher, "layout-node");
-        updateHashU32(hasher, seen_index);
-        updateHashU32(hasher, @intCast(@backingInt(layout_val.tag)));
-        updateHashU32(hasher, @intCast(size_align.size));
-        updateHashU32(hasher, @intCast(size_align.alignment.toByteUnits()));
-        updateHashBool(hasher, self.layouts.layoutContainsRefcounted(layout_val));
-
-        switch (layout_val.tag) {
-            .scalar => {
-                const scalar = layout_val.getScalar();
-                updateHashU32(hasher, @intCast(@backingInt(scalar.tag)));
-                switch (scalar.tag) {
-                    .int => updateHashU32(hasher, @intCast(@backingInt(scalar.getInt()))),
-                    .frac => updateHashU32(hasher, @intCast(@backingInt(scalar.getFrac()))),
-                    .vector => updateHashU32(hasher, @intCast(@backingInt(scalar.getVector()))),
-                    .str, .opaque_ptr => {},
-                }
-            },
-            .box, .list, .ptr => try self.hashIdx(hasher, layout_val.getIdx()),
-            .box_of_zst, .erased_box, .list_of_zst, .erased_callable, .zst => {},
-            .closure => try self.hashIdx(hasher, layout_val.getClosure().captures_layout_idx),
-            .struct_ => {
-                const info = self.layouts.getStructInfo(layout_val);
-                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
-                updateHashU32(hasher, info.size());
-                updateHashU32(hasher, @intCast(info.fields.len));
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(i);
-                    updateHashU32(hasher, @intCast(field.index));
-                    updateHashBool(hasher, field.is_padding);
-                    try self.hashIdx(hasher, field.layout);
-                }
-            },
-            .tag_union => {
-                const info = self.layouts.getTagUnionInfo(layout_val);
-                updateHashU32(hasher, @intCast(info.alignment.toByteUnits()));
-                updateHashU32(hasher, info.size());
-                updateHashU32(hasher, info.discriminant_offset);
-                updateHashU32(hasher, @intCast(info.data.discriminant_size));
-                updateHashU32(hasher, @intCast(info.variants.len));
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(i);
-                    try self.hashIdx(hasher, variant.payload_layout);
-                }
-            },
-        }
-    }
-};
-
-fn updateLayoutFingerprint(
-    allocator: Allocator,
-    hasher: *base.Sha256,
-    layouts: *const layout.Store,
-    layout_idx: layout.Idx,
-) Allocator.Error!void {
-    var ctx = LayoutHashContext.init(allocator, layouts);
-    defer ctx.deinit();
-    try ctx.hashIdx(hasher, layout_idx);
-}
-
 fn updatePlatformAppRelationIdentity(
     hasher: *base.Sha256,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -2338,46 +1782,37 @@ fn updatePlatformAppRelationIdentity(
     for (checked_error_requires) |requires_idx| updateHashU32(hasher, requires_idx);
 }
 
-fn updateHostCallableLayoutIdentity(
-    allocator: Allocator,
+/// Each platform entrypoint's host boundary digest, which covers every
+/// layout a value crossing the boundary has, including the argument and
+/// result layouts of the erased callables those values reach.
+fn updateHostBoundaryIdentity(
     hasher: *base.Sha256,
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
-) Allocator.Error!void {
-    updateHashBytes(hasher, "host-callable-layouts-v1");
-    updateHashU32(hasher, @intCast(platform_entrypoints.len));
-    for (platform_entrypoints) |entrypoint| {
-        updateHashU32(hasher, entrypoint.ordinal);
-        const proc = store.getProcSpec(entrypoint.root_proc);
-        const arg_layouts = try argLayoutsForProc(allocator, store, entrypoint.root_proc);
-        defer allocator.free(arg_layouts);
-        updateHashU32(hasher, @intCast(arg_layouts.len));
-        for (arg_layouts) |arg_layout| {
-            try updateLayoutFingerprint(allocator, hasher, layouts, arg_layout);
-        }
-        try updateLayoutFingerprint(allocator, hasher, layouts, proc.ret_layout);
+    root_metadata: []const lir.RootMetadata.RootMetadata,
+) void {
+    updateHashBytes(hasher, "host-boundary-digests-v1");
+    updateHashU32(hasher, @intCast(root_metadata.len));
+    for (root_metadata) |metadata| {
+        const digest = metadata.host_boundary_digest orelse
+            base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
+        hasher.update(&digest);
     }
 }
 
 fn checkedInterpreterHostIdentity(
-    allocator: Allocator,
     root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    store: *const lir.LirStore,
-    layouts: *const layout.Store,
-    platform_entrypoints: []const lir.LirImage.PlatformEntrypoint,
+    root_metadata: []const lir.RootMetadata.RootMetadata,
     entrypoint_names: []const []const u8,
     target_usize: base.target.TargetUsize,
     hosted_table: CheckedHostedTable,
-) Allocator.Error![32]u8 {
+) std.mem.Allocator.Error![32]u8 {
     var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-checked-host-interface-v2");
+    updateHashBytes(&hasher, "roc-run-checked-host-interface-v3");
     updateHashU32(&hasher, @backingInt(target_usize));
 
-    const declarations_hash = root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names);
+    const declarations_hash = try root_artifact.platform_required_declarations.identityHash(&root_artifact.canonical_names, root_artifact.typesView());
     hasher.update(&declarations_hash);
     updatePlatformAppRelationIdentity(&hasher, root_artifact);
-    try updateHostCallableLayoutIdentity(allocator, &hasher, store, layouts, platform_entrypoints);
+    updateHostBoundaryIdentity(&hasher, root_metadata);
 
     updateHashU32(&hasher, @intCast(entrypoint_names.len));
     for (entrypoint_names) |name| {
@@ -2395,35 +1830,6 @@ fn checkedInterpreterHostIdentity(
     }
 
     return hasher.finalResult();
-}
-
-fn updateInterpreterExeFileLinkInput(
-    hasher: *base.Sha256,
-    declared_path: []const u8,
-    resolved_path: []const u8,
-    content_digest: [32]u8,
-) void {
-    updateHashBytes(hasher, "file");
-    updateHashBytes(hasher, declared_path);
-    updateHashBytes(hasher, resolved_path);
-    hasher.update(&content_digest);
-}
-
-fn updateInterpreterExeAppLinkInput(
-    hasher: *base.Sha256,
-    shim_kind: ShimLibraryKind,
-    target: RocTarget,
-    entrypoint_names: []const []const u8,
-    debug: bool,
-) void {
-    updateHashBytes(hasher, "app");
-    const shim_digest = shimLibraryDigest(shim_kind, target);
-    hasher.update(&shim_digest);
-    updateHashBool(hasher, llvm_available);
-    if (llvm_available) {
-        const platform_shim_identity = platformHostShimIdentity(target, entrypoint_names, debug);
-        hasher.update(&platform_shim_identity);
-    }
 }
 
 /// Digest of the entrypoint C ABI and hosted dispatch table baked into the
@@ -2500,191 +1906,7 @@ fn entrypointAbiDigestFromLirData(
     return hasher.finalResult();
 }
 
-fn interpreterExeLinkInputsIdentity(
-    ctx: *CliCtx,
-    shim_kind: ShimLibraryKind,
-    link_items: []const roc_target.LinkItem,
-    platform_dir: []const u8,
-    files_dir: []const u8,
-    target: RocTarget,
-    entrypoint_names: []const []const u8,
-    debug: bool,
-) (Allocator.Error || CliError)![32]u8 {
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v3");
-    updateHashBytes(&hasher, @tagName(target));
-
-    const target_name = @tagName(target);
-    for (link_items) |item| {
-        switch (item) {
-            .file_path => |file_name| {
-                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, file_name });
-                const content_digest = try fileContentsDigest(ctx, full_path);
-                updateInterpreterExeFileLinkInput(&hasher, file_name, full_path, content_digest);
-            },
-            .app => updateInterpreterExeAppLinkInput(&hasher, shim_kind, target, entrypoint_names, debug),
-            .win_gui => updateHashBytes(&hasher, "win_gui"),
-        }
-    }
-
-    return hasher.finalResult();
-}
-
-fn defaultRunCheckedHostIdentity(
-    target: RocTarget,
-    entrypoint_names: []const []const u8,
-    hosted_symbols: []const []const u8,
-) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-checked-host-v1");
-    updateHashBytes(&hasher, @tagName(target));
-    updateHashBytes(&hasher, echo_platform.run_shim_platform_main_source);
-    updateHashBytes(&hasher, echo_platform.echo_module_source);
-
-    updateHashU32(&hasher, @intCast(entrypoint_names.len));
-    for (entrypoint_names) |name| {
-        updateHashBytes(&hasher, name);
-    }
-
-    updateHashU32(&hasher, @intCast(hosted_symbols.len));
-    for (hosted_symbols) |symbol| {
-        updateHashBytes(&hasher, symbol);
-    }
-
-    return hasher.finalResult();
-}
-
-fn defaultRunLinkInputsIdentity(target: RocTarget) ?[32]u8 {
-    const runtime_digest = defaultRuntimeDigest(target) orelse return null;
-    const compiler_rt_digest = defaultCompilerRtDigest(target) orelse return null;
-
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-default-link-inputs-v3");
-    updateHashBytes(&hasher, @tagName(target));
-    hasher.update(&runtime_digest);
-    hasher.update(&compiler_rt_digest);
-
-    return hasher.finalResult();
-}
-
-const ShimHostExeCacheInputs = struct {
-    shim_kind: ShimLibraryKind,
-    target: RocTarget,
-    debug: bool,
-    checked_host_identity: [32]u8,
-    link_inputs_identity: [32]u8,
-};
-
-fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
-    updateHashBytes(&hasher, build_options.compiler_compatibility_id);
-    updateHashBytes(&hasher, @tagName(inputs.shim_kind));
-    updateHashBytes(&hasher, @tagName(inputs.target));
-    updateHashBool(&hasher, inputs.debug);
-    const shim_digest = shimLibraryDigest(inputs.shim_kind, inputs.target);
-    hasher.update(&shim_digest);
-    hasher.update(&inputs.checked_host_identity);
-    hasher.update(&inputs.link_inputs_identity);
-    return hasher.finalResult();
-}
-
-fn shimHostExeCacheName(
-    ctx: *CliCtx,
-    inputs: ShimHostExeCacheInputs,
-) (Allocator.Error || error{CliError})![]const u8 {
-    const digest = shimHostExeCacheDigest(inputs);
-    const digest_hex = std.fmt.bytesToHex(digest, .lower);
-    return std.fmt.allocPrint(ctx.arena, "roc_{s}", .{digest_hex[0..]}) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-}
-
-fn testDigest(byte: u8) [32]u8 {
-    return @as([32]u8, @splat(byte));
-}
-
-fn testCacheDigest(checked_host_identity: [32]u8, link_inputs_identity: [32]u8) [32]u8 {
-    return shimHostExeCacheDigest(.{
-        .shim_kind = .lir,
-        .target = .x64linux,
-        .debug = false,
-        .checked_host_identity = checked_host_identity,
-        .link_inputs_identity = link_inputs_identity,
-    });
-}
-
-fn testLinkInputsIdentityForFiles(
-    first_declared: []const u8,
-    first_resolved: []const u8,
-    first_contents: []const u8,
-    second_declared: []const u8,
-    second_resolved: []const u8,
-    second_contents: []const u8,
-) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    updateHashBytes(&hasher, "roc-run-link-inputs-v1");
-    updateHashBytes(&hasher, @tagName(RocTarget.x64linux));
-    updateInterpreterExeFileLinkInput(&hasher, first_declared, first_resolved, bytesDigest(first_contents));
-    updateInterpreterExeFileLinkInput(&hasher, second_declared, second_resolved, bytesDigest(second_contents));
-    return hasher.finalResult();
-}
-
-test "interpreter executable cache digest changes for checked host identity" {
-    const baseline = testCacheDigest(testDigest(1), testDigest(2));
-    const changed = testCacheDigest(testDigest(3), testDigest(2));
-    try std.testing.expect(!std.mem.eql(u8, &baseline, &changed));
-}
-
-test "interpreter executable cache digest changes for linked host file contents" {
-    const link_a = testLinkInputsIdentityForFiles(
-        "libhost.a",
-        "/platform/targets/x64linux/libhost.a",
-        "old-host",
-        "libsupport.a",
-        "/platform/targets/x64linux/libsupport.a",
-        "support",
-    );
-    const link_b = testLinkInputsIdentityForFiles(
-        "libhost.a",
-        "/platform/targets/x64linux/libhost.a",
-        "new-host",
-        "libsupport.a",
-        "/platform/targets/x64linux/libsupport.a",
-        "support",
-    );
-    try std.testing.expect(!std.mem.eql(u8, &link_a, &link_b));
-}
-
-test "interpreter executable cache digest changes for declared link order" {
-    const link_a = testLinkInputsIdentityForFiles(
-        "first.a",
-        "/platform/targets/x64linux/first.a",
-        "first",
-        "second.a",
-        "/platform/targets/x64linux/second.a",
-        "second",
-    );
-    const link_b = testLinkInputsIdentityForFiles(
-        "second.a",
-        "/platform/targets/x64linux/second.a",
-        "second",
-        "first.a",
-        "/platform/targets/x64linux/first.a",
-        "first",
-    );
-    try std.testing.expect(!std.mem.eql(u8, &link_a, &link_b));
-}
-
-test "interpreter executable cache digest changes for platform host shim entrypoints" {
-    const entrypoints_a = [_][]const u8{"init!"};
-    const entrypoints_b = [_][]const u8{ "init!", "render!" };
-    const shim_a = platformHostShimIdentity(.x64linux, &entrypoints_a, false);
-    const shim_b = platformHostShimIdentity(.x64linux, &entrypoints_b, false);
-    try std.testing.expect(!std.mem.eql(u8, &shim_a, &shim_b));
-}
-
-fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget }!void {
+fn rejectRunTargetNotExecutable(ctx: *CliCtx, target: RocTarget) error{ WriteFailed, UnsupportedTarget } {
     // Name the host by the CPU level it executes, so a target rejected only
     // because this machine's CPU is older than it requires says so.
     const native_target = roc_target.host_cpu.nativeTarget();
@@ -2700,7 +1922,7 @@ fn rejectTargetCpuIncompatible(
     target: RocTarget,
     targets_config: roc_target.TargetsConfig,
     platform_source: ?[]const u8,
-) error{ WriteFailed, UnsupportedTarget }!void {
+) error{ WriteFailed, UnsupportedTarget } {
     try ctx.io.stderr().print(
         "Error: the {s} target requires CPU features this host does not support.\n\n",
         .{@tagName(target)},
@@ -2880,37 +2102,35 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = name,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is missing",
+                .reason = "its install manifest is missing",
             } });
         },
         .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest could not be read",
+            .reason = "its install manifest could not be read",
         } }),
     };
-    var parsed = (try install_store.parseManifest(ctx.gpa, manifest_bytes)) orelse {
+    const manifest = install_store.parseManifest(manifest_bytes) orelse {
         return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest is not valid",
+            .reason = "its install manifest is not valid",
         } });
     };
-    defer parsed.deinit();
 
     // The recorded URL is the entry's identity, so it must still be a valid
     // bundle URL—a manifest that fails this check is corrupt, and nothing
     // downstream may be handed an unvalidated URL.
-    _ = base.url.parseUrlPath(parsed.manifest().url) catch {
+    _ = base.url.parseUrlPath(manifest.url) catch {
         return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest records an invalid URL",
+            .reason = "its install manifest records an invalid URL",
         } });
     };
-    const manifest_url = try ctx.arena.dupe(u8, parsed.manifest().url);
-    // parseManifest already validated the kind string.
-    const kind = install_store.manifestKind(parsed.manifest()).?;
+    const manifest_url = try ctx.arena.dupe(u8, manifest.url);
+    const kind = manifest.kind;
 
     const artifact_path = entry.artifactPath(kind);
     std.Io.Dir.cwd().access(ctx.io.std_io, artifact_path, .{}) catch {
@@ -2955,8 +2175,12 @@ const RunPlatformLink = struct {
     items: []const roc_target.LinkItem,
     platform_dir: []const u8,
     files_dir: []const u8,
+    /// Present iff the platform is a downloaded bundle: its verified content
+    /// hash, which names the content-addressed package-cache directory
+    /// `platform_dir`.
+    bundle_hash: ?[]const u8,
 
-    fn init(arena: Allocator, platform: PlatformTargets, link_spec: roc_target.TargetLinkSpec) Allocator.Error!RunPlatformLink {
+    fn init(arena: Allocator, platform: PlatformTargets, link_spec: roc_target.TargetLinkSpec, bundle_hash: ?[]const u8) Allocator.Error!RunPlatformLink {
         const items = try arena.alloc(roc_target.LinkItem, link_spec.items.len);
         for (link_spec.items, items) |item, *copy| {
             copy.* = switch (item) {
@@ -2969,228 +2193,268 @@ const RunPlatformLink = struct {
             .items = items,
             .platform_dir = try arena.dupe(u8, std.fs.path.dirname(platform.root_file) orelse "."),
             .files_dir = try arena.dupe(u8, platform.config.inputs_dir orelse "targets"),
+            .bundle_hash = if (bundle_hash) |hash| try arena.dupe(u8, hash) else null,
         };
     }
 };
 
-fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
+/// What a shared-memory run's platform shim takes its entrypoint ABI from.
+const PlatformShimSource = union(enum) {
+    /// The program's LIR, for a dev run.
+    lir: *const lir.CheckedPipeline.LoweredProgram,
+    /// The LIR image the interpreter shim embeds.
+    lir_image: []const u8,
+};
 
-    // Check whether this is a default app—a headerless file with main!, or an
-    // app header naming no platform—before linking the platform host shim.
-    if (try stageDefaultApp(ctx, args.path, .execution)) |staged| {
-        var owned_staged = staged;
-        // Default apps never hot reload; they just run once. The shared-memory
-        // shim is the run mechanism where the default platform runtime exists (Linux native,
-        // or any cross-target run); elsewhere we use the plain run-once path.
-        if (useDefaultAppSharedMemoryShim(args)) {
-            return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
-        }
-        return rocRunDefaultApp(ctx, args, &owned_staged);
-    }
+/// The host executable a shared-memory run launches: the platform's host
+/// linked with the shim library and a generated platform shim, cached by
+/// the checked host interface and the link inputs.
+fn updateHashBool(hasher: *base.Sha256, value: bool) void {
+    hasher.update(if (value) "\x01" else "\x00");
+}
 
-    if (args.opt == .dev and args.no_cache and !args.watch) {
-        return rocRunBuildAndExec(ctx, args, arg0);
-    }
-
-    // Initialize cache - used to store our shim, and linked interpreter executables in cache
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
+fn fileContentsDigest(ctx: *CliCtx, path: []const u8) CliError![32]u8 {
+    const file = std.Io.Dir.cwd().openFile(ctx.io.std_io, path, .{}) catch |err| {
+        return ctx.fail(.{ .file_read_failed = .{
+            .path = path,
+            .err = err,
+        } });
     };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer file.close(ctx.io.std_io);
 
-    // Create cache directory for linked interpreter executables
-    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
-        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-    };
-
-    // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
-    const exe_display_name = std.fs.path.basename(args.path);
-
-    // Display name for temp directory (what shows in ps)
-    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_display_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    // Create unique temp directory for this build (uses PID for uniqueness)
-    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-
-    // The executable is built directly in the temp dir with the display name
-    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    var reporter = makeReporter(ctx, "roc", args.timings);
-    defer reporter.deinit();
-    reporter.start();
-
-    var lowered_result: ?LoweredCoordinatorResult = null;
-    defer if (lowered_result) |*result| result.deinit();
-
-    var shm_handle_opt: ?SharedMemoryHandle = null;
-    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
-
-    var entrypoint_names: []const []const u8 = &.{};
-    var hosted_symbols: []const []const u8 = &.{};
-    var checked_host_identity: [32]u8 = undefined;
-    var diagnostics = CheckDiagnosticCounts{};
-
-    // The platform is the one package resolution selected, after applying
-    // `--replace-dep`, so the host linked below belongs to the platform the
-    // app was checked against. Lowering precedes linking so the host shim uses
-    // checked entrypoint metadata.
-    const platform_link = blk: {
-        var build_env = try initRunBuildEnv(ctx, .{
-            .source_dir_override = null,
-            .synthetic_default_app = null,
-            .max_threads = args.max_threads,
-            .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-            .enable_checked_cache = !args.no_cache,
-            .reporter = &reporter,
-        });
-        defer build_env.deinit();
-        try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
-
-        const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-        const selected = try selectRunPlatformTarget(ctx, platform.config, platform.root_file, args.target);
-        build_env.setTarget(selected.target);
-        build_env.setValidateTargetFilesForSelectedTarget(true);
-
-        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-        switch (args.opt) {
-            .dev => {
-                lowered_result = try lowerDiscoveredLir(
-                    ctx,
-                    &build_env,
-                    ctx.gpa,
-                    .{ .dev_run_image = .{ .target = selected.target, .hot_reload = args.watch } },
-                    args.path,
-                    args.opt,
-                    specialization_strategy,
-                    &reporter,
-                );
-                const result = if (lowered_result) |*value| value else unreachable;
-                entrypoint_names = result.entrypoint_names;
-                hosted_symbols = result.hosted_symbols;
-                checked_host_identity = result.checked_host_identity;
-                diagnostics = result.counts;
-            },
-            .interpreter => {
-                var lowered = try lowerDiscoveredLir(
-                    ctx,
-                    &build_env,
-                    ctx.gpa,
-                    .lir_image,
-                    args.path,
-                    args.opt,
-                    specialization_strategy,
-                    &reporter,
-                );
-                defer lowered.deinit();
-                const shm_result = try publishLirImage(ctx, &lowered);
-                shm_handle_opt = shm_result.handle;
-                entrypoint_names = shm_result.entrypoint_names;
-                hosted_symbols = shm_result.hosted_symbols;
-                checked_host_identity = shm_result.checked_host_identity;
-                diagnostics = shm_result.diagnostics;
-            },
-            .size, .speed => unreachable,
-        }
-
-        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec);
-    };
-
-    reporter.finish();
-
-    if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
-        }
-        unreachable;
-    }
-
-    const selected_target = platform_link.target;
-    const enable_debug = builtin.mode == .debug;
-    const shim_kind: ShimLibraryKind = switch (args.opt) {
-        .dev => .machine_code,
-        .interpreter => .lir,
-        .size, .speed => unreachable,
-    };
-
-    const platform_dir = platform_link.platform_dir;
-    const files_dir = platform_link.files_dir;
-    const target_name = @tagName(selected_target);
-
-    const link_inputs_identity = try interpreterExeLinkInputsIdentity(
-        ctx,
-        shim_kind,
-        platform_link.items,
-        platform_dir,
-        files_dir,
-        selected_target,
-        entrypoint_names,
-        enable_debug,
-    );
-
-    const exe_cache_name = try shimHostExeCacheName(ctx, .{
-        .shim_kind = shim_kind,
-        .target = selected_target,
-        .debug = enable_debug,
-        .checked_host_identity = checked_host_identity,
-        .link_inputs_identity = link_inputs_identity,
-    });
-    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
-        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name}) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        }
-    else
-        ctx.arena.dupe(u8, exe_cache_name) catch |err| {
-            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-        };
-
-    const exe_cache_path = std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext }) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-
-    // Check if the interpreter executable already exists in cache
-    const cache_exists = if (args.no_cache) false else blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch {
-            break :blk false;
-        };
-        break :blk true;
-    };
-
-    if (cache_exists) {
-        // Cached executable exists - hardlink from cache to temp dir
-        std.log.debug("Using cached executable: {s}", .{exe_cache_path});
-        createHardlink(ctx, exe_cache_path, exe_path) catch |err| {
-            // If hardlinking fails, fall back to copying
-            std.log.debug("Hardlink from cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{}) catch |copy_err| {
-                return ctx.fail(.{ .file_write_failed = .{
-                    .path = exe_path,
-                    .err = copy_err,
+    var hasher = base.Sha256.init(.{});
+    var read_buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const bytes_read = file.readStreaming(ctx.io.std_io, &.{&read_buf}) catch |err| switch (err) {
+            error.EndOfStream => break,
+            error.AccessDenied,
+            error.Canceled,
+            error.ConnectionResetByPeer,
+            error.InputOutput,
+            error.IsDir,
+            error.LockViolation,
+            error.NotOpenForReading,
+            error.SocketUnconnected,
+            error.SystemResources,
+            error.Unexpected,
+            error.WouldBlock,
+            => {
+                return ctx.fail(.{ .file_read_failed = .{
+                    .path = path,
+                    .err = err,
                 } });
-            };
+            },
         };
-    } else {
+        if (bytes_read == 0) break;
+        hasher.update(read_buf[0..bytes_read]);
+    }
+    return hasher.finalResult();
+}
 
+const LinkFileContent = union(enum) {
+    /// The file lives in a downloaded bundle's content-addressed package-cache
+    /// directory, so the bundle's verified hash determines its contents.
+    bundle_hash: []const u8,
+    /// A digest of the file's bytes, for files outside a downloaded bundle.
+    digest: [32]u8,
+};
+
+/// Hash one link file by its declared name and its content, never by where
+/// it was read from: two checkouts of a platform share one host.
+fn updateInterpreterExeFileLinkInput(
+    hasher: *base.Sha256,
+    declared_path: []const u8,
+    content: LinkFileContent,
+) void {
+    updateHashBytes(hasher, "file");
+    updateHashBytes(hasher, declared_path);
+    switch (content) {
+        .bundle_hash => |hash| {
+            updateHashBytes(hasher, "bundle");
+            updateHashBytes(hasher, hash);
+        },
+        .digest => |digest| {
+            updateHashBytes(hasher, "digest");
+            hasher.update(&digest);
+        },
+    }
+}
+
+fn platformHostShimIdentity(target: RocTarget, entrypoint_names: []const []const u8, debug: bool) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-platform-host-shim-v1");
+    updateHashBytes(&hasher, target.toTriple());
+    updateHashBool(&hasher, debug);
+    updateHashU32(&hasher, @intCast(entrypoint_names.len));
+    for (entrypoint_names) |name| {
+        updateHashBytes(&hasher, name);
+    }
+    return hasher.finalResult();
+}
+
+fn updateInterpreterExeAppLinkInput(
+    hasher: *base.Sha256,
+    shim_kind: ShimLibraryKind,
+    target: RocTarget,
+    entrypoint_names: []const []const u8,
+    debug: bool,
+) void {
+    updateHashBytes(hasher, "app");
+    const shim_digest = shimLibraryDigest(shim_kind, target);
+    hasher.update(&shim_digest);
+    updateHashBool(hasher, llvm_available);
+    if (llvm_available) {
+        const platform_shim_identity = platformHostShimIdentity(target, entrypoint_names, debug);
+        hasher.update(&platform_shim_identity);
+    }
+}
+
+fn interpreterExeLinkInputsIdentity(
+    ctx: *CliCtx,
+    shim_kind: ShimLibraryKind,
+    link_items: []const roc_target.LinkItem,
+    platform_dir: []const u8,
+    files_dir: []const u8,
+    bundle_hash: ?[]const u8,
+    target: RocTarget,
+    entrypoint_names: []const []const u8,
+    debug: bool,
+) (Allocator.Error || CliError)![32]u8 {
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-link-inputs-v5");
+    updateHashBytes(&hasher, @tagName(target));
+
+    const target_name = @tagName(target);
+    for (link_items) |item| {
+        switch (item) {
+            .file_path => |file_name| {
+                const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, file_name });
+                const content: LinkFileContent = if (bundle_hash) |hash|
+                    .{ .bundle_hash = hash }
+                else
+                    .{ .digest = try fileContentsDigest(ctx, full_path) };
+                updateInterpreterExeFileLinkInput(&hasher, file_name, content);
+            },
+            .app => updateInterpreterExeAppLinkInput(&hasher, shim_kind, target, entrypoint_names, debug),
+            .win_gui => updateHashBytes(&hasher, "win_gui"),
+        }
+    }
+
+    return hasher.finalResult();
+}
+
+const ShimHostExeCacheInputs = struct {
+    shim_kind: ShimLibraryKind,
+    target: RocTarget,
+    debug: bool,
+    checked_host_identity: [32]u8,
+    link_inputs_identity: [32]u8,
+};
+
+fn shimHostExeCacheDigest(inputs: ShimHostExeCacheInputs) [32]u8 {
+    var hasher = base.Sha256.init(.{});
+    updateHashBytes(&hasher, "roc-run-shim-host-cache-v3");
+    updateHashBytes(&hasher, build_options.compiler_compatibility_id);
+    updateHashBytes(&hasher, @tagName(inputs.shim_kind));
+    updateHashBytes(&hasher, @tagName(inputs.target));
+    updateHashBool(&hasher, inputs.debug);
+    const shim_digest = shimLibraryDigest(inputs.shim_kind, inputs.target);
+    hasher.update(&shim_digest);
+    hasher.update(&inputs.checked_host_identity);
+    hasher.update(&inputs.link_inputs_identity);
+    return hasher.finalResult();
+}
+
+const RunShimHost = struct {
+    shim_kind: ShimLibraryKind,
+    platform_link: RunPlatformLink,
+    temp_dir_path: []const u8,
+    exe_path: []const u8,
+    /// The executable's key in the `run_host` cache family: the checked
+    /// host interface and the link inputs.
+    cache_key: [32]u8,
+    /// The cache the executable is filed in and restored from; null for a
+    /// run without one.
+    cache: ?*CacheManager,
+    enable_debug: bool,
+
+    const cache_scope = "run-host";
+
+    fn init(
+        ctx: *CliCtx,
+        shim_kind: ShimLibraryKind,
+        platform_link: RunPlatformLink,
+        cache: ?*CacheManager,
+        temp_dir_path: []const u8,
+        exe_path: []const u8,
+        entrypoint_names: []const []const u8,
+        checked_host_identity: [32]u8,
+    ) CliMainError!RunShimHost {
+        const enable_debug = builtin.mode == .debug;
+        const link_inputs_identity = try interpreterExeLinkInputsIdentity(
+            ctx,
+            shim_kind,
+            platform_link.items,
+            platform_link.platform_dir,
+            platform_link.files_dir,
+            platform_link.bundle_hash,
+            platform_link.target,
+            entrypoint_names,
+            enable_debug,
+        );
+        return .{
+            .shim_kind = shim_kind,
+            .platform_link = platform_link,
+            .temp_dir_path = temp_dir_path,
+            .exe_path = exe_path,
+            .cache_key = shimHostExeCacheDigest(.{
+                .shim_kind = shim_kind,
+                .target = platform_link.target,
+                .debug = enable_debug,
+                .checked_host_identity = checked_host_identity,
+                .link_inputs_identity = link_inputs_identity,
+            }),
+            .cache = cache,
+            .enable_debug = enable_debug,
+        };
+    }
+
+    /// Copy the cached executable to `exe_path`; false when there is none.
+    fn restore(self: *const RunShimHost, ctx: *CliCtx) bool {
+        const cache = self.cache orelse return false;
+        var artifact = cache.acquireFamily(.run_host, self.cache_key, cache_scope) orelse return false;
+        defer artifact.deinit();
+        std.Io.Dir.cwd().copyFile(artifact.path, std.Io.Dir.cwd(), self.exe_path, ctx.io.std_io, .{ .permissions = .executable_file }) catch return false;
+        return true;
+    }
+
+    /// File the executable this run linked in the cache.
+    fn publish(self: *const RunShimHost) void {
+        const cache = self.cache orelse return;
+        cache.storeFamilyFile(.run_host, self.cache_key, cache_scope, self.exe_path, "run host");
+    }
+
+    /// Link the executable at `exe_path`. `referenced_hosted_symbols` are
+    /// the hosted symbols the program calls, which the host inputs must
+    /// define.
+    fn link(
+        self: *const RunShimHost,
+        ctx: *CliCtx,
+        entrypoint_names: []const []const u8,
+        hosted_symbols: []const []const u8,
+        platform_shim_source: PlatformShimSource,
+        referenced_hosted_symbols: []const []const u8,
+        run_package_objects: RunPackageObjects,
+    ) CliMainError!void {
+        const platform_link = self.platform_link;
+        const selected_target = platform_link.target;
+        const platform_dir = platform_link.platform_dir;
+        const files_dir = platform_link.files_dir;
+        const target_name = @tagName(selected_target);
+        const temp_dir_path = self.temp_dir_path;
+        const enable_debug = self.enable_debug;
         // Extract shim library to temp dir to avoid race conditions
-        const shim_filename = switch (shim_kind) {
+        const shim_filename = switch (self.shim_kind) {
             .lir => if (builtin.target.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a",
             .machine_code => if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a",
         };
@@ -3200,17 +2464,15 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // Always extract to temp dir (unique per process, no race condition)
         // Use the selected target's shim (which may differ from native if falling back to a compatible target)
-        extractShimLibrary(ctx, shim_kind, shim_path, selected_target) catch |err| {
+        extractShimLibrary(ctx, self.shim_kind, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
         // Generate platform host shim using the published checked-artifact entrypoints
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for the default `roc` command)
-        const platform_shim_path = switch (args.opt) {
-            .dev => blk: {
-                const result = if (lowered_result) |*value| value else unreachable;
-                const lowered = &result.lowered;
+        const platform_shim_path = switch (platform_shim_source) {
+            .lir => |lowered| blk: {
                 const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
                 defer ctx.gpa.free(platform_entrypoints);
                 break :blk try generatePlatformHostShimFromLirData(
@@ -3222,48 +2484,29 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                     &lowered.lir_result.store,
                     &lowered.lir_result.layouts,
                     platform_entrypoints,
+                    run_package_objects.symbols,
                     null,
                     0,
                     false,
                     enable_debug,
                 );
             },
-            .interpreter => blk: {
-                const shm_handle = shm_handle_opt orelse {
-                    if (builtin.mode == .debug) {
-                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                    }
-                    unreachable;
-                };
-                const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
-                break :blk try generatePlatformHostShim(
-                    ctx,
-                    temp_dir_path,
-                    entrypoint_names,
-                    hosted_symbols,
-                    selected_target,
-                    shm_image_bytes,
-                    false,
-                    false,
-                    enable_debug,
-                );
-            },
-            .size, .speed => unreachable,
+            .lir_image => |shm_image_bytes| try generatePlatformHostShim(
+                ctx,
+                temp_dir_path,
+                entrypoint_names,
+                hosted_symbols,
+                selected_target,
+                shm_image_bytes,
+                false,
+                false,
+                enable_debug,
+            ),
         };
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, then clang if LLVM is not available.
-        var extra_args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 32) catch {
-            return error.OutOfMemory;
-        };
-
-        // Add system libraries for macOS
-        if (builtin.target.os.tag == .macos) {
-            extra_args.append("-lSystem") catch {
-                return error.OutOfMemory;
-            };
-        }
-
+        //
         // Build object files list from the link spec items
         // Items are linked in the order specified in the targets section
         var object_files = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 16) catch {
@@ -3304,6 +2547,14 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                             return error.OutOfMemory;
                         };
                     }
+                    // Runtime support objects whose entries the image calls.
+                    for (run_package_objects.objects, 0..) |object, index| {
+                        const object_path = try std.fs.path.join(ctx.arena, &.{ temp_dir_path, try std.fmt.allocPrint(ctx.arena, "roc_runtime_{d}.o", .{index}) });
+                        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch |err| {
+                            return ctx.fail(.{ .file_write_failed = .{ .path = object_path, .err = err } });
+                        };
+                        try object_files.append(object_path);
+                    }
                 },
                 .win_gui => {
                     // Windows GUI flag - handled separately in linker config
@@ -3328,42 +2579,21 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // The interpreter executable's shim references the same hosted and
         // runtime symbols compiled output would; the host inputs must define
         // them all.
-        {
-            const referenced_hosted_symbols = switch (args.opt) {
-                .dev => blk: {
-                    const result = if (lowered_result) |*value| value else unreachable;
-                    const lowered = &result.lowered;
-                    break :blk try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-                },
-                .interpreter => blk: {
-                    const shm_handle = shm_handle_opt orelse {
-                        if (builtin.mode == .debug) {
-                            base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
-                        }
-                        unreachable;
-                    };
-                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
-                    defer view.deinit();
-                    break :blk try hostedSymbolsFromLir(ctx.arena, &view.store);
-                },
-                .size, .speed => unreachable,
-            };
-            try verifyHostInputSymbols(
-                ctx,
-                host_input_paths.items,
-                referenced_hosted_symbols,
-                target_name,
-                false,
-            );
-        }
+        try verifyHostInputSymbols(
+            ctx,
+            host_input_paths.items,
+            referenced_hosted_symbols,
+            target_name,
+            false,
+        );
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
-            .output_path = exe_path,
+            .output_path = self.exe_path,
             .object_files = object_files.items,
             .platform_files_pre = empty_files,
             .platform_files_post = empty_files,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .can_exit_early = false,
             .disable_output = false,
             .platform_files_dir = platform_files_dir,
@@ -3371,47 +2601,246 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         };
 
         linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = @tagName(platform_link.target),
-            } });
-        };
-
-        // After building, hardlink to cache for future runs
-        // Force-hardlink (delete existing first) since hash collision means identical content
-        std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
-            // If hardlinking fails, fall back to copying
-            std.log.debug("Hardlink to cache failed, copying: {}", .{err});
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                // Non-fatal - just means future runs won't be cached
-                std.log.debug("Failed to copy to cache: {}", .{copy_err});
-            };
+            return failLink(ctx, err, @tagName(platform_link.target));
         };
     }
+};
 
-    if (args.opt == .dev) {
-        const result = if (lowered_result) |*value| value else unreachable;
-        const lowered = &result.lowered;
-        const internal_static_data = successfulInternalStaticData(result, "default roc command");
-        shm_handle_opt = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, args.watch);
+fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Check whether this is a default app—a headerless file with main!, or an
+    // app header naming no platform—before linking the platform host shim.
+    if (try stageDefaultApp(ctx, args.path, .running)) |staged| {
+        var owned_staged = staged;
+        // Default apps never hot reload; they just run once. A `.boxy` dev
+        // run builds the app against the synthetic default platform with a
+        // fast dev link and runs the executable. Otherwise the shared-memory
+        // shim is the run mechanism where the default platform runtime
+        // exists (Linux native, or any cross-target run); elsewhere we use
+        // the plain run-once path.
+        if (args.opt == .dev and currentRuntimeSpecializationStrategy(args.specialization_strategy) == .boxy) {
+            owned_staged.deinit(ctx.gpa);
+            return rocRunBuildAndExec(ctx, args, arg0);
+        }
+        if (useDefaultAppSharedMemoryShim(args)) {
+            return rocRunDefaultAppSharedMemoryShim(ctx, args, &owned_staged);
+        }
+        return rocRunDefaultApp(ctx, args, &owned_staged);
     }
+
+    if (args.opt == .dev and args.no_cache and !args.watch) {
+        return rocRunBuildAndExec(ctx, args, arg0);
+    }
+
+    // The cache the run's host executable is filed in and restored from.
+    const cache_config = CacheConfig{
+        .enabled = !args.no_cache,
+        .verbose = false,
+        .roc_ctx = ctx.coreCtx(),
+    };
+    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
+    defer cache_manager.deinit();
+
+    // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
+    const exe_display_name = std.fs.path.basename(args.path);
+
+    // Display name for temp directory (what shows in ps)
+    const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
+        std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name}) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        }
+    else
+        ctx.arena.dupe(u8, exe_display_name) catch |err| {
+            return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+        };
+
+    // Create unique temp directory for this build (uses PID for uniqueness)
+    const temp_dir_path = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+
+    // The executable is built directly in the temp dir with the display name
+    const exe_path = std.fs.path.join(ctx.arena, &.{ temp_dir_path, exe_display_name_with_ext }) catch |err| {
+        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
+    };
+
+    var reporter = makeReporter(ctx, "roc", args.timings);
+    defer reporter.deinit();
+    reporter.start();
+
+    var lowered_result: ?LoweredCoordinatorResult = null;
+    defer if (lowered_result) |*result| result.deinit();
+    // A run composed from unit images: what its units lower against, which
+    // outlives the build environment, and the units themselves.
+    var run_tables: ?RunUnitTables = null;
+    defer if (run_tables) |*tables| tables.deinit();
+    var run_units: ?RunUnits = null;
+    defer if (run_units) |*units| units.deinit(ctx.gpa);
+
+    var shm_handle_opt: ?SharedMemoryHandle = null;
+    defer if (shm_handle_opt) |handle| closeSharedMemoryHandle(handle);
+
+    var entrypoint_names: []const []const u8 = &.{};
+    var hosted_symbols: []const []const u8 = &.{};
+    var checked_host_identity: [32]u8 = undefined;
+    var diagnostics = CheckDiagnosticCounts{};
+
+    // Boxy programs link their runtime support into the host executable.
+    var run_package_objects: RunPackageObjects = .{};
+
+    // The platform is the one package resolution selected, after applying
+    // `--replace-dep`, so the host linked below belongs to the platform the
+    // app was checked against. Lowering precedes linking so the host shim uses
+    // checked entrypoint metadata.
+    const platform_link = blk: {
+        var build_env = try initRunBuildEnv(ctx, .{
+            .source_dir_override = null,
+            .synthetic_default_app = null,
+            .max_threads = args.max_threads,
+            .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+            .enable_checked_cache = !args.no_cache,
+            .reporter = &reporter,
+            .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        });
+        defer build_env.deinit();
+        try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
+
+        const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+        const selected = try selectRunPlatformTarget(ctx, platform.config, platform.root_file, args.target);
+        build_env.setTarget(selected.target);
+        build_env.setValidateTargetFilesForSelectedTarget(true);
+
+        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+        switch (args.opt) {
+            .dev => if (unitImageRunApplies(args.opt, args.no_cache, specialization_strategy, selected.target)) {
+                run_tables = RunUnitTables.init(ctx);
+                const tables = &run_tables.?;
+                run_units = try lowerRunUnits(ctx, &build_env, tables, selected.target, args.path, &reporter, args.watch);
+                const units = &run_units.?;
+                shm_handle_opt = try publishDevRunImage(ctx, selected.target, .{ .composed = .{ .units = units, .reporter = &reporter } }, args.watch);
+                // The library units' images belong to the build environment.
+                units.releaseCode(ctx.gpa);
+                entrypoint_names = units.entrypoint_names;
+                hosted_symbols = units.hosted_symbols;
+                checked_host_identity = units.checked_host_identity;
+                diagnostics = units.counts;
+                if (entrypoint_names.len == 0) {
+                    base.invariant("default roc command invariant violated: no platform entrypoints in checked root requests", .{});
+                }
+                // The host executable may need the root program lowered, which
+                // needs the build environment.
+                const link = try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
+                try prepareComposedRunHost(ctx, &reporter, &build_env, tables, units, link, if (args.no_cache) null else &cache_manager, temp_dir_path, exe_path);
+                reporter.finish();
+                break :blk link;
+            } else {
+                lowered_result = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .{ .dev_run_image = .{ .target = selected.target, .hot_reload = args.watch } },
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                );
+                const result = if (lowered_result) |*value| value else unreachable; // lowerDiscoveredLir assigned it on the line above
+                if (result.lowered.lir_result.store.runtime_contract == .boxy) {
+                    const object = EmbeddedTargetObjects.forTarget(selected.target).boxy_runtime orelse return error.UnsupportedTarget;
+                    run_package_objects = try run_package_objects.withBoxyRuntime(ctx.arena, object);
+                }
+                entrypoint_names = result.entrypoint_names;
+                hosted_symbols = result.hosted_symbols;
+                checked_host_identity = result.checked_host_identity;
+                diagnostics = result.counts;
+            },
+            .interpreter => {
+                var lowered = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .lir_image,
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                );
+                defer lowered.deinit();
+                const shm_result = try publishLirImage(ctx, &lowered);
+                shm_handle_opt = shm_result.handle;
+                entrypoint_names = shm_result.entrypoint_names;
+                hosted_symbols = shm_result.hosted_symbols;
+                checked_host_identity = shm_result.checked_host_identity;
+                diagnostics = shm_result.diagnostics;
+            },
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+        }
+
+        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec, build_env.getPlatformBundleHash());
+    };
+
+    // A composed run linked or restored its host executable while its build
+    // environment was open, and published its image there.
+    if (run_units == null) {
+        reporter.finish();
+
+        if (entrypoint_names.len == 0) {
+            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+        }
+
+        const shim_kind: ShimLibraryKind = switch (args.opt) {
+            .dev => .machine_code,
+            .interpreter => .lir,
+            .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+        };
+        const shim_host = try RunShimHost.init(ctx, shim_kind, platform_link, if (args.no_cache) null else &cache_manager, temp_dir_path, exe_path, entrypoint_names, checked_host_identity);
+        if (shim_host.restore(ctx)) {
+            std.log.debug("Using the cached host executable", .{});
+        } else {
+            switch (args.opt) {
+                .dev => {
+                    const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
+                    const lowered = &result.lowered;
+                    try shim_host.link(ctx, entrypoint_names, hosted_symbols, .{ .lir = lowered }, try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store), run_package_objects);
+                },
+                .interpreter => {
+                    const shm_handle = shm_handle_opt orelse {
+                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                    };
+                    var view = try viewLirImageFromHandle(shm_handle, base.target.TargetUsize.native, ctx.arena);
+                    defer view.deinit();
+                    const referenced_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &view.store);
+                    const shm_image_bytes = @as([*]const u8, @ptrCast(shm_handle.ptr))[0..shm_handle.size];
+                    try shim_host.link(ctx, entrypoint_names, hosted_symbols, .{ .lir_image = shm_image_bytes }, referenced_hosted_symbols, run_package_objects);
+                },
+                .size, .speed => unreachable, // rocRun sends .size and .speed to rocRunBuildAndExec
+            }
+            shim_host.publish();
+        }
+
+        if (args.opt == .dev) {
+            const result = if (lowered_result) |*value| value else unreachable; // the .dev lowering in platform_link assigned it
+            const lowered = &result.lowered;
+            const internal_static_data = successfulInternalStaticData(result, "default roc command");
+            shm_handle_opt = try publishDevRunImage(ctx, platform_link.target, .{ .lowered = .{
+                .entrypoint_names = entrypoint_names,
+                .lowered = lowered,
+                .internal_static_data = internal_static_data,
+            } }, args.watch);
+        }
+    }
+    const selected_target = platform_link.target;
 
     const shm_handle = shm_handle_opt orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
-        }
-        unreachable;
+        base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
     };
 
     std.log.debug("Launching shim executable: {s}", .{exe_path});
     if (args.watch) {
-        const result = if (lowered_result) |*value| value else {
-            if (builtin.mode == .debug) {
-                base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
-            }
-            unreachable;
+        const watch_inputs = if (run_units) |*units| units.watch_inputs else if (lowered_result) |*result| result.watch_inputs else {
+            base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
         };
         try runHotReloadDevShim(
             ctx,
@@ -3421,7 +2850,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             args,
             selected_target,
             checked_host_identity,
-            result.watch_inputs,
+            watch_inputs,
             null,
             diagnostics,
         );
@@ -3447,7 +2876,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     };
     var cleanup_temp_dir = true;
     defer if (cleanup_temp_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+        releaseScratchDir(ctx, temp_dir);
     };
 
     const output_filename = try compiledRunOutputFilename(ctx, args.path);
@@ -3456,6 +2885,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
     const build_result = try rocBuildOnce(ctx, .{
         .path = args.path,
         .opt = args.opt,
+        .specialization_strategy = args.specialization_strategy,
         .target = args.target,
         .output = exe_path,
         .debug = false,
@@ -3475,7 +2905,7 @@ fn rocRunBuildAndExec(ctx: *CliCtx, args: cli_args.RunArgs, _: []const u8) CliMa
 
     const term = try runCompiledExecutable(ctx, build_result.output_path, args.path, args.app_args);
 
-    compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+    releaseScratchDir(ctx, temp_dir);
     cleanup_temp_dir = false;
 
     try finishCompiledRun(ctx, build_result.output_path, term, build_result.diagnostics);
@@ -3717,9 +3147,12 @@ fn stageDefaultApp(
         .invalid => {
             defer result.deinit(ctx.gpa);
             const config = ctx.reportConfig(.stderr);
+            var counts = CheckDiagnosticCounts{};
             for (result.invalid.items) |*report| {
+                if (report.severity.isError()) counts.errors += 1 else counts.warnings += 1;
                 reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config) catch {};
             }
+            renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), counts.errors, counts.warnings, file_path, config) catch {};
             ctx.io.flush();
             return error.CliError;
         },
@@ -3753,7 +3186,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.S
         return err;
     };
 
-    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" }) catch return error.OutOfMemory;
+    const app_path = std.fs.path.join(ctx.arena, &.{ temp_dir, std.fs.path.basename(args.path) }) catch return error.OutOfMemory;
     const platform_main_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" }) catch return error.OutOfMemory;
     const echo_module_path = std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" }) catch return error.OutOfMemory;
 
@@ -3778,12 +3211,7 @@ fn rocRunDefaultApp(ctx: *CliCtx, args: cli_args.RunArgs, staged: *default_app.S
         ctx,
         app_path,
         original_source_dir,
-        .{
-            .original_path = args.path,
-            .original_source = staged.original_source,
-            .header_len = staged.header_len,
-            .header_lines = staged.header_lines,
-        },
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -3832,8 +3260,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return error.InvalidTarget;
         };
         if (!devShimTargetCompatible(requested, native_target)) {
-            try rejectRunTargetNotExecutable(ctx, requested);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, requested);
         }
         break :blk requested;
     } else default_target;
@@ -3846,40 +3273,27 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         return error.UnsupportedTarget;
     }
 
-    if (DefaultPlatformRuntimeObjects.forTarget(selected_target) == null) {
+    if (EmbeddedTargetObjects.forTarget(selected_target).default_runtime == null) {
         return rejectRunTargetNotExecutable(ctx, selected_target);
     }
-
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
-        return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
-    };
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
-        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-    };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
     var cleanup_temp_dir = true;
     defer if (cleanup_temp_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir);
+        releaseScratchDir(ctx, temp_dir);
     };
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
-    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, "main.roc" });
+    const app_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, std.fs.path.basename(args.path) });
     const platform_main_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "main.roc" });
     const echo_module_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, "Echo.roc" });
 
     try writeDefaultAppSyntheticRunSource(ctx, app_path, staged);
-    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.run_shim_platform_main_source });
+    try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
@@ -3892,12 +3306,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         .{ .dev_run_image = .{ .target = selected_target, .hot_reload = false } },
         app_path,
         original_source_dir,
-        .{
-            .original_path = args.path,
-            .original_source = staged.original_source,
-            .header_len = staged.header_len,
-            .header_lines = staged.header_lines,
-        },
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         args.max_threads,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
@@ -3911,32 +3320,15 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
 
     const entrypoint_names = lowered_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("default app run invariant violated: no platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("default app run invariant violated: no platform entrypoints", .{});
     }
 
     const lowered = &lowered_result.lowered;
     const enable_debug = builtin.mode == .debug;
-    const exe_checked_host_identity = defaultRunCheckedHostIdentity(selected_target, entrypoint_names, lowered_result.hosted_symbols);
-    const link_inputs_identity = defaultRunLinkInputsIdentity(selected_target) orelse {
-        return rejectRunTargetNotExecutable(ctx, selected_target);
-    };
-
-    const exe_cache_name = try shimHostExeCacheName(ctx, .{
-        .shim_kind = .machine_code,
-        .target = selected_target,
-        .debug = enable_debug,
-        .checked_host_identity = exe_checked_host_identity,
-        .link_inputs_identity = link_inputs_identity,
-    });
-    const exe_cache_name_with_ext = if (builtin.target.os.tag == .windows)
-        try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_cache_name})
-    else
-        try ctx.arena.dupe(u8, exe_cache_name);
-    const exe_cache_path = try std.fs.path.join(ctx.arena, &.{ exe_cache_dir, exe_cache_name_with_ext });
-
+    // A `.boxy` program's image calls the Boxy runtime's entry points: the
+    // host links the runtime object and the machine-code shim resolves them
+    // by name (design.md "`.boxy` Runtime Lowering", Runtime).
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
     const exe_display_name = std.fs.path.basename(args.path);
     const exe_display_name_with_ext = if (builtin.target.os.tag == .windows)
         try std.fmt.allocPrint(ctx.arena, "{s}.exe", .{exe_display_name})
@@ -3944,16 +3336,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
         try ctx.arena.dupe(u8, exe_display_name);
     const exe_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, exe_display_name_with_ext });
 
-    const cache_exists = if (args.no_cache) false else blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, exe_cache_path, .{}) catch break :blk false;
-        break :blk true;
-    };
-
-    if (cache_exists) {
-        createHardlink(ctx, exe_cache_path, exe_path) catch {
-            try std.Io.Dir.cwd().copyFile(exe_cache_path, std.Io.Dir.cwd(), exe_path, ctx.io.std_io, .{});
-        };
-    } else {
+    {
         const shim_filename = if (builtin.target.os.tag == .windows) "roc_machine_code_shim.lib" else "libroc_machine_code_shim.a";
         const shim_path = try std.fs.path.join(ctx.arena, &.{ temp_dir, shim_filename });
         extractShimLibrary(ctx, .machine_code, shim_path, selected_target) catch |err| {
@@ -3971,6 +3354,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
             platform_entrypoints,
+            if (boxy_runtime) backend.boxy_runtime_symbols else &.{},
             null,
             0,
             true,
@@ -3984,43 +3368,34 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             return rejectRunTargetNotExecutable(ctx, selected_target);
         };
 
-        const object_files = [_][]const u8{
-            platform_shim_path,
-            shim_path,
-            runtime_path,
-            compiler_rt_path,
-        };
+        var object_files: std.ArrayList([]const u8) = .empty;
+        try object_files.appendSlice(ctx.arena, &.{ platform_shim_path, shim_path, runtime_path, compiler_rt_path });
+        if (boxy_runtime) try object_files.append(ctx.arena, try writeBoxyRuntimeObject(ctx, temp_dir, selected_target));
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(selected_target.toOsTag()),
             .target_abi = buildLinkAbi(selected_target, true),
             .target_os = selected_target.toOsTag(),
             .target_arch = selected_target.toCpuArch(),
             .output_path = exe_path,
-            .object_files = &object_files,
+            .object_files = object_files.items,
             .can_exit_early = false,
             .disable_output = false,
             .scratch_dir = temp_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = @tagName(selected_target),
-            } });
-        };
-
-        deleteExistingCacheFile(ctx, exe_cache_path);
-        createHardlink(ctx, exe_path, exe_cache_path) catch {
-            std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
-                std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
-            };
+            return failLink(ctx, err, @tagName(selected_target));
         };
     }
 
     // Default apps never hot reload—they compile through throwaway synthetic
     // source files, so there is nothing stable to reload. They just run once.
     const internal_static_data = successfulInternalStaticData(&lowered_result, "default app run");
-    const shm_handle = try publishDevRunImage(ctx, selected_target, entrypoint_names, lowered, internal_static_data, false);
+    const shm_handle = try publishDevRunImage(ctx, selected_target, .{ .lowered = .{
+        .entrypoint_names = entrypoint_names,
+        .lowered = lowered,
+        .internal_static_data = internal_static_data,
+    } }, false);
     defer closeSharedMemoryHandle(shm_handle);
 
     const termination = if (comptime is_windows)
@@ -4213,7 +3588,7 @@ fn runWithWindowsHandleInheritance(
     // On Windows, clean up temp files after the child process exits.
     // (Unlike Unix, Windows locks files while they're being executed)
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -4316,7 +3691,7 @@ fn runWithPosixFdInheritance(
     // file to find the shared memory before it can run.
     // The background cleanup thread will also clean up old temp directories.
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -4496,6 +3871,8 @@ const HotReloadDescriptorTracker = struct {
     descriptors: std.ArrayList(usize) = .empty,
     free_descriptor_slots: std.ArrayList(HotReloadDescriptorSlot) = .empty,
     free_regions: std.ArrayList(HotReloadFreeRegion) = .empty,
+    /// Static pool chunks of accepted images, which are never reclaimed.
+    static_pool_chunks: std.ArrayList(HotReloadFreeRegion) = .empty,
     descriptor_floor: usize = 0,
     next_descriptor_offset: usize = 0,
 
@@ -4503,6 +3880,7 @@ const HotReloadDescriptorTracker = struct {
         self.descriptors.deinit(gpa);
         self.free_descriptor_slots.deinit(gpa);
         self.free_regions.deinit(gpa);
+        self.static_pool_chunks.deinit(gpa);
     }
 };
 
@@ -4626,7 +4004,9 @@ fn finishHotReloadRebuild(
     joinWatchChild(rebuild.child);
     if (rebuild.child.output_error) |err| return err;
 
-    try replayWatchChildOutput(ctx, rebuild.child, true);
+    if (hotReloadOutputAllowed()) {
+        try replayWatchChildOutput(ctx, rebuild.child, true);
+    }
 
     const rebuild_succeeded = hotReloadRebuildSucceeded(rebuild.child);
     const new_inputs = if (rebuild_succeeded)
@@ -4666,10 +4046,18 @@ fn finishHotReloadRebuild(
     };
 }
 
+/// A running app that has put the terminal in raw mode (such as a TUI) owns the
+/// screen, so hot reload output would corrupt what it has drawn.
+fn hotReloadOutputAllowed() bool {
+    return !ReplLine.stdinRawModeActive();
+}
+
 fn reportHotReloadRebuildPublished(ctx: *CliCtx, rebuild: *HotReloadRebuild) CliOutputWriteError!void {
     if (rebuild.published_reported) return;
-    try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
-    ctx.io.flush();
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} published ---\n", .{rebuild.generation});
+        ctx.io.flush();
+    }
     rebuild.published_reported = true;
 }
 
@@ -4689,12 +4077,15 @@ fn reportHotReloadAcknowledgement(
         }
     }
 
-    switch (ack.status) {
+    const outcome = switch (ack.status) {
         .none => return null,
-        .accepted => try ctx.io.stderr().print("--- roc watch: hot reload generation {} accepted by host ---\n", .{generation}),
-        .rejected => try ctx.io.stderr().print("--- roc watch: hot reload generation {} rejected by host; previous code remains active ---\n", .{generation}),
+        .accepted => "accepted by host",
+        .rejected => "rejected by host; previous code remains active",
+    };
+    if (hotReloadOutputAllowed()) {
+        try ctx.io.stderr().print("--- roc watch: hot reload generation {} {s} ---\n", .{ generation, outcome });
+        ctx.io.flush();
     }
-    ctx.io.flush();
     last_reported_ack.* = generation;
     return generation;
 }
@@ -4877,6 +4268,10 @@ fn hotReloadValidAllocation(
     if (snapshot.image_offset >= snapshot.allocation_end) return false;
     if (snapshot.image_size <= snapshot.image_offset) return false;
     if (snapshot.image_size > snapshot.allocation_end) return false;
+    if (snapshot.static_pool_end != snapshot.static_pool_start) {
+        if (snapshot.static_pool_start <= snapshot.image_offset) return false;
+        if (snapshot.static_pool_end != snapshot.allocation_end) return false;
+    }
     return true;
 }
 
@@ -5008,6 +4403,34 @@ fn hotReloadUsedSizeIncludingFreeRegions(tracker: *const HotReloadDescriptorTrac
     return high_water;
 }
 
+/// Link an accepted image's static pool chunk into the session pool. Values the
+/// host keeps may point into it from now on, so it is never reclaimed.
+fn hotReloadAdoptStaticPoolChunk(
+    gpa: Allocator,
+    control: *ipc.hot_reload.Control,
+    shm_handle: SharedMemoryHandle,
+    tracker: *HotReloadDescriptorTracker,
+    snapshot: ipc.hot_reload.ImageDescriptorSnapshot,
+) CliMainError!void {
+    if (snapshot.static_pool_end == snapshot.static_pool_start) return;
+    for (tracker.static_pool_chunks.items) |chunk| {
+        if (chunk.start == snapshot.static_pool_start) return;
+    }
+    try tracker.static_pool_chunks.ensureUnusedCapacity(gpa, 1);
+
+    const Chunk = backend.RunImage.StaticDataPool.Chunk;
+    if (snapshot.static_pool_start % @alignOf(Chunk) != 0) return error.InvalidSharedMemory;
+    if (snapshot.static_pool_end - snapshot.static_pool_start < @sizeOf(Chunk)) return error.InvalidSharedMemory;
+    const chunk: *Chunk = @ptrCast(@alignCast(hotReloadBasePtr(shm_handle) + snapshot.static_pool_start));
+    if (chunk.magic != backend.RunImage.StaticDataPool.CHUNK_MAGIC) return error.InvalidSharedMemory;
+    chunk.next_chunk_offset = ipc.hot_reload.staticPoolHead(control);
+    ipc.hot_reload.setStaticPoolHead(control, snapshot.static_pool_start);
+    tracker.static_pool_chunks.appendAssumeCapacity(.{
+        .start = snapshot.static_pool_start,
+        .end = snapshot.static_pool_end,
+    });
+}
+
 fn hotReloadSweepImageDescriptors(
     gpa: Allocator,
     control: *ipc.hot_reload.Control,
@@ -5027,6 +4450,7 @@ fn hotReloadSweepImageDescriptors(
         if (!hotReloadValidAllocation(shm_handle, reusable_boundary, snapshot)) {
             return error.InvalidSharedMemory;
         }
+        if (snapshot.accepted) try hotReloadAdoptStaticPoolChunk(gpa, control, shm_handle, tracker, snapshot);
 
         const is_current = current != null and
             current.?.descriptor_offset == descriptor_offset and
@@ -5044,13 +4468,18 @@ fn hotReloadSweepImageDescriptors(
 
         if (snapshot.refs == 0) {
             ipc.hot_reload.markDescriptorReclaimed(descriptor);
+            // An accepted image's static pool chunk outlives the rest of it.
+            const reclaimed_end = if (snapshot.accepted and snapshot.static_pool_end != snapshot.static_pool_start)
+                snapshot.static_pool_start
+            else
+                snapshot.allocation_end;
             try hotReloadAddFreeRegion(
                 gpa,
                 tracker,
                 shm_handle,
                 reusable_boundary,
                 snapshot.allocation_start,
-                snapshot.allocation_end,
+                reclaimed_end,
             );
             try hotReloadReleaseDescriptorSlot(gpa, tracker, descriptor_offset, true);
             _ = tracker.descriptors.swapRemove(i);
@@ -5060,6 +4489,11 @@ fn hotReloadSweepImageDescriptors(
             try hotReloadSubtractFreeRegion(gpa, tracker, snapshot.allocation_start, snapshot.allocation_end);
             i += 1;
         }
+    }
+
+    for (tracker.static_pool_chunks.items) |chunk| {
+        used_size = @max(used_size, chunk.end);
+        try hotReloadSubtractFreeRegion(gpa, tracker, chunk.start, chunk.end);
     }
 
     used_size = hotReloadUsedSizeIncludingFreeRegions(tracker, used_size);
@@ -5270,7 +4704,7 @@ fn runHotReloadDevShim(
     }
 
     if (std.fs.path.dirname(exe_path)) |temp_dir_path| {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, temp_dir_path);
+        releaseScratchDir(ctx, temp_dir_path);
         std.log.debug("Cleaned up temp directory: {s}", .{temp_dir_path});
     }
 
@@ -5453,10 +4887,10 @@ fn testingSharedMemoryHandle(shm: *SharedMemoryAllocator) SharedMemoryHandle {
     };
 }
 
-fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) *ipc.hot_reload.ImageDescriptor {
+fn testingHotReloadDescriptor(shm: *SharedMemoryAllocator, offset: usize) CliMainError!*ipc.hot_reload.ImageDescriptor {
     // Route through the production helper so tests commit the descriptor's page on
     // Windows (SEC_RESERVE leaves it reserved-but-uncommitted) exactly as a real run does.
-    return hotReloadDescriptorForWrite(shm, offset) catch unreachable;
+    return hotReloadDescriptorForWrite(shm, offset);
 }
 
 fn testingPrepareHotReloadDescriptor(
@@ -5467,14 +4901,54 @@ fn testingPrepareHotReloadDescriptor(
     image_bound: usize,
     allocation_start: usize,
     allocation_end: usize,
-) *ipc.hot_reload.ImageDescriptor {
-    const descriptor = testingHotReloadDescriptor(shm, descriptor_offset);
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
     ipc.hot_reload.prepareDescriptor(
         descriptor,
         generation,
         image_offset,
         image_bound,
         allocation_start,
+        allocation_end,
+        0,
+        0,
+        true,
+    );
+    return descriptor;
+}
+
+fn testingPrepareHotReloadDescriptorWithStaticPool(
+    shm: *SharedMemoryAllocator,
+    generation: u64,
+    descriptor_offset: usize,
+    image_offset: usize,
+    allocation_start: usize,
+    static_pool_start: usize,
+    allocation_end: usize,
+) CliMainError!*ipc.hot_reload.ImageDescriptor {
+    const Chunk = backend.RunImage.StaticDataPool.Chunk;
+    // The run commits its pool through the allocator; this writes the chunk
+    // directly, so it commits the page itself on Windows (SEC_RESERVE).
+    if (comptime is_windows) {
+        const commit_result = ipc.platform.windows.VirtualAlloc(
+            @ptrCast(shm.base_ptr + static_pool_start),
+            @sizeOf(Chunk),
+            ipc.platform.windows.MEM_COMMIT,
+            ipc.platform.windows.PAGE_READWRITE,
+        );
+        if (commit_result == null) return error.OutOfMemory;
+    }
+    const chunk: *Chunk = @ptrCast(@alignCast(shm.base_ptr + static_pool_start));
+    chunk.* = .{ .entries_offset = 0, .entry_count = 0, .relocations_offset = 0, .relocation_count = 0 };
+    const descriptor = try testingHotReloadDescriptor(shm, descriptor_offset);
+    ipc.hot_reload.prepareDescriptor(
+        descriptor,
+        generation,
+        image_offset,
+        allocation_end,
+        allocation_start,
+        allocation_end,
+        static_pool_start,
         allocation_end,
         true,
     );
@@ -5501,7 +4975,7 @@ test "hot reload parent publishes only current prepared candidate" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
 
     const allocation = HotReloadImageAllocation{
@@ -5512,7 +4986,7 @@ test "hot reload parent publishes only current prepared candidate" {
         .region_end = 1536,
         .append_offset = 2048,
     };
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
 
     try std.testing.expect(!try publishPreparedHotReloadCandidate(control, handle, allocation, true));
     try std.testing.expectEqual(@as(u64, 1), ipc.hot_reload.publishedGeneration(control));
@@ -5533,7 +5007,7 @@ test "hot reload stale prepared candidate reclaims append allocation" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
@@ -5545,7 +5019,7 @@ test "hot reload stale prepared candidate reclaims append allocation" {
         .region_end = 1536,
         .append_offset = 2048,
     };
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
     var tracker = HotReloadDescriptorTracker{};
@@ -5574,15 +5048,15 @@ test "hot reload allocation coalesces adjacent reclaimed image regions" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -5617,11 +5091,11 @@ test "hot reload sweep keeps acknowledged current descriptor live" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.acknowledge(control, 2, .accepted);
@@ -5654,11 +5128,11 @@ test "hot reload sweep keeps top reclaimed descriptor region addressable" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 3, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
     ipc.hot_reload.publishDescriptor(control, 3, desc0_offset, desc0);
 
@@ -5692,17 +5166,17 @@ test "hot reload allocation skips retired retained descriptors" {
     const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, 2048, 512, 2048);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     ipc.hot_reload.retainDescriptor(desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 2048);
 
-    const desc1 = testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
+    const desc1 = try testingPrepareHotReloadDescriptor(&shm, 2, desc1_offset, 2048, 4096, 2048, 4096);
     ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
     ipc.hot_reload.retainDescriptor(desc1);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 4096);
 
-    const desc2 = testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 4096, 8192, 4096, 8192);
     ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 8192);
 
@@ -5738,7 +5212,7 @@ test "hot reload allocation rolls back fresh descriptor when append has no room"
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 512, desc1_offset, 512, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -5766,7 +5240,7 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
 
     const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
-    const desc0 = testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
+    const desc0 = try testingPrepareHotReloadDescriptor(&shm, 1, desc0_offset, 4096, desc1_offset, 4096, desc1_offset);
     ipc.hot_reload.init(control, desc0_offset, desc0);
     try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, desc1_offset);
 
@@ -5783,6 +5257,52 @@ test "hot reload allocation can use reclaimed region when append has no room" {
     try std.testing.expectEqual(@as(usize, 512), allocation.region_start);
     try std.testing.expectEqual(@as(usize, 4096), allocation.region_end);
     try std.testing.expectEqual(desc1_offset, allocation.append_offset);
+}
+
+test "hot reload sweep keeps an accepted image's static pool chunk" {
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try SharedMemoryAllocator.create(std.testing.io, 64 * 1024, page_size);
+    defer shm.deinit(std.testing.allocator);
+
+    const handle = testingSharedMemoryHandle(&shm);
+    const desc0_offset = try hotReloadInitialDescriptorOffset(handle);
+    const desc1_offset = hotReloadPreviousDescriptorOffset(desc0_offset).?;
+    const desc2_offset = hotReloadPreviousDescriptorOffset(desc1_offset).?;
+
+    const control = ipc.hot_reload.controlFromBase(shm.base_ptr);
+    const desc0 = try testingPrepareHotReloadDescriptorWithStaticPool(&shm, 1, desc0_offset, 512, 512, 2048, 4096);
+    ipc.hot_reload.init(control, desc0_offset, desc0);
+    ipc.hot_reload.markDescriptorAccepted(desc0);
+
+    // Never accepted, so nothing can point into its chunk.
+    const desc1 = try testingPrepareHotReloadDescriptorWithStaticPool(&shm, 2, desc1_offset, 4096, 4096, 6144, 8192);
+    ipc.hot_reload.publishDescriptor(control, 2, desc1_offset, desc1);
+
+    const desc2 = try testingPrepareHotReloadDescriptor(&shm, 3, desc2_offset, 8192, 12288, 8192, 12288);
+    ipc.hot_reload.publishDescriptor(control, 3, desc2_offset, desc2);
+    try SharedMemoryAllocator.rewindMappedHeader(shm.base_ptr, shm.total_size, 12288);
+
+    var tracker = HotReloadDescriptorTracker{};
+    defer tracker.deinit(std.testing.allocator);
+    try testingInitHotReloadDescriptorTracker(&tracker, desc0_offset, desc2_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc0_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc1_offset);
+    try hotReloadTrackDescriptor(std.testing.allocator, &tracker, desc2_offset);
+
+    try hotReloadSweepImageDescriptors(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker);
+    try hotReloadSweepImageDescriptors(std.testing.allocator, control, handle, @sizeOf(SharedMemoryAllocator.Header), &tracker);
+
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc0).state);
+    try std.testing.expectEqual(ipc.hot_reload.DescriptorState.reclaimed, ipc.hot_reload.descriptorSnapshot(desc1).state);
+    try std.testing.expectEqual(@as(usize, 2048), ipc.hot_reload.staticPoolHead(control));
+    const chunk: *const backend.RunImage.StaticDataPool.Chunk = @ptrCast(@alignCast(shm.base_ptr + 2048));
+    try std.testing.expectEqual(@as(u64, 0), chunk.next_chunk_offset);
+    try std.testing.expectEqual(@as(usize, 1), tracker.static_pool_chunks.items.len);
+    try std.testing.expectEqual(@as(usize, 2), tracker.free_regions.items.len);
+    try std.testing.expectEqual(@as(usize, 512), tracker.free_regions.items[0].start);
+    try std.testing.expectEqual(@as(usize, 2048), tracker.free_regions.items[0].end);
+    try std.testing.expectEqual(@as(usize, 4096), tracker.free_regions.items[1].start);
+    try std.testing.expectEqual(@as(usize, 8192), tracker.free_regions.items[1].end);
 }
 
 /// Counts of checker diagnostics preserved until the command determines its
@@ -5809,6 +5329,9 @@ fn checkedArtifactForBuild(
     if (artifact.hasUnboundPlatformRequirements()) {
         return ctx.fail(.{ .platform_requires_app = .{ .platform_path = source_path } });
     }
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to link; the error was rendered with the diagnostics.
+    if (artifact.hasProvidedExportWithoutAbi()) return error.TypeCheckingFailed;
     return artifact;
 }
 
@@ -5824,12 +5347,13 @@ pub const SharedMemoryResult = struct {
 };
 
 fn renderSummaryHeaderLine(
+    gpa: Allocator,
     writer: anytype,
     error_count: usize,
     warning_count: usize,
     path: []const u8,
     config: reporting.ReportingConfig,
-) error{WriteFailed}!void {
+) (Allocator.Error || error{WriteFailed})!void {
     const palette = reporting.ColorUtils.getPaletteForConfig(config);
 
     const error_suffix = if (error_count == 1) "" else "s";
@@ -5844,8 +5368,9 @@ fn renderSummaryHeaderLine(
     const total_w = @min(config.getMaxLineWidth(), 120);
     const prefix_w = 3 + err_str.len + 5 + warn_str.len + 1;
 
-    const sanitised_path = reporting.sanitisePathForSnapshots(path);
-    const loc_w = if (sanitised_path.len > 0) 1 + reporting.source_region.displayWidth(sanitised_path) else 0;
+    const display_path = try reporting.displayPath(gpa, path, config.source_path_base);
+    defer gpa.free(display_path);
+    const loc_w = if (display_path.len > 0) 1 + reporting.source_region.displayWidth(display_path) else 0;
 
     const dashes = @max(total_w -| prefix_w -| loc_w, 1);
 
@@ -5860,32 +5385,13 @@ fn renderSummaryHeaderLine(
     try writer.writeAll(palette.secondary);
     try writer.writeByte(' ');
     try writer.splatBytesAll("─", dashes);
-    if (sanitised_path.len > 0) {
+    if (display_path.len > 0) {
         try writer.writeByte(' ');
         try writer.writeAll(palette.primary);
-        try base.bidi.writeVisible(writer, sanitised_path);
+        try base.bidi.writeVisible(writer, display_path);
     }
     try writer.writeAll(palette.reset);
     try writer.writeAll("\n\n");
-}
-
-fn writeDiagnosticCounts(writer: *std.Io.Writer, error_count: anytype, warning_count: anytype, use_color: bool) std.Io.Writer.Error!void {
-    const error_suffix = if (error_count == 1) "" else "s";
-    const warning_suffix = if (warning_count == 1) "" else "s";
-    const red = if (use_color) ansi_term.red else "";
-    const yellow = if (use_color) ansi_term.yellow else "";
-    const reset = if (use_color) ansi_term.reset else "";
-
-    try writer.print("{s}{} error{s}{s} and {s}{} warning{s}{s}", .{
-        red,
-        error_count,
-        error_suffix,
-        reset,
-        yellow,
-        warning_count,
-        warning_suffix,
-        reset,
-    });
 }
 
 fn writeNoErrors(writer: *std.Io.Writer, use_color: bool) std.Io.Writer.Error!void {
@@ -5894,25 +5400,16 @@ fn writeNoErrors(writer: *std.Io.Writer, use_color: bool) std.Io.Writer.Error!vo
     try writer.print("{s}No errors{s}", .{ green, reset });
 }
 
-test "diagnostic summaries support colored and plain output" {
+test "no-errors summary supports colored and plain output" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
-    try writeDiagnosticCounts(&output.writer, 1, 0, true);
-    try output.writer.writeByte('\n');
-    try writeDiagnosticCounts(&output.writer, 2, 3, false);
-    try output.writer.writeByte('\n');
-    try writeDiagnosticCounts(&output.writer, 0, 1, true);
-    try output.writer.writeByte('\n');
     try writeNoErrors(&output.writer, true);
     try output.writer.writeByte('\n');
     try writeNoErrors(&output.writer, false);
 
     try std.testing.expectEqualStrings(
-        ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++ ansi_term.yellow ++ "0 warnings" ++ ansi_term.reset ++ "\n" ++
-            "2 errors and 3 warnings\n" ++
-            ansi_term.red ++ "0 errors" ++ ansi_term.reset ++ " and " ++ ansi_term.yellow ++ "1 warning" ++ ansi_term.reset ++ "\n" ++
-            ansi_term.green ++ "No errors" ++ ansi_term.reset ++ "\n" ++
+        ansi_term.green ++ "No errors" ++ ansi_term.reset ++ "\n" ++
             "No errors",
         output.written(),
     );
@@ -5931,7 +5428,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     var plain_config = reporting.ReportingConfig.initColorTerminal();
     plain_config.color_preference = .never;
     plain_config.max_line_width = 80;
-    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
+    try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", plain_config);
     try std.testing.expectEqualStrings(
         "── 1 error and 1 warning " ++ rule ++ " example.roc\n\n",
         output.written(),
@@ -5940,7 +5437,7 @@ test "diagnostic summary header has exact colors and bounded width" {
     output.clearRetainingCapacity();
     var color_config = reporting.ReportingConfig.initColorTerminal();
     color_config.max_line_width = 80;
-    try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", color_config);
+    try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", color_config);
     try std.testing.expectEqualStrings(
         ansi_term.bright_black ++ "── " ++
             ansi_term.red ++ "1 error" ++ ansi_term.reset ++ " and " ++
@@ -5952,8 +5449,8 @@ test "diagnostic summary header has exact colors and bounded width" {
     inline for (.{ .{ 55, 55 }, .{ 200, 120 } }) |case| {
         output.clearRetainingCapacity();
         plain_config.max_line_width = case[0];
-        try renderSummaryHeaderLine(&output.writer, 1, 1, "example.roc", plain_config);
-        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse unreachable;
+        try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 1, "example.roc", plain_config);
+        const first_newline = std.mem.findScalar(u8, output.written(), '\n') orelse return error.TestUnexpectedResult;
         try std.testing.expectEqual(@as(usize, case[1]), reporting.source_region.displayWidth(output.written()[0..first_newline]));
     }
 }
@@ -5984,10 +5481,7 @@ const LoweredCoordinatorResult = struct {
 
 fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: []const u8) []const backend.StaticDataExport {
     return result.internal_static_data orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
-        }
-        unreachable;
+        base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
     };
 }
 
@@ -6015,7 +5509,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     if (counts.errors > 0 or counts.warnings > 0) {
         const stderr = ctx.io.stderr();
-        renderSummaryHeaderLine(stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, counts.errors, counts.warnings, display_path, report_config) catch {};
     }
 
     ctx.io.flush();
@@ -6074,7 +5568,7 @@ fn useDefaultAppSharedMemoryShim(args: cli_args.RunArgs) bool {
     const default_target = defaultRunShimTarget(native_target);
     return devShimTargetCompatible(default_target, native_target) and
         default_target.toOsTag() == .linux and
-        DefaultPlatformRuntimeObjects.forTarget(default_target) != null;
+        EmbeddedTargetObjects.forTarget(default_target).default_runtime != null;
 }
 
 /// The Linux target the default app runs on, keeping the CPU level
@@ -6329,18 +5823,17 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
         break :blk null;
     };
 
+    if (source_rewrite == null and unitImageRunApplies(.dev, args.no_cache, currentRuntimeSpecializationStrategy(args.specialization_strategy), selected_target)) {
+        return rebuildComposedRunImage(ctx, args, &shm, selected_target);
+    }
+
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
         .{ .dev_run_image = .{ .target = selected_target, .hot_reload = true } },
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
-        if (source_rewrite) |rewrite| .{
-            .original_path = rewrite.source_path,
-            .original_source = staged_owned.?.original_source,
-            .header_len = staged_owned.?.header_len,
-            .header_lines = staged_owned.?.header_lines,
-        } else null,
+        if (source_rewrite) |rewrite| SyntheticDefaultAppMapping.fromStaged(rewrite.source_path, &staged_owned.?) else null,
         args.max_threads,
         .dev,
         args.specialization_strategy,
@@ -6365,7 +5858,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     }
 
     const lowered = &lowered_result.lowered;
-    _ = try writeDevRunImageToSharedMemory(
+    _ = writeDevRunImageToSharedMemory(
         ctx,
         &shm,
         selected_target,
@@ -6381,7 +5874,77 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
             .append_offset = args.append_offset,
             .preserve_descriptor_refs = args.preserve_descriptor_refs,
         },
-    );
+    ) catch |err| switch (err) {
+        // Reported where they were raised.
+        error.UnsupportedTarget, error.WriteFailed => return err,
+        else => {
+            try ctx.io.stderr().print(
+                "Error: hot reload could not write the rebuilt program into shared memory ({s}); the previous version stays active.\n",
+                .{@errorName(err)},
+            );
+            return err;
+        },
+    };
+    shm.updateHeader();
+}
+
+/// A hot-reload rebuild of a run composed from unit images: check the
+/// program, build its changed units, and compose the next generation into
+/// the allocation the parent chose.
+fn rebuildComposedRunImage(ctx: *CliCtx, args: HotReloadDevWorkerArgs, shm: *SharedMemoryAllocator, target: RocTarget) CliMainError!void {
+    var tables = RunUnitTables.init(ctx);
+    defer tables.deinit();
+    // A rebuild's output is captured; it reports no progress.
+    var reporter = progress.Reporter.init(.{
+        .std_io = ctx.io.std_io,
+        .writer = ctx.io.stderr(),
+        .op_label = "roc",
+        .timings_flag = false,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    var build_env = try initRunBuildEnv(ctx, .{
+        .source_dir_override = null,
+        .synthetic_default_app = null,
+        .max_threads = args.max_threads,
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .enable_checked_cache = true,
+        .reporter = null,
+        .specialization_strategy = .boxy,
+    });
+    defer build_env.deinit();
+    try discoverRunDependencies(ctx, &build_env, args.path, args.path, null);
+    var units = try lowerRunUnits(ctx, &build_env, &tables, target, args.path, &reporter, true);
+    defer units.deinit(ctx.gpa);
+
+    try writeHotReloadWatchPathsFile(ctx, args.watch_inputs_file, units.watch_inputs, null);
+    // As for a rebuild of the whole program: keep the last accepted
+    // generation active until a diagnostic-free replacement is ready.
+    if (units.counts.errors != 0) return error.TypeCheckingFailed;
+    if (!std.mem.eql(u8, &units.checked_host_identity, &args.expected_host_identity)) {
+        try ctx.io.stderr().writeAll("Error: hot reload changed the platform host interface; restart `roc --watch`.\n");
+        return error.TypeCheckingFailed;
+    }
+
+    _ = writeComposedRunImage(ctx, &reporter, shm, &units, .{
+        .generation = args.generation,
+        .descriptor_offset = args.descriptor_offset,
+        .image_limit = args.image_limit,
+        .region_start = args.region_start,
+        .region_end = args.region_end,
+        .append_offset = args.append_offset,
+        .preserve_descriptor_refs = args.preserve_descriptor_refs,
+    }) catch |err| switch (err) {
+        // Reported where they were raised.
+        error.UnsupportedTarget, error.WriteFailed => return err,
+        else => {
+            try ctx.io.stderr().print(
+                "Error: hot reload could not write the rebuilt program into shared memory ({s}); the previous version stays active.\n",
+                .{@errorName(err)},
+            );
+            return err;
+        },
+    };
     shm.updateHeader();
 }
 
@@ -6403,8 +5966,7 @@ fn writeDevRunImageToSharedMemory(
     } else {
         const native_target = backend.HostLirCodeGen.roc_target;
         if (!devShimTargetCompatible(selected_target, native_target)) {
-            try rejectRunTargetNotExecutable(ctx, selected_target);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, selected_target);
         }
 
         const store = &lowered.lir_result.store;
@@ -6421,20 +5983,17 @@ fn writeDevRunImageToSharedMemory(
 
         // This image executes in this process, so its instructions are held to
         // what this machine's CPU runs rather than to the target's level.
-        var codegen = try backend.HostLirCodeGen.initWithBoxyMetadata(
+        var codegen = try backend.HostLirCodeGen.initWithCapturePrefix(
             ctx.gpa,
             store,
             layouts,
             static_strings.view(),
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
+            lowered.lir_result.erased_capture_prefix,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
         codegen.generation_mode = .shim_execution;
         try codegen.setStaticDataSymbols(internal_static_data);
-        codegen.enable_hot_reload = hot_reload_allocation != null;
 
         const proc_specs = store.getProcSpecs();
         try codegen.compileAllProcSpecs(proc_specs);
@@ -6461,10 +6020,7 @@ fn writeDevRunImageToSharedMemory(
             if (proc.is_static_initializer) continue;
             const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const compiled = codegen.compiledProcSymbol(proc_id) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
-                }
-                unreachable;
+                base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
             };
             code_symbols[initialized_code_symbols] = .{
                 .name = try backend.procSymbolName(ctx.gpa, proc.identity),
@@ -6474,13 +6030,10 @@ fn writeDevRunImageToSharedMemory(
         }
         for (static_rc_helpers) |helper_key| {
             const code_offset = codegen.compiledStaticDataRcHelperOffset(helper_key) orelse {
-                if (builtin.mode == .debug) {
-                    base.invariant(
-                        "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
-                        .{helper_key.encode()},
-                    );
-                }
-                unreachable;
+                base.invariant(
+                    "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
+                    .{helper_key.encode()},
+                );
             };
             code_symbols[initialized_code_symbols] = .{
                 .name = try backend.atomicRcHelperSymbolName(ctx.gpa, layouts, helper_key),
@@ -6488,7 +6041,6 @@ fn writeDevRunImageToSharedMemory(
             };
             initialized_code_symbols += 1;
         }
-
         const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
         defer ctx.gpa.free(platform_entrypoints);
 
@@ -6498,10 +6050,7 @@ fn writeDevRunImageToSharedMemory(
         for (platform_entrypoints, 0..) |platform_entrypoint, i| {
             const ordinal: usize = @intCast(platform_entrypoint.ordinal);
             if (ordinal >= entrypoint_names.len) {
-                if (builtin.mode == .debug) {
-                    base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
-                }
-                unreachable;
+                base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
             }
 
             const proc = store.getProcSpec(platform_entrypoint.root_proc);
@@ -6524,9 +6073,6 @@ fn writeDevRunImageToSharedMemory(
         const generated_code = codegen.getGeneratedCode();
         const relocations = codegen.getRelocations();
 
-        var sidecar_blob = try lir.LirImage.buildSidecarBlob(ctx.gpa, &lowered.lir_result);
-        defer sidecar_blob.deinit(ctx.gpa);
-
         var empty_region_buffer: [0]u8 = .{};
         var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
         var image_allocator = shm.allocator();
@@ -6538,24 +6084,31 @@ fn writeDevRunImageToSharedMemory(
         const original_total_size = shm.total_size;
         defer shm.total_size = original_total_size;
 
+        // A hot-reload image records its reusable static data in a chunk for
+        // later images, and reuses what earlier images already recorded.
+        var static_plan = try backend.RunImage.StaticDataPool.Plan.init(ctx.gpa, readonly_data.items, hot_reload_allocation != null);
+        defer static_plan.deinit();
+
         if (hot_reload_allocation) |allocation| {
             const reusable_capacity = if (allocation.region_end > allocation.region_start)
                 allocation.region_end - allocation.region_start
             else
                 0;
-            const required_bound = try backend.RunImage.requiredCapacityFromOffset(
+            // Reusing pool entries only shrinks the image, so the image laid
+            // out without reuse bounds where it will be placed.
+            const unpooled_bound = try backend.RunImage.requiredCapacityFromOffset(
                 ctx.gpa,
                 shm.page_size,
                 allocation.region_start,
                 generated_code,
                 entrypoints,
-                code_symbols,
+                code_symbols[0..initialized_code_symbols],
                 codegen.getSymbolNames(),
                 relocations,
                 readonly_data.items,
-                sidecar_blob.bytes,
+                &static_plan,
             );
-            const required_capacity = required_bound - allocation.region_start;
+            const required_capacity = unpooled_bound - allocation.region_start;
 
             descriptor = try hotReloadDescriptorForWrite(shm, allocation.descriptor_offset);
             descriptor_offset = allocation.descriptor_offset;
@@ -6572,6 +6125,16 @@ fn writeDevRunImageToSharedMemory(
                 shm.total_size = allocation.image_limit;
                 allocation_start = allocation.append_offset;
             }
+
+            try static_plan.reusePool(
+                readonly_data.items,
+                .{
+                    .mapping = shm.base_ptr[0..original_total_size],
+                    .head_offset = ipc.hot_reload.staticPoolHead(ipc.hot_reload.controlFromBase(shm.base_ptr)),
+                },
+                allocation_start,
+                try std.math.add(usize, allocation_start, required_capacity),
+            );
         }
 
         const header = try backend.RunImage.writeToSharedMemory(
@@ -6581,17 +6144,22 @@ fn writeDevRunImageToSharedMemory(
             shm.page_size,
             generated_code,
             entrypoints,
-            code_symbols,
+            code_symbols[0..initialized_code_symbols],
             codegen.getSymbolNames(),
             relocations,
             readonly_data.items,
-            sidecar_blob.bytes,
-            sidecar_blob.sidecar,
+            &static_plan,
         );
         const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
         const image_bound: usize = @intCast(header.image_size);
+        if (dev_diagnostics.get(.dump_run_image)) |path| if (hot_reload_allocation == null or hot_reload_allocation.?.generation == 1) {
+            std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = shm.base_ptr[image_offset..image_bound] }) catch |err| {
+                std.log.warn("writing the run image to {s} failed: {}", .{ path, err });
+            };
+        };
         if (hot_reload_allocation) |allocation| {
             allocation_end = image_bound;
+            const static_pool_start: usize = @intCast(header.static_pool.offset);
             ipc.hot_reload.prepareDescriptor(
                 descriptor.?,
                 allocation.generation,
@@ -6599,6 +6167,8 @@ fn writeDevRunImageToSharedMemory(
                 image_bound,
                 allocation_start,
                 allocation_end,
+                static_pool_start,
+                static_pool_start + @as(usize, @intCast(header.static_pool.len)),
                 reset_descriptor_refs,
             );
             try shm.resetToUsedSize(@max(allocation.append_offset, allocation_end));
@@ -6610,12 +6180,38 @@ fn writeDevRunImageToSharedMemory(
     }
 }
 
+/// What a dev run image is written from.
+const DevRunImageSource = union(enum) {
+    /// The whole program's LIR, compiled into the image.
+    lowered: struct {
+        entrypoint_names: []const []const u8,
+        lowered: *const lir.CheckedPipeline.LoweredProgram,
+        internal_static_data: []const backend.StaticDataExport,
+    },
+    /// The program's unit images, composed into the image.
+    composed: struct {
+        units: *RunUnits,
+        reporter: *progress.Reporter,
+    },
+};
+
+fn writeDevRunImageFromSource(
+    ctx: *CliCtx,
+    shm: *SharedMemoryAllocator,
+    selected_target: RocTarget,
+    source: DevRunImageSource,
+    hot_reload_allocation: ?HotReloadImageAllocation,
+) CliMainError!DevRunImagePublication {
+    return switch (source) {
+        .lowered => |program| writeDevRunImageToSharedMemory(ctx, shm, selected_target, program.entrypoint_names, program.lowered, program.internal_static_data, hot_reload_allocation),
+        .composed => |composed| writeComposedRunImage(ctx, composed.reporter, shm, composed.units, hot_reload_allocation),
+    };
+}
+
 fn publishDevRunImage(
     ctx: *CliCtx,
     selected_target: RocTarget,
-    entrypoint_names: []const []const u8,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-    internal_static_data: []const backend.StaticDataExport,
+    source: DevRunImageSource,
     enable_hot_reload: bool,
 ) CliMainError!SharedMemoryHandle {
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -6639,15 +6235,7 @@ fn publishDevRunImage(
             .append_offset = @sizeOf(SharedMemoryAllocator.Header),
         };
     } else null;
-    const publication = try writeDevRunImageToSharedMemory(
-        ctx,
-        &shm,
-        selected_target,
-        entrypoint_names,
-        lowered,
-        internal_static_data,
-        hot_reload_allocation,
-    );
+    const publication = try writeDevRunImageFromSource(ctx, &shm, selected_target, source, hot_reload_allocation);
     if (enable_hot_reload) {
         ipc.hot_reload.init(
             ipc.hot_reload.controlFromBase(shm.base_ptr),
@@ -6688,12 +6276,9 @@ fn reportCliInterpreterError(ops: *echo_platform.host_abi.RocOps, interpreter: *
         error.OutOfMemory => "Roc interpreter ran out of memory",
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
-        // expect_err statements only occur in top-level expect test roots,
-        // never in program entrypoints.
-        error.ExpectErr => unreachable,
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.ExpectErr => unreachable, // expect_err statements occur only in top-level expect test roots, never in program entrypoints
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does
     };
     ops.crash(message);
 }
@@ -6711,11 +6296,10 @@ fn evaluateLirImageEntrypoint(
     var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &view.store);
     defer static_strings.deinit();
 
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         allocator,
         &view.store,
         &view.layouts,
-        eval.LirInterpreter.BoxyTables.fromImageView(view),
         static_strings.view(),
         ops,
     );
@@ -6725,14 +6309,10 @@ fn evaluateLirImageEntrypoint(
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
-            }
-            unreachable;
+            base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
         },
         error.OutOfMemory,
         error.RuntimeError,
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.Crash,
         error.ExpectErr,
@@ -6751,7 +6331,25 @@ const SyntheticDefaultAppMapping = struct {
     /// `default_app.Staged`.
     header_len: usize,
     header_lines: u32,
+
+    fn fromStaged(original_path: []const u8, staged: *const default_app.Staged) SyntheticDefaultAppMapping {
+        return .{
+            .original_path = original_path,
+            .original_source = staged.original_source,
+            .header_len = staged.header_len,
+            .header_lines = staged.header_lines,
+        };
+    }
 };
+
+/// Point a staged default app's diagnostics at the user's real file and line
+/// numbers; the mapping also pins the stable synthetic package identities.
+fn applySyntheticDefaultAppMapping(build_env: *BuildEnv, mapping: ?SyntheticDefaultAppMapping) void {
+    const m = mapping orelse return;
+    build_env.setSyntheticRootSourceMappingWithLineOffset(m.original_path, m.original_source, m.header_len, m.header_lines);
+    // Crash reports name the user's file rather than its staged copy.
+    build_env.setStagedEntryUserPath(m.original_path);
+}
 
 const PlatformEntrypointArtifact = union(enum) {
     /// Pointer-width-independent LIR consumed directly by the interpreter.
@@ -6788,6 +6386,7 @@ fn lowerLirWithBuildEnv(
         .resolution_config = resolution_config,
         .enable_checked_cache = enable_checked_cache,
         .reporter = reporter,
+        .specialization_strategy = specialization_strategy,
     });
     defer build_env.deinit();
     const display_path = runDisplayPath(roc_file_path, synthetic_default_app);
@@ -6803,6 +6402,7 @@ const RunBuildEnvOptions = struct {
     resolution_config: compile.package_resolution.Config,
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 };
 
 /// The build environment for a run, before its runtime artifact is chosen.
@@ -6817,18 +6417,9 @@ fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv
         .track_watch_inputs = true,
         .source_dir_override = opts.source_dir_override,
         .post_check_publication_mode = .executable_artifacts,
+        .specialization_strategy = opts.specialization_strategy,
     });
-    if (opts.synthetic_default_app) |mapping| {
-        // Diagnostics for a staged default app must point at the user's real
-        // file (and its real line numbers) rather than the staged copy; the
-        // mapping also pins the stable synthetic package identities.
-        build_env.setSyntheticRootSourceMappingWithLineOffset(
-            mapping.original_path,
-            mapping.original_source,
-            mapping.header_len,
-            mapping.header_lines,
-        );
-    }
+    applySyntheticDefaultAppMapping(&build_env, opts.synthetic_default_app);
     return build_env;
 }
 
@@ -6853,16 +6444,14 @@ fn discoverRunDependencies(
         _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
-            error.FileNotFound => ctx.fail(.{ .file_not_found = .{
-                .path = roc_file_path,
-                .context = .source_file,
-            } }),
+            // Discovery has already reported each of these, a missing file
+            // included, so the drained reports above are the whole story.
             error.AccessDenied,
             error.BuiltinLowLevelAnnotationMustBeFunction,
             error.DownloadFailed,
             error.ExpectedPlatformString,
-            error.ExpectedString,
             error.FileError,
+            error.FileNotFound,
             error.Internal,
             error.InvalidDependency,
             error.InvalidNullByteInPath,
@@ -6902,7 +6491,22 @@ fn discoverRunDependencies(
     if (reporter) |r| r.end();
 }
 
-/// Check and lower a discovered run to its runtime artifact.
+/// Runtime support objects a `roc run` host links and exposes to the image.
+const RunPackageObjects = struct {
+    objects: []const []const u8 = &.{},
+    symbols: []const []const u8 = &.{},
+
+    /// These objects and the Boxy runtime, for a program whose LIR carries
+    /// the `.boxy` runtime contract: the host executable links it and the
+    /// machine-code shim resolves its entry points by name.
+    fn withBoxyRuntime(self: RunPackageObjects, arena: Allocator, object: []const u8) Allocator.Error!RunPackageObjects {
+        return .{
+            .objects = try std.mem.concat(arena, []const u8, &.{ self.objects, &.{object} }),
+            .symbols = try std.mem.concat(arena, []const u8, &.{ self.symbols, backend.boxy_runtime_symbols }),
+        };
+    }
+};
+
 fn lowerDiscoveredLir(
     ctx: *CliCtx,
     build_env: *BuildEnv,
@@ -6913,13 +6517,16 @@ fn lowerDiscoveredLir(
     specialization_strategy: base.SpecializationStrategy,
     reporter: ?*progress.Reporter,
 ) CliMainError!LoweredCoordinatorResult {
-    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+    var runtime_lowering = checkedRuntimeLoweringConfig(
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
-    ));
+    );
+    // The checked host identity covers each entrypoint's host boundary digest.
+    runtime_lowering.target.host_boundary_digests = true;
+    build_env.setRuntimeLowering(runtime_lowering);
 
     if (reporter) |r| r.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
@@ -6938,13 +6545,15 @@ fn lowerDiscoveredLir(
         if (reporter) |r| r.fail();
         return error.TypeCheckingFailed;
     }
-    if (reporter) |r| finishFrontEndPhase(r, build_env.getTimingInfo());
+    if (reporter) |r| try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), r, build_env.getTimingInfo());
 
     const root_artifact = build_env.executableRootCheckedArtifact();
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
+    // A run whose post-check work writes no cache leaves what `roc check`
+    // leaves (design.md "Caching Under `.boxy`").
 
     if (reporter) |r| r.begin(loweringProgressLabel(specialization_strategy));
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
@@ -6958,13 +6567,13 @@ fn lowerDiscoveredLir(
         .{ .platform_entrypoints = artifact },
         opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
+        true,
         build_env.postCheckExecutor(),
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
-        .source_bodies,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -6990,18 +6599,24 @@ fn lowerDiscoveredLir(
         imported_artifacts,
         relation_artifacts,
     );
-    const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
-    defer ctx.gpa.free(platform_entrypoints);
-    const checked_host_identity = try checkedInterpreterHostIdentity(
-        ctx.gpa,
+    const interface_identity = try checkedInterpreterHostIdentity(
         root_artifact,
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        platform_entrypoints,
+        lowered.lir_result.root_metadata.items,
         entrypoint_names,
         lowered.target_usize,
         hosted_table,
     );
+    // A Boxy host executable links the runtime that its image calls.
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
+    const checked_host_identity = if (boxy_runtime) identity: {
+        var hasher = base.Sha256.init(.{});
+        hasher.update(&interface_identity);
+        if (boxy_runtime) {
+            updateHashBytes(&hasher, "roc-run-boxy-runtime-v1");
+            if (EmbeddedTargetObjects.native.boxy_runtime_digest) |digest| hasher.update(&digest);
+        }
+        break :identity hasher.finalResult();
+    } else interface_identity;
 
     return .{
         .lowered = lowered,
@@ -7013,6 +6628,506 @@ fn lowerDiscoveredLir(
         .watch_inputs_allocator = ctx.gpa,
         .counts = counts,
     };
+}
+
+/// Whether a dev run composes its run image from unit images
+/// (`run_image_link.zig`), restored from the per-module cache or built and
+/// filed there as `roc build` does, rather than lowering and compiling the
+/// whole program: a `.boxy` dev run with a cache, of a target whose units
+/// carry unit images and whose support image the compiler embeds, on a Linux
+/// x86_64 host, which runs the image in place. Every other run lowers and
+/// compiles the whole program.
+fn unitImageRunApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, target: RocTarget) bool {
+    if (opt != .dev or strategy != .boxy) return false;
+    // A run without a cache neither reads nor files unit images.
+    if (no_cache) return false;
+    // The hosts whose units carry images are the hosts whose shim composes
+    // them.
+    if (comptime backend.dev.UnitImageLoader == void) return false;
+    return unitImageTarget(target);
+}
+
+/// Whether `target`'s programs can be built from unit images: a target
+/// with a fast dev link format, whose support image the compiler embeds.
+fn unitImageTarget(target: RocTarget) bool {
+    return fastDevLinkFormat(target) != null;
+}
+
+/// What a dev run composed from unit images lowers against: the export
+/// interfaces its units record and the names its root unit reads. It
+/// outlives the run's build environment, whose compile-time evaluation
+/// records into it.
+const RunUnitTables = struct {
+    interfaces: postcheck.Boxy.Lower.ExportInterfaces,
+    digests: compile.boxy_interface.Digests,
+
+    fn init(ctx: *CliCtx) RunUnitTables {
+        return .{
+            .interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io),
+            .digests = .{ .gpa = ctx.gpa, .names = .{} },
+        };
+    }
+
+    fn deinit(self: *RunUnitTables) void {
+        self.digests.deinit();
+        self.interfaces.deinit();
+    }
+
+    fn rootUnit(self: *RunUnitTables) postcheck.Boxy.Lower.ModuleUnit {
+        return .{ .imports = &self.interfaces, .root = true, .names = &self.digests.names };
+    }
+};
+
+/// A dev run's program as unit images, ready to compose into its run image.
+const RunUnits = struct {
+    target: RocTarget,
+    hot_reload: bool,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    /// The platform entrypoint symbols, by ordinal; the root image exports a
+    /// wrapper under each. Allocated from the CLI arena.
+    entrypoint_names: []const []const u8,
+    /// The platform's hosted symbols, by dispatch index. Arena-allocated.
+    hosted_symbols: []const []const u8,
+    /// The hosted symbols the composed run image imports, which the host
+    /// inputs must define; set when the image is composed. Arena-allocated.
+    referenced_hosted_symbols: []const []const u8 = &.{},
+    checked_host_identity: [32]u8,
+    watch_inputs: []const compile.watch_inputs.Input,
+    counts: CheckDiagnosticCounts,
+    /// Every library unit's image. Restored images belong to the run's build
+    /// environment, so `releaseCode` runs before it goes away.
+    library: ?BoxyLibraryObjects,
+    /// The root unit's image, owned.
+    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
+    /// The root program's LIR, when this run lowered it.
+    root: ?lir.CheckedPipeline.LoweredProgram,
+
+    /// Release the images, once the run image holds their code.
+    fn releaseCode(self: *RunUnits, gpa: Allocator) void {
+        if (self.library) |library| library.deinit(gpa);
+        self.library = null;
+        if (self.root_image) |image| gpa.free(image);
+        self.root_image = null;
+    }
+
+    fn deinit(self: *RunUnits, gpa: Allocator) void {
+        self.releaseCode(gpa);
+        if (self.root) |*program| program.deinit();
+        self.root = null;
+        compile.watch_inputs.deinit(gpa, self.watch_inputs);
+        self.watch_inputs = &.{};
+    }
+};
+
+/// Check a discovered dev run and build its units: every library unit
+/// restored from the per-module cache or lowered and filed there, as `roc
+/// build` does (design.md "Caching Under `.boxy`"), and the root unit (the
+/// app with the platform modules paired with it) restored from the cache or
+/// lowered and compiled with entrypoint wrappers the machine-code shim
+/// calls.
+fn lowerRunUnits(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    target: RocTarget,
+    display_path: []const u8,
+    reporter: *progress.Reporter,
+    hot_reload: bool,
+) CliMainError!RunUnits {
+    var runtime_lowering = checkedRuntimeLoweringConfig(.{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } }, .dev, .boxy, target, false);
+    // The checked host identity covers each entrypoint's host boundary digest.
+    runtime_lowering.target.host_boundary_digests = true;
+    runtime_lowering.target.boxy_unit = tables.rootUnit();
+    build_env.setRuntimeLowering(runtime_lowering);
+    // The run image places every unit, so compile-time evaluation builds the
+    // units as their modules are checked, against the run's interfaces.
+    if (build_env.boxy_object_lowering) |*lowering| if (lowering.target == target) {
+        lowering.interfaces = &tables.interfaces;
+        lowering.links = true;
+        lowering.link_reads_pieces = false;
+    };
+
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
+        return err;
+    };
+    const counts = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
+    const watch_inputs = try build_env.collectWatchInputStates();
+    errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
+    // An app root that never finished checking has no program; its
+    // diagnostics have already been rendered.
+    if (!build_env.executable_artifacts_finalized) {
+        reporter.fail();
+        return error.TypeCheckingFailed;
+    }
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
+
+    const root_artifact = build_env.executableRootCheckedArtifact();
+    // A `provides` entry whose type is erroneous declares no host ABI, so no
+    // program exists to run; the error was rendered with the diagnostics.
+    if (root_artifact.hasProvidedExportWithoutAbi()) {
+        reporter.fail();
+        return error.TypeCheckingFailed;
+    }
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    // A run files the units it builds.
+    tables.digests = try build_env.boxyLinkDigests();
+    const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false };
+    var library: ?BoxyLibraryObjects = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &tables.interfaces, &tables.digests, true, null, "Lowering Modules");
+    errdefer if (library) |owned| owned.deinit(ctx.gpa);
+    const cache_manager = build_env.cache_manager orelse base.invariant("roc run invariant violated: a run composed from unit images has no cache manager", .{});
+    const root_key = try boxyObjectKey(ctx.gpa, &tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.?.platform), policy, target, library.?.paired_platforms, true);
+
+    const selected_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(ctx.gpa, root_artifact.root_requests.runtime_requests);
+    defer ctx.gpa.free(selected_roots);
+    const entrypoint_names = try ctx.arena.alloc([]const u8, selected_roots.len);
+    for (selected_roots, entrypoint_names) |root, *name| name.* = try ctx.arena.dupe(u8, nativeEntrypointSymbolName(root_artifact, root));
+
+    var root_program: ?lir.CheckedPipeline.LoweredProgram = null;
+    errdefer if (root_program) |*program| program.deinit();
+    var root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null;
+    errdefer if (root_image) |image| ctx.gpa.free(image);
+    const host_boundary_digests = try ctx.arena.alloc([32]u8, selected_roots.len);
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, target, &tables.interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        if (entry.host_boundary_digests.len != selected_roots.len) base.invariant("roc run invariant violated: the root unit's cache entry covers {d} of {d} entrypoints", .{ entry.host_boundary_digests.len, selected_roots.len });
+        @memcpy(host_boundary_digests, entry.host_boundary_digests);
+        const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
+        @memcpy(image, entry.image);
+        root_image = image;
+        build_env.recordBoxyObjects(1, 0);
+    } else {
+        root_program = try lowerRunRoot(ctx, build_env, tables, target, reporter, root_artifact, imported_artifacts, relation_artifacts, hot_reload);
+        const lowered = &root_program.?;
+        for (lowered.lir_result.root_metadata.items, host_boundary_digests) |metadata, *digest| {
+            digest.* = metadata.host_boundary_digest orelse base.invariant("platform entrypoint was lowered without its host boundary digest", .{});
+        }
+        root_image = try buildRunRootImage(ctx, reporter, build_env, lowered, root_artifact, imported_artifacts, relation_artifacts, target);
+        const records = try compile.boxy_unit.exportRecords(ctx.gpa, lowered, &tables.interfaces);
+        defer ctx.gpa.free(records);
+        try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
+            .exports = records,
+            .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+            .host_boundary_digests = host_boundary_digests,
+            // No link composes the root unit of a run image.
+            .pieces = &.{},
+            .image = root_image.?,
+        });
+        build_env.recordBoxyObjects(0, 1);
+    }
+
+    const hosted_table = try checkedHostedTable(ctx.arena, root_artifact, imported_artifacts, relation_artifacts);
+    const root_metadata = try ctx.gpa.alloc(lir.RootMetadata.RootMetadata, selected_roots.len);
+    defer ctx.gpa.free(root_metadata);
+    for (selected_roots, host_boundary_digests, root_metadata) |root, digest, *metadata| {
+        metadata.* = lir.RootMetadata.RootMetadata.fromCheckedRoot(root);
+        metadata.host_boundary_digest = digest;
+    }
+    const interface_identity = try checkedInterpreterHostIdentity(
+        root_artifact,
+        root_metadata,
+        entrypoint_names,
+        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        hosted_table,
+    );
+    // The host executable links only the platform's host and the shim: the
+    // run image carries the builtins and the Boxy runtime.
+    var identity = base.Sha256.init(.{});
+    updateHashBytes(&identity, "roc-run-unit-images-v1");
+    identity.update(&interface_identity);
+
+    const owned_library = library.?;
+    library = null;
+    return .{
+        .target = target,
+        .hot_reload = hot_reload,
+        .root_artifact = root_artifact,
+        .entrypoint_names = entrypoint_names,
+        .hosted_symbols = hosted_table.symbols,
+        .checked_host_identity = identity.finalResult(),
+        .watch_inputs = watch_inputs,
+        .counts = counts,
+        .library = owned_library,
+        .root_image = root_image,
+        .root = root_program,
+    };
+}
+
+/// Lower a composed run's root program: the app and the platform modules
+/// paired with it, against the units' export interfaces.
+fn lowerRunRoot(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    target: RocTarget,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    hot_reload: bool,
+) CliMainError!lir.CheckedPipeline.LoweredProgram {
+    reporter.begin(loweringProgressLabel(.boxy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    const lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        .{ .platform_entrypoints = .{ .dev_run_image = .{ .target = target, .hot_reload = hot_reload } } },
+        .dev,
+        .boxy,
+        target,
+        false,
+        true,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        tables.rootUnit(),
+    );
+    finishPostCheckLowering(reporter, &spec_timing, .boxy);
+    return lowered;
+}
+
+/// Compile a composed run's root program into its unit image: its
+/// procedures, its constants, and an entrypoint wrapper per `provides`
+/// procedure in the convention the machine-code shim calls.
+fn buildRunRootImage(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    build_env: *BuildEnv,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+) CliMainError![]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 {
+    const static_data = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{ .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts), .imports = imported_artifacts },
+        lowered,
+        target,
+        .{},
+    );
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, lowered);
+    defer ctx.gpa.free(entrypoints);
+
+    reporter.begin(devBackendPhaseName(target));
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.internal_entrypoints = true;
+    var pieces = object_compiler.compileToPieces(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        entrypoints,
+        static_data,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+    ) catch |err| {
+        reporter.fail();
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer pieces.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.begin("Unit Image");
+    const image = object_compiler.buildUnitImage(&pieces, target, .entrypoints, null) catch |err| {
+        reporter.fail();
+        std.log.err("Building the root unit's image failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    reporter.end();
+    return image;
+}
+
+/// Compose `units` into a run image in `shm`: into the allocation a
+/// hot-reload rebuild was given, or after the mapping's header.
+fn writeComposedRunImage(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    shm: *SharedMemoryAllocator,
+    units: *RunUnits,
+    hot_reload_allocation: ?HotReloadImageAllocation,
+) CliMainError!DevRunImagePublication {
+    if (comptime !backend.host_lir_codegen_available) {
+        unreachable; // `unitImageRunApplies` selects composed runs only on hosts whose units carry images
+    } else {
+        if (!devShimTargetCompatible(units.target, backend.HostLirCodeGen.roc_target)) {
+            return rejectRunTargetNotExecutable(ctx, units.target);
+        }
+        reporter.begin("Run Image");
+        const support_bytes = EmbeddedTargetObjects.forTarget(units.target).support_image orelse base.invariant("roc run invariant violated: a run composed from unit images has no support image", .{});
+        const support = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, support_bytes.len);
+        defer ctx.gpa.free(support);
+        @memcpy(support, support_bytes);
+        const library = units.library.?;
+        const inputs = try ctx.gpa.alloc(run_image_link.ImageInput, library.images.len + 1);
+        defer ctx.gpa.free(inputs);
+        for (library.images, inputs[0..library.images.len]) |image, *input| {
+            input.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc run invariant violated: a unit image does not read", .{}) };
+        }
+        inputs[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(units.root_image.?) catch base.invariant("roc run invariant violated: the root unit image does not read", .{}) };
+        var shim_builtins: [shim_builtin_count][]const u8 = undefined;
+        for (builtins_registry.BuiltinFn.image_tracking, &shim_builtins) |builtin_fn, *name| name.* = builtin_fn.symbolName();
+        const sorted_shim_builtins = try fast_dev_link.sortedUnion(ctx.arena, &.{&shim_builtins});
+        const support_view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc run invariant violated: the embedded support image does not read", .{});
+        // The support image's imports: the runtime set and the system
+        // library functions its builtins call, which the shim resolves in
+        // its own process.
+        const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
+        for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
+        // The run targets this host, checked above, and only 64-bit x86 and
+        // ARM hosts load unit images.
+        const target_arch = units.target.toCpuArch();
+        std.debug.assert(target_arch == .x86_64 or target_arch == .aarch64);
+        const link_inputs: run_image_link.Inputs = .{
+            .support = .{ .view = support_view },
+            .units = inputs,
+            .root = library.images.len,
+            .entrypoints = units.entrypoint_names,
+            .host_symbols = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.hosted_symbols, &host_symbols.runtime_symbols, sorted_shim_builtins, support_imports }),
+            .shim_builtins = sorted_shim_builtins,
+            .function_table_entry_size = if (target_arch == .aarch64) 8 else 12,
+        };
+        var plan = run_image_link.plan(ctx.gpa, ctx.io.std_io, link_inputs) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ProgramTooLarge => {
+                reporter.fail();
+                return ctx.fail(.{ .dev_program_too_large = .{ .target = @tagName(units.target) } });
+            },
+        };
+        defer plan.deinit();
+        // The hosted symbols the image imports, which the host must define.
+        var referenced_hosted: std.ArrayList([]const u8) = .empty;
+        for (plan.slot_symbols) |symbol| {
+            const name = link_inputs.host_symbols[symbol];
+            for (units.hosted_symbols) |hosted| {
+                if (std.mem.eql(u8, hosted, name)) {
+                    try referenced_hosted.append(ctx.arena, name);
+                    break;
+                }
+            }
+        }
+        units.referenced_hosted_symbols = referenced_hosted.items;
+
+        var empty_region_buffer: [0]u8 = .{};
+        var fixed_region_buffer = std.heap.FixedBufferAllocator.init(&empty_region_buffer);
+        var image_allocator = shm.allocator();
+        var descriptor: ?*ipc.hot_reload.ImageDescriptor = null;
+        var descriptor_offset: usize = ipc.hot_reload.invalid_descriptor_offset;
+        var allocation_start: usize = 0;
+        var reset_descriptor_refs = true;
+        const original_total_size = shm.total_size;
+        defer shm.total_size = original_total_size;
+        if (hot_reload_allocation) |allocation| {
+            const reusable_capacity = if (allocation.region_end > allocation.region_start)
+                allocation.region_end - allocation.region_start
+            else
+                0;
+            const required_capacity = try backend.RunImage.composedCapacityFromOffset(shm.page_size, allocation.region_start, plan.layout) - allocation.region_start;
+            descriptor = try hotReloadDescriptorForWrite(shm, allocation.descriptor_offset);
+            descriptor_offset = allocation.descriptor_offset;
+            reset_descriptor_refs = !allocation.preserve_descriptor_refs;
+            if (reusable_capacity >= required_capacity) {
+                fixed_region_buffer = std.heap.FixedBufferAllocator.init(shm.base_ptr[allocation.region_start..allocation.region_end]);
+                image_allocator = fixed_region_buffer.allocator();
+                allocation_start = allocation.region_start;
+            } else {
+                if (allocation.image_limit <= allocation.append_offset) return error.OutOfMemory;
+                try shm.resetToUsedSize(allocation.append_offset);
+                shm.total_size = allocation.image_limit;
+                allocation_start = allocation.append_offset;
+            }
+        }
+        const composed = try backend.RunImage.allocComposed(image_allocator, shm.base_ptr, shm.page_size, plan.layout);
+        var timing: run_image_link.Timing = .{};
+        run_image_link.write(&plan, ctx.io.std_io, link_inputs, composed, &timing) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.ClearFailed => {
+                reporter.fail();
+                return error.InvalidSharedMemory;
+            },
+        };
+        const header = composed.header;
+        const image_offset = @intFromPtr(header) - @intFromPtr(shm.base_ptr);
+        const image_bound: usize = @intCast(header.image_size);
+        if (hot_reload_allocation) |allocation| {
+            ipc.hot_reload.prepareDescriptor(
+                descriptor.?,
+                allocation.generation,
+                image_offset,
+                image_bound,
+                allocation_start,
+                image_bound,
+                0,
+                0,
+                reset_descriptor_refs,
+            );
+            try shm.resetToUsedSize(@max(allocation.append_offset, image_bound));
+        }
+        reporter.endWithBreakdown(&.{
+            .{ .name = "Layout", .ns = timing.layout_ns },
+            .{ .name = "Write", .ns = timing.write_ns },
+        });
+        if (dev_diagnostics.get(.dump_run_image)) |path| if (hot_reload_allocation == null or hot_reload_allocation.?.generation == 1) {
+            std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = shm.base_ptr[image_offset..image_bound] }) catch |err| {
+                std.log.warn("writing the run image to {s} failed: {}", .{ path, err });
+            };
+        };
+        reporter.recordCounters("Run image", &.{
+            .{ .name = "Images placed", .count = timing.images_placed },
+            .{ .name = "Bytes written", .count = timing.bytes_written },
+            .{ .name = "Sites filled", .count = timing.sites_patched },
+            .{ .name = "Host sites", .count = timing.host_sites },
+            .{ .name = "Rebased words", .count = timing.rebases },
+        });
+        return .{ .descriptor = descriptor, .descriptor_offset = descriptor_offset };
+    }
+}
+
+const builtins_registry = @import("builtins").builtin_registry;
+const shim_builtin_count = builtins_registry.BuiltinFn.image_tracking.len;
+
+/// The host executable a composed run launches, restored from the cache or
+/// linked now, with its platform shim built from the root program's LIR,
+/// which a run that restored the root unit lowers for it.
+fn prepareComposedRunHost(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    build_env: *BuildEnv,
+    tables: *RunUnitTables,
+    units: *RunUnits,
+    platform_link: RunPlatformLink,
+    cache: ?*CacheManager,
+    temp_dir_path: []const u8,
+    exe_path: []const u8,
+) CliMainError!void {
+    const shim_host = try RunShimHost.init(ctx, .machine_code, platform_link, cache, temp_dir_path, exe_path, units.entrypoint_names, units.checked_host_identity);
+    reporter.begin("Host Executable Restore");
+    const restored = shim_host.restore(ctx);
+    reporter.end();
+    if (restored) return;
+    if (units.root == null) {
+        const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, units.root_artifact);
+        defer ctx.gpa.free(imported_artifacts);
+        const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, units.root_artifact);
+        defer ctx.gpa.free(relation_artifacts);
+        units.root = try lowerRunRoot(ctx, build_env, tables, units.target, reporter, units.root_artifact, imported_artifacts, relation_artifacts, units.hot_reload);
+    }
+    reporter.begin("Host Executable Link");
+    try shim_host.link(ctx, units.entrypoint_names, units.hosted_symbols, .{ .lir = &units.root.? }, units.referenced_hosted_symbols, .{});
+    shim_host.publish();
+    reporter.end();
 }
 
 /// Build shared memory containing a viewable ARC-inserted LIR image.
@@ -7087,44 +7202,6 @@ fn publishLirImage(ctx: *CliCtx, lowered_result: *const LoweredCoordinatorResult
     );
 }
 
-/// Get the roc cache directory for downloaded packages, creating it if needed.
-/// Standard cache locations by platform:
-/// - Linux/macOS: ~/.cache/roc/packages/ (respects XDG_CACHE_HOME if set)
-/// - Windows: %LOCALAPPDATA%\roc\packages\
-fn getRocCacheDir(allocator: std.mem.Allocator) (Allocator.Error || error{NoCacheDir})![]const u8 {
-    // Check XDG_CACHE_HOME first (Linux/macOS)
-    if (try getEnvVar(allocator, "XDG_CACHE_HOME")) |xdg_cache| {
-        defer allocator.free(xdg_cache);
-        return std.fs.path.join(allocator, &.{ xdg_cache, "roc", "packages" });
-    }
-
-    // Fall back to %LOCALAPPDATA%\roc\packages (Windows)
-    if (comptime builtin.os.tag == .windows) {
-        if (try getEnvVar(allocator, "LOCALAPPDATA")) |local_app_data| {
-            defer allocator.free(local_app_data);
-            return std.fs.path.join(allocator, &.{ local_app_data, "roc", "packages" });
-        }
-    }
-
-    // Fall back to ~/.cache/roc/packages (Unix)
-    if (try getEnvVar(allocator, "HOME")) |home| {
-        defer allocator.free(home);
-        return std.fs.path.join(allocator, &.{ home, ".cache", "roc", "packages" });
-    }
-
-    return error.NoCacheDir;
-}
-
-/// Cross-platform helper to get environment variable.
-/// Returns null if the variable is not set. Caller must free the returned slice.
-fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error!?[]const u8 {
-    const key_z = try allocator.dupeSentinel(u8, key, 0);
-    defer allocator.free(key_z);
-    const value = std.c.getenv(key_z) orelse return null;
-    const len = std.mem.len(value);
-    return try allocator.dupe(u8, value[0..len]);
-}
-
 /// Convert parsed CLI size-limit flags to a resolution config.
 fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package_resolution.Config {
     var config = compile.package_resolution.Config{};
@@ -7136,9 +7213,9 @@ fn resolutionConfigFromLimits(limits: cli_args.ResolveLimitArgs) compile.package
         config.max_transitive_expanded_bytes = max_bytes;
         config.max_platform_transitive_expanded_bytes = max_bytes;
     }
+    comptime std.debug.assert(cli_args.ReplaceDepArgs.max <= compile.package_resolution.ReplaceDeps.max);
     for (limits.replace_deps.slice()) |arg| {
-        // The parser caps occurrences at the same bound, so this cannot overflow.
-        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable;
+        config.replace_deps.append(.{ .old = arg.old, .new = arg.new }) catch unreachable; // the parser caps occurrences at ReplaceDepArgs.max, asserted above to fit ReplaceDeps
     }
     return config;
 }
@@ -7205,7 +7282,7 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     const base58_hash = parsed_url.hash;
 
     // 2. Get cache directory
-    const cache_dir_path = getRocCacheDir(ctx.arena) catch {
+    const cache_dir_path = compile.build.packagesCacheDir(ctx.coreCtx(), ctx.arena) catch {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, base58_hash });
@@ -7234,13 +7311,13 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
                 .err = make_err,
             } });
         };
-        sweepStalePackageStagingDirs(ctx.io.std_io, cache_dir_path);
+        compile.package_resolution.sweepStalePackageCacheEntries(ctx.coreCtx(), ctx.arena, cache_dir_path);
 
         // Download into a staging directory and publish it with a rename, so
         // the hash-named directory never exists half-written. Other processes
         // read this cache while we fill it, and a directory under the hash is
         // their only signal that the bundle is complete.
-        const staging_dir_path = try packageStagingDirPath(ctx, package_dir_path);
+        const staging_dir_path = try compile.package_resolution.packageStagingDirPath(ctx.io.std_io, ctx.arena, package_dir_path);
         std.Io.Dir.cwd().createDir(ctx.io.std_io, staging_dir_path, .default_dir) catch |make_err| {
             return ctx.fail(.{ .directory_create_failed = .{
                 .path = staging_dir_path,
@@ -7260,7 +7337,18 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
             } });
         };
 
-        try publishPackageDir(ctx, url, staging_dir_path, package_dir_path, platform_source_path);
+        _ = compile.package_resolution.publishStagedPackage(ctx.coreCtx(), ctx.arena, staging_dir_path, package_dir_path, platform_source_path) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // The CLI's CoreCtx renames through `std.Io.Dir`, whose errors it
+            // passes through unchanged.
+            error.IoError => {
+                base.invariant("CLI CoreCtx rename reported a non-std error", .{});
+            },
+            else => |rename_err| return ctx.fail(.{ .download_failed = .{
+                .url = url,
+                .err = rename_err,
+            } }),
+        };
 
         std.log.info("Bundle cached at {s}", .{package_dir_path});
     }
@@ -7280,87 +7368,6 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
     return .{
         .source_path = platform_source_path,
     };
-}
-
-/// A staging path next to the final hash-named directory, so publishing is a
-/// rename within one directory rather than a copy across filesystems. The
-/// random component keeps concurrent downloads of the same bundle out of
-/// each other's way, and the `.tmp` suffix is what the stale sweep matches.
-fn packageStagingDirPath(ctx: *CliCtx, package_dir_path: []const u8) error{OutOfMemory}![]u8 {
-    var suffix: [8]u8 = undefined;
-    ctx.io.std_io.random(&suffix);
-    return std.fmt.allocPrint(ctx.arena, "{s}.{s}.tmp", .{ package_dir_path, std.fmt.bytesToHex(suffix, .lower) });
-}
-
-/// Move a finished staging directory into its hash-named slot in the package
-/// cache. Mirrors the publish step of the compiler's package resolution,
-/// which shares this cache: losing the rename to a concurrent process is
-/// success, since bundles are content-addressed and hash-verified, and a
-/// slot holding a directory with no entry point is an interrupted
-/// extraction's leftover that gets moved aside and deleted. Moving rather
-/// than deleting in place matters when a concurrent process publishes a good
-/// copy between our check and our repair: a rename cannot tear that copy
-/// out from under whoever is already reading it.
-fn publishPackageDir(
-    ctx: *CliCtx,
-    url: []const u8,
-    staging_dir_path: []const u8,
-    package_dir_path: []const u8,
-    entry_point_path: []const u8,
-) (CliError || error{OutOfMemory})!void {
-    std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch {
-        const entry_point_exists = exists: {
-            std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :exists false;
-            break :exists true;
-        };
-        if (entry_point_exists) {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
-            return;
-        }
-
-        const trash_dir_path = try packageStagingDirPath(ctx, package_dir_path);
-        std.Io.Dir.cwd().rename(package_dir_path, std.Io.Dir.cwd(), trash_dir_path, ctx.io.std_io) catch {};
-        defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, trash_dir_path) catch {};
-        std.Io.Dir.cwd().rename(staging_dir_path, std.Io.Dir.cwd(), package_dir_path, ctx.io.std_io) catch |rename_err| {
-            std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
-            // Someone published in the gap between that move and this retry.
-            // Their copy is as good as ours.
-            const published_by_another = published: {
-                std.Io.Dir.cwd().access(ctx.io.std_io, entry_point_path, .{}) catch break :published false;
-                break :published true;
-            };
-            if (published_by_another) return;
-            return ctx.fail(.{ .download_failed = .{
-                .url = url,
-                .err = rename_err,
-            } });
-        };
-    };
-}
-
-/// Reclaim package cache staging directories stranded by processes that died
-/// mid-download. Nothing ever reads them again, and one older than a day
-/// cannot belong to a live download. The compiler's package resolution runs
-/// the same sweep over this cache with the same naming scheme, so either
-/// downloader cleans up after the other. Best-effort: any failure just
-/// leaves the sweep to a future download.
-fn sweepStalePackageStagingDirs(std_io: std.Io, cache_dir_path: []const u8) void {
-    var dir = std.Io.Dir.cwd().openDir(std_io, cache_dir_path, .{ .iterate = true }) catch return;
-    defer dir.close(std_io);
-
-    const now_ns: i128 = std.Io.Timestamp.now(std_io, .real).nanoseconds;
-    var it = dir.iterate();
-    while (true) {
-        const entry = (it.next(std_io) catch break) orelse break;
-        if (entry.kind != .directory) continue;
-        if (!std.mem.endsWith(u8, entry.name, ".tmp")) continue;
-
-        const info = dir.statFile(std_io, entry.name, .{}) catch continue;
-        const mtime_ns: i128 = @intCast(info.mtime.nanoseconds);
-        if (now_ns - mtime_ns <= stale_staging_max_age_ns) continue;
-
-        dir.deleteTree(std_io, entry.name) catch {};
-    }
 }
 
 /// Default output basename for `roc build <url>`: the last path segment of
@@ -7445,29 +7452,27 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = args.shorthand,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is missing",
+                .reason = "its install manifest is missing",
             } });
         },
         .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
-            .reason = "its install.json manifest could not be read",
+            .reason = "its install manifest could not be read",
         } }),
     };
     if (existing_bytes) |bytes| {
-        var parsed = (try install_store.parseManifest(ctx.gpa, bytes)) orelse {
+        const existing = install_store.parseManifest(bytes) orelse {
             return ctx.fail(.{ .install_entry_corrupt = .{
                 .name = args.shorthand,
                 .path = entry.entry_dir,
-                .reason = "its install.json manifest is not valid",
+                .reason = "its install manifest is not valid",
             } });
         };
-        defer parsed.deinit();
-        if (std.mem.eql(u8, parsed.manifest().url, args.url)) {
+        if (std.mem.eql(u8, existing.url, args.url)) {
             // Same name + same URL: an intact entry makes this a no-op, and a
             // damaged one is safe to repair since the URL matches.
-            // parseManifest already validated the kind string.
-            const existing_kind = install_store.manifestKind(parsed.manifest()).?;
+            const existing_kind = existing.kind;
             const artifact_intact = intact: {
                 std.Io.Dir.cwd().access(ctx.io.std_io, entry.artifactPath(existing_kind), .{}) catch break :intact false;
                 break :intact true;
@@ -7487,7 +7492,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
                 } });
             };
         } else {
-            const existing_url = try ctx.arena.dupe(u8, parsed.manifest().url);
+            const existing_url = try ctx.arena.dupe(u8, existing.url);
             return ctx.fail(.{ .shorthand_conflict = .{
                 .name = args.shorthand,
                 .existing_url = existing_url,
@@ -7600,14 +7605,13 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
 
     // The manifest is written last, so a staged entry is complete by the time
     // it can be published.
-    const manifest_json = try install_store.manifestToJson(ctx.arena, .{
-        .format_version = install_store.manifest_format_version,
-        .kind = @tagName(install_kind),
+    const manifest_bytes = try install_store.encodeManifest(ctx.arena, .{
+        .kind = install_kind,
         .url = args.url,
         .hash = parsed_url.hash,
         .compiler_version = @import("compiler_version").compiler_version,
     });
-    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_json }) catch |err| {
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = staging.manifest_path, .data = manifest_bytes }) catch |err| {
         return ctx.fail(.{ .file_write_failed = .{ .path = staging.manifest_path, .err = err } });
     };
 
@@ -7617,12 +7621,11 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
         const winner_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch {
             return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
         };
-        var winner = (try install_store.parseManifest(ctx.gpa, winner_bytes)) orelse {
+        const winner = install_store.parseManifest(winner_bytes) orelse {
             return ctx.fail(.{ .install_publish_failed = .{ .name = args.shorthand, .err = rename_err } });
         };
-        defer winner.deinit();
-        if (!std.mem.eql(u8, winner.manifest().url, args.url)) {
-            const existing_url = try ctx.arena.dupe(u8, winner.manifest().url);
+        if (!std.mem.eql(u8, winner.url, args.url)) {
+            const existing_url = try ctx.arena.dupe(u8, winner.url);
             return ctx.fail(.{ .shorthand_conflict = .{
                 .name = args.shorthand,
                 .existing_url = existing_url,
@@ -7635,33 +7638,6 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
         .executable => try ctx.io.stdout().print("Installed {s}. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand }),
         .glue => try ctx.io.stdout().print("Installed {s}. Use it with: roc glue {s} <output-dir> <platform>\n", .{ args.shorthand, args.shorthand }),
     }
-}
-
-/// Path of a complete copy of the selected shim library that the calling build
-/// may link: `cache_path` or `staged_path`.
-///
-/// `cache_path` names the library's content-addressed entry in the shared
-/// build cache. An entry is published by writing it in full at `staged_path`,
-/// which must lie in a directory only the calling build writes to, and
-/// renaming it into the cache, so a build that finds the entry never reads one
-/// that is still being written. When the rename is refused, the staged copy
-/// is itself complete and is the path returned.
-fn publishedShimLibraryPath(
-    ctx: *CliCtx,
-    kind: ShimLibraryKind,
-    target: RocTarget,
-    cache_path: []const u8,
-    staged_path: []const u8,
-) (std.Io.File.OpenError || std.Io.File.Writer.Error)![]const u8 {
-    const published = blk: {
-        std.Io.Dir.cwd().access(ctx.io.std_io, cache_path, .{}) catch break :blk false;
-        break :blk true;
-    };
-    if (published) return cache_path;
-
-    try extractShimLibrary(ctx, kind, staged_path, target);
-    std.Io.Dir.cwd().rename(staged_path, std.Io.Dir.cwd(), cache_path, ctx.io.std_io) catch return staged_path;
-    return cache_path;
 }
 
 /// Extract the selected embedded shim library to the specified path for the given target.
@@ -7845,6 +7821,26 @@ fn bundleArchivePath(
     return relative_path;
 }
 
+/// The `main.roc` among `source_paths` that roots a bundle: the one whose
+/// directory contains every other `main.roc` given, such as the headers of
+/// local packages it depends on. Null when no `main.roc` qualifies.
+fn bundleRootMain(allocator: Allocator, source_paths: []const []const u8) Allocator.Error!?[]const u8 {
+    for (source_paths) |candidate| {
+        if (!std.mem.eql(u8, std.fs.path.basename(candidate), "main.roc")) continue;
+        const candidate_dir = std.fs.path.dirname(candidate) orelse continue;
+        const contains_every_main = for (source_paths) |other| {
+            if (!std.mem.eql(u8, std.fs.path.basename(other), "main.roc")) continue;
+            const relative_path = bundleArchivePath(allocator, candidate_dir, other) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidPath => break false,
+            };
+            allocator.free(relative_path);
+        } else true;
+        if (contains_every_main) return candidate;
+    }
+    return null;
+}
+
 /// Bundles a roc package and its dependencies into a compressed tar archive
 pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     const stdout = ctx.io.stdout();
@@ -7875,11 +7871,6 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // If no paths provided, default to "main.roc"
     const paths_to_use = if (args.paths.len == 0) &[_][]const u8{"main.roc"} else args.paths;
 
-    // Find the first .roc file to use as entry point for module discovery
-    const first_roc_index: ?usize = for (paths_to_use, 0..) |path, index| {
-        if (std.mem.endsWith(u8, path, ".roc")) break index;
-    } else null;
-
     // Resolve every explicitly requested file exactly once. Discovered module
     // paths are already absolute, so all following work uses one path form.
     for (paths_to_use) |path| {
@@ -7890,7 +7881,16 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         try source_paths.append(ctx.arena, abs_path);
     }
 
-    const entry_source_path = source_paths.items[first_roc_index orelse 0];
+    // Consumers load a fetched bundle from its root directory's `main.roc`,
+    // so that file is the package root the bundle is built and laid out
+    // from, wherever it appears among the arguments.
+    const entry_source_path = try bundleRootMain(ctx.arena, source_paths.items) orelse {
+        try stderr.print(
+            "Error: A bundle must include its package's main.roc, in a directory containing every other main.roc given. Consumers load the bundle from that main.roc.\n",
+            .{},
+        );
+        return error.InvalidPath;
+    };
     const bundle_root_path = std.fs.path.dirname(entry_source_path) orelse {
         try stderr.print("Error: Could not determine the directory containing entry point '{s}'.\n", .{entry_source_path});
         return error.InvalidPath;
@@ -7898,9 +7898,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
 
     // Discover transitive modules and their recorded file imports, including
     // modules exposed by a `package [...]` header, and add their source paths.
-    if (first_roc_index != null) {
-        try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
-    }
+    try discoverAndAddBundleInputs(ctx, entry_source_path, &source_paths, stderr);
 
     var entries = std.ArrayList(bundle.Entry).empty;
     defer entries.deinit(ctx.arena);
@@ -7977,7 +7975,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
         var random: [16]u8 = undefined;
         ctx.io.std_io.random(&random);
         const hex = std.fmt.bytesToHex(random, .lower);
-        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable;
+        temp_filename = std.fmt.bufPrint(&temp_name_buffer, ".roc-bundle-{s}.tmp", .{hex}) catch unreachable; // 12 prefix bytes, 32 hex digits, and 4 suffix bytes fit the 64-byte buffer
         break output_dir.createFile(ctx.io.std_io, temp_filename, .{
             // Allow querying metadata (stat) on the handle, necessary for Windows.
             .read = true,
@@ -8078,7 +8076,7 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     // No need to free when using arena allocator
 
     // Print results
-    try stdout.print("Created: {s}\n", .{display_path});
+    try stdout.print("Created: {s}\n", .{try ctx.displayPath(display_path)});
     try stdout.print("Compressed size: {} bytes\n", .{compressed_size});
     try stdout.print("Uncompressed size: {} bytes\n", .{uncompressed_size});
     try stdout.print("Compression ratio: {d:.2}:1\n", .{@as(f64, @floatFromInt(uncompressed_size)) / @as(f64, @floatFromInt(compressed_size))});
@@ -8246,7 +8244,7 @@ fn rocBuildOnce(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     // Default apps build through a synthetic default platform.
-    const prepared = stageDefaultApp(ctx, args.path, .execution) catch |err| {
+    const prepared = stageDefaultApp(ctx, args.path, .building) catch |err| {
         // Preparation can fail before a BuildEnv exists. The watch parent
         // must still observe edits that repair the root source.
         if (args.watch_inputs_file) |file_path| {
@@ -8282,14 +8280,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
 
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{temp_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
+    if (args.keep_temp) try reportKeptTempDir(ctx, temp_dir);
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
@@ -8360,56 +8351,10 @@ fn writeDefaultWindowsRuntime(ctx: *CliCtx, platform_dir: []const u8, args: cli_
 fn defaultBuildPlatformSource(args: cli_args.BuildArgs) []const u8 {
     if (args.target) |target_str| {
         if (RocTarget.fromString(target_str)) |requested| {
-            // Which default platform a target gets follows from its OS and
-            // architecture, which a `v1` target shares with its default twin.
-            return switch (requested.defaultCpuTarget()) {
-                .x64mac,
-                .arm64mac,
-                .x64win,
-                .x64mingw,
-                .arm64win,
-                .arm64mingw,
-                .x64openbsd,
-                => echo_platform.build_c_platform_main_source,
-                .wasm32 => echo_platform.build_wasm_archive_platform_main_source,
-                .x64musl,
-                .x64glibc,
-                .x64linux,
-                .x64elf,
-                .x64freebsd,
-                .x64netbsd,
-                .x64v1mac,
-                .x64v1win,
-                .x64v1mingw,
-                .x64v1freebsd,
-                .x64v1openbsd,
-                .x64v1netbsd,
-                .x64v1musl,
-                .x64v1glibc,
-                .x64v1linux,
-                .x64v1elf,
-                .arm64linux,
-                .arm64musl,
-                .arm64glibc,
-                .arm64v1win,
-                .arm64v1mingw,
-                .arm64v1linux,
-                .arm64v1musl,
-                .arm64v1glibc,
-                .arm32linux,
-                .arm32musl,
-                .wasm32v1,
-                => echo_platform.build_platform_main_source,
-            };
+            if (requested.defaultCpuTarget() == .wasm32) return echo_platform.build_wasm_archive_platform_main_source;
         }
-
-        return echo_platform.build_platform_main_source;
     }
-
-    return switch (RocTarget.detectNative().toOsTag()) {
-        .macos, .windows, .openbsd => echo_platform.build_c_platform_main_source,
-        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .haiku, .hurd, .illumos, .linux, .plan9, .rtems, .serenity, .dragonfly, .freebsd, .netbsd, .driverkit, .ios, .maccatalyst, .tvos, .visionos, .watchos, .uefi, .@"3ds", .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .wasi, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => echo_platform.build_platform_main_source,
-    };
+    return echo_platform.platform_main_source;
 }
 
 fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
@@ -8417,558 +8362,6 @@ fn defaultBuildTarget(args: cli_args.BuildArgs) RocTarget {
         if (RocTarget.fromString(target_str)) |requested| return requested.defaultCpuTarget();
     }
     return RocTarget.detectNative().defaultCpuTarget();
-}
-
-/// Build using the dev backend to generate native machine code.
-/// This produces truly compiled executables without an interpreter.
-/// `ROC_DEV_PACK_OBJECTS` makes a native dev build also lower every visible
-/// module's closed exports as a pack program and write one object and one
-/// manifest per module next to the output (`<output>.pack.<module>.o` and
-/// `.manifest`). This is the pack-program gate for the object cache
-/// (https://github.com/roc-lang/roc/issues/12167); no build reads these files.
-fn writePackObjects(
-    ctx: *CliCtx,
-    build_env: *BuildEnv,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    app_imports: []const check.CheckedArtifact.ImportedModuleView,
-    app_relations: []const check.CheckedArtifact.ImportedModuleView,
-    app_lowered: *const lir.CheckedPipeline.LoweredProgram,
-    args: cli_args.BuildArgs,
-    target: RocTarget,
-    final_output_path: []const u8,
-) CliMainError!void {
-    if (std.c.getenv("ROC_DEV_PACK_OBJECTS") == null) return;
-    {
-        // The app program's own procedures, in the same shape as a pack
-        // manifest, so identities can be compared across the two lowerings.
-        const app_manifest = try lir.PackProgram.manifestBytes(ctx.gpa, app_lowered);
-        defer ctx.gpa.free(app_manifest);
-        const app_manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.app.manifest", .{final_output_path});
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, app_manifest_path, app_manifest) catch {
-            return error.NativeCompilationFailed;
-        };
-    }
-    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(artifacts);
-
-    for (artifacts) |artifact| {
-        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
-        defer ctx.gpa.free(roots);
-        const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
-        const file_name = try ctx.arena.dupe(u8, module_name);
-        for (file_name) |*byte| {
-            if (!std.ascii.isAlphanumeric(byte.*)) byte.* = '_';
-        }
-        const object_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.o", .{ final_output_path, file_name });
-        const manifest_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.manifest", .{ final_output_path, file_name });
-        if (roots.len == 0) {
-            // A module with no closed exports has an empty pack; the manifest
-            // still records that it was considered.
-            backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, "") catch {
-                return error.NativeCompilationFailed;
-            };
-            continue;
-        }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
-        defer pack.deinit();
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, pack.compiled.object_bytes) catch {
-            return error.NativeCompilationFailed;
-        };
-        if (pack.compiled.artifacts) |*set| {
-            const pack_bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-            defer ctx.gpa.free(pack_bytes);
-            const pack_path = try std.fmt.allocPrint(ctx.arena, "{s}.pack.{s}.rpk", .{ final_output_path, file_name });
-            backend.writeFileWindowsAvSafe(ctx.io.std_io, pack_path, pack_bytes) catch {
-                return error.NativeCompilationFailed;
-            };
-        }
-
-        const manifest = try lir.PackProgram.manifestBytes(ctx.gpa, &pack.lowered);
-        defer ctx.gpa.free(manifest);
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, manifest_path, manifest) catch {
-            return error.NativeCompilationFailed;
-        };
-    }
-}
-
-/// A module's pack program lowered and compiled in pack mode.
-const ModulePack = struct {
-    allocator: Allocator,
-    lowered: lir.CheckedPipeline.LoweredProgram,
-    static_data_exports: []compile.static_data_exports.StaticDataExport,
-    compiled: backend.dev.CompilationResult,
-
-    fn deinit(self: *ModulePack) void {
-        self.compiled.deinit();
-        compile.static_data_exports.deinitStaticData(self.allocator, self.static_data_exports);
-        self.lowered.deinit();
-    }
-};
-
-/// Lower `artifact`'s closed exports as a pack program and compile them in
-/// pack mode, with the program's whole module set in view.
-fn compileModulePack(
-    ctx: *CliCtx,
-    build_env: *BuildEnv,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    app_imports: []const check.CheckedArtifact.ImportedModuleView,
-    app_relations: []const check.CheckedArtifact.ImportedModuleView,
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    roots: []const check.CheckedArtifact.RootRequest,
-    args: cli_args.BuildArgs,
-    target: RocTarget,
-) CliMainError!ModulePack {
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    const module_name = artifact.canonical_names.moduleNameText(artifact.module_identity.module_name);
-    const own_imports = try build_env.collectImportedArtifactViews(ctx.gpa, artifact);
-    defer ctx.gpa.free(own_imports);
-    // A platform's internal modules bind their hosted functions through the
-    // platform module's hosted section, which names declarations across
-    // every module the platform reaches; the pack lowers with the program's
-    // whole module set in view, exactly as the app does, and Monotype lowers
-    // only what the pack's roots reach.
-    var imports = std.ArrayList(check.CheckedArtifact.ImportedModuleView).empty;
-    defer imports.deinit(ctx.gpa);
-    try imports.appendSlice(ctx.gpa, own_imports);
-    const root_view = check.CheckedArtifact.importedView(root_artifact);
-    for ([_][]const check.CheckedArtifact.ImportedModuleView{ &.{root_view}, app_imports, app_relations }) |views| {
-        for (views) |view| {
-            if (std.meta.eql(view.key, artifact.key)) continue;
-            var present = false;
-            for (imports.items) |existing| {
-                if (std.meta.eql(existing.key, view.key)) present = true;
-            }
-            if (!present) try imports.append(ctx.gpa, view);
-        }
-    }
-    const relations = try build_env.collectRelationArtifactViews(ctx.gpa, artifact);
-    defer ctx.gpa.free(relations);
-
-    var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
-    config.target.post_check_executor = build_env.postCheckExecutor();
-    var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
-    errdefer lowered.deinit();
-
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations),
-            .imports = imports.items,
-        },
-        &lowered,
-        target,
-        .{},
-    );
-    errdefer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
-
-    var object_compiler = backend.ObjectFileCompiler.initForPack(ctx.gpa);
-    object_compiler.post_check_executor = build_env.postCheckExecutor();
-    const compiled = object_compiler.compileToObjectFile(
-        &lowered.lir_result.store,
-        &lowered.lir_result.layouts,
-        &.{},
-        static_data_exports,
-        lowered.lir_result.store.getProcSpecs(),
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
-        target,
-    ) catch |err| {
-        std.log.err("Pack compilation for {s} failed: {}", .{ module_name, err });
-        return error.NativeCompilationFailed;
-    };
-    return .{ .allocator = ctx.gpa, .lowered = lowered, .static_data_exports = static_data_exports, .compiled = compiled };
-}
-
-/// Write this build's packs into the object cache: the root module's pack
-/// from the artifacts of the program just compiled, and a pack program for
-/// every other module in view whose pack is not in the store yet, except the
-/// app module when the platform is the root, since no other program imports
-/// it. Packs are
-/// filed by module identity and artifact key, so an unchanged module's pack
-/// is found and left alone.
-fn writePacksToStore(
-    ctx: *CliCtx,
-    build_env: *BuildEnv,
-    store: *const pack_store.Store,
-    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    app_imports: []const check.CheckedArtifact.ImportedModuleView,
-    app_relations: []const check.CheckedArtifact.ImportedModuleView,
-    app_lowered: *const lir.CheckedPipeline.LoweredProgram,
-    app_artifacts: ?*const backend.dev.ProcArtifact.Set,
-    args: cli_args.BuildArgs,
-    target: RocTarget,
-) CliMainError!void {
-    if (std.c.getenv("ROC_PACK_TRACE") != null) {
-        // What this program lowered from source: every procedure by identity,
-        // for comparison with another build of the same source, and every
-        // specialization by the key a pack serves it by, for comparison with
-        // what packs offer under that key.
-        const program_store = &app_lowered.lir_result.store;
-        for (program_store.getProcSpecs(), 0..) |proc, index| {
-            if (proc.body == null) continue;
-            const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            const fingerprint = try procFingerprint(ctx.gpa, app_lowered, proc_id);
-            std.debug.print("lowered {s} {x:0>16} {s}\n", .{ &proc.identity.symbolHex(), fingerprint, program_store.procDebugName(proc_id) orelse "" });
-        }
-        for (app_lowered.lir_result.spec_procs.items) |spec_proc| {
-            if (program_store.getProcSpec(spec_proc.proc).body == null) continue;
-            const fingerprint = try procFingerprint(ctx.gpa, app_lowered, spec_proc.proc);
-            std.debug.print("compiled {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, program_store.procDebugName(spec_proc.proc) orelse "" });
-        }
-    }
-    if (app_artifacts) |set| {
-        if (build_env.packPlacementForArtifactKey(root_artifact.key)) |placement| {
-            if (!try store.has(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes)) {
-                const bytes = try packFileBytes(ctx.gpa, set, app_lowered);
-                defer ctx.gpa.free(bytes);
-                store.write(placement.origin, placement.identity, root_artifact.codeGenerationKey().bytes, bytes) catch |err| {
-                    std.log.warn("object cache could not store the program's pack: {}", .{err});
-                };
-            }
-        }
-    }
-    // An app module is never imported, so its procedures only ever link into
-    // builds of that app, which read the pack written above from the
-    // program just compiled. A pack program of its own would only repeat it.
-    const app_key: ?check.CheckedArtifact.CheckedModuleArtifactKey = if (build_env.getAppSemanticData()) |app|
-        if (app.checked_artifact) |app_artifact| app_artifact.key else null
-    else
-        null;
-    const artifacts = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
-    defer ctx.gpa.free(artifacts);
-    for (artifacts) |artifact| {
-        if (app_key) |key| {
-            if (std.meta.eql(artifact.key, key)) continue;
-        }
-        const placement = build_env.packPlacementForArtifactKey(artifact.key) orelse continue;
-        const origin = placement.origin;
-        const identity = placement.identity;
-        if (try store.has(origin, identity, artifact.codeGenerationKey().bytes)) continue;
-        const roots = try lir.PackProgram.closedExportRoots(ctx.gpa, artifact);
-        defer ctx.gpa.free(roots);
-        if (roots.len == 0) continue;
-        if (std.c.getenv("ROC_PACK_TRACE") != null) {
-            std.debug.print("module pack {s}\n", .{artifact.canonical_names.moduleNameText(artifact.module_identity.module_name)});
-        }
-        var pack = try compileModulePack(ctx, build_env, root_artifact, app_imports, app_relations, artifact, roots, args, target);
-        defer pack.deinit();
-        const set = &(pack.compiled.artifacts orelse continue);
-        const bytes = try packFileBytes(ctx.gpa, set, &pack.lowered);
-        defer ctx.gpa.free(bytes);
-        store.write(origin, identity, artifact.codeGenerationKey().bytes, bytes) catch |err| {
-            std.log.warn("object cache could not store a module's pack: {}", .{err});
-        };
-    }
-}
-
-/// Encode a pack program's artifacts with its spec table: every keyed
-/// specialization whose procedure has an artifact, with the ownership
-/// signature ARC solved for it.
-fn packFileBytes(
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    lowered: *const lir.CheckedPipeline.LoweredProgram,
-) Allocator.Error![]u8 {
-    var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer artifact_by_identity.deinit();
-    for (set.artifacts, 0..) |artifact, index| {
-        switch (artifact.kind) {
-            .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
-        }
-    }
-    var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
-    defer specs.deinit(allocator);
-    var conditions_arena = std.heap.ArenaAllocator.init(allocator);
-    defer conditions_arena.deinit();
-    const trace = std.c.getenv("ROC_PACK_TRACE") != null;
-    var withheld: usize = 0;
-    const procs = lowered.lir_result.store.getProcSpecs();
-    const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
-    defer allocator.free(converting);
-    var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
-    defer literal_converters.deinit();
-    for (procs, converting) |proc, converts| {
-        if (converts) try literal_converters.put(proc.identity, {});
-    }
-    var closure = try SpliceClosure.init(allocator, set);
-    defer closure.deinit();
-    for (lowered.lir_result.spec_procs.items) |spec_proc| {
-        const proc = procs[@backingInt(spec_proc.proc)];
-        const artifact = artifact_by_identity.get(proc.identity) orelse continue;
-        // A linking program calls an entry at its base signature and cannot
-        // emit the ownership variants its callers would demand from the
-        // body, so an entry that admits such demands is not offered.
-        if (proc.rc_variant_demandable) {
-            withheld += 1;
-            continue;
-        }
-        // A linking program inlines it rather than calling it.
-        if (proc.inlined_at_calls) {
-            withheld += 1;
-            continue;
-        }
-        // A linking program has no body for an entry, so it sees the entry
-        // outside every call cycle and would reach it with an ordinary call
-        // where the cycle needs a frame-replacing one.
-        if (proc.tail_group != null) {
-            withheld += 1;
-            continue;
-        }
-        // Boxy statements index the program's own descriptor sidecar, and a
-        // constant holding a code pointer names code the pack may not carry;
-        // an entry that reaches either cannot be linked elsewhere, so it is
-        // not offered.
-        const placed = try closure.of(artifact);
-        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &literal_converters, placed)) {
-            withheld += 1;
-            continue;
-        }
-        // An entry this program spliced from a pack is offered again with
-        // its producer's code; only a body lowered here has a fingerprint.
-        if (trace and proc.body != null) {
-            const fingerprint = try procFingerprint(allocator, lowered, spec_proc.proc);
-            std.debug.print("offer {x} {x:0>16} {s}\n", .{ &spec_proc.key, fingerprint, lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
-        }
-        try specs.append(allocator, .{
-            .key = spec_proc.key,
-            .artifact = artifact,
-            .platform_requirement_relation = spec_proc.platform_requirement_relation,
-            .rc_borrowed_params = proc.rc_borrowed_params,
-            .rc_ret_borrowed = proc.rc_ret_borrowed,
-            .rc_ret_lenders = proc.rc_ret_lenders,
-            .rc_read_only_params = proc.rc_read_only_params,
-            .rc_ret_unique = proc.rc_ret_unique,
-            .rc_ret_unique_fields = proc.rc_ret_unique_fields,
-            .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
-        });
-    }
-    if (trace) {
-        std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
-    }
-    return try backend.dev.PackFile.write(allocator, set, specs.items);
-}
-
-/// The LIR fingerprint of one procedure of `lowered`, which is the same in
-/// every program that lowers that procedure identically.
-fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, proc: lir.LIR.LirProcSpecId) Allocator.Error!u64 {
-    return lir.DebugPrint.procFingerprint(allocator, &lowered.lir_result.store, &lowered.lir_result.layouts, proc) catch |err| switch (err) {
-        error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
-    };
-}
-
-/// The artifacts a splice of one entry places (`ProcArtifact.splice`): the
-/// entry, and everything it reaches through set-local references and stable
-/// references to definitions in the same set. The set's definitions are
-/// indexed once; each query reuses the walk's storage.
-const SpliceClosure = struct {
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, u32),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
-    helpers: std.StringHashMap(u32),
-    seen: std.AutoHashMap(u32, void),
-    order: std.ArrayList(u32) = .empty,
-
-    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
-        var self = SpliceClosure{
-            .allocator = allocator,
-            .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .helpers = std.StringHashMap(u32).init(allocator),
-            .seen = std.AutoHashMap(u32, void).init(allocator),
-        };
-        errdefer self.deinit();
-        for (set.artifacts, 0..) |artifact, index| {
-            switch (artifact.kind) {
-                .proc => |identity| _ = try self.procs.getOrPutValue(identity, @intCast(index)),
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
-                .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
-                .entrypoint, .message_pool_run, .branch_island => {},
-            }
-        }
-        return self;
-    }
-
-    fn deinit(self: *SpliceClosure) void {
-        self.order.deinit(self.allocator);
-        self.seen.deinit();
-        self.helpers.deinit();
-        self.thunks.deinit();
-        self.procs.deinit();
-    }
-
-    /// Indices of the artifacts a splice of `root` places, valid until the
-    /// next query.
-    fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
-        self.seen.clearRetainingCapacity();
-        self.order.clearRetainingCapacity();
-        try self.visit(root);
-        var cursor: usize = 0;
-        while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
-            for (artifact.refs) |ref| try self.visit(ref.target);
-            for (artifact.symbolic_refs) |ref| {
-                const target = switch (ref.target) {
-                    .proc => |identity| self.procs.get(identity),
-                    .boxy_thunk => |identity| self.thunks.get(identity),
-                    .rc_helper => |name| self.helpers.get(name),
-                };
-                if (target) |index| try self.visit(index);
-            }
-        }
-        return self.order.items;
-    }
-
-    fn visit(self: *SpliceClosure, index: u32) Allocator.Error!void {
-        if ((try self.seen.getOrPut(index)).found_existing) return;
-        try self.order.append(self.allocator, index);
-    }
-};
-
-/// Whether any procedure a splice places converts a specialized custom
-/// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
-fn closureConvertsLiteral(
-    set: *const backend.dev.ProcArtifact.Set,
-    literal_converters: *const std.AutoHashMap(lir.ProcIdentity, void),
-    placed: []const u32,
-) bool {
-    for (placed) |index| switch (set.artifacts[index].kind) {
-        .proc => |identity| if (literal_converters.contains(identity)) return true,
-        .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
-    };
-    return false;
-}
-
-/// Whether any artifact a splice places refers to something only its own
-/// program defines: a program-scope symbol it does not carry, such as the Boxy
-/// runtime, whose calls index this program's descriptor sidecar, or a constant
-/// holding a code pointer.
-fn closureNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, placed: []const u32) bool {
-    for (placed) |index| {
-        const artifact = set.artifacts[index];
-        for (artifact.relocations) |relocation| {
-            if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return true;
-        }
-        for (artifact.data) |item| {
-            for (item.relocations) |relocation| if (relocation.function) return true;
-        }
-    }
-    return false;
-}
-
-fn carriesData(artifact: backend.dev.ProcArtifact.Artifact, name: []const u8) bool {
-    for (artifact.data) |item| {
-        if (std.mem.eql(u8, item.name, name)) return true;
-    }
-    return false;
-}
-
-/// Test helper: whether the entry at `root` is withheld for program-local symbols.
-fn testNamesProgramLocalSymbols(set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
-    var closure = try SpliceClosure.init(std.testing.allocator, set);
-    defer closure.deinit();
-    return closureNamesProgramLocalSymbols(set, try closure.of(root));
-}
-
-test "pack withholds an entry whose stable references reach a constant holding a code pointer" {
-    const ProcArtifact = backend.dev.ProcArtifact;
-    const callee = lir.ProcIdentity.forTest(2);
-    const artifacts = [_]ProcArtifact.Artifact{
-        .{
-            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
-            .code = "call",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = callee } }},
-            .relocations = &.{},
-            .data = &.{},
-        },
-        .{
-            .kind = .{ .proc = callee },
-            .code = "read",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } }},
-            .data = &.{.{
-                .name = "roc__d0",
-                .bytes = &@as([8]u8, @splat('\x00')),
-                .alignment = 8,
-                .symbol_offset = 0,
-                .relocations = &.{.{ .offset = 0, .name = "roc__pcallback", .addend = 0, .function = true }},
-                .program_local_name = true,
-            }},
-        },
-    };
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
-    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 0));
-    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
-}
-
-test "pack withholds an entry whose stable references reach a literal-converting procedure" {
-    const ProcArtifact = backend.dev.ProcArtifact;
-    const converter = lir.ProcIdentity.forTest(2);
-    const artifacts = [_]ProcArtifact.Artifact{
-        .{
-            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
-            .code = "call",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = converter } }},
-            .relocations = &.{},
-            .data = &.{},
-        },
-        .{ .kind = .{ .proc = converter }, .code = "conv", .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = &.{} },
-    };
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
-    var converters = std.AutoHashMap(lir.ProcIdentity, void).init(std.testing.allocator);
-    defer converters.deinit();
-    try converters.put(converter, {});
-    var closure = try SpliceClosure.init(std.testing.allocator, &set);
-    defer closure.deinit();
-    try std.testing.expect(closureConvertsLiteral(&set, &converters, try closure.of(0)));
-}
-
-test "pack offers an entry that carries its program data and withholds one that calls the Boxy runtime" {
-    const ProcArtifact = backend.dev.ProcArtifact;
-    const artifacts = [_]ProcArtifact.Artifact{
-        .{
-            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
-            .code = "read",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .relocations = &.{
-                .{ .offset = 0, .name = "roc__d0", .scope = .program, .kind = .{ .data = .rel32 } },
-                .{ .offset = 4, .name = "roc_builtins_str_concat", .scope = .shared, .kind = .function },
-            },
-            .data = &.{.{
-                .name = "roc__d0",
-                .bytes = &@as([8]u8, @splat('\x00')),
-                .alignment = 8,
-                .symbol_offset = 0,
-                .program_local_name = true,
-            }},
-        },
-        .{
-            .kind = .{ .proc = lir.ProcIdentity.forTest(2) },
-            .code = "call",
-            .entry = 0,
-            .frame = null,
-            .refs = &.{},
-            .relocations = &.{.{ .offset = 0, .name = "roc_boxy_drop", .scope = .program, .kind = .function }},
-            .data = &.{},
-        },
-    };
-    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
-    try std.testing.expect(!try testNamesProgramLocalSymbols(&set, 0));
-    try std.testing.expect(try testNamesProgramLocalSymbols(&set, 1));
 }
 
 fn nativeBuildEntrypoints(
@@ -8979,13 +8372,10 @@ fn nativeBuildEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
-                .{ root_procs.len, root_metadata.len },
-            );
-        }
-        unreachable;
+        base.invariant(
+            "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
+            .{ root_procs.len, root_metadata.len },
+        );
     }
 
     const entrypoints = try ctx.gpa.alloc(backend.Entrypoint, root_procs.len);
@@ -8995,10 +8385,7 @@ fn nativeBuildEntrypoints(
         std.debug.assert(metadata.kind == .provided_export);
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
-            }
-            unreachable;
+            base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
         };
         std.debug.assert(root.kind == .provided_export);
 
@@ -9026,13 +8413,10 @@ fn nativeEntrypointSymbolName(
     root: check.CheckedArtifact.RootRequest,
 ) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
-                .{},
-            );
-        }
-        unreachable;
+        base.invariant(
+            "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
+            .{},
+        );
     };
     return entrypoint_name;
 }
@@ -9070,10 +8454,9 @@ fn selectBuildPlatformTarget(
             return error.UnsupportedTarget;
         },
         .incompatible_cpu => |target| {
-            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
-            unreachable;
+            return rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
         },
-        .requires_executable => unreachable,
+        .requires_executable => unreachable, // only selectRunTarget produces this outcome
         .no_default => {
             if (targets_config.targets.len == 0) {
                 renderValidationError(ctx, .{
@@ -9095,7 +8478,7 @@ fn selectBuildPlatformTarget(
             }
             return error.UnsupportedTarget;
         },
-        .not_runnable_on_host => unreachable,
+        .not_runnable_on_host => unreachable, // only selectRunTarget produces this outcome
     };
 }
 
@@ -9159,12 +8542,10 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .incompatible_cpu => |target| {
-            try rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
-            unreachable;
+            return rejectTargetCpuIncompatible(ctx, target, targets_config, platform_source);
         },
         .requires_executable => |selected| {
-            try rejectRequiredExecutableOutput(ctx, selected);
-            unreachable;
+            return rejectRequiredExecutableOutput(ctx, selected);
         },
         .no_default => {
             if (targets_config.targets.len == 0) {
@@ -9183,8 +8564,7 @@ fn selectRunPlatformTarget(
             return error.UnsupportedTarget;
         },
         .not_runnable_on_host => |target| {
-            try rejectRunTargetNotExecutable(ctx, target);
-            unreachable;
+            return rejectRunTargetNotExecutable(ctx, target);
         },
     };
 }
@@ -9266,8 +8646,8 @@ fn verifyHostInputSymbols(
 }
 
 fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformRuntimeObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformRuntimeObjects.filename(target) });
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_runtime orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, EmbeddedTargetObjects.filename("roc_default_runtime", target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform runtime object {s}: {}", .{ runtime_path, err });
         return err;
@@ -9275,8 +8655,21 @@ fn writeDefaultPlatformRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, tar
     return runtime_path;
 }
 
+/// Write the Boxy runtime object a `.boxy` program links next to its app
+/// object.
+fn writeBoxyRuntimeObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError![]const u8 {
+    const bytes = EmbeddedTargetObjects.forTarget(target).boxy_runtime orelse return error.UnsupportedTarget;
+    const filename = if (target.toOsTag() == .windows) "roc_boxy_runtime.obj" else "roc_boxy_runtime.o";
+    const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, filename });
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, bytes) catch |err| {
+        std.log.err("Failed to write Boxy runtime object {s}: {}", .{ object_path, err });
+        return err;
+    };
+    return object_path;
+}
+
 fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformCompilerRtObjects.forTarget(target) orelse return null;
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_compiler_rt orelse return null;
     const object_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_default_compiler_rt.o" });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, bytes) catch |err| {
         std.log.err("Failed to write default platform compiler-rt object {s}: {}", .{ object_path, err });
@@ -9285,134 +8678,79 @@ fn writeDefaultPlatformCompilerRtObject(ctx: *CliCtx, artifact_dir: []const u8, 
     return object_path;
 }
 
-fn lirResultNeedsBoxyRuntime(result: *const lir.Program.Result) bool {
-    return eval.boxy_runtime.resultNeedsRuntime(result);
-}
-
-/// Add the boxy runtime object and its embedded sidecar to a standalone
-/// link. The runtime object provides the `roc_boxy_*` wrappers and
-/// `roc_boxy_init_embedded`; a companion data object carries the sidecar those
-/// symbols read (the descriptor tables, layout store, and string store the
-/// program's boxy statements index).
-fn appendBoxyRuntimeLinkInputs(
-    ctx: *CliCtx,
-    object_files: *std.array_list.Managed([]const u8),
-    scratch_dir: []const u8,
-    target: RocTarget,
-    lir_result: *const lir.Program.Result,
-) CliMainError!void {
-    const runtime_bytes = BoxyRuntimeObjects.forTarget(target) orelse {
-        try ctx.io.stderr().print(
-            "Error: standalone dev builds of generic (boxy) programs are not supported for the '{s}' target.\n",
-            .{@tagName(target)},
-        );
-        return error.UnsupportedTarget;
-    };
-
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, BoxyRuntimeObjects.filename(target) });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch {
-        return error.NativeCompilationFailed;
-    };
-
-    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch {
-        return error.NativeCompilationFailed;
-    };
-    defer sidecar_blob.deinit(ctx.gpa);
-
-    const blob_len_val: u64 = @intCast(sidecar_blob.bytes.len);
-    const blob_len_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&blob_len_val));
-    const desc_bytes = try ctx.arena.dupe(u8, std.mem.asBytes(&sidecar_blob.sidecar));
-
-    const sidecar_exports = [_]backend.StaticDataExport{
-        .{ .symbol_name = "roc_boxy_sidecar_blob", .bytes = sidecar_blob.bytes, .alignment = 16, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_blob_len", .bytes = blob_len_bytes, .alignment = 8, .is_global = true },
-        .{ .symbol_name = "roc_boxy_sidecar_desc", .bytes = desc_bytes, .alignment = 8, .is_global = true },
-    };
-
-    const sidecar_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_boxy_sidecar.o" });
-    var sidecar_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
-    sidecar_compiler.compileStaticDataObjectAndWrite(&sidecar_exports, target, sidecar_path, ctx.coreCtx()) catch {
-        return error.NativeCompilationFailed;
-    };
-
-    try object_files.append(sidecar_path);
-    try object_files.append(runtime_path);
-}
-
-fn mergeBoxySidecarWasm(
-    ctx: *CliCtx,
-    module: *backend.wasm.WasmModule,
-    lir_result: *const lir.Program.Result,
-    mode: backend.wasm.WasmModule.MergeMode,
-) CliMainError!void {
-    if (!lirResultNeedsBoxyRuntime(lir_result)) return;
-
-    var sidecar_blob = lir.LirImage.buildSidecarBlob(ctx.gpa, lir_result) catch return error.NativeCompilationFailed;
-    defer sidecar_blob.deinit(ctx.gpa);
-    backend.wasm.BoxyRuntimeLink.mergeSidecar(
-        ctx.gpa,
-        module,
-        sidecar_blob.bytes,
-        sidecar_blob.sidecar,
-        mode,
-    ) catch |err| {
-        std.log.err("Failed to merge wasm Boxy sidecar: {}", .{err});
-        return err;
-    };
-}
-
 fn writeSealedWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     output_filename: []const u8,
     module: *backend.wasm.WasmModule,
-    lir_result: *const lir.Program.Result,
     public_definitions: []const []const u8,
     allowed_undefined_functions: []const []const u8,
+    stack_checks: bool,
+    timing: ?*WasmBuildTiming,
 ) CliMainError![]const u8 {
+    var encode_started = WasmBuildTiming.now(ctx);
     const unsealed_bytes = try module.encodeRelocatable(ctx.gpa);
     defer ctx.gpa.free(unsealed_bytes);
     const unsealed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_unsealed_wasm32.o" });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, unsealed_path, unsealed_bytes) catch return error.WasmOutputWriteFailed;
 
     const compiler_rt_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_compiler_rt_support.o" });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.bytes) catch return error.WasmOutputWriteFailed;
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, compiler_rt_path, WasmCompilerRtObject.forTarget(target)) catch return error.WasmOutputWriteFailed;
 
-    var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 3);
+    var compiler_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 2);
     try compiler_inputs.append(unsealed_path);
     try compiler_inputs.append(compiler_rt_path);
-    if (lirResultNeedsBoxyRuntime(lir_result)) {
-        const runtime_bytes = BoxyRuntimeObjects.forTarget(.wasm32) orelse return error.UnsupportedTarget;
-        const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_boxy_runtime_support.o" });
-        backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, runtime_bytes) catch return error.WasmOutputWriteFailed;
-        try compiler_inputs.append(runtime_path);
+    var sealed_public_definitions = public_definitions;
+    const stack_support = backend.wasm.StackSupport.Contents{
+        .accessors = target.cpuLevel() == .v1,
+        .overflow = stack_checks,
+    };
+    if (stack_support.accessors or stack_support.overflow) {
+        const support_bytes = try backend.wasm.StackSupport.encodeObject(ctx.gpa, stack_support);
+        defer ctx.gpa.free(support_bytes);
+        const support_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_stack_support.o" });
+        backend.writeFileWindowsAvSafe(ctx.io.std_io, support_path, support_bytes) catch return error.WasmOutputWriteFailed;
+        try compiler_inputs.append(support_path);
+    }
+    if (stack_support.accessors) {
+        const accessor_names = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
+        sealed_public_definitions = try std.mem.concat(ctx.arena, []const u8, &.{ public_definitions, &accessor_names });
     }
     const composed_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, "roc_app_composed_wasm32.o" });
-    linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = "wasm32",
-        } });
+    if (timing) |phases| phases.encode_ns += WasmBuildTiming.since(ctx, &encode_started);
+    linker.linkWasmObjectsRelocatable(ctx, composed_path, compiler_inputs.items, .{}) catch |err| {
+        return failLink(ctx, err, "wasm32");
     };
+    if (timing) |phases| phases.compose_ns += WasmBuildTiming.since(ctx, &encode_started);
 
-    const composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
+    var composed_bytes = try std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, composed_path, ctx.gpa, .unlimited);
     defer ctx.gpa.free(composed_bytes);
+    // Every compiler-owned definition is composed now, so every frame size a
+    // stack-bound check depends on is known.
+    if (stack_checks) {
+        if (try backend.wasm.StackRoom.fillCheckRooms(ctx.gpa, composed_bytes)) |filled| {
+            ctx.gpa.free(composed_bytes);
+            composed_bytes = filled;
+        }
+    }
     var sealed_module = backend.wasm.WasmModule.preload(ctx.gpa, composed_bytes, .relocatable_for_sealing) catch |err| {
         std.log.err("Failed to inspect composed Roc wasm object {s}: {}", .{ composed_path, err });
         return err;
     };
     defer sealed_module.deinit();
-    try sealed_module.sealRocObject(public_definitions, allowed_undefined_functions);
+    try sealed_module.sealRocObject(sealed_public_definitions, allowed_undefined_functions);
     try sealed_module.verifyNoLinkObjectContract();
     try sealed_module.patchRelocatableSymbolFlags(composed_bytes);
     const output_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, output_filename });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, output_path, composed_bytes) catch return error.WasmOutputWriteFailed;
+    if (timing) |phases| phases.seal_ns += WasmBuildTiming.since(ctx, &encode_started);
     return output_path;
 }
 
 fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, target: RocTarget) CliMainError!?[]const u8 {
-    const bytes = DefaultPlatformExecutableObjects.forTarget(target) orelse return null;
-    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, DefaultPlatformExecutableObjects.filename(target) });
+    const bytes = EmbeddedTargetObjects.forTarget(target).default_platform orelse return null;
+    const runtime_path = try std.fs.path.join(ctx.arena, &.{ artifact_dir, EmbeddedTargetObjects.filename("roc_default_platform", target) });
     backend.writeFileWindowsAvSafe(ctx.io.std_io, runtime_path, bytes) catch |err| {
         std.log.err("Failed to write default platform executable object {s}: {}", .{ runtime_path, err });
         return err;
@@ -9465,7 +8803,7 @@ fn linkerOutputKind(output: roc_target.OutputKind) linker.OutputKind {
     return switch (output) {
         .shared => .shared_lib,
         .exe => .exe,
-        .archive => unreachable,
+        .archive => unreachable, // every caller sends archive outputs to writeArchiveOutput instead
     };
 }
 
@@ -9505,7 +8843,7 @@ fn writeArchiveOutput(
     };
 }
 
-fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.SelectedTarget) error{ UnsupportedTarget, WriteFailed }!void {
+fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.SelectedTarget) error{ UnsupportedTarget, WriteFailed } {
     const stderr = ctx.io.stderr();
     switch (selected.output) {
         .archive => {
@@ -9526,7 +8864,7 @@ fn rejectRequiredExecutableOutput(ctx: *CliCtx, selected: target_selection.Selec
                 try stderr.print("the library artifact.\n", .{});
             }
         },
-        .exe => unreachable,
+        .exe => unreachable, // callers reject only a selection whose output is not .exe
     }
     return error.UnsupportedTarget;
 }
@@ -9657,16 +8995,10 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
 
 fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
     const wasm = link_inputs.wasm orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
-        }
-        unreachable;
+        base.invariant("linked wasm target reached the linker without an exports declaration", .{});
     };
     return wasm.exports orelse {
-        if (builtin.mode == .debug) {
-            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
-        }
-        unreachable;
+        base.invariant("linked wasm target reached the linker without an exports declaration", .{});
     };
 }
 
@@ -9694,14 +9026,15 @@ fn writeDevWasmObject(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
-    cpu_level: roc_target.CpuLevel,
+    target: RocTarget,
+    executor: ?base.post_check_task_executor.Executor,
+    stack_checks: bool,
+    timing: *WasmBuildTiming,
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
     }
+    var started = WasmBuildTiming.now(ctx);
 
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     // Ownership of the module moves into the codegen at initWithModule below;
@@ -9716,25 +9049,25 @@ fn writeDevWasmObject(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         &wasm_module,
-        cpu_level,
+        target.cpuLevel(),
     );
     wasm_module_owned_here = false;
     defer codegen.deinit();
+    codegen.executor = executor;
     codegen.configureStackPointerReloc(stack_pointer_symbol);
     codegen.configureTableReloc(table_symbol);
     codegen.configureRelocatableObject();
 
-    // Register the runtime and hosted symbol imports while the module has no
+    // Register the hosted symbol imports while the module has no
     // defined functions yet; a function import added later would shift every
     // defined function index.
+    if (stack_checks) try codegen.configureStackChecks(try staticDataFunctionPointerTargets(ctx, static_data_exports));
     try codegen.registerHostedSymbolTargets(lowered.lir_result.store.getProcSpecs());
-    if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) try codegen.registerBoxySymbolTargets();
+    timing.codegen_ns += WasmBuildTiming.since(ctx, &started);
 
-    const builtins_bytes = BuiltinsObjects.forTargetExtern(.wasm32);
+    const target_objects = EmbeddedTargetObjects.forTarget(target);
+    const builtins_bytes = if (stack_checks) target_objects.builtins_extern_stack_checked.? else target_objects.builtins_extern;
     if (builtins_bytes.len > 0) {
         var builtins_module = backend.wasm.WasmModule.preload(ctx.gpa, builtins_bytes, .relocatable_for_merge) catch |err| {
             std.log.err("Failed to preload wasm builtins: {}", .{err});
@@ -9745,11 +9078,35 @@ fn writeDevWasmObject(
         var merge_result = try codegen.module.mergeModuleForObject(&builtins_module);
         merge_result.deinit();
     }
+    // A program with the `.boxy` runtime contract calls the Boxy runtime's
+    // `roc_desc_*` entry points, which this object then defines.
+    const boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy;
+    if (boxy_runtime) {
+        const runtime_bytes = (if (stack_checks) target_objects.boxy_runtime_stack_checked else target_objects.boxy_runtime) orelse return error.UnsupportedTarget;
+        var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, .relocatable_for_merge) catch |err| {
+            std.log.err("Failed to preload the wasm Boxy runtime: {}", .{err});
+            return err;
+        };
+        defer runtime_module.deinit();
+        var merge_result = try codegen.module.mergeModuleForObject(&runtime_module);
+        merge_result.deinit();
+    }
+    // The object packs whose C-ABI entries serve this program's linked
+    // procedures. Their imports are the runtime and hosted functions their
+    // code calls, which the platform provides like this program's own.
+    var pack_imports = std.ArrayList([]const u8).empty;
     const builtin_symbols = backend.wasm.BuiltinSignatures.populateForRelocs(&codegen.module) catch |err| {
         std.log.err("Failed to locate wasm builtin symbols after object merge: {}", .{err});
         return err;
     };
     codegen.configureBuiltinRelocs(builtin_symbols);
+    if (boxy_runtime) {
+        codegen.configureBoxyRuntimeRelocs(backend.wasm.BoxyRuntimeSignatures.populateForRelocs(&codegen.module) catch |err| {
+            std.log.err("Failed to locate wasm Boxy runtime symbols after object merge: {}", .{err});
+            return err;
+        });
+    }
+    timing.merge_ns += WasmBuildTiming.since(ctx, &started);
 
     const static_rc_helpers = try backend.collectRequiredRcHelpers(ctx.gpa, static_data_exports);
     defer ctx.gpa.free(static_rc_helpers);
@@ -9771,17 +9128,153 @@ fn writeDevWasmObject(
     for (entrypoints) |entry| {
         _ = try codegen.module.findDefinedFunctionSymbolExact(entry.symbol_name);
     }
+    timing.codegen_ns += WasmBuildTiming.since(ctx, &started);
     try mergeStaticDataWasmModule(ctx, &codegen.module, static_data_exports, .relocatable_object);
-    try mergeBoxySidecarWasm(ctx, &codegen.module, &lowered.lir_result, .relocatable_object);
+    try pack_imports.appendSlice(ctx.arena, try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store));
+    timing.merge_ns += WasmBuildTiming.since(ctx, &started);
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         "roc_app_wasm32.o",
         &codegen.module,
-        &lowered.lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
-        try wasmRocHostRequirements(ctx.arena, &lowered.lir_result.store),
+        pack_imports.items,
+        stack_checks,
+        timing,
     );
+}
+
+/// Whether code compiled for a wasm platform must check its stack bounds:
+/// only when the platform reserves low memory, so the stack cannot sit at
+/// address 0 where an overflow traps by itself.
+fn wasmStackChecks(wasm: ?roc_target.WasmTargetConfig) bool {
+    const config = wasm orelse return false;
+    return config.reservesLowMemory();
+}
+
+/// The functions static data calls through the function table, by symbol.
+fn staticDataFunctionPointerTargets(ctx: *CliCtx, static_data_exports: []const backend.StaticDataExport) Allocator.Error![]const []const u8 {
+    var names = std.ArrayList([]const u8).empty;
+    for (static_data_exports) |data_export| {
+        for (data_export.relocations) |relocation| {
+            if (relocation.kind == .function_pointer) try names.append(ctx.arena, relocation.target_symbol_name);
+        }
+    }
+    return names.toOwnedSlice(ctx.arena);
+}
+
+/// Links one relocatable wasm app object against the platform's wasm inputs
+/// into `final_output_path`.
+fn linkWasmOutput(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    link_inputs: PlatformLinkInputs,
+    final_output_path: []const u8,
+    obj_path: []const u8,
+    scratch_dir: []const u8,
+) CliMainError!void {
+    const object_files = try ctx.arena.alloc([]const u8, 1);
+    object_files[0] = obj_path;
+    const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
+    const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
+    const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
+    switch (linker.wasmStackLayout(global_base)) {
+        .stack_first => if (maximum_memory) |bytes| {
+            const limit = linker.stackFirstMaximumMemory(stack_size);
+            if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                .target = link_inputs.target_name,
+                .maximum_memory = bytes,
+                .limit = limit,
+                .stack_size = stack_size,
+            } });
+        },
+        .data_first => {},
+    }
+    const link_config = linker.LinkConfig{
+        .target_format = .wasm,
+        .target_abi = null,
+        .target_os = .freestanding,
+        .target_arch = .wasm32,
+        .output_path = final_output_path,
+        .object_files = object_files,
+        .platform_files_pre = link_inputs.platform_files_pre,
+        .platform_files_post = link_inputs.platform_files_post,
+        .extra_args = &.{},
+        .can_exit_early = false,
+        .disable_output = false,
+        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+        .wasm_maximum_memory = maximum_memory,
+        .wasm_stack_size = stack_size,
+        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+        .wasm_debug_info = args.debug,
+        .wasm_optimize = wasmOptimizeMode(args.opt),
+        .wasm_cpu_level = target.cpuLevel(),
+        .wasm_global_base = global_base,
+        .wasm_exports = requiredWasmPlatformExports(link_inputs),
+        .platform_files_dir = link_inputs.platform_files_dir,
+        .scratch_dir = scratch_dir,
+    };
+    linker.link(ctx, link_config) catch |err| {
+        return failLink(ctx, err, link_inputs.target_name);
+    };
+}
+
+/// The C ABI a wasm build's boundary functions and linked entries follow.
+fn wasmAbiTarget(target: RocTarget) layout.abi.Target {
+    return if (target.cpuLevel() == .v1) .wasm32v1 else .wasm32;
+}
+
+/// The parameters of the wasm function type a C-ABI signature declares.
+fn wasmCAbiParamCount(arena: Allocator, lowered: *const lir.CheckedPipeline.LoweredProgram, target: RocTarget, arg_layouts: []const layout.Idx, ret_layout: layout.Idx) Allocator.Error!u32 {
+    return layout.abi.wasmCAbiParamCount(try layout.abi.lower(arena, &lowered.lir_result.layouts, wasmAbiTarget(target), arg_layouts, ret_layout, false));
+}
+
+/// Report every function on a platform boundary that no wasm engine would
+/// load. The host fixes these signatures, so unlike calls between Roc
+/// procedures their arguments cannot move into memory.
+fn rejectWasmHostParameterOverflow(
+    ctx: *CliCtx,
+    target: RocTarget,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    entrypoints: []const backend.Entrypoint,
+) CliMainError!void {
+    const store = &lowered.lir_result.store;
+    const limit = layout.abi.wasm_max_function_params;
+    var rejected = false;
+    for (entrypoints) |entry| {
+        const count = try wasmCAbiParamCount(ctx.arena, lowered, target, entry.arg_layouts, entry.ret_layout);
+        if (count <= limit) continue;
+        try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+            .symbol = try ctx.arena.dupe(u8, entry.symbol_name),
+            .direction = .provided_to_host,
+            .param_count = count,
+            .limit = limit,
+        } });
+        rejected = true;
+    }
+    var seen = std.AutoHashMap(u32, void).init(ctx.gpa);
+    defer seen.deinit();
+    for (store.getProcSpecs()) |proc| {
+        const hosted = proc.hosted orelse continue;
+        if (seen.contains(hosted.dispatch_index)) continue;
+        try seen.put(hosted.dispatch_index, {});
+        const params = store.getLocalSpan(proc.args);
+        const arg_layouts = try ctx.arena.alloc(layout.Idx, params.len);
+        for (arg_layouts, 0..) |*arg_layout, index| arg_layout.* = store.getLocal(lir.LirStore.GuardedList.at(params, index)).layout_idx;
+        const count = try wasmCAbiParamCount(ctx.arena, lowered, target, arg_layouts, proc.ret_layout);
+        if (count <= limit) continue;
+        try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+            .symbol = try ctx.arena.dupe(u8, store.getString(hosted.symbol)),
+            .direction = .hosted,
+            .param_count = count,
+            .limit = limit,
+        } });
+        rejected = true;
+    }
+    if (rejected) return error.CliError;
 }
 
 fn rocBuildWasm(
@@ -9795,27 +9288,28 @@ fn rocBuildWasm(
     lowered: *const lir.CheckedPipeline.LoweredProgram,
     entrypoints: []const backend.Entrypoint,
     static_data_exports: []const backend.StaticDataExport,
+    executor: ?base.post_check_task_executor.Executor,
+    timing: *WasmBuildTiming,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
     }
+    try rejectWasmHostParameterOverflow(ctx, target, lowered, entrypoints);
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+    const stack_checks = wasmStackChecks(link_inputs.wasm);
 
     // The intermediate objects have fixed names, so concurrent builds sharing
     // one directory would link each other's half-written files.
     const scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, scratch_dir);
+    defer if (!args.keep_temp) releaseScratchDir(ctx, scratch_dir);
 
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target.cpuLevel());
+        const obj_path = try writeDevWasmObject(ctx, scratch_dir, lowered, entrypoints, static_data_exports, target, executor, stack_checks, timing);
         try writeArchiveOutput(ctx, .wasm32, final_output_path, link_inputs, &.{obj_path});
         return;
     }
@@ -9834,44 +9328,56 @@ fn rocBuildWasm(
         lowered,
         entrypoints,
         static_data_exports,
-        target.cpuLevel(),
+        target,
+        executor,
+        stack_checks,
+        timing,
     );
 
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = obj_path;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = scratch_dir,
-    };
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
-            .err = err,
-            .target = link_inputs.target_name,
-        } });
-    };
+    var link_started = WasmBuildTiming.now(ctx);
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, obj_path, scratch_dir);
+    timing.link_ns += WasmBuildTiming.since(ctx, &link_started);
 }
+
+/// Where a dev wasm build's code generation phase spends its time, for
+/// `--timings`.
+const WasmBuildTiming = struct {
+    /// Generating the program's bodies and entry wrappers.
+    codegen_ns: u64 = 0,
+    /// Merging the builtins, the Boxy runtime and the static data into the
+    /// program's module.
+    merge_ns: u64 = 0,
+    /// Encoding the relocatable object and writing it and its support objects.
+    encode_ns: u64 = 0,
+    /// Composing them with `wasm-ld -r`.
+    compose_ns: u64 = 0,
+    /// Reading the composed object back, filling its stack rooms and sealing it.
+    seal_ns: u64 = 0,
+    /// Linking the sealed object with the platform's host.
+    link_ns: u64 = 0,
+
+    fn now(ctx: *CliCtx) i96 {
+        return std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    }
+
+    /// The nanoseconds since `started`, which moves to now.
+    fn since(ctx: *CliCtx, started: *i96) u64 {
+        const at = now(ctx);
+        defer started.* = at;
+        return @intCast(@max(0, at - started.*));
+    }
+
+    fn breakdown(self: WasmBuildTiming) [6]progress.SubTiming {
+        return .{
+            .{ .name = "Codegen", .ns = self.codegen_ns },
+            .{ .name = "Builtins + Runtime Merge", .ns = self.merge_ns },
+            .{ .name = "Object Encoding", .ns = self.encode_ns },
+            .{ .name = "wasm-ld -r", .ns = self.compose_ns },
+            .{ .name = "Seal", .ns = self.seal_ns },
+            .{ .name = "Final Link", .ns = self.link_ns },
+        };
+    }
+};
 
 const LlvmObjectPaths = struct {
     artifact_dir: []const u8,
@@ -9897,6 +9403,146 @@ fn staticDataLinkRootSymbols(
         try symbols.append(shim_symbols.roc_default_backtrace_count);
     }
     return symbols.items;
+}
+
+/// The static data a dev object's link must keep: each constant the host binds
+/// by name. A dev object defines only its host-visible constants under their
+/// own names (design.md "Deterministic Dev Images"); every other constant is named
+/// by its content and reached through the code that names it, so a program's
+/// own name for it (such as a static-data slot's) is not a symbol of the
+/// object. A link told to keep such a name fails where a forced undefined
+/// symbol must resolve, as on COFF.
+fn devObjectLinkRootSymbols(arena: Allocator, static_data_exports: []const backend.StaticDataExport) Allocator.Error![]const []const u8 {
+    var symbols = std.ArrayList([]const u8).empty;
+    for (static_data_exports) |data_export| {
+        if (data_export.is_exported) try symbols.append(arena, data_export.symbol_name);
+    }
+    return symbols.items;
+}
+
+test "a dev object defines every static datum its link keeps" {
+    const allocator = std.testing.allocator;
+    const text = "a constant the program names for itself";
+    inline for (.{ RocTarget.x64linux, RocTarget.x64win }) |target| {
+        var arena_state = base.SingleThreadArena.init(allocator);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        var store = lir.LirStore.init(a);
+        defer store.deinit();
+        var layouts = try layout.Store.init(a, .u64);
+        defer layouts.deinit();
+        // The entry reads static-data slot 7, whose string the program names
+        // for itself; the host binds `roc_answer` by name.
+        const local = try store.addLocal(.{ .layout_idx = .str });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = local,
+            .value = .{ .static_data = .{ .id = @fromBackingInt(@intCast(7)) } },
+            .next = ret,
+        } }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = lir.ProcIdentity.forTest(719),
+            .args = .empty(),
+            .body = body,
+            .ret_layout = .str,
+        }, .none);
+        const descriptor = try a.alloc(u8, 24);
+        @memset(descriptor, 0);
+        std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
+        std.mem.writeInt(u64, descriptor[16..24], text.len, .little);
+        const backing = try a.alloc(u8, 16 + text.len);
+        @memset(backing[0..16], 0);
+        @memcpy(backing[16..], text);
+        const relocation = try a.alloc(backend.StaticDataRelocation, 1);
+        relocation[0] = .{
+            .offset = 0,
+            .target_symbol_name = "roc__d7_1",
+            .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) },
+            .addend = 8,
+        };
+        const exports = [_]backend.StaticDataExport{
+            .{ .symbol_name = "roc__d7", .value_id = @fromBackingInt(@intCast(7)), .bytes = descriptor, .alignment = 8, .is_global = true, .is_exported = false, .relocations = relocation },
+            .{ .symbol_name = "roc__d7_1", .bytes = backing, .symbol_offset = 8, .alignment = 8, .is_global = true, .is_exported = false },
+            .{ .symbol_name = "roc_answer", .bytes = try a.dupe(u8, "\x2a\x00\x00\x00\x00\x00\x00\x00"), .alignment = 8, .is_global = true, .is_exported = true },
+        };
+        const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = proc, .arg_layouts = &.{}, .ret_layout = .str }};
+        var compiler = backend.ObjectFileCompiler.init(allocator);
+        var result = try compiler.compileToObjectFile(&store, &layouts, &entrypoints, &exports, store.getProcSpecs(), target);
+        defer result.deinit();
+
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "app.o", .data = result.object_bytes });
+        const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "app.o", a);
+        const roots = try devObjectLinkRootSymbols(a, &exports);
+        try std.testing.expectEqualDeep(@as([]const []const u8, &.{"roc_answer"}), roots);
+        const kept = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, roots);
+        try std.testing.expect(kept.all_inputs_scanned);
+        try std.testing.expectEqual(@as(usize, 0), kept.missing.len);
+        // The slot is named by its content in the object, never as the
+        // program named it.
+        const slot = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{ "roc__d7", "roc__d7_1" });
+        try std.testing.expectEqual(@as(usize, 2), slot.missing.len);
+    }
+}
+
+test "a composed program object holds only the pieces its roots reach" {
+    const allocator = std.testing.allocator;
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
+        var arena_state = base.SingleThreadArena.init(allocator);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        const callee_identity = lir.ProcIdentity.forTest(2001);
+        const unreached_identity = lir.ProcIdentity.forTest(2002);
+        const entry_identity = lir.ProcIdentity.forTest(2003);
+        // The library unit: the callee the app reaches, and one nothing reaches.
+        var library_store = lir.LirStore.init(a);
+        defer library_store.deinit();
+        var library_layouts = try layout.Store.init(a, .u64);
+        defer library_layouts.deinit();
+        try library_store.setSourceFiles(&.{.{ .name = "Lib.roc", .qualified_name = "lib.Lib", .module_identity = @splat(1) }});
+        for ([_]lir.ProcIdentity{ callee_identity, unreached_identity }) |identity| {
+            const local = try library_store.addLocal(.{ .layout_idx = .u64 });
+            const ret = try library_store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
+            const body = try library_store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u64 } }, .next = ret } }, .test_fixture);
+            _ = try library_store.addProcSpec(.{ .name = library_store.freshSyntheticSymbol(), .identity = identity, .args = .empty(), .body = body, .ret_layout = .u64, .exported = true }, .none);
+        }
+        var library_compiler = backend.ObjectFileCompiler.init(allocator);
+        library_compiler.link_unit = true;
+        var library_pieces = try library_compiler.compileToPieces(&library_store, &library_layouts, &.{}, &.{}, library_store.getProcSpecs(), target);
+        defer library_pieces.deinit();
+        // The app unit: an entrypoint whose procedure calls the library's callee.
+        var app_store = lir.LirStore.init(a);
+        defer app_store.deinit();
+        var app_layouts = try layout.Store.init(a, .u64);
+        defer app_layouts.deinit();
+        try app_store.setSourceFiles(&.{.{ .name = "Main.roc", .qualified_name = "app.Main", .module_identity = @splat(2) }});
+        const linked = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = callee_identity, .args = .empty(), .ret_layout = .u64, .external = true, .linked = true }, .none);
+        const result = try app_store.addLocal(.{ .layout_idx = .u64 });
+        const ret = try app_store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const body = try app_store.addCFStmt(.{ .assign_call = .{ .target = result, .proc = linked, .args = .empty(), .next = ret } }, .test_fixture);
+        const entry_proc = try app_store.addProcSpec(.{ .name = app_store.freshSyntheticSymbol(), .identity = entry_identity, .args = .empty(), .body = body, .ret_layout = .u64 }, .none);
+        const entrypoints = [_]backend.Entrypoint{.{ .symbol_name = "roc__main", .proc = entry_proc, .arg_layouts = &.{}, .ret_layout = .u64 }};
+        var app_compiler = backend.ObjectFileCompiler.init(allocator);
+        var app_pieces = try app_compiler.compileToPieces(&app_store, &app_layouts, &entrypoints, &.{}, app_store.getProcSpecs(), target);
+        defer app_pieces.deinit();
+        var composer = backend.ObjectFileCompiler.init(allocator);
+        var composed = try composer.composeObject(&.{ &app_pieces, &library_pieces }, target, .{ .roots = &.{}, .global_procs = true });
+        defer composed.deinit();
+        var again = try composer.composeObject(&.{ &library_pieces, &app_pieces }, target, .{ .roots = &.{}, .global_procs = true });
+        defer again.deinit();
+        try std.testing.expectEqualSlices(u8, composed.object_bytes, again.object_bytes);
+        var tmp = std.testing.tmpDir(.{});
+        defer tmp.cleanup();
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "program.o", .data = composed.object_bytes });
+        const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "program.o", a);
+        const kept = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{ "roc__main", try callee_identity.symbolName(a), try entry_identity.symbolName(a) });
+        try std.testing.expect(kept.all_inputs_scanned);
+        try std.testing.expectEqual(@as(usize, 0), kept.missing.len);
+        const dropped = try host_symbols.scanHostInputs(a, std.testing.io, &.{object_path}, &.{try unreached_identity.symbolName(a)});
+        try std.testing.expectEqual(@as(usize, 1), dropped.missing.len);
+    }
 }
 
 fn sharedLibraryAppExports(
@@ -9964,32 +9610,29 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
         .size => .size,
         .speed => .speed,
         .dev, .interpreter => {
-            if (builtin.mode == .debug) {
-                base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
-            }
-            unreachable;
+            base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
         },
     };
 }
 
-fn devBackendPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Backend";
-    if (target_arch == .aarch64) return "arm64 Backend";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
-    if (builtin.mode == .debug) {
-        std.debug.panic(
-            "dev code-generation timing requested for unsupported architecture {s}",
-            .{@tagName(target_arch)},
-        );
-    }
-    unreachable;
+fn devBackendPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Backend",
+        .aarch64 => "arm64 Backend",
+    };
+    if (target.toCpuArch() == .wasm32) return "wasm32 Bytecode Generation";
+    base.invariant(
+        "dev code-generation timing invariant violated: unsupported target {s}",
+        .{@tagName(target)},
+    );
 }
 
-fn devInstructionGenerationPhaseName(target_arch: std.Target.Cpu.Arch) []const u8 {
-    if (target_arch == .x86_64) return "x64 Instruction Generation";
-    if (target_arch == .aarch64) return "arm64 Instruction Generation";
-    if (target_arch == .wasm32) return "wasm32 Bytecode Generation";
-    return devBackendPhaseName(target_arch);
+fn devInstructionGenerationPhaseName(target: RocTarget) []const u8 {
+    if (backend.dev.isa.isaOfOrNull(target)) |isa| return switch (isa) {
+        .x86_64 => "x64 Instruction Generation",
+        .aarch64 => "arm64 Instruction Generation",
+    };
+    return devBackendPhaseName(target);
 }
 
 fn devBackendBreakdown(timing: backend.ObjectFileCompiler.TimingSnapshot) [8]progress.SubTiming {
@@ -10035,11 +9678,12 @@ test "native artifact counters preserve every measured field" {
 }
 
 test "dev backend timing labels name the backend and emitted instruction format" {
-    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Backend", devBackendPhaseName(.x64musl));
+    try std.testing.expectEqualStrings("arm64 Backend", devBackendPhaseName(.arm64mac));
     try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devBackendPhaseName(.wasm32));
-    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x86_64));
-    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.aarch64));
+    try std.testing.expectEqualStrings("x64 Instruction Generation", devInstructionGenerationPhaseName(.x64v1win));
+    try std.testing.expectEqualStrings("arm64 Instruction Generation", devInstructionGenerationPhaseName(.arm64linux));
+    try std.testing.expectEqualStrings("wasm32 Bytecode Generation", devInstructionGenerationPhaseName(.wasm32));
 }
 
 fn noTargetLibcallsForLlvmBuild(target: RocTarget) bool {
@@ -10117,6 +9761,9 @@ fn compileLlvmAppObject(
     static_data_exports: []const backend.StaticDataExport,
     enable_default_platform_runtime: bool,
     enable_default_platform_hosted_calls: bool,
+    // Whether the program is for a wasm platform that reserves low memory,
+    // so generated code and the linked builtins check the stack bounds.
+    stack_checks: bool,
     // When present, the caller has an active "LLVM IR Generation" phase covering
     // LIR-to-bitcode lowering; this transitions it to a distinct
     // "LLVM Optimize + Emit" phase at the point LLVM takes over the bitcode.
@@ -10133,9 +9780,6 @@ fn compileLlvmAppObject(
         var codegen = llvm_codegen.MonoLlvmCodeGen.initForLinkedObject(
             ctx.gpa,
             &lowered.lir_result.store,
-            lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-            lowered.lir_result.boxy_erased_arg_desc_params.items,
-            lowered.lir_result.boxy_worker_procs.items,
             std_target,
         );
         codegen.layout_store = &lowered.lir_result.layouts;
@@ -10144,6 +9788,8 @@ fn compileLlvmAppObject(
         codegen.enable_default_platform_runtime = enable_default_platform_runtime;
         codegen.enable_default_platform_hosted_calls = enable_default_platform_hosted_calls;
         codegen.enable_default_platform_diagnostics = enable_default_platform_hosted_calls and emit_debug_info;
+        codegen.optimize_for_size = llvmOptimizationLevel(args.opt) == .size;
+        codegen.stack_checks = stack_checks;
         codegen.debug_producer = "roc " ++ @import("compiler_version").compiler_version;
         defer codegen.deinit();
 
@@ -10218,9 +9864,11 @@ fn compileLlvmAppObject(
             // through extern symbols, never through a RocOps parameter.
             .host_call_extern = true,
             .sha256_rounds = Sha256Rounds.forCpu(std_target.cpu),
+            .stack_checked = stack_checks,
         },
         .pic = pic,
         .no_target_libcalls = noTargetLibcallsForLlvmBuild(target),
+        .private_runtime = true,
     };
 
     const success = try builder.compileBitcodeToObject(ctx.gpa, ctx.io.std_io, compile_config);
@@ -10270,6 +9918,7 @@ fn mergeStaticDataWasmModule(
 
 fn writeCombinedLlvmWasmObject(
     ctx: *CliCtx,
+    target: RocTarget,
     artifact_dir: []const u8,
     app_object_path: []const u8,
     lir_result: *const lir.Program.Result,
@@ -10277,6 +9926,7 @@ fn writeCombinedLlvmWasmObject(
     static_data_exports: []const backend.StaticDataExport,
     opt: cli_args.OptLevel,
     owned_inputs: *std.ArrayList([]u8),
+    stack_checks: bool,
 ) CliMainError![]const u8 {
     var wasm_module = backend.wasm.WasmModule.init(ctx.gpa);
     defer wasm_module.deinit();
@@ -10289,18 +9939,32 @@ fn writeCombinedLlvmWasmObject(
     defer app_module.deinit();
     var app_merge = try wasm_module.mergeModuleForObject(&app_module);
     app_merge.deinit();
+    // A program with the `.boxy` runtime contract calls the Boxy runtime's
+    // `roc_desc_*` entry points, which this object then defines.
+    if (lir_result.store.runtime_contract == .boxy) {
+        const target_objects = EmbeddedTargetObjects.forTarget(target);
+        const runtime_bytes = (if (stack_checks) target_objects.boxy_runtime_stack_checked else target_objects.boxy_runtime) orelse return error.UnsupportedTarget;
+        var runtime_module = backend.wasm.WasmModule.preload(ctx.gpa, runtime_bytes, .relocatable_for_merge) catch |err| {
+            std.log.err("Failed to preload the wasm Boxy runtime: {}", .{err});
+            return err;
+        };
+        defer runtime_module.deinit();
+        var runtime_merge = try wasm_module.mergeModuleForObject(&runtime_module);
+        runtime_merge.deinit();
+    }
 
-    try mergeBoxySidecarWasm(ctx, &wasm_module, lir_result, .relocatable_object);
     try mergeStaticDataWasmModule(ctx, &wasm_module, static_data_exports, .relocatable_object);
     const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_llvm_wasm32_{s}.o", .{@tagName(opt)});
     return writeSealedWasmObject(
         ctx,
+        target,
         artifact_dir,
         obj_filename,
         &wasm_module,
-        lir_result,
         try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
         try wasmRocHostRequirements(ctx.arena, &lir_result.store),
+        stack_checks,
+        null,
     );
 }
 
@@ -10318,12 +9982,11 @@ fn rocBuildWasmLlvm(
     reporter: *progress.Reporter,
 ) CliMainError!void {
     if (entrypoints.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
     }
+    try rejectWasmHostParameterOverflow(ctx, target, lowered, entrypoints);
 
+    const stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
     const app_object = try compileLlvmAppObject(
         ctx,
         args,
@@ -10334,6 +9997,7 @@ fn rocBuildWasmLlvm(
         static_data_exports,
         false,
         false,
+        stack_checks,
         reporter,
     );
     defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
@@ -10348,7 +10012,7 @@ fn rocBuildWasmLlvm(
     if (link_type == .archive) {
         // Archives package whatever inputs the platform declared (possibly
         // just the app); no platform wasm file is required.
-        const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
+        const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, &.{combined_obj});
         return;
     }
@@ -10358,43 +10022,942 @@ fn rocBuildWasmLlvm(
         return error.UnsupportedTarget;
     }
 
-    const combined_obj = try writeCombinedLlvmWasmObject(ctx, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs);
-    const object_files = try ctx.arena.alloc([]const u8, 1);
-    object_files[0] = combined_obj;
-    const wasm_exports = requiredWasmPlatformExports(link_inputs);
+    const combined_obj = try writeCombinedLlvmWasmObject(ctx, target, app_object.artifact_dir, app_object.object_path, &lowered.lir_result, entrypoints, static_data_exports, args.opt, &owned_inputs, stack_checks);
+    try linkWasmOutput(ctx, args, target, link_inputs, final_output_path, combined_obj, app_object.artifact_dir);
+}
 
-    const link_config = linker.LinkConfig{
-        .target_format = .wasm,
-        .target_abi = null,
-        .target_os = .freestanding,
-        .target_arch = .wasm32,
-        .output_path = final_output_path,
-        .object_files = object_files,
-        .platform_files_pre = link_inputs.platform_files_pre,
-        .platform_files_post = link_inputs.platform_files_post,
-        .extra_args = &.{},
-        .can_exit_early = false,
-        .disable_output = false,
-        .wasm_initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
-        .wasm_maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null,
-        .wasm_stack_size = configuredWasmStackBytes(args, link_inputs.wasm),
-        .wasm_import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
-        .wasm_zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
-        .wasm_debug_info = args.debug,
-        .wasm_optimize = wasmOptimizeMode(args.opt),
-        .wasm_cpu_level = target.cpuLevel(),
-        .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
-        .wasm_exports = wasm_exports,
-        .platform_files_dir = link_inputs.platform_files_dir,
-        .scratch_dir = app_object.artifact_dir,
-    };
+/// Base output path for `roc build`: `--output`, else the synthetic
+/// basename, else the module name.
+fn buildOutputBasePath(ctx: *CliCtx, args: cli_args.BuildArgs) Allocator.Error![]const u8 {
+    if (args.output) |output| return ctx.arena.dupe(u8, output);
+    if (args.synthetic_output_basename) |basename| return ctx.arena.dupe(u8, basename);
+    return base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+}
 
-    linker.link(ctx, link_config) catch |err| {
-        return ctx.fail(.{ .linker_failed = .{
+/// Records a failed link as a CLI problem. A link that failed on undefined
+/// compiler symbols has already recorded the compiler bug it is.
+fn failLink(ctx: *CliCtx, err: linker.LinkError, target: []const u8) CliError {
+    return switch (err) {
+        error.UndefinedCompilerSymbols => error.CliError,
+        error.LinkFailed,
+        error.OutOfMemory,
+        error.InvalidArguments,
+        error.LLVMNotAvailable,
+        => ctx.fail(.{ .linker_failed = .{
             .err = err,
-            .target = link_inputs.target_name,
-        } });
+            .target = target,
+        } }),
     };
+}
+
+/// Validate the destination without deleting another invocation's completed
+/// output. Failed builds report failure and leave the last publication intact.
+fn prepareBuildOutput(ctx: *CliCtx, final_output_path: []const u8) CliError!void {
+    const parent = std.fs.path.dirname(final_output_path) orelse ".";
+    var dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, parent, .{}) catch |err|
+        return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = err } });
+    dir.close(ctx.io.std_io);
+}
+
+/// A private link destination on the output filesystem. Rename is the only
+/// operation that modifies the user-visible name; the last complete publisher
+/// wins. The linker never opens a competing build's executable for writing.
+const BuildOutputPublication = struct {
+    ctx: *CliCtx,
+    destination: []const u8,
+    path: []const u8,
+    directory: []const u8,
+
+    fn init(ctx: *CliCtx, destination: []const u8) CliMainError!BuildOutputPublication {
+        var nonce: [16]u8 = undefined;
+        ctx.io.std_io.random(&nonce);
+        const directory = try std.fmt.allocPrint(ctx.arena, "{s}/.roc-link-{s}", .{ std.fs.path.dirname(destination) orelse ".", std.fmt.bytesToHex(nonce, .lower) });
+        std.Io.Dir.cwd().createDir(ctx.io.std_io, directory, .default_dir) catch |err|
+            return ctx.fail(.{ .file_write_failed = .{ .path = destination, .err = err } });
+        errdefer std.Io.Dir.cwd().deleteDir(ctx.io.std_io, directory) catch {};
+        return .{ .ctx = ctx, .destination = destination, .directory = directory, .path = try std.fs.path.join(ctx.arena, &.{ directory, std.fs.path.basename(destination) }) };
+    }
+
+    fn deinit(self: *BuildOutputPublication) void {
+        std.Io.Dir.cwd().deleteFile(self.ctx.io.std_io, self.path) catch {};
+        std.Io.Dir.cwd().deleteDir(self.ctx.io.std_io, self.directory) catch {};
+    }
+
+    fn publish(self: *BuildOutputPublication) CliError!void {
+        std.Io.Dir.cwd().rename(self.path, std.Io.Dir.cwd(), self.destination, self.ctx.io.std_io) catch |err|
+            return self.ctx.fail(.{ .file_write_failed = .{ .path = self.destination, .err = err } });
+    }
+};
+
+test "build output preparation reports a missing parent directory" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
+    const output_path = try std.fs.path.join(arena.allocator(), &.{ root, "missing", "app" });
+
+    // https://github.com/roc-lang/roc/issues/12476: an absent parent must be
+    // reported as an output-path failure before compilation or linking.
+    try testing.expectError(error.CliError, prepareBuildOutput(&ctx, output_path));
+    try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
+    const problem = ctx.problems.items[0].file_write_failed;
+    try testing.expectEqualStrings(output_path, problem.path);
+    try testing.expectEqual(error.FileNotFound, problem.err);
+
+    try tmp.dir.createDir(testing.io, "missing", .default_dir);
+    try prepareBuildOutput(&ctx, output_path);
+
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "missing/app", .data = "old output" });
+    try prepareBuildOutput(&ctx, output_path);
+    try tmp.dir.access(testing.io, "missing/app", .{});
+    try testing.expectEqual(@as(usize, 1), ctx.problems.items.len);
+}
+
+test "native output publication isolates concurrent writers and preserves completed output" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(testing.allocator, arena.allocator(), &io_state, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
+    const destination = try std.fs.path.join(arena.allocator(), &.{ root, "app" });
+    var first = try BuildOutputPublication.init(&ctx, destination);
+    defer first.deinit();
+    var second = try BuildOutputPublication.init(&ctx, destination);
+    defer second.deinit();
+    try testing.expect(!std.mem.eql(u8, first.path, second.path));
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = first.path, .data = "first complete" });
+    try first.publish();
+    try prepareBuildOutput(&ctx, destination);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second partial" });
+    const before = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("first complete", before);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = second.path, .data = "second complete" });
+    try second.publish();
+    const after = try std.Io.Dir.cwd().readFileAlloc(testing.io, destination, arena.allocator(), .limited(128));
+    try testing.expectEqualStrings("second complete", after);
+}
+
+/// Final output path for `roc build`: an explicit `--output` is used as-is,
+/// otherwise the target's default extension for `link_type` is appended.
+fn buildFinalOutputPath(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    output_path: []const u8,
+    link_type: roc_target.OutputKind,
+    target: RocTarget,
+) Allocator.Error![]const u8 {
+    if (args.output != null) return output_path;
+    const ext = target_selection.defaultBuildOutputExtension(link_type, target);
+    return std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+}
+
+/// Creates the `BuildEnv` for a `roc build` invocation, including the
+/// synthetic root source mapping when the root was staged.
+fn initBuildCommandEnv(ctx: *CliCtx, args: cli_args.BuildArgs) InitCliBuildEnvError!BuildEnv {
+    var build_env = try initCliBuildEnv(ctx, .{
+        .max_threads = args.max_threads,
+        .no_cache = args.no_cache,
+        .verbose_cache = args.verbose,
+        .timings = args.timings,
+        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+        .track_watch_inputs = args.watch_inputs_file != null,
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
+        .source_dir_override = args.source_dir_override,
+        .root_source_url = args.root_source_url,
+    });
+    if (args.synthetic_root_original_path) |original_path| {
+        if (args.synthetic_root_original_source) |original_source| {
+            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
+        }
+    }
+    return build_env;
+}
+
+/// Discovers the build's dependencies and selects the platform target,
+/// returning the platform directory and the selected target.
+fn resolveBuildCommandPlatform(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { []const u8, target_selection.SelectedTarget } {
+    reporter.begin("Resolving Dependencies");
+    build_env.discoverDependencies(args.path) catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, build_env);
+        return err;
+    };
+    reporter.end();
+
+    const platform = try requirePlatformTargets(ctx, build_env, args.path);
+    const targets_config = platform.config;
+    const platform_source = platform.root_file;
+    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
+
+    const selected = if (args.require_host_runnable_output)
+        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
+    else
+        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    return .{ platform_dir, selected };
+}
+
+/// Type checks the discovered modules of a `roc build` and renders their
+/// diagnostics, returning the diagnostic counts (warnings include optimized
+/// `dbg` warnings) and the platform's targets config.
+fn typeCheckBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+) CliMainError!struct { CheckDiagnosticCounts, roc_target.TargetsConfig } {
+    reporter.begin("Type Checking");
+    build_env.compileDiscovered() catch |err| {
+        reporter.fail();
+        try renderDiagnostics(ctx, build_env);
+        return err;
+    };
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), reporter, build_env.getTimingInfo());
+
+    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
+    const total_warning_count = diag.warnings + try optimizedDbgWarningsForBuild(ctx, build_env, args.opt);
+    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
+        try renderProblem(ctx, .{
+            .no_platform_found = .{ .app_path = args.path },
+        });
+        return error.NoPlatformSource;
+    };
+    return .{ .{ .errors = diag.errors, .warnings = total_warning_count }, resolved_targets_config };
+}
+
+/// Finishes progress reporting for a successful `roc build`, prints the
+/// build summary unless suppressed, and returns the build result.
+fn finishBuildCommand(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    final_output_path: []const u8,
+    diag: CheckDiagnosticCounts,
+    timer_start_ns: i96,
+) CliMainError!BuildResult {
+    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
+    reporter.finish();
+    if (!args.suppress_build_status) {
+        try printBuildSuccess(ctx, final_output_path, diag.errors, diag.warnings, elapsed_ns, args.verbose, build_env.getBuildStats());
+    } else if (diag.errors > 0 or diag.warnings > 0) {
+        // A run that builds its executable reports its diagnostics' counts
+        // as any run does.
+        renderSummaryHeaderLine(ctx.arena, ctx.io.stderr(), diag.errors, diag.warnings, args.synthetic_root_original_path orelse args.path, ctx.reportConfig(.stderr)) catch {};
+        ctx.io.flush();
+    }
+    return .{ .output_path = final_output_path, .diagnostics = diag };
+}
+
+/// Lowers a checked `roc build` program to LIR, reporting the post-check
+/// lowering phase.
+/// The objects of every module of a `.boxy` build other than the root
+/// program's, materialized for linking, and the hosted symbols they
+/// reference.
+const BoxyLibraryObjects = struct {
+    /// Every library unit's pieces, in unit order; empty for a fast dev
+    /// link, which reads `images` instead.
+    pieces: []const *const backend.dev.UnitPieces.Pieces,
+    /// For a fast dev link, every library unit's image, in unit order.
+    images: []const []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8 = &.{},
+    /// The images of the units this build lowered or restored itself, which
+    /// it owns.
+    owned_images: []const compile.boxy_unit.Image = &.{},
+    /// Every library unit's object cache key, in unit order.
+    keys: []const [32]u8,
+    /// The pieces of the units this build lowered itself, which it owns;
+    /// the rest belong to compile-time evaluation's scheduler.
+    owned_pieces: []const *backend.dev.UnitPieces.Pieces,
+    hosted_symbols: []const []const u8,
+    /// The program's platform module, for the root unit's key.
+    platform: ?check.CheckedArtifact.ImportedModuleView,
+    /// The checked keys of the platform modules the root unit lowers, whose
+    /// implementations its object holds.
+    paired_platforms: []const [32]u8,
+    /// Every library unit's module, in unit order.
+    artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact = &.{},
+    /// For test units, every unit's tables and image code locations, in
+    /// unit order. Arena-allocated, or borrowed from `owned_images`.
+    tests: []const BoxyUnitTests = &.{},
+    /// Every library unit's checked module key, in unit order.
+    module_keys: []const [32]u8,
+    /// The checked keys of the modules the root unit lowers: the root, and
+    /// every module with platform requirements.
+    root_modules: []const [32]u8,
+    /// The template workers the checked program reaches, by module.
+    reach: compile.boxy_reach.Reach,
+
+    fn deinit(self: BoxyLibraryObjects, gpa: Allocator) void {
+        for (self.owned_pieces) |pieces| {
+            pieces.deinit();
+            gpa.destroy(pieces);
+        }
+        for (self.owned_images) |image| image.deinit(gpa);
+        var reach = self.reach;
+        reach.deinit();
+    }
+};
+
+/// The checked program's reachability (`compile.boxy_reach`), run as a
+/// post-check task beside the library units.
+const BoxyReachTask = struct {
+    gpa: Allocator,
+    root: *const check.CheckedArtifact.CheckedModuleArtifact,
+    modules: compile.boxy_reach.Modules,
+    outcome: union(enum) { pending, failed: Allocator.Error, done: compile.boxy_reach.Reach } = .pending,
+
+    fn compute(self: *BoxyReachTask) void {
+        self.outcome = if (compile.boxy_reach.compute(self.gpa, self.root, self.modules)) |reach| .{ .done = reach } else |err| .{ .failed = err };
+    }
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyReachTask = @ptrCast(@alignCast(context));
+        self.compute();
+        return null;
+    }
+};
+
+/// What a test unit adds to its image (`compile.boxy_unit.Built`).
+const BoxyUnitTests = struct {
+    expect_sites: []const compile.boxy_object_cache.ExpectSiteRecord,
+    test_roots: []const compile.boxy_object_cache.TestRootRecord,
+    code_locations: []const u8,
+};
+
+/// Lower every module of the program other than the root as its own unit,
+/// filing each object in the per-module Boxy object cache under the
+/// module's extended checked key and restoring the ones already there
+/// (design.md "Caching Under `.boxy`"). A module's unit starts once its
+/// imports' units are done, since its calls compile against their export
+/// interfaces, and units with no such wait run in parallel on the
+/// post-check executor. A module with platform requirements has no object
+/// of its own: the root unit lowers its workers at the app's types.
+fn buildBoxyLibraryObjects(
+    ctx: *CliCtx,
+    policy: BoxyUnitPolicy,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    target: RocTarget,
+    interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
+    digests: *compile.boxy_interface.Digests,
+    /// Collect each unit's image for a fast dev link, rather than its pieces.
+    want_images: bool,
+    /// For test units: the modules whose units the test program needs,
+    /// which with their imports are the units built, in place of the root's
+    /// visible modules.
+    test_modules: ?[]const *const check.CheckedArtifact.CheckedModuleArtifact,
+    /// The `--timings` phase the units' work is reported under.
+    phase_name: []const u8,
+) CliMainError!BoxyLibraryObjects {
+    reporter.begin(phase_name);
+    // Reusing CTFE's code also requires its ownership and pending-call ABI.
+    // Instrumented units replace their own contracts before importers start.
+    try build_env.boxyAdoptInterfaces(interfaces);
+    const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+    const visible = try build_env.collectVisibleArtifacts(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(visible);
+    std.debug.assert(policy.test_units == (test_modules != null));
+    var units: std.ArrayList(*const Artifact) = .empty;
+    defer units.deinit(ctx.gpa);
+    try units.append(ctx.gpa, &build_env.builtin_modules.checked_artifact);
+    for (test_modules orelse visible) |artifact| {
+        if (artifact.platform_type_inputs.requirements.len != 0) continue;
+        try units.append(ctx.gpa, artifact);
+    }
+    // A module's body calls imports its root never sees, and a unit is keyed
+    // on its imports' exports, so every import has a unit in the link. The
+    // link drops the code nothing reaches.
+    var seen_units = std.AutoHashMap([32]u8, void).init(ctx.gpa);
+    defer seen_units.deinit();
+    var distinct: usize = 0;
+    for (units.items) |artifact| {
+        if ((try seen_units.getOrPut(artifact.key.bytes)).found_existing) continue;
+        units.items[distinct] = artifact;
+        distinct += 1;
+    }
+    units.shrinkRetainingCapacity(distinct);
+    var next_unit: usize = 0;
+    while (next_unit < units.items.len) : (next_unit += 1) {
+        const importer = units.items[next_unit];
+        for (importer.direct_import_module_keys) |key| {
+            const imported = digests.artifacts.get(key.bytes) orelse continue;
+            if (imported.platform_type_inputs.requirements.len != 0) continue;
+            if ((try seen_units.getOrPut(key.bytes)).found_existing) continue;
+            try units.append(ctx.gpa, imported);
+        }
+    }
+    const platform = try boxyPlatformView(ctx, build_env, root_artifact, visible);
+    // The checked program's reachability runs beside the units: the
+    // composition resolves the procedures it names in parallel first
+    // (design.md "Unit Pieces And Whole-Program Dead Code").
+    const link_modules = try ctx.arena.alloc(*const Artifact, digests.artifacts.count());
+    const link_names = try ctx.arena.alloc([32]u8, link_modules.len);
+    {
+        var linked = digests.artifacts.valueIterator();
+        var i: usize = 0;
+        while (linked.next()) |artifact| : (i += 1) {
+            link_modules[i] = artifact.*;
+            link_names[i] = digests.module_names.get(artifact.*.key.bytes) orelse base.invariant("roc build invariant violated: a module of the link has no link name", .{});
+        }
+    }
+    var reach_task: BoxyReachTask = .{ .gpa = ctx.gpa, .root = root_artifact, .modules = .{ .artifacts = link_modules, .link_names = link_names } };
+    var reach_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
+    defer if (reach_session) |*open| {
+        while (open.outstanding != 0) _ = open.receive();
+        open.end();
+    };
+    var reach_taken = false;
+    defer if (!reach_taken) switch (reach_task.outcome) {
+        .done => |*reach| reach.deinit(),
+        .pending, .failed => {},
+    };
+    if (reach_session) |*open| try open.submit(.{ .id = 0, .context = &reach_task, .run = BoxyReachTask.run }) else reach_task.compute();
+    if (dev_diagnostics.isSet(.trace_boxy_work)) {
+        std.debug.print("boxy-work: root {s} key {s} codegen {s} identity {s}\n", .{ root_artifact.canonical_names.moduleNameText(root_artifact.module_identity.module_name), &std.fmt.bytesToHex(root_artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(root_artifact.module_identity.stable_hash[0..8], .lower) });
+        for (units.items) |artifact| std.debug.print("boxy-work: unit {s} key {s} codegen {s} identity {s}\n", .{ artifact.canonical_names.moduleNameText(artifact.module_identity.module_name), &std.fmt.bytesToHex(artifact.key.bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.codeGenerationKey().bytes[0..8], .lower), &std.fmt.bytesToHex(artifact.module_identity.stable_hash[0..8], .lower) });
+        if (platform) |view| std.debug.print("boxy-work: platform {s} key {s}\n", .{ view.module_env.module_name, &std.fmt.bytesToHex(view.key.bytes[0..8], .lower) });
+    }
+    var index_by_key = std.AutoHashMap([32]u8, u32).init(ctx.gpa);
+    defer index_by_key.deinit();
+    for (units.items, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
+
+    // Each unit's imports among the units, and the units importing it.
+    const remaining = try ctx.gpa.alloc(u32, units.items.len);
+    defer ctx.gpa.free(remaining);
+    @memset(remaining, 0);
+    const dependents = try ctx.gpa.alloc(std.ArrayList(u32), units.items.len);
+    defer {
+        for (dependents) |*list| list.deinit(ctx.gpa);
+        ctx.gpa.free(dependents);
+    }
+    for (dependents) |*list| list.* = .empty;
+    for (units.items, 0..) |artifact, index| {
+        for (artifact.direct_import_module_keys) |import_key| {
+            const imported = index_by_key.get(import_key.bytes) orelse continue;
+            remaining[index] += 1;
+            try dependents[imported].append(ctx.gpa, @intCast(index));
+        }
+    }
+
+    // The units run on the executor's lanes, so each phase of this timing
+    // sums the units' work rather than measuring elapsed time.
+    var unit_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
+    defer {
+        for (tasks) |*task| task.deinit(ctx.gpa);
+        ctx.gpa.free(tasks);
+    }
+    for (tasks, units.items) |*task, artifact| {
+        var unit_policy = policy;
+        unit_policy.test_units = policy.test_units and compile.boxy_unit.requiresTestUnit(artifact);
+        if (policy.test_units and !unit_policy.test_units and dev_diagnostics.isSet(.trace_boxy_work)) {
+            std.debug.print("boxy-work: ordinary unit serves tests for {s} (no expect nodes or test roots)\n", .{artifact.moduleEnvConst().module_name});
+        }
+        task.* = .{
+            .gpa = ctx.gpa,
+            .io = ctx.io.std_io,
+            .policy = unit_policy,
+            .artifact = artifact,
+            .platform = boxyUnitPlatform(artifact, platform),
+            .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
+            .target = target,
+            .interfaces = interfaces,
+            .names = &digests.names,
+            .cache_manager = if (policy.no_cache) null else build_env.cache_manager,
+            .timing = &unit_timing,
+            .want_pieces = !want_images,
+        };
+    }
+    // A unit's key reads what its imports' units recorded, so it is computed
+    // here, once they are done and before its own task can start.
+    const Prepare = struct {
+        fn run(unit_tasks: []BoxyUnitTask, unit_digests: *compile.boxy_interface.Digests, index: u32) Allocator.Error!void {
+            const task = &unit_tasks[index];
+            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.policy, task.target, &.{}, false);
+        }
+    };
+
+    // The units' objects in unit order, whatever order they finish in, so
+    // the link's inputs (and so the executable) are the same every build.
+    const objects = try ctx.arena.alloc(?*const backend.dev.UnitPieces.Pieces, units.items.len);
+    @memset(objects, null);
+    const images = try ctx.arena.alloc(?[]align(backend.dev.UnitImage.alignment.toByteUnits()) const u8, units.items.len);
+    @memset(images, null);
+    var owned_images: std.ArrayList(compile.boxy_unit.Image) = .empty;
+    errdefer for (owned_images.items) |image| image.deinit(ctx.gpa);
+    const keys = try ctx.arena.alloc([32]u8, units.items.len);
+    const unit_tests = try ctx.arena.alloc(BoxyUnitTests, if (policy.test_units) units.items.len else 0);
+    var hosted_symbols: std.ArrayList([]const u8) = .empty;
+    var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+    var owned_pieces: std.ArrayList(*backend.dev.UnitPieces.Pieces) = .empty;
+    errdefer for (owned_pieces.items) |pieces| {
+        pieces.deinit();
+        ctx.gpa.destroy(pieces);
+    };
+    var restored: u32 = 0;
+    var built: u32 = 0;
+    var done: usize = 0;
+    // An object compile-time evaluation built or restored under this
+    // build's key is linked as it is; its exports are in `interfaces`. A key
+    // reads what the unit's imports recorded, so this walks imports first,
+    // and a unit left to run holds back its importers.
+    var ready: std.ArrayList(u32) = .empty;
+    defer ready.deinit(ctx.gpa);
+    var keyable: std.ArrayList(u32) = .empty;
+    defer keyable.deinit(ctx.gpa);
+    for (remaining, 0..) |count, index| if (count == 0) try keyable.append(ctx.gpa, @intCast(index));
+    while (keyable.pop()) |index| {
+        const task = &tasks[index];
+        try Prepare.run(tasks, digests, index);
+        const known = build_env.boxyObjectWithKey(task.artifact, task.key) orelse {
+            try ready.append(ctx.gpa, index);
+            continue;
+        };
+        // Compile-time evaluation never builds an instrumented test unit.
+        // Its ordinary objects can also serve expect-free test dependencies.
+        std.debug.assert(!task.policy.test_units);
+        try build_env.boxyAdoptExports(digests, task.artifact);
+        if (known.restored) restored += 1 else built += 1;
+        if (want_images) {
+            const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
+            images[index] = image.bytes;
+            if (policy.test_units) unit_tests[index] = .{
+                .expect_sites = &.{},
+                .test_roots = &.{},
+                .code_locations = image.code_locations,
+            };
+        } else {
+            objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
+        }
+        keys[index] = task.key.bytes;
+        for (known.hosted_symbols) |symbol| {
+            const owned = try ctx.arena.dupe(u8, symbol);
+            if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+            try hosted_symbols.append(ctx.arena, owned);
+        }
+        done += 1;
+        for (dependents[index].items) |dependent| {
+            remaining[dependent] -= 1;
+            if (remaining[dependent] == 0) try keyable.append(ctx.gpa, dependent);
+        }
+    }
+    var first_error: ?CliMainError = null;
+    var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
+    defer if (executor_session) |*open| open.end();
+    while (done < tasks.len) {
+        var completed: ?u32 = null;
+        if (executor_session) |*open| {
+            while (ready.items.len != 0 and open.canSubmit() and first_error == null) {
+                const index = ready.pop().?;
+                try Prepare.run(tasks, digests, index);
+                try open.submit(.{ .id = index, .context = &tasks[index], .run = BoxyUnitTask.run });
+            }
+            if (open.outstanding != 0) {
+                completed = @intCast(open.receive().id);
+            } else if (first_error == null) {
+                base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
+            } else break;
+        } else {
+            if (first_error != null) break;
+            const index = ready.pop() orelse base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
+            try Prepare.run(tasks, digests, index);
+            _ = BoxyUnitTask.run(&tasks[index], .{ .id = 0, .allocator = ctx.gpa, .scratch = ctx.gpa, .lane_state = undefined });
+            completed = index;
+        }
+        const index = completed orelse continue;
+        done += 1;
+        const task = &tasks[index];
+        switch (task.outcome) {
+            .pending => base.invariant("roc build invariant violated: a .boxy unit completed without an outcome", .{}),
+            .failed => |err| {
+                if (first_error == null) first_error = err;
+                continue;
+            },
+            .done => |*result| {
+                if (first_error != null) continue;
+                if (result.restored) restored += 1 else built += 1;
+                try digests.recordExports(task.artifact, result.exports);
+                keys[index] = task.key.bytes;
+                for (result.hosted_symbols) |symbol| {
+                    const owned = try ctx.arena.dupe(u8, symbol);
+                    if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+                    try hosted_symbols.append(ctx.arena, owned);
+                }
+                // The pieces or the image outlive the task: the link reads
+                // them.
+                if (result.pieces) |pieces| {
+                    objects[index] = pieces;
+                    try owned_pieces.append(ctx.arena, pieces);
+                }
+                if (policy.test_units) unit_tests[index] = .{
+                    .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, result.expect_sites),
+                    .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, result.test_roots),
+                    .code_locations = if (result.image) |image| image.code_locations else base.invariant("roc test invariant violated: a test unit has no image", .{}),
+                };
+                if (result.image) |image| {
+                    if (want_images) {
+                        images[index] = image.bytes;
+                        try owned_images.append(ctx.arena, image);
+                    } else image.deinit(ctx.gpa);
+                }
+                result.deinitKeepingCode(ctx.gpa);
+                task.outcome = .pending;
+                for (dependents[index].items) |dependent| {
+                    remaining[dependent] -= 1;
+                    if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
+                }
+            },
+        }
+    }
+    if (reach_session) |*open| _ = open.receive();
+    if (first_error) |err| return err;
+    const reach = switch (reach_task.outcome) {
+        .done => |reach| reach,
+        .failed => |err| return err,
+        .pending => base.invariant("roc build invariant violated: the checked reachability task completed without an outcome", .{}),
+    };
+    reach_taken = true;
+    if (dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: the checked program reaches {d} template workers in {d} modules\n", .{ reach.identities.len, reach.modules.count() });
+    // The summary counts cache work; a build without a cache does none.
+    if (!policy.no_cache) switch (compile.boxy_unit.imageKind(target)) {
+        .native, .none => build_env.recordBoxyObjects(restored, built),
+        .wasm => build_env.recordWasmUnits(restored, built),
+    };
+    reporter.end();
+    recordPostCheckLowering(reporter, &unit_timing, .boxy);
+    const ordered = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, if (want_images) 0 else units.items.len);
+    for (objects[0..ordered.len], ordered) |object, *slot| slot.* = object orelse base.invariant("roc build invariant violated: a .boxy unit completed without an object", .{});
+    const ordered_images = try ctx.arena.alloc([]align(backend.dev.UnitImage.alignment.toByteUnits()) const u8, if (want_images) units.items.len else 0);
+    for (images[0..ordered_images.len], ordered_images) |image, *slot| slot.* = image orelse base.invariant("roc build invariant violated: a .boxy unit completed without an image", .{});
+    var paired_platforms: std.ArrayList([32]u8) = .empty;
+    var root_modules: std.ArrayList([32]u8) = .empty;
+    try root_modules.append(ctx.arena, root_artifact.key.bytes);
+    if (platform) |view| {
+        try paired_platforms.append(ctx.arena, (view.code_generation_key orelse view.key).bytes);
+        try root_modules.append(ctx.arena, view.key.bytes);
+    }
+    for (visible) |artifact| {
+        if (artifact.platform_type_inputs.requirements.len == 0) continue;
+        try paired_platforms.append(ctx.arena, artifact.codeGenerationKey().bytes);
+        try root_modules.append(ctx.arena, artifact.key.bytes);
+    }
+    const module_keys = try ctx.arena.alloc([32]u8, units.items.len);
+    for (units.items, module_keys) |artifact, *key| key.* = artifact.key.bytes;
+    return .{
+        .pieces = ordered,
+        .keys = keys,
+        .owned_pieces = owned_pieces.items,
+        .hosted_symbols = hosted_symbols.items,
+        .platform = platform,
+        .paired_platforms = paired_platforms.items,
+        .artifacts = try ctx.arena.dupe(*const Artifact, units.items),
+        .tests = unit_tests,
+        .images = ordered_images,
+        .owned_images = owned_images.items,
+        .module_keys = module_keys,
+        .root_modules = root_modules.items,
+        .reach = reach,
+    };
+}
+
+/// Compose the program's pieces into the one object its link takes: every
+/// piece the root unit's entrypoints and host-visible constants reach
+/// (design.md "Unit Pieces And Whole-Program Dead Code"), materialized for
+/// the link. The composed object is a function of the units' keys, so the
+/// cache files it under them and a build whose units are all unchanged links
+/// the object it composed before.
+fn composeBoxyProgramObject(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    link_objects: *link_artifacts.Objects,
+    cache_manager: ?*CacheManager,
+    root_key: ?[32]u8,
+    root: *const backend.dev.UnitPieces.Pieces,
+    library: BoxyLibraryObjects,
+    target: RocTarget,
+    synthetic_default_platform: bool,
+    executor: ?base.post_check_task_executor.Executor,
+) CliMainError![]const u8 {
+    const program_key: ?[32]u8 = if (root_key) |key| key: {
+        var hasher = base.Sha256.init(.{});
+        hasher.update("roc.boxy.program-object.v1");
+        hasher.update(&key);
+        for (library.keys) |unit_key| hasher.update(&unit_key);
+        hasher.update(@tagName(target));
+        hasher.update(&.{@intFromBool(synthetic_default_platform)});
+        break :key hasher.finalResult();
+    } else null;
+    const program_scope = "boxy-program";
+    // A record is the object's identity, then the object: the identity was
+    // computed from these bytes by the build that composed them.
+    if (program_key) |key| if (cache_manager) |manager| if (manager.loadFamilyBytes(.boxy_object, key, program_scope)) |record| {
+        defer manager.allocator.free(record);
+        if (record.len >= 40) {
+            const identity: link_artifacts.Identity = .{ .digest = record[0..32].*, .size = std.mem.readInt(u64, record[32..40], .little) };
+            if (identity.size == record.len - 40) {
+                reporter.begin("Object Materialization");
+                const path = link_objects.materializeKnown(record[40..], identity) catch return error.NativeCompilationFailed;
+                reporter.end();
+                return path;
+            }
+        }
+    };
+    reporter.begin("Composing Program Object");
+    const inputs = try ctx.arena.alloc(*const backend.dev.UnitPieces.Pieces, library.pieces.len + 1);
+    inputs[0] = root;
+    @memcpy(inputs[1..], library.pieces);
+    // The procedures the checked program reaches in each unit, resolved in
+    // parallel before the walk that decides what the object keeps.
+    const seeds = try ctx.arena.alloc([]const lir.ProcIdentity, inputs.len);
+    {
+        var root_seeds: std.ArrayList(lir.ProcIdentity) = .empty;
+        for (library.root_modules) |key| try root_seeds.appendSlice(ctx.arena, library.reach.of(key));
+        seeds[0] = root_seeds.items;
+        for (library.module_keys, seeds[1..]) |key, *unit_seeds| unit_seeds.* = library.reach.of(key);
+    }
+    var compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    compiler.post_check_executor = executor;
+    var timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    compiler.timing = &timing;
+    var composed = compiler.composeObject(inputs, target, .{
+        .enable_default_platform_runtime = synthetic_default_platform,
+        .roots = &.{},
+        .seeds = seeds,
+    }) catch |err| {
+        reporter.fail();
+        std.log.err("Composing the program's object failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer composed.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(timing.snapshot()));
+    reporter.begin("Object Materialization");
+    const identity = link_artifacts.Identity.of(composed.object_bytes);
+    const path = link_objects.materializeKnown(composed.object_bytes, identity) catch return error.NativeCompilationFailed;
+    reporter.end();
+    if (program_key) |key| if (cache_manager) |manager| {
+        const record = try ctx.gpa.alloc(u8, 40 + composed.object_bytes.len);
+        defer ctx.gpa.free(record);
+        record[0..32].* = identity.digest;
+        std.mem.writeInt(u64, record[32..40], identity.size, .little);
+        @memcpy(record[40..], composed.object_bytes);
+        manager.storeFamilyBytes(.boxy_object, key, record, program_scope, "boxy program object");
+    };
+    return path;
+}
+
+/// The platform module whose hosted section binds every hosted function
+/// of the program: a relation of the root, a visible module, or the root
+/// itself. Null for a program with no platform module.
+fn boxyPlatformView(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    visible: []const *const check.CheckedArtifact.CheckedModuleArtifact,
+) Allocator.Error!?check.CheckedArtifact.ImportedModuleView {
+    const relations = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relations);
+    var platform: ?check.CheckedArtifact.ImportedModuleView = null;
+    for (relations) |view| {
+        if (view.module_identity.kind == .platform) platform = view;
+    }
+    for (visible) |artifact| {
+        if (artifact.module_identity.kind == .platform) platform = check.CheckedArtifact.importedView(artifact);
+    }
+    if (root_artifact.module_identity.kind == .platform) platform = check.CheckedArtifact.importedView(root_artifact);
+    return platform;
+}
+
+/// What of the command building them a `.boxy` build's units depend on.
+const BoxyUnitPolicy = struct {
+    opt: cli_args.OptLevel,
+    no_cache: bool,
+    synthetic_default_platform: bool,
+    /// Whether the units are test units (`roc test` from unit images).
+    test_units: bool = false,
+    /// For wasm units: whether the platform reserves low memory, so the
+    /// units' code checks its stack bounds (`wasmStackChecks`).
+    wasm_stack_checks: bool = false,
+
+    fn ofBuild(args: cli_args.BuildArgs) BoxyUnitPolicy {
+        return .{ .opt = args.opt, .no_cache = args.no_cache, .synthetic_default_platform = args.synthetic_default_platform };
+    }
+};
+
+/// The key of `artifact`'s object under this build's target and policy;
+/// `run_image` marks the root unit of a dev run image.
+fn boxyObjectKey(gpa: Allocator, digests: *compile.boxy_interface.Digests, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView, policy: BoxyUnitPolicy, target: RocTarget, paired_platforms: []const [32]u8, run_image: bool) Allocator.Error!compile.boxy_object_cache.Key {
+    return compile.boxy_unit.objectKey(gpa, digests, artifact, platform, @tagName(policy.opt), inlineExpectModeForOpt(policy.opt) == .run, target, paired_platforms, run_image, policy.test_units, policy.wasm_stack_checks);
+}
+
+/// The platform module a unit of `artifact` needs in view: the one whose
+/// hosted section binds the hosted functions `artifact` declares to their
+/// host symbols. Null for a module declaring none.
+fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, platform: ?check.CheckedArtifact.ImportedModuleView) ?check.CheckedArtifact.ImportedModuleView {
+    if (artifact.hosted_procs.procs.len == 0) return null;
+    return platform;
+}
+
+/// One library module's unit, run as a post-check task: its object restored
+/// from the cache, or lowered, compiled, and filed there. The task owns no
+/// executor of its own; the parallelism is across units.
+const BoxyUnitTask = struct {
+    gpa: Allocator,
+    io: std.Io,
+    policy: BoxyUnitPolicy,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    platform: ?check.CheckedArtifact.ImportedModuleView,
+    views: []check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+    interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
+    names: *const postcheck.Boxy.Types.ModuleNames,
+    cache_manager: ?*CacheManager,
+    timing: *lir.CheckedPipeline.Timing,
+    key: compile.boxy_object_cache.Key = undefined,
+    want_pieces: bool,
+    outcome: union(enum) { pending, failed: CliMainError, done: compile.boxy_unit.Built } = .pending,
+
+    fn deinit(self: *BoxyUnitTask, gpa: Allocator) void {
+        gpa.free(self.views);
+        switch (self.outcome) {
+            .pending, .failed => {},
+            .done => |result| result.deinit(gpa),
+        }
+    }
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyUnitTask = @ptrCast(@alignCast(context));
+        self.outcome = if (self.build()) |result| .{ .done = result } else |err| .{ .failed = err };
+        return context;
+    }
+
+    fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
+        var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names, .expect_sites = self.policy.test_units };
+        config.target.timing = self.timing;
+        return try compile.boxy_unit.restoreOrBuild(.{
+            .gpa = self.gpa,
+            .artifact = self.artifact,
+            .platform = self.platform,
+            .views = self.views,
+            .target = self.target,
+            .config = config.target,
+            .interfaces = self.interfaces,
+            .cache_manager = self.cache_manager,
+            .key = self.key,
+            .want_pieces = self.want_pieces,
+            .test_unit = self.policy.test_units,
+            .wasm_stack_checks = self.policy.wasm_stack_checks,
+        });
+    }
+};
+
+/// `first` followed by every symbol of `second` it lacks.
+fn unionSymbols(arena: Allocator, first: []const []const u8, second: []const []const u8) Allocator.Error![]const []const u8 {
+    var seen = std.StringHashMap(void).init(arena);
+    var symbols: std.ArrayList([]const u8) = .empty;
+    for (first) |symbol| {
+        if ((try seen.getOrPut(symbol)).found_existing) continue;
+        try symbols.append(arena, symbol);
+    }
+    for (second) |symbol| {
+        if ((try seen.getOrPut(symbol)).found_existing) continue;
+        try symbols.append(arena, symbol);
+    }
+    return symbols.items;
+}
+
+fn lowerBuildCommandToLir(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    roots: CheckedLirRoots,
+    target: RocTarget,
+    proc_debug_names: bool,
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
+) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
+    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+    reporter.begin(loweringProgressLabel(specialization_strategy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (args.timings) spec_timing.enableDetailedMonotypeBody();
+    const lowered = try lowerCheckedSourceToLir(
+        ctx.gpa,
+        ctx.gpa,
+        root_artifact,
+        imported_artifacts,
+        relation_artifacts,
+        roots,
+        args.opt,
+        specialization_strategy,
+        target,
+        proc_debug_names,
+        false,
+        build_env.postCheckExecutor(),
+        &spec_timing,
+        build_env.runtimeProgramSession(),
+        boxy_unit,
+    );
+    finishPostCheckLowering(reporter, &spec_timing, specialization_strategy);
+    return lowered;
+}
+
+/// Builds the readonly data symbols of a linked `roc build`, including the
+/// platform's provided constants, reporting the static data phase.
+fn buildCommandStaticData(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    target: RocTarget,
+) CliMainError![]compile.static_data_exports.StaticDataExport {
+    reporter.begin("Static Data");
+    const static_data_exports = try compile.static_data_exports.buildStaticData(
+        ctx.gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        },
+        lowered,
+        target,
+        .{ .include_provided_exports = true },
+    );
+    reporter.end();
+    return static_data_exports;
+}
+
+/// Reports that `--keep-temp` kept the temporary directory `dir`.
+fn reportKeptTempDir(ctx: *CliCtx, dir: []const u8) Allocator.Error!void {
+    for (ctx.scratch.items) |*scratch| {
+        if (std.mem.eql(u8, scratch.path(), dir)) scratch.keep = true;
+    }
+    const config = ctx.reportConfig(.stderr);
+    const palette = reporting.ColorUtils.getPaletteForConfig(config);
+    var report = try reporting.Report.initWithPath(ctx.arena, "Kept Temporary Directory", "Kept temporary directory: ", dir, ".", .warning);
+    defer report.deinit();
+    reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
 }
 
 fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
@@ -10404,50 +10967,15 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-    const targets_config = platform.config;
-    const platform_source = platform.root_file;
-    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -10485,44 +11013,23 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         args.synthetic_default_platform,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -10530,54 +11037,17 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, null);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
-        }
-        unreachable;
+        base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
     }
 
     if (target.toCpuArch() == .wasm32) {
@@ -10599,7 +11069,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     } else {
         reporter.begin("LLVM IR Generation");
         const hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
-        const enable_default_platform_runtime = args.synthetic_default_platform and DefaultPlatformExecutableObjects.forTarget(target) != null;
+        const enable_default_platform_runtime = args.synthetic_default_platform and EmbeddedTargetObjects.forTarget(target).default_platform != null;
 
         const app_object = try compileLlvmAppObject(
             ctx,
@@ -10611,17 +11081,11 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             static_data_exports,
             enable_default_platform_runtime,
             args.synthetic_default_platform,
+            false,
             &reporter,
         );
 
-        if (args.keep_temp) {
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{app_object.artifact_dir});
-            var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-        }
+        if (args.keep_temp) try reportKeptTempDir(ctx, app_object.artifact_dir);
         defer if (!args.keep_temp) std.Io.Dir.cwd().deleteTree(ctx.io.std_io, app_object.artifact_dir) catch {};
 
         var static_data_obj_path: ?[]const u8 = null;
@@ -10645,11 +11109,13 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         if (static_data_obj_path) |path| {
             try object_files.append(path);
         }
+        // A `.boxy` program's code calls the Boxy runtime's `roc_desc_*`
+        // entry points; a specialized program neither links nor references it.
+        if (lowered.lir_result.store.runtime_contract == .boxy) {
+            try object_files.append(try writeBoxyRuntimeObject(ctx, app_object.artifact_dir, target));
+        }
         if (enable_default_platform_runtime) {
             try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
-        }
-        if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
-            try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
         }
         reporter.end();
 
@@ -10714,32 +11180,854 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
             linker.link(ctx, link_config) catch |err| {
                 reporter.fail();
-                return ctx.fail(.{ .linker_failed = .{
-                    .err = err,
-                    .target = link_inputs.target_name,
-                } });
+                return failLink(ctx, err, link_inputs.target_name);
             };
         }
         reporter.end();
     }
 
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
+    // A build with errors files nothing, as for dev packs: a literal root
+    // that failed must not be skipped by a later build.
 
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+}
 
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
+/// The format a fast dev link of `target`'s executables patches, for the
+/// targets whose units carry unit images and whose support image the
+/// compiler embeds.
+fn fastDevLinkFormat(target: RocTarget) ?fast_dev_link.Format {
+    return switch (target) {
+        .x64musl, .x64glibc, .x64linux, .x64elf, .x64freebsd, .x64openbsd, .x64netbsd => .elf,
+        .x64v1musl, .x64v1glibc, .x64v1linux, .x64v1elf, .x64v1freebsd, .x64v1openbsd, .x64v1netbsd => .elf,
+        .arm64musl, .arm64glibc, .arm64linux, .arm64v1musl, .arm64v1glibc, .arm64v1linux => .elf,
+        .arm64mac, .x64mac, .x64v1mac => .macho,
+        .x64win, .x64mingw, .arm64win, .arm64mingw, .x64v1win, .x64v1mingw, .arm64v1win, .arm64v1mingw => .coff,
+        .arm32linux, .arm32musl, .wasm32, .wasm32v1 => null,
     };
 }
+
+/// Whether `roc build` links its executable with a fast dev link
+/// (`fast_dev_link.zig`): a `.boxy` dev build of an executable for a target
+/// with a fast dev link format, on any compiler host, whose output file the
+/// link writes through the host's own system calls. Every other combination
+/// composes a program object and links it with LLD.
+fn fastDevLinkApplies(target: RocTarget, link_type: roc_target.OutputKind, args: cli_args.BuildArgs) bool {
+    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    if (fastDevLinkFormat(target) == null) return false;
+    return switch (link_type) {
+        .exe, .shared => true,
+        // An archive is never linked.
+        .archive => false,
+    };
+}
+
+/// Whether a build lowers per-module wasm units for its wasm target, filing
+/// them when it has a cache: a `.boxy` dev build of `wasm32` or `wasm32v1`.
+/// Compile-time evaluation keeps running native units, so such a build has
+/// two units per module: the native one compile-time evaluation runs and
+/// the wasm one for the link.
+fn wasmUnitsApply(target: RocTarget, args: cli_args.BuildArgs) bool {
+    if (args.opt != .dev or currentRuntimeSpecializationStrategy(args.specialization_strategy) != .boxy) return false;
+    return compile.boxy_unit.imageKind(target) == .wasm;
+}
+
+/// Every wasm unit of a program: the library units' images and the root
+/// unit's, which this build owns, and the names the root gives the host.
+const WasmUnits = struct {
+    library: BoxyLibraryObjects,
+    root_image: []align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8,
+    /// The root's entry wrappers and exported data, from the arena.
+    app_export_symbols: []const []const u8,
+
+    fn deinit(self: WasmUnits, gpa: Allocator) void {
+        self.library.deinit(gpa);
+        gpa.free(self.root_image);
+    }
+};
+
+/// Whether a build links its wasm output by composing images instead of
+/// with LLD (`wasm_link.zig`): a build whose wasm units apply
+/// (`wasmUnitsApply`), on any compiler host, for any output: a module
+/// (`exe` or `shared`) or an archive.
+fn wasmFastLinkApplies(target: RocTarget, args: cli_args.BuildArgs) bool {
+    return wasmUnitsApply(target, args);
+}
+
+/// A wasm fast dev link in progress: the module's output file, created when
+/// the build starts, and the background job finding the support and host
+/// images (`wasm_host_image.ImageJob`). The link configuration comes from
+/// the checked platform, whose compile-time evaluation may settle it.
+const WasmFastLink = struct {
+    spec: wasm_host_image.Spec,
+    job: wasm_host_image.ImageJob,
+    target: RocTarget,
+    link_type: roc_target.OutputKind,
+    platform_dir: []const u8,
+    final_output_path: []const u8,
+    /// For a module output; an archive is written whole at the end.
+    output: ?fast_dev_link.OutputFile,
+    published: bool = false,
+    provides: []const []const u8,
+    hosted: []const []const u8,
+    /// The stack support object the link encoded, when the support code
+    /// needs one.
+    stack_support: ?[]u8 = null,
+
+    fn start(
+        ctx: *CliCtx,
+        build_env: *BuildEnv,
+        platform_dir: []const u8,
+        target: RocTarget,
+        link_type: roc_target.OutputKind,
+        final_output_path: []const u8,
+        no_cache: bool,
+    ) CliMainError!*WasmFastLink {
+        const targets_config = build_env.getPlatformTargetsConfig() orelse base.invariant("roc build invariant violated: a resolved platform has no targets config", .{});
+        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+        const module_output = switch (link_type) {
+            .exe, .shared => true,
+            .archive => false,
+        };
+        if (module_output and link_inputs.platform_files_pre.len + link_inputs.platform_files_post.len == 0) {
+            try ctx.io.stderr().writeAll("Error: wasm32 builds require a relocatable wasm platform file or archive.\n");
+            return error.UnsupportedTarget;
+        }
+
+        // The compiler's embedded support objects, in the order today's
+        // link composes them, for each stack-check mode.
+        const embedded = EmbeddedTargetObjects.forTarget(target);
+        var variants: [2][]const wasm_host_image.SupportObject = undefined;
+        for (&variants, [_]bool{ false, true }) |*variant, stack_checks| {
+            const objects = try ctx.arena.alloc(wasm_host_image.SupportObject, 3);
+            objects[0] = .{ .name = "roc_compiler_rt_support.o", .bytes = WasmCompilerRtObject.forTarget(target) };
+            objects[1] = .{ .name = "roc_builtins.o", .bytes = if (stack_checks) embedded.builtins_extern_stack_checked.? else embedded.builtins_extern };
+            objects[2] = .{ .name = "roc_boxy_runtime.o", .bytes = (if (stack_checks) embedded.boxy_runtime_stack_checked else embedded.boxy_runtime) orelse return error.UnsupportedTarget };
+            variant.* = objects;
+        }
+
+        const link_spec = targets_config.getLinkSpec(target) orelse base.invariant("roc build invariant violated: a selected target has no link spec", .{});
+        var link_items: std.ArrayList([]const u8) = .empty;
+        for (link_spec.items) |item| switch (item) {
+            .file_path => |path| try link_items.append(ctx.arena, path),
+            .app => try link_items.append(ctx.arena, "<app>"),
+            .win_gui => {},
+        };
+        const symbols = build_env.getPlatformLinkSymbols() orelse base.invariant("roc build invariant violated: a resolved platform has no header symbols", .{});
+        const provides = try ctx.arena.alloc([]const u8, symbols.provides.len);
+        for (symbols.provides, provides) |entry, *name| name.* = entry.ffi_symbol;
+
+        const hosted = try fast_dev_link.sortedUnion(ctx.arena, &.{symbols.hosted});
+        const platform_files = try hostInputPaths(ctx, link_inputs);
+        const self = try ctx.gpa.create(WasmFastLink);
+        errdefer ctx.gpa.destroy(self);
+        self.* = .{
+            .spec = .{
+                .target = target,
+                .support_objects = variants,
+                .platform_files = platform_files,
+                .link_items = link_items.items,
+                .bundle_hash = build_env.getPlatformBundleHash(),
+                .needs_host = module_output,
+            },
+            .job = undefined,
+            .target = target,
+            .link_type = link_type,
+            .platform_dir = platform_dir,
+            .final_output_path = final_output_path,
+            .output = if (module_output) fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = file_err } }),
+            } else null,
+            .provides = provides,
+            .hosted = hosted,
+        };
+        errdefer if (self.output) |*output| output.discard();
+        self.job = .{
+            .gpa = ctx.gpa,
+            .std_io = ctx.io.std_io,
+            .manager = if (no_cache) null else build_env.cache_manager,
+            .spec = &self.spec,
+        };
+        self.job.start() catch |err| {
+            std.log.err("Starting the wasm fast dev link's image job failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        return self;
+    }
+
+    fn deinit(self: *WasmFastLink, gpa: Allocator) void {
+        self.job.deinit();
+        if (self.output) |*output| if (!self.published) output.discard();
+        if (self.stack_support) |bytes| gpa.free(bytes);
+        gpa.destroy(self);
+    }
+
+    /// The image the job looked up, or converted now on a miss and owned by
+    /// the caller through `owned`.
+    fn image(
+        self: *WasmFastLink,
+        ctx: *CliCtx,
+        comptime kind: enum { support, host },
+        stack_checks: bool,
+        target_name: []const u8,
+        scratch_dir: []const u8,
+        owned: *?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8,
+        convert_ns: *u64,
+    ) CliMainError!backend.wasm.WasmUnitImage.View {
+        const lookup = switch (kind) {
+            .support => self.job.support[@intFromBool(stack_checks)],
+            .host => self.job.host,
+        };
+        switch (lookup) {
+            .pending => unreachable, // waiting joined the job, which looks up every image the link needs
+            .hit => |hit| return backend.wasm.WasmUnitImage.View.init(hit.mapping) catch unreachable, // the job admitted the record it reports
+            .miss => {
+                const started = WasmBuildTiming.now(ctx);
+                var unsupported: ?backend.wasm.ObjectImage.Unsupported = null;
+                const manager = self.job.manager;
+                const bytes = (switch (kind) {
+                    .support => support: {
+                        const variant = self.spec.support_objects[@intFromBool(stack_checks)];
+                        const objects = try std.mem.concat(ctx.arena, wasm_host_image.SupportObject, &.{ variant, if (self.stack_support) |bytes| &.{.{ .name = "roc_stack_support.o", .bytes = bytes }} else &.{} });
+                        break :support wasm_host_image.convertSupport(ctx, objects, stack_checks, self.job.support_keys[@intFromBool(stack_checks)], manager, scratch_dir, &unsupported);
+                    },
+                    .host => wasm_host_image.convertHost(ctx, &self.spec, self.job.host_key, manager, scratch_dir, &unsupported),
+                }) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.LinkFailed, error.InvalidArguments, error.LLVMNotAvailable, error.UndefinedCompilerSymbols => |link_err| return failLink(ctx, link_err, target_name),
+                    error.UnsupportedObject => switch (kind) {
+                        .host => return ctx.fail(.{ .wasm_host_unsupported = .{ .reason = unsupported.?.describe(), .target = target_name } }),
+                        .support => base.invariant("wasm fast dev link invariant violated: the compiler's support objects do not convert: {s}", .{unsupported.?.describe()}),
+                    },
+                    error.ReadFailed => {
+                        std.log.err("Writing or reading the {s} objects for a wasm dev build failed", .{@tagName(kind)});
+                        return failLink(ctx, error.LinkFailed, target_name);
+                    },
+                    error.ImageTooLarge, error.UnexpectedEnd, error.Overflow, error.InvalidMagic, error.InvalidVersion, error.InvalidSection, error.MissingLinkingSection, error.InvalidLinkingVersion, error.HasInternalGlobals => |read_err| switch (kind) {
+                        .host => {
+                            std.log.err("Preparing the host for a wasm dev build failed: {s}", .{@errorName(read_err)});
+                            return failLink(ctx, error.LinkFailed, target_name);
+                        },
+                        .support => base.invariant("wasm fast dev link invariant violated: the compiler's support objects do not read: {s}", .{@errorName(read_err)}),
+                    },
+                };
+                owned.* = bytes;
+                convert_ns.* = @intCast(@max(0, WasmBuildTiming.now(ctx) - started));
+                return backend.wasm.WasmUnitImage.View.init(bytes) catch base.invariant("roc build invariant violated: an image this build converted does not read", .{});
+            },
+        }
+    }
+
+    /// Link the program from its units' images, the support image and, for
+    /// a module, the host image. The phase "Fast Dev Link" reports the
+    /// time after the root unit's image is ready.
+    fn link(
+        self: *WasmFastLink,
+        ctx: *CliCtx,
+        args: cli_args.BuildArgs,
+        reporter: *progress.Reporter,
+        build_env: *BuildEnv,
+        targets_config: roc_target.TargetsConfig,
+        units: WasmUnits,
+        scratch_dir: []const u8,
+    ) CliMainError!void {
+        // The link configuration of the checked platform.
+        const link_inputs = try collectPlatformLinkInputs(ctx, self.platform_dir, targets_config, self.target, self.link_type);
+        const module_output = self.output != null;
+        const stack_checks = wasmStackChecks(link_inputs.wasm);
+        const stack_size = configuredWasmStackBytes(args, link_inputs.wasm);
+        const global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null;
+        const maximum_memory = if (link_inputs.wasm) |wasm| wasm.maximum_memory else null;
+        if (module_output) switch (linker.wasmStackLayout(global_base)) {
+            .stack_first => if (maximum_memory) |bytes| {
+                const limit = linker.stackFirstMaximumMemory(stack_size);
+                if (bytes > limit) return ctx.fail(.{ .wasm_maximum_memory_too_large = .{
+                    .target = link_inputs.target_name,
+                    .maximum_memory = bytes,
+                    .limit = limit,
+                    .stack_size = stack_size,
+                } });
+            },
+            .data_first => {},
+        };
+        const config: wasm_link.ModuleConfig = .{
+            .exports = if (module_output) requiredWasmPlatformExports(link_inputs) else &.{},
+            .stack_exports = linker.wasmStackExports(self.target.cpuLevel()),
+            .stack_size = stack_size,
+            .global_base = global_base,
+            .initial_memory = configuredWasmMinimumMemory(args, link_inputs.wasm),
+            .maximum_memory = maximum_memory,
+            .import_memory = if (link_inputs.wasm) |wasm| wasm.import_memory.importsMemory() else false,
+            .zero_filled_memory = configuredWasmZeroFilledMemory(link_inputs.wasm),
+            .names = args.debug,
+        };
+        const stack_contents = backend.wasm.StackSupport.Contents{ .accessors = self.target.cpuLevel() == .v1, .overflow = stack_checks };
+        if (stack_contents.accessors or stack_contents.overflow) self.stack_support = try backend.wasm.StackSupport.encodeObject(ctx.gpa, stack_contents);
+
+        reporter.begin("Fast Dev Link");
+        const target_name = link_inputs.target_name;
+        const wait_started = WasmBuildTiming.now(ctx);
+        self.job.wait();
+        const wait_ns: u64 = @intCast(@max(0, WasmBuildTiming.now(ctx) - wait_started));
+        if (self.job.failed) |err| {
+            reporter.fail();
+            return err;
+        }
+        if (self.job.unreadable_input) |path| {
+            reporter.fail();
+            std.log.err("Reading the platform link input {s} failed", .{path});
+            return failLink(ctx, error.InvalidArguments, target_name);
+        }
+        var owned_support: ?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8 = null;
+        defer if (owned_support) |bytes| ctx.gpa.free(bytes);
+        var owned_host: ?[]align(backend.wasm.WasmUnitImage.alignment.toByteUnits()) u8 = null;
+        defer if (owned_host) |bytes| ctx.gpa.free(bytes);
+        var support_convert_ns: u64 = 0;
+        var host_convert_ns: u64 = 0;
+        const support = self.image(ctx, .support, stack_checks, target_name, scratch_dir, &owned_support, &support_convert_ns) catch |err| {
+            reporter.fail();
+            return err;
+        };
+        const host: ?backend.wasm.WasmUnitImage.View = if (self.spec.needs_host) self.image(ctx, .host, stack_checks, target_name, scratch_dir, &owned_host, &host_convert_ns) catch |err| {
+            reporter.fail();
+            return err;
+        } else null;
+
+        const library = units.library;
+        const unit_views = try ctx.gpa.alloc(backend.wasm.WasmUnitImage.View, library.images.len + 1);
+        defer ctx.gpa.free(unit_views);
+        for (library.images, unit_views[0..library.images.len]) |unit_image, *view| {
+            view.* = backend.wasm.WasmUnitImage.View.init(unit_image) catch base.invariant("roc build invariant violated: a wasm unit image does not read", .{});
+        }
+        unit_views[library.images.len] = backend.wasm.WasmUnitImage.View.init(units.root_image) catch base.invariant("roc build invariant violated: the root wasm unit image does not read", .{});
+        const accessors = [_][]const u8{ shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer };
+        const app_public = try fast_dev_link.sortedUnion(ctx.arena, &.{ units.app_export_symbols, if (self.target.cpuLevel() == .v1) &accessors else &.{} });
+        const inputs: wasm_link.Inputs = .{
+            .host = host,
+            .support = support,
+            .units = unit_views,
+            .root = library.images.len,
+            .app_public = app_public,
+            .provides = self.provides,
+            .hosted = self.hosted,
+        };
+
+        var timing: wasm_link.Timing = .{};
+        var outcome: wasm_link.Outcome = .{};
+        const executor = build_env.postCheckExecutor();
+        var publish_ns: u64 = 0;
+        if (self.output) |*output| {
+            wasm_link.composeModule(ctx.gpa, ctx.arena, ctx.io.std_io, inputs, config, output, executor, &timing, &outcome) catch |err| {
+                reporter.fail();
+                return self.reportFailure(ctx, err, outcome, target_name);
+            };
+            const publish_started = WasmBuildTiming.now(ctx);
+            output.publish(ctx.arena) catch |err| {
+                reporter.fail();
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = output.dest, .err = file_err } }),
+                };
+            };
+            self.published = true;
+            publish_ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - publish_started));
+        } else {
+            const object = wasm_link.composeObject(ctx.gpa, ctx.arena, ctx.io.std_io, inputs, &timing, &outcome) catch |err| {
+                reporter.fail();
+                return self.reportFailure(ctx, err, outcome, target_name);
+            };
+            defer ctx.gpa.free(object);
+            const publish_started = WasmBuildTiming.now(ctx);
+            const object_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_app_wasm32.o" });
+            backend.writeFileWindowsAvSafe(ctx.io.std_io, object_path, object) catch return error.WasmOutputWriteFailed;
+            try writeArchiveOutput(ctx, .wasm32, self.final_output_path, link_inputs, &.{object_path});
+            publish_ns = @intCast(@max(0, WasmBuildTiming.now(ctx) - publish_started));
+        }
+        reporter.endWithBreakdown(&.{
+            .{ .name = if (support_convert_ns != 0) "Support Image (convert)" else "Support Image (cache hit)", .ns = support_convert_ns },
+            .{ .name = if (host_convert_ns != 0) "Host Image (convert)" else "Host Image (cache hit)", .ns = host_convert_ns },
+            .{ .name = "Image Hashing", .ns = self.job.hash_ns },
+            .{ .name = "Image Lookup", .ns = self.job.lookup_ns },
+            .{ .name = "Image Wait", .ns = wait_ns },
+            .{ .name = "Walk", .ns = timing.walk_ns },
+            .{ .name = "Layout", .ns = timing.layout_ns },
+            .{ .name = "Write", .ns = timing.write_ns },
+            .{ .name = "Finalize", .ns = timing.finalize_ns + publish_ns },
+        });
+        reporter.recordCounters("Wasm fast dev link", &.{
+            .{ .name = "Images placed", .count = timing.images_placed },
+            .{ .name = "Functions", .count = timing.functions },
+            .{ .name = "Bytes written", .count = timing.bytes_written },
+            .{ .name = "Sites patched", .count = timing.sites_patched },
+        });
+    }
+
+    fn reportFailure(self: *WasmFastLink, ctx: *CliCtx, err: wasm_link.LinkError, outcome: wasm_link.Outcome, target_name: []const u8) CliMainError {
+        switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MissingSymbols => {
+                const symbols = try ctx.arena.alloc(cli_problem.WasmMissingSymbol, outcome.missing.len);
+                for (outcome.missing, symbols) |missing, *symbol| symbol.* = .{
+                    .name = missing.name,
+                    .kind = switch (missing.kind) {
+                        .data => .data,
+                        .table => .table,
+                    },
+                    .needed_by = switch (missing.needed_by) {
+                        .host => .host,
+                        .support => .support,
+                        .unit => .unit,
+                    },
+                };
+                return ctx.fail(.{ .wasm_symbols_undefined = .{ .symbols = symbols, .target = target_name } });
+            },
+            error.UndefinedExports => return ctx.fail(.{ .wasm_exports_undefined = .{ .symbols = outcome.undefined_exports, .target = target_name } }),
+            error.ImportConflict => return ctx.fail(.{ .wasm_import_conflict = .{ .symbol = outcome.conflict.?, .target = target_name } }),
+            error.EngineLimit => return ctx.fail(.{ .wasm_engine_limit = .{ .what = outcome.limit.?.what, .count = outcome.limit.?.count, .limit = outcome.limit.?.limit, .target = target_name } }),
+            error.MemoryLayout => return ctx.fail(.{ .wasm_memory_layout = .{ .what = @tagName(outcome.memory.?.what), .needed = outcome.memory.?.needed, .configured = outcome.memory.?.configured, .target = target_name } }),
+            error.ParameterLimit => {
+                for (outcome.parameters) |problem| try ctx.addProblem(.{ .wasm_host_parameter_limit = .{
+                    .symbol = problem.symbol,
+                    .direction = if (problem.hosted) .hosted else .provided_to_host,
+                    .param_count = problem.param_count,
+                    .limit = layout.abi.wasm_max_function_params,
+                } });
+                return error.CliError;
+            },
+            error.AccessDenied, error.NoSpaceLeft, error.FileNotFound, error.Unexpected => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = self.final_output_path, .err = file_err } }),
+        }
+    }
+};
+
+/// Restore or build and file every wasm unit of the program: each library
+/// module's, scheduled after checking as a native link's units are
+/// (`buildBoxyLibraryObjects`), then the root unit's, which exports the
+/// platform's provides under the names the host imports. Each is keyed by
+/// the unit key with the wasm target and the platform's stack-check mode.
+fn buildWasmUnits(
+    ctx: *CliCtx,
+    args: cli_args.BuildArgs,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    imported_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    relation_artifacts: []const check.CheckedArtifact.ImportedModuleView,
+    target: RocTarget,
+    targets_config: roc_target.TargetsConfig,
+) CliMainError!WasmUnits {
+    const cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
+    var policy = BoxyUnitPolicy.ofBuild(args);
+    policy.wasm_stack_checks = wasmStackChecks(if (targets_config.getLinkSpec(target)) |spec| spec.wasm else null);
+    var interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io);
+    defer interfaces.deinit();
+    var digests = try build_env.boxyLinkDigests();
+    defer digests.deinit();
+    const library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, root_artifact, target, &interfaces, &digests, true, null, "Lowering Modules (wasm)");
+    var library_owned_here = true;
+    defer if (library_owned_here) library.deinit(ctx.gpa);
+    const dump_dir = dev_diagnostics.get(.dump_wasm_unit_images);
+    if (dump_dir) |dir| for (library.images, library.keys) |image, key| dumpWasmUnitImage(ctx, dir, key, image);
+
+    const root_key = try boxyObjectKey(ctx.gpa, &digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    reporter.begin("Wasm Root Unit");
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, root_key, target, &interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        build_env.recordWasmUnits(1, 0);
+        if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, entry.image);
+        const root_image = try ctx.gpa.alignedAlloc(u8, backend.wasm.WasmUnitImage.alignment, entry.image.len);
+        @memcpy(root_image, entry.image);
+        const app_export_symbols = try ctx.arena.alloc([]const u8, entry.app_export_symbols.len);
+        for (entry.app_export_symbols, app_export_symbols) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        reporter.endWithBreakdown(&.{.{ .name = "Root Unit (cache hit)", .ns = 0 }});
+        library_owned_here = false;
+        return .{ .library = library, .root_image = root_image, .app_export_symbols = app_export_symbols };
+    }
+    var lowering_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    var lowered = try lowerCheckedSourceToLir(ctx.gpa, ctx.gpa, root_artifact, imported_artifacts, relation_artifacts, .linked_output, args.opt, .boxy, target, args.synthetic_default_platform, false, build_env.postCheckExecutor(), &lowering_timing, null, .{ .imports = &interfaces, .root = true, .names = &digests.names });
+    defer lowered.deinit();
+    const lowering_snapshot = lowering_timing.snapshot();
+    reporter.endWithBreakdown(&.{.{ .name = "Lowering", .ns = postCheckLoweringTotalNs(lowering_snapshot) }});
+    reporter.begin("Unit Image");
+    const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
+    defer ctx.gpa.free(entrypoints);
+    const static_data_exports = try compile.static_data_exports.buildStaticData(ctx.gpa, .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    }, &lowered, target, .{ .include_provided_exports = true });
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
+    const entries = try ctx.arena.alloc(backend.wasm.UnitCompile.Entry, entrypoints.len);
+    for (entrypoints, entries) |entry, *out| out.* = .{ .symbol_name = entry.symbol_name, .proc = entry.proc, .arg_layouts = entry.arg_layouts, .ret_layout = entry.ret_layout };
+    const image = backend.wasm.UnitCompile.compileUnitImage(ctx.gpa, &lowered.lir_result.store, &lowered.lir_result.layouts, entries, static_data_exports, .{
+        .cpu_level = target.cpuLevel(),
+        .stack_checks = policy.wasm_stack_checks,
+        .executor = build_env.postCheckExecutor(),
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            reporter.fail();
+            std.log.err("Wasm compilation of the root unit failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        },
+    };
+    var image_owned_here = true;
+    defer if (image_owned_here) ctx.gpa.free(image);
+    const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &interfaces);
+    defer ctx.gpa.free(records);
+    const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
+    try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
+        .exports = records,
+        .hosted_symbols = try compile.boxy_unit.hostedSymbols(ctx.arena, &lowered.lir_result.store),
+        .app_export_symbols = app_export_symbols,
+        .pieces = &.{},
+        .image = image,
+    });
+    build_env.recordWasmUnits(0, 1);
+    if (dump_dir) |dir| dumpWasmUnitImage(ctx, dir, root_key.bytes, image);
+    reporter.end();
+    library_owned_here = false;
+    image_owned_here = false;
+    return .{ .library = library, .root_image = image, .app_export_symbols = app_export_symbols };
+}
+
+/// Write a wasm unit image to `dir`, named by its unit key
+/// (`ROC_DUMP_WASM_UNIT_IMAGES`).
+fn dumpWasmUnitImage(ctx: *CliCtx, dir: []const u8, key: [32]u8, image: []const u8) void {
+    const name = std.fmt.allocPrint(ctx.arena, "{s}.rbwu", .{std.fmt.bytesToHex(key, .lower)}) catch return;
+    const path = std.fs.path.join(ctx.arena, &.{ dir, name }) catch return;
+    std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = image }) catch |err|
+        std.log.err("could not write the wasm unit image {s}: {}", .{ path, err });
+}
+
+/// A fast dev link in progress: its output file, created when the build
+/// starts, and the background job finding the platform's pre-linked host.
+const FastDevLink = struct {
+    spec: fast_dev_link.HostSpec,
+    output: fast_dev_link.OutputFile,
+    job: fast_dev_link.HostJob,
+    /// The embedded support image, copied to memory `UnitImage.View` reads.
+    support: []align(backend.dev.UnitImage.alignment.toByteUnits()) u8,
+    published: bool = false,
+
+    fn start(
+        ctx: *CliCtx,
+        args: cli_args.BuildArgs,
+        build_env: *BuildEnv,
+        platform_dir: []const u8,
+        target: RocTarget,
+        link_type: roc_target.OutputKind,
+        final_output_path: []const u8,
+        build_scratch_dir: []const u8,
+    ) CliMainError!*FastDevLink {
+        const embedded = EmbeddedTargetObjects.forTarget(target);
+        const support_bytes = embedded.support_image orelse base.invariant("roc build invariant violated: a fast dev link target has no support image", .{});
+        const self = try ctx.gpa.create(FastDevLink);
+        errdefer ctx.gpa.destroy(self);
+        const support = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, support_bytes.len);
+        errdefer ctx.gpa.free(support);
+        @memcpy(support, support_bytes);
+        const support_view = backend.dev.UnitImage.View.init(support) catch base.invariant("roc build invariant violated: the embedded support image does not read", .{});
+
+        const targets_config = build_env.getPlatformTargetsConfig() orelse base.invariant("roc build invariant violated: a resolved platform has no targets config", .{});
+        const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, .exe);
+        const link_spec = targets_config.getLinkSpec(target) orelse base.invariant("roc build invariant violated: a selected target has no link spec", .{});
+        var link_items: std.ArrayList([]const u8) = .empty;
+        for (link_spec.items) |item| switch (item) {
+            .file_path => |path| try link_items.append(ctx.arena, path),
+            .app => try link_items.append(ctx.arena, "<app>"),
+            .win_gui => {},
+        };
+        // The synthetic default platform's host is the compiler's own
+        // startup object before the app and, where the platform is
+        // freestanding, its compiler-rt carrier after it
+        // (`appendDefaultPlatformLinkInputs`); the host's key names them
+        // as link items and digests their contents like any input.
+        var platform_files_pre: std.ArrayList([]const u8) = .empty;
+        try platform_files_pre.appendSlice(ctx.arena, link_inputs.platform_files_pre);
+        var platform_files_post: std.ArrayList([]const u8) = .empty;
+        if (args.synthetic_default_platform) {
+            var default_inputs = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 2);
+            try appendDefaultPlatformLinkInputs(ctx, &default_inputs, build_scratch_dir, target);
+            try platform_files_pre.append(ctx.arena, default_inputs.items[0]);
+            try platform_files_post.appendSlice(ctx.arena, default_inputs.items[1..]);
+            for (default_inputs.items) |path| try link_items.append(ctx.arena, std.fs.path.basename(path));
+        }
+        try platform_files_post.appendSlice(ctx.arena, link_inputs.platform_files_post);
+        const symbols = build_env.getPlatformLinkSymbols() orelse base.invariant("roc build invariant violated: a resolved platform has no header symbols", .{});
+        const provides = try ctx.arena.alloc([]const u8, symbols.provides.len);
+        for (symbols.provides, provides) |entry, *name| name.* = entry.ffi_symbol;
+        const support_imports = try ctx.arena.alloc([]const u8, support_view.imports().len);
+        for (support_view.imports(), support_imports) |import, *name| name.* = try ctx.arena.dupe(u8, support_view.name(import.name));
+        // A shared library exports the provides and the host inputs' own
+        // exports, as a composed link's does (`sharedLibraryExports`).
+        const shared = switch (link_type) {
+            .exe => false,
+            .shared => true,
+            .archive => unreachable, // fastDevLinkApplies admits no archive
+        };
+        const exports: []const []const u8 = if (shared) try fast_dev_link.sortedUnion(ctx.arena, &.{
+            provides,
+            try host_symbols.collectHostExports(ctx.arena, ctx.io.std_io, try hostInputPaths(ctx, link_inputs)),
+        }) else &.{};
+
+        self.* = .{
+            .spec = .{
+                .format = fastDevLinkFormat(target) orelse unreachable, // fastDevLinkApplies chose the target
+                .target = target,
+                .link_abi = buildLinkAbi(target, args.synthetic_default_platform),
+                .platform_files_pre = platform_files_pre.items,
+                .platform_files_post = platform_files_post.items,
+                .platform_files_dir = link_inputs.platform_files_dir,
+                .link_items = link_items.items,
+                .bundle_hash = build_env.getPlatformBundleHash(),
+                .provides = try fast_dev_link.sortedUnion(ctx.arena, &.{provides}),
+                .keep = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
+                .host_required = try fast_dev_link.sortedUnion(ctx.arena, &.{ symbols.hosted, &host_symbols.runtime_symbols, support_imports }),
+                .shared = shared,
+                .exports = exports,
+            },
+            .output = fast_dev_link.OutputFile.create(ctx.arena, final_output_path) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => |file_err| return ctx.fail(.{ .file_write_failed = .{ .path = final_output_path, .err = file_err } }),
+            },
+            .job = undefined,
+            .support = support,
+        };
+        self.job = .{
+            .gpa = ctx.gpa,
+            .std_io = ctx.io.std_io,
+            .manager = build_env.cache_manager,
+            .spec = &self.spec,
+            .output = &self.output,
+        };
+        self.job.start() catch |err| {
+            self.output.discard();
+            std.log.err("Starting the fast dev link's host job failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        return self;
+    }
+
+    /// Write the import library of the published DLL beside it: the DLL's
+    /// name with a `.lib` extension, listing the DLL's exports.
+    fn writeImportLibrary(self: *FastDevLink, ctx: *CliCtx, reporter: *progress.Reporter, scratch_dir: []const u8) CliMainError!void {
+        const target_name = @tagName(self.spec.target);
+        const dll_path = self.output.dest;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, dll_path, ctx.gpa, .unlimited) catch |err| {
+            reporter.fail();
+            return ctx.fail(.{ .file_read_failed = .{ .path = dll_path, .err = err } });
+        };
+        defer ctx.gpa.free(bytes);
+        const def = coff_import_library.moduleDefinition(ctx.gpa, std.fs.path.basename(dll_path), bytes) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidExecutable => base.invariant("roc build invariant violated: a DLL this build linked does not parse", .{}),
+        };
+        defer ctx.gpa.free(def);
+        const def_path = try std.fs.path.join(ctx.arena, &.{ scratch_dir, "roc_import_library.def" });
+        std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = def_path, .data = def }) catch |err| {
+            reporter.fail();
+            return ctx.fail(.{ .file_write_failed = .{ .path = def_path, .err = err } });
+        };
+        const stem = dll_path[0 .. dll_path.len - std.fs.path.extension(dll_path).len];
+        const lib_path = try std.fmt.allocPrint(ctx.arena, "{s}.lib", .{stem});
+        // A COFF fast dev link target is x86_64 or aarch64.
+        const machine: u16 = if (self.spec.target.toCpuArch() == .aarch64) coff_host_prelink.IMAGE_FILE_MACHINE_ARM64 else coff_host_prelink.IMAGE_FILE_MACHINE_AMD64;
+        builder.writeImportLibrary(ctx.gpa, def_path, machine, lib_path) catch |err| {
+            reporter.fail();
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.ImportLibraryWriteFailed, error.LLVMNotAvailable => ctx.fail(.{ .linker_failed = .{ .err = err, .target = target_name } }),
+            };
+        };
+    }
+
+    /// Each `provides` symbol's kind and layout size, as the program's
+    /// images define it: what a Mach-O or COFF host's windows are sized by.
+    fn provideLayouts(
+        self: *FastDevLink,
+        ctx: *CliCtx,
+        support_view: backend.dev.UnitImage.View,
+        units: []const patch_link.ImageInput,
+    ) CliMainError![]const host_prelink.Provide {
+        var images: std.ArrayList(unit_walk.ImageInput) = .empty;
+        defer images.deinit(ctx.gpa);
+        try images.append(ctx.gpa, .{ .view = support_view });
+        try images.appendSlice(ctx.gpa, units);
+        var exports = try unit_walk.collectExports(ctx.gpa, images.items);
+        defer exports.deinit(ctx.gpa);
+        const out = try ctx.arena.alloc(host_prelink.Provide, self.spec.provides.len);
+        for (self.spec.provides, out) |name, *provide| {
+            // The checked program defines every `provides` symbol (the
+            // checker rejects an app that lacks one).
+            const found = exports.get(name) orelse base.invariant("roc build invariant violated: no unit image defines the provided symbol {s}", .{name});
+            const symbol = images.items[found.image].view.symbols()[found.symbol];
+            const procedure = @as(backend.dev.UnitImage.SymbolType, @fromBackingInt(symbol.type)) == .func;
+            provide.* = .{ .name = name, .kind = if (procedure) .procedure else .data, .size = if (procedure) 0 else symbol.size };
+        }
+        return out;
+    }
+
+    fn deinit(self: *FastDevLink, gpa: Allocator) void {
+        self.job.deinit();
+        if (!self.published) self.output.discard();
+        gpa.free(self.support);
+        gpa.destroy(self);
+    }
+
+    /// Link the program: its library units' images, the root unit's image,
+    /// and the support image, after the pre-linked host. The phase "Fast Dev
+    /// Link" reports the time after the root unit's image is ready.
+    fn link(
+        self: *FastDevLink,
+        ctx: *CliCtx,
+        reporter: *progress.Reporter,
+        build_env: *BuildEnv,
+        root_image: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+        library: BoxyLibraryObjects,
+        scratch_dir: []const u8,
+    ) CliMainError!void {
+        reporter.begin("Fast Dev Link");
+        const target_name = @tagName(self.spec.target);
+        const wait_started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+        self.job.wait();
+        const wait_ns: u64 = @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - wait_started));
+        var prelink_ns: u64 = 0;
+        var owned_record: ?[]align(16) u8 = null;
+        defer if (owned_record) |record| ctx.gpa.free(record);
+
+        const units = try ctx.gpa.alloc(patch_link.ImageInput, library.images.len + 1);
+        defer ctx.gpa.free(units);
+        for (library.images, units[0..library.images.len]) |image, *unit| {
+            unit.* = .{ .view = backend.dev.UnitImage.View.init(image) catch base.invariant("roc build invariant violated: a unit image does not read", .{}) };
+        }
+        units[library.images.len] = .{ .view = backend.dev.UnitImage.View.init(root_image) catch base.invariant("roc build invariant violated: the root unit image does not read", .{}) };
+        const support_view = backend.dev.UnitImage.View.init(self.support) catch
+            unreachable; // `start` read this image
+
+        // A Mach-O or COFF host's key covers the provides' kinds and layout
+        // sizes, which the images tell; its lookup waits for them.
+        var provides: []const host_prelink.Provide = &.{};
+        if (self.spec.format == .macho or self.spec.format == .coff or self.spec.shared) {
+            provides = try self.provideLayouts(ctx, support_view, units);
+            if (self.job.outcome == .hashed) self.job.lookupWithLayouts(provides);
+        }
+        const record_bytes: []align(16) const u8 = switch (self.job.outcome) {
+            .pending, .hashed => unreachable, // waiting joined the job, which always records an outcome, and a lookup by layouts followed
+            .unreadable_input => |path| {
+                reporter.fail();
+                std.log.err("Reading the platform link input {s} failed", .{path});
+                return failLink(ctx, error.InvalidArguments, target_name);
+            },
+            .failed => |err| {
+                reporter.fail();
+                return switch (err) {
+                    error.OutOfMemory => error.OutOfMemory,
+                    else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
+                };
+            },
+            .hit => |hit| hit.mapping,
+            .miss => miss: {
+                const started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+                const record = fast_dev_link.prelink(ctx, &self.spec, self.job.key, self.job.manager, scratch_dir, provides) catch |err| {
+                    reporter.fail();
+                    return switch (err) {
+                        error.OutOfMemory => error.OutOfMemory,
+                        error.LinkFailed, error.InvalidArguments, error.LLVMNotAvailable, error.UndefinedCompilerSymbols => |link_err| failLink(ctx, link_err, target_name),
+                        error.UnexpectedHostLayout, error.HostTooLarge, error.ReadFailed => |host_err| failed: {
+                            std.log.err("Preparing the platform's host for a dev build failed: {s}", .{@errorName(host_err)});
+                            break :failed failLink(ctx, error.LinkFailed, target_name);
+                        },
+                    };
+                };
+                owned_record = record;
+                const host_start: []const u8 = switch (self.spec.format) {
+                    .elf => (host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).host(),
+                    .macho => (macho_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).segments(),
+                    .coff => (coff_host_prelink.View.init(record) catch base.invariant("roc build invariant violated: a host record this build made does not read", .{})).sections(),
+                };
+                self.output.writeStart(host_start) catch |err| {
+                    reporter.fail();
+                    return switch (err) {
+                        error.OutOfMemory => error.OutOfMemory,
+                        else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
+                    };
+                };
+                prelink_ns = @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started));
+                break :miss record;
+            },
+        };
+
+        var timing: patch_link.Timing = .{};
+        var outcome: patch_link.Outcome = .{};
+        const linked: patch_link.LinkError!void = switch (self.spec.format) {
+            .elf => patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .macho => macho_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = macho_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+            .coff => coff_patch_link.link(ctx.gpa, ctx.arena, ctx.io.std_io, .{
+                .host = coff_host_prelink.View.init(record_bytes) catch unreachable, // the job or the prelink admitted the record
+                .support = .{ .view = support_view },
+                .units = units,
+                .root = library.images.len,
+                .host_required = self.spec.host_required,
+            }, &self.output, build_env.postCheckExecutor(), &timing, &outcome),
+        };
+        linked catch |err| {
+            reporter.fail();
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.MissingHostSymbols => ctx.fail(.{ .missing_host_symbols = .{ .symbols = outcome.missing, .target = target_name } }),
+                error.ProvidedValueTooLarge => ctx.fail(.{ .provided_value_too_large = .{
+                    .symbol = outcome.too_large.?.symbol,
+                    .size = outcome.too_large.?.size,
+                    .limit = host_prelink.provide_window,
+                    .target = target_name,
+                } }),
+                error.ProgramTooLarge => ctx.fail(.{ .dev_program_too_large = .{ .target = target_name } }),
+                error.AccessDenied, error.NoSpaceLeft, error.FileNotFound, error.Unexpected => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
+            };
+        };
+        const publish_started = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+        self.output.publish(ctx.arena) catch |err| {
+            reporter.fail();
+            return switch (err) {
+                error.OutOfMemory => error.OutOfMemory,
+                else => |file_err| ctx.fail(.{ .file_write_failed = .{ .path = self.output.dest, .err = file_err } }),
+            };
+        };
+        self.published = true;
+        // A DLL is published with its import library beside it, as a
+        // composed link's LLD writes one.
+        if (self.spec.shared and self.spec.format == .coff) try self.writeImportLibrary(ctx, reporter, scratch_dir);
+        timing.finalize_ns += @intCast(@max(0, std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - publish_started));
+        reporter.endWithBreakdown(&.{
+            .{ .name = if (prelink_ns != 0) "Host Prelink (link)" else "Host Prelink (cache hit)", .ns = if (prelink_ns != 0) prelink_ns else self.job.lookup_ns },
+            .{ .name = "Host Input Hashing", .ns = self.job.hash_ns },
+            .{ .name = "Host Copy", .ns = self.job.copy_ns },
+            .{ .name = "Output Copy Wait", .ns = wait_ns },
+            .{ .name = "Layout", .ns = timing.layout_ns },
+            .{ .name = "Patch Fan-out", .ns = timing.fan_out_ns },
+            .{ .name = "Finalize", .ns = timing.finalize_ns },
+            .{ .name = "Output Unmap", .ns = timing.unmap_ns },
+        });
+        reporter.recordCounters("Fast dev link", &.{
+            .{ .name = "Images placed", .count = timing.images_placed },
+            .{ .name = "Bytes written", .count = timing.bytes_written },
+            .{ .name = "Patch sites", .count = timing.sites_patched },
+            .{ .name = "References fixed", .count = timing.refs_fixed },
+            .{ .name = "Hole bytes dropped", .count = timing.hole_bytes },
+        });
+    }
+};
 
 fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
@@ -10748,70 +12036,23 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
-    const cache_config = CacheConfig{
-        .enabled = !args.no_cache,
-        .verbose = args.verbose,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
-
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-    const targets_config = platform.config;
-    const platform_source = platform.root_file;
-    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
     const target_arch = target.toCpuArch();
-    const target_os = target.toOsTag();
     if (target.isDynamic() and builtin.target.os.tag != .linux) {
         renderValidationError(ctx, .{
             .unsupported_glibc_cross = .{
@@ -10822,157 +12063,148 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         return error.UnsupportedCrossCompilation;
     }
 
-    if (target_arch != .x86_64 and target_arch != .aarch64 and target_arch != .wasm32) {
+    if (target_arch != .wasm32 and backend.dev.isa.isaOfOrNull(target) == null) {
         try ctx.io.stderr().print(
             "Error: The native object backend does not support the '{s}' architecture.\n",
             .{@tagName(target_arch)},
         );
         return error.UnsupportedTarget;
     }
-    const code_generation_phase_name = devBackendPhaseName(target_arch);
+    const code_generation_phase_name = devBackendPhaseName(target);
 
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try prepareBuildOutput(ctx, final_output_path);
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
+    defer releaseScratchDir(ctx, build_scratch_dir);
+
+    // A dev executable of a `.boxy` program for a target with a fast dev
+    // link format is linked by a fast dev link, whose output file and host
+    // job start before any compile work.
+    const fast_link: ?*FastDevLink = if (fastDevLinkApplies(target, link_type, args))
+        try FastDevLink.start(ctx, args, &build_env, platform_dir, target, link_type, final_output_path, build_scratch_dir)
+    else
+        null;
+    defer if (fast_link) |fast| fast.deinit(ctx.gpa);
+    // A `.boxy` dev build of a wasm target is linked by composing images,
+    // whose output file and image job start before any compile work too.
+    const wasm_fast_link: ?*WasmFastLink = if (wasmFastLinkApplies(target, args))
+        try WasmFastLink.start(ctx, &build_env, platform_dir, target, link_type, final_output_path, args.no_cache)
+    else
+        null;
+    defer if (wasm_fast_link) |fast| fast.deinit(ctx.gpa);
 
     build_env.setTarget(target);
-    // `ROC_DEV_PACK_HITS` names a directory of pack files to serve closed
-    // specializations from; the object compiler splices their code in. The
-    // lookup is part of the runtime lowering policy the compile-time session
-    // is declared with, so it loads before checking starts.
-    var own_packs: ?pack_store.LoadedPacks = null;
-    defer if (own_packs) |*packs| packs.deinit();
-    var loaded_packs: ?*pack_store.LoadedPacks = null;
-    if (std.c.getenv("ROC_DEV_PACK_HITS")) |dir_z| {
-        own_packs = pack_store.LoadedPacks.loadDir(ctx.gpa, ctx.io.std_io, std.mem.span(dir_z)) catch |err| {
-            std.log.err("failed to load packs from {s}: {}", .{ std.mem.span(dir_z), err });
-            return error.NativeCompilationFailed;
-        };
-        loaded_packs = &own_packs.?;
-    }
-    // The object cache lives under the cache root and follows `--no-cache`
-    // like the rest of the cache: this build reads the packs of every module
-    // in view and writes its own. A directory of packs given for a test
-    // (`ROC_DEV_PACK_HITS`) replaces the store. A dev build for the host
-    // reads the very packs compile-time evaluation reads, so it shares them.
-    const object_cache_enabled = !args.no_cache and loaded_packs == null;
-    var own_store: ?pack_store.Store = null;
-    defer if (own_store) |*store| store.deinit();
-    var object_store: ?*pack_store.Store = null;
-    if (object_cache_enabled) {
-        if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
-            object_store = &shared.store;
-            loaded_packs = &shared.packs;
-        } else {
-            const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
-            own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
-                std.log.warn("object cache unavailable: {}", .{err});
-                return error.NativeCompilationFailed;
-            };
-            object_store = &own_store.?;
-            own_packs = pack_store.LoadedPacks.init(ctx.gpa);
-            own_packs.?.pending = .{ .store = object_store.?, .io = ctx.io.std_io, .build_env = &build_env };
-            loaded_packs = &own_packs.?;
-        }
-    }
+    const runtime_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
     var runtime_lowering = checkedRuntimeLoweringConfig(
         .linked_output,
         args.opt,
-        currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        runtime_strategy,
+        target,
         args.synthetic_default_platform,
     );
-    if (loaded_packs) |packs| {
-        runtime_lowering.target.spec_cache = packs.specCacheLookup();
-    }
-    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
+    // A `.boxy` dev build of a native target lowers one object per module
+    // and files each in the per-module Boxy object cache (design.md
+    // "Caching Under `.boxy`"): the root program is the root unit, whose
+    // calls into other modules compile against their objects' export
+    // interfaces.
+    const boxy_units = runtime_strategy == .boxy and args.opt == .dev and target_arch != .wasm32;
+    var boxy_interfaces: ?postcheck.Boxy.Lower.ExportInterfaces = if (boxy_units) postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io) else null;
+    defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
+    // Filled once checking has published every module; the root unit reads
+    // its names only when it lowers, after that.
+    var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .names = .{} };
+    defer boxy_digests.deinit();
+    const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true, .names = &boxy_digests.names } else null;
+    runtime_lowering.target.boxy_unit = boxy_root_unit;
+    // A build of the host target at dev opt links the objects compile-time
+    // evaluation builds, so their exports go in the link's table.
+    if (boxy_interfaces) |*interfaces| if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) lowering.interfaces = interfaces;
+    };
     build_env.setRuntimeLowering(runtime_lowering);
+    var link_objects = link_artifacts.Objects.init(ctx.coreCtx(), ctx.arena, build_scratch_dir);
+    // The link reads every unit's object, so compile-time evaluation
+    // builds the units the link needs as their modules are checked, with
+    // their pieces when the link composes them.
+    if (boxy_interfaces != null) if (build_env.boxy_object_lowering) |*lowering| {
+        if (lowering.target == target) {
+            lowering.links = true;
+            lowering.link_reads_pieces = fast_link == null;
+        }
+    };
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(imported_artifacts);
     const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
     defer ctx.gpa.free(relation_artifacts);
 
-    const target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth());
-
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .linked_output,
-        args.opt,
-        specialization_strategy,
-        target_usize,
-        args.synthetic_default_platform,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        if (loaded_packs) |packs| packs.specCacheLookup() else null,
-        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
-    );
-    defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
-    // Cache statistics are diagnostic output. Ordinary successful builds must
-    // leave stderr empty so build runners do not report false warnings.
-    if (loaded_packs != null and std.c.getenv("ROC_PACK_STATS") != null) {
-        const packs = loaded_packs.?.*;
-        var external_procs: usize = 0;
-        for (lowered.lir_result.store.getProcSpecs()) |proc| {
-            if (proc.external) external_procs += 1;
+    if (wasmUnitsApply(target, args)) {
+        const units = try buildWasmUnits(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, target, resolved_targets_config);
+        defer units.deinit(ctx.gpa);
+        if (wasm_fast_link) |fast| {
+            try fast.link(ctx, args, &reporter, &build_env, resolved_targets_config, units, build_scratch_dir);
+            return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
         }
-        // The compile-time evaluator has already spliced its entries; the
-        // object compiler asks for the runtime program's afterwards.
-        std.debug.print("pack hits: {d} external procs: {d} evaluator artifacts: {d} packs loaded: {d} keys: {d}\n", .{ packs.hits, external_procs, packs.artifacts_served, packs.packs.items.len, packs.specs.count() });
     }
 
+    // Every other module's object comes first: the root unit compiles its
+    // calls against their export interfaces.
+    if (boxy_interfaces != null) boxy_digests = try build_env.boxyLinkDigests();
+    const boxy_library: ?BoxyLibraryObjects = if (boxy_interfaces) |*interfaces|
+        try buildBoxyLibraryObjects(ctx, BoxyUnitPolicy.ofBuild(args), &build_env, &reporter, root_artifact, target, interfaces, &boxy_digests, fast_link != null, null, "Lowering Modules")
+    else
+        null;
+    defer if (boxy_library) |library| library.deinit(ctx.gpa);
+    const boxy_cache_manager: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
+    const boxy_root_key: ?compile.boxy_object_cache.Key = if (boxy_library) |library| try boxyObjectKey(ctx.gpa, &boxy_digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), BoxyUnitPolicy.ofBuild(args), target, library.paired_platforms, false) else null;
+    if (dev_diagnostics.isSet(.trace_boxy_work)) if (boxy_library) |library| std.debug.print("boxy-work: library units {d}, root key {s}\n", .{ library.pieces.len, &std.fmt.bytesToHex(boxy_root_key.?.bytes[0..8], .lower) });
+    // The root program's object is cached under its own key too: a build
+    // whose every module is cached lowers nothing.
+    if (boxy_library) |library| if (try compile.boxy_unit.restore(ctx.gpa, boxy_cache_manager, boxy_root_key.?, target, &boxy_interfaces.?)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        build_env.recordBoxyObjects(1, 0);
+        if (fast_link) |fast| {
+            try fast.link(ctx, &reporter, &build_env, @alignCast(entry.image), library, build_scratch_dir);
+            return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+        }
+        var root_pieces = backend.dev.UnitPieces.decode(ctx.gpa, entry.pieces) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.MalformedPieces, error.UnsupportedPiecesVersion => base.invariant("the cached pieces of the root unit were admitted but do not decode: {s}", .{@errorName(err)}),
+        };
+        defer root_pieces.deinit();
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, boxy_root_key.?.bytes, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
+        reporter.begin("Preparing Link Inputs");
+        const root_hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
+        for (entry.hosted_symbols, root_hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        const link_root_symbols = try ctx.arena.alloc([]const u8, entry.link_root_symbols.len);
+        for (entry.link_root_symbols, link_root_symbols) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        const app_export_symbols = try ctx.arena.alloc([]const u8, entry.app_export_symbols.len);
+        for (entry.app_export_symbols, app_export_symbols) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        const link_facts: LinkFacts = .{
+            .hosted_symbols = try unionSymbols(ctx.arena, root_hosted, library.hosted_symbols),
+            .link_root_symbols = link_root_symbols,
+            .app_export_symbols = app_export_symbols,
+            .boxy_runtime = true,
+        };
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+    };
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .linked_output, target, args.synthetic_default_platform, boxy_root_unit);
+    defer lowered.deinit();
     const entrypoints = try nativeBuildEntrypoints(ctx, root_artifact, &lowered);
     defer ctx.gpa.free(entrypoints);
 
-    reporter.begin("Static Data");
-    const static_data_exports = try compile.static_data_exports.buildStaticData(
-        ctx.gpa,
-        .{
-            .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
-            .imports = imported_artifacts,
-        },
-        &lowered,
-        target,
-        .{ .include_provided_exports = true },
-    );
-    reporter.end();
+    const static_data_exports = try buildCommandStaticData(ctx, &reporter, root_artifact, imported_artifacts, relation_artifacts, &lowered, target);
     defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data_exports);
 
     if (target_arch == .wasm32) {
         reporter.begin(code_generation_phase_name);
+        var wasm_timing: WasmBuildTiming = .{};
         try rocBuildWasm(
             ctx,
             args,
@@ -10984,128 +12216,228 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             &lowered,
             entrypoints,
             static_data_exports,
+            build_env.postCheckExecutor(),
+            &wasm_timing,
         );
-        reporter.end();
+        reporter.endWithBreakdown(&wasm_timing.breakdown());
 
-        const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-        reporter.finish();
-        const cache_stats = build_env.getBuildStats();
-        const cache_percent = if (cache_stats.modules_total > 0)
-            @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-        else
-            0;
-
-        if (!args.suppress_build_status) {
-            try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-        }
-        return .{
-            .output_path = final_output_path,
-            .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-        };
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
     }
 
     reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
-        }
-        unreachable;
+        base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
     }
 
     var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
     var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
     object_compiler.timing = &backend_timing;
     object_compiler.post_check_executor = build_env.postCheckExecutor();
-    if (loaded_packs) |packs| object_compiler.splice_source = packs.spliceSource();
-    object_compiler.capture_artifacts = object_cache_enabled;
-    defer if (object_compiler.captured_artifacts) |*set| set.deinit();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
 
-    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
-        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
-    };
-    const cleanup_build_scratch_dir = true;
-    defer if (cleanup_build_scratch_dir) {
-        compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
-    };
-
-    const obj_filename = try std.fmt.allocPrint(ctx.arena, "roc_app_{s}.o", .{@tagName(target)});
-    const obj_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, obj_filename });
-    const uses_boxy = object_compiler.compileToObjectFileAndWrite(
+    if (boxy_library) |library| {
+        var root_pieces = object_compiler.compileToPieces(
+            &lowered.lir_result.store,
+            &lowered.lir_result.layouts,
+            entrypoints,
+            static_data_exports,
+            lowered.lir_result.store.getProcSpecs(),
+            target,
+        ) catch |err| {
+            reporter.fail();
+            std.log.err("Native compilation failed: {}", .{err});
+            return error.NativeCompilationFailed;
+        };
+        defer root_pieces.deinit();
+        reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+        reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
+        // The root unit's image goes into its cache entry for later fast
+        // dev links, and into this build's own when it links that way.
+        const root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = if (compile.boxy_unit.producesImage(target) and (fast_link != null or !args.no_cache)) image: {
+            reporter.begin("Unit Image");
+            const image = object_compiler.buildUnitImage(&root_pieces, target, .entrypoints, null) catch |err| {
+                reporter.fail();
+                std.log.err("Building the root unit's image failed: {}", .{err});
+                return error.NativeCompilationFailed;
+            };
+            reporter.end();
+            break :image image;
+        } else null;
+        defer if (root_image) |image| ctx.gpa.free(image);
+        if (fast_link) |fast| {
+            try fast.link(ctx, &reporter, &build_env, root_image.?, library, build_scratch_dir);
+            if (!args.no_cache) {
+                const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
+                defer ctx.gpa.free(records);
+                const encoded = try backend.dev.UnitPieces.encode(ctx.gpa, &root_pieces);
+                defer ctx.gpa.free(encoded);
+                try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, boxy_root_key.?, .{
+                    .exports = records,
+                    .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
+                    .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
+                    .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+                    .pieces = encoded,
+                    .image = root_image.?,
+                });
+                build_env.recordBoxyObjects(0, 1);
+            }
+            return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+        }
+        const obj_path = try composeBoxyProgramObject(ctx, &reporter, &link_objects, boxy_cache_manager, if (boxy_root_key) |key| key.bytes else null, &root_pieces, library, target, args.synthetic_default_platform, build_env.postCheckExecutor());
+        const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+        const link_facts: LinkFacts = .{
+            .hosted_symbols = try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols),
+            .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
+            .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+            .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
+        };
+        if (boxy_root_key) |root_key| {
+            const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &boxy_interfaces.?);
+            defer ctx.gpa.free(records);
+            const encoded = try backend.dev.UnitPieces.encode(ctx.gpa, &root_pieces);
+            defer ctx.gpa.free(encoded);
+            try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
+                .exports = records,
+                .hosted_symbols = root_hosted_symbols,
+                .link_root_symbols = link_facts.link_root_symbols,
+                .app_export_symbols = link_facts.app_export_symbols,
+                .pieces = encoded,
+                .image = if (root_image) |image| image else &.{},
+            });
+            if (!args.no_cache) build_env.recordBoxyObjects(0, 1);
+        }
+        reporter.begin("Preparing Link Inputs");
+        try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
+        return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+    }
+    var written = object_compiler.compileToObjectFile(
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
         entrypoints,
         static_data_exports,
         lowered.lir_result.store.getProcSpecs(),
-        lowered.lir_result.boxy_erased_arg_desc_offsets.items,
-        lowered.lir_result.boxy_erased_arg_desc_params.items,
-        lowered.lir_result.boxy_worker_procs.items,
         target,
-        obj_path,
-        ctx.coreCtx(),
     ) catch |err| {
         reporter.fail();
         std.log.err("Native compilation failed: {}", .{err});
         return error.NativeCompilationFailed;
     };
+    defer written.deinit();
     reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
     reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(backend_timing.snapshot().native_emission));
-    try writePackObjects(ctx, &build_env, root_artifact, imported_artifacts, relation_artifacts, &lowered, args, target, final_output_path);
-    // A literal root that failed reported an error. Its specializations
-    // must not be served to a later build, which would skip evaluating it
-    // and so skip its diagnostic, so a build with errors writes no packs.
-    if (object_store != null and diag.errors == 0) {
-        const store = object_store.?;
-        try writePacksToStore(ctx, &build_env, store, root_artifact, imported_artifacts, relation_artifacts, &lowered, if (object_compiler.captured_artifacts) |*set| set else null, args, target);
-    }
-
-    reporter.begin("Preparing Link Inputs");
-    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
-
-    const builtins_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, BuiltinsObjects.filenameExtern(target) });
-    backend.writeFileWindowsAvSafe(ctx.io.std_io, builtins_path, BuiltinsObjects.forTargetExtern(target)) catch {
-        return error.BuiltinsExtractionFailed;
+    reporter.begin("Object Materialization");
+    const object_identity = link_artifacts.Identity.of(written.object_bytes);
+    const obj_path = link_objects.materializeKnown(written.object_bytes, object_identity) catch return error.NativeCompilationFailed;
+    const root_hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+    const link_facts: LinkFacts = .{
+        .hosted_symbols = if (boxy_library) |library| try unionSymbols(ctx.arena, root_hosted_symbols, library.hosted_symbols) else root_hosted_symbols,
+        .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
+        .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
+        .boxy_runtime = lowered.lir_result.store.runtime_contract == .boxy,
     };
+    ctx.gpa.free(written.object_bytes);
+    written.object_bytes = &.{};
+    reporter.end();
+    reporter.begin("Preparing Link Inputs");
+    try linkNativeBuild(ctx, &reporter, args, target, link_type, final_output_path, platform_dir, resolved_targets_config, build_scratch_dir, &link_objects, obj_path, &.{}, link_facts);
+
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
+}
+
+/// Link a native build's Roc object with the platform's inputs. The phase
+/// "Preparing Link Inputs" has begun.
+fn linkNativeBuild(
+    ctx: *CliCtx,
+    reporter: *progress.Reporter,
+    args: cli_args.BuildArgs,
+    target: RocTarget,
+    link_type: roc_target.OutputKind,
+    final_output_path: []const u8,
+    platform_dir: []const u8,
+    targets_config: roc_target.TargetsConfig,
+    build_scratch_dir: []const u8,
+    objects: *link_artifacts.Objects,
+    obj_path: []const u8,
+    extra_objects: []const []const u8,
+    facts: LinkFacts,
+) CliMainError!void {
+    // Executables have one publication unit. Shared libraries can also emit
+    // import libraries, so their existing multi-output path remains separate.
+    var publication: ?BuildOutputPublication = if (link_type == .exe) try BuildOutputPublication.init(ctx, final_output_path) else null;
+    defer if (publication) |*pending| pending.deinit();
+    const link_output_path = if (publication) |pending| pending.path else final_output_path;
+    const target_os = target.toOsTag();
+    const target_arch = target.toCpuArch();
+    const paths_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+    const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, targets_config, target, link_type);
+
+    const host_paths = try hostInputPaths(ctx, link_inputs);
+    const input_states = try ctx.arena.alloc(std.Io.File.Stat, host_paths.len);
+    for (host_paths, input_states) |path, *state| {
+        state.* = std.Io.Dir.cwd().statFile(ctx.io.std_io, path, .{}) catch return failLink(ctx, error.InvalidArguments, link_inputs.target_name);
+    }
+    const objects_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+    const paths_ns: u64 = @intCast(objects_started.nanoseconds - paths_started.nanoseconds);
+    const embedded = EmbeddedTargetObjects.forTarget(target);
+    const builtins_path = objects.materializeKnown(embedded.builtins_extern, .{ .digest = embedded.builtins_extern_digest, .size = embedded.builtins_extern.len }) catch return error.BuiltinsExtractionFailed;
 
     var object_files = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 4);
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
+    if (facts.boxy_runtime) {
+        const boxy_runtime = embedded.boxy_runtime orelse return error.UnsupportedTarget;
+        try object_files.append(objects.materializeKnown(boxy_runtime, .{ .digest = embedded.boxy_runtime_digest.?, .size = boxy_runtime.len }) catch return error.BuiltinsExtractionFailed);
+    }
     if (args.synthetic_default_platform) {
-        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
+        const startup = embedded.default_platform orelse return error.UnsupportedTarget;
+        try object_files.append(objects.materializeKnown(startup, .{ .digest = embedded.default_platform_link_digest.?, .size = startup.len }) catch return error.NativeCompilationFailed);
+        if (embedded.default_compiler_rt) |bytes| try object_files.append(objects.materializeKnown(bytes, .{ .digest = embedded.default_compiler_rt_link_digest.?, .size = bytes.len }) catch return error.NativeCompilationFailed);
     }
-    // Boxy programs reference the `roc_boxy_*` runtime and, in their
-    // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
-    // and a data object carrying the sidecar those symbols read.
-    if (uses_boxy) {
-        try appendBoxyRuntimeLinkInputs(ctx, &object_files, build_scratch_dir, target, &lowered.lir_result);
-    }
-    reporter.end();
-
+    try object_files.appendSlice(extra_objects);
+    const objects_ns: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - objects_started.nanoseconds);
+    reporter.endWithParentBreakdown(&.{
+        .{ .name = "Platform input validation", .ns = paths_ns },
+        .{ .name = "Runtime object materialization", .ns = objects_ns },
+    });
     reporter.begin("Linking");
+    var timing: linker.Timing = .{};
+    var inspection_ns: u64 = 0;
+    var inspection_counters: host_symbols.Counters = .{};
     if (link_type == .archive) {
-        try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
+        const started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+        try writeArchiveOutput(ctx, target, link_output_path, link_inputs, object_files.items);
+        timing.finalization_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - started.nanoseconds);
     } else {
-        try verifyHostInputSymbols(
-            ctx,
-            try hostInputPaths(ctx, link_inputs),
-            try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
-            link_inputs.target_name,
-            args.synthetic_default_platform,
-        );
-
-        const force_undefined_symbols = try staticDataLinkRootSymbols(
-            ctx,
-            static_data_exports,
-            false,
-        );
-        const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
-        const export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, app_export_symbols);
+        const inspection_started = std.Io.Timestamp.now(ctx.io.std_io, .awake);
+        var needed: std.ArrayList([]const u8) = .empty;
+        if (!(host_paths.len == 0 and args.synthetic_default_platform)) {
+            try needed.appendSlice(ctx.arena, &host_symbols.runtime_symbols);
+            try needed.appendSlice(ctx.arena, facts.hosted_symbols);
+        }
+        const inspected = try host_symbols.inspect(ctx.arena, ctx.io.std_io, host_paths, needed.items, link_type == .shared);
+        inspection_counters = inspected.counters;
+        try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+        if (inspected.all_inputs_scanned and inspected.missing.len > 0) {
+            return ctx.fail(.{ .missing_host_symbols = .{ .symbols = inspected.missing, .target = link_inputs.target_name } });
+        }
+        var exports = std.array_list.Managed([]const u8).init(ctx.arena);
+        if (link_type == .shared) {
+            var seen = std.StringHashMap(void).init(ctx.arena);
+            for (facts.app_export_symbols) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
+            for (inspected.exports) |name| try appendUniqueSharedLibraryExport(&seen, &exports, name);
+        }
+        inspection_ns = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - inspection_started.nanoseconds);
+        const force_undefined_symbols = facts.link_root_symbols;
+        const export_symbols = exports.items;
 
         const link_config = linker.LinkConfig{
+            .timing = &timing,
+            .immutable_objects = objects,
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
             .target_os = target_os,
             .target_arch = target_arch,
-            .output_path = final_output_path,
+            .output_path = link_output_path,
             .output_kind = linkerOutputKind(link_type),
             // Dev output uses the symbol ABI, so host archives resolve by
             // symbol reference and unused host code can be stripped.
@@ -11128,34 +12460,44 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
 
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
+            return failLink(ctx, err, link_inputs.target_name);
         };
     }
-    reporter.end();
-
-    const elapsed_ns = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    try validateLinkInputStates(ctx, host_paths, input_states, link_inputs.target_name);
+    if (publication) |*pending| try pending.publish();
+    reporter.endWithParentBreakdown(&.{
+        .{ .name = "Host symbols and exports", .ns = inspection_ns },
+        .{ .name = "Link arguments", .ns = timing.arguments_ns },
+        .{ .name = "Embedded LLD", .ns = timing.lld_ns },
+        .{ .name = "Output finalization", .ns = timing.finalization_ns },
+    });
+    reporter.recordCounters("Link preparation", &.{
+        .{ .name = "Object bytes written", .count = objects.counters.written },
+        .{ .name = "Host bytes copied", .count = inspection_counters.copied_bytes },
+        .{ .name = "Peak host bytes retained", .count = inspection_counters.peak_retained_bytes },
+        .{ .name = "Archive members visited", .count = inspection_counters.archive_members },
+        .{ .name = "Symbol tables visited", .count = inspection_counters.symbol_tables },
+    });
 }
 
-/// Build a standalone binary with the interpreter and an embedded LIR image.
-/// This is the primary build path that creates executables or libraries without requiring IPC.
+fn validateLinkInputStates(ctx: *CliCtx, paths: []const []const u8, states: []const std.Io.File.Stat, target_name: []const u8) CliMainError!void {
+    for (paths, states) |path, state| {
+        const current = std.Io.Dir.cwd().statFile(ctx.io.std_io, path, .{}) catch return failLink(ctx, error.InvalidArguments, target_name);
+        if (!host_symbols.sameFileState(state, current)) {
+            std.log.err("Platform link input changed during this build: {s}", .{path});
+            return failLink(ctx, error.InvalidArguments, target_name);
+        }
+    }
+}
+
+/// Link inputs explicitly produced by the current program.
+const LinkFacts = struct {
+    hosted_symbols: []const []const u8,
+    link_root_symbols: []const []const u8,
+    app_export_symbols: []const []const u8,
+    boxy_runtime: bool = false,
+};
+
 fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult {
     const timer_start_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
 
@@ -11163,60 +12505,15 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     defer reporter.deinit();
     reporter.start();
 
-    const output_path = if (args.output) |output|
-        try ctx.arena.dupe(u8, output)
-    else if (args.synthetic_output_basename) |basename|
-        try ctx.arena.dupe(u8, basename)
-    else
-        try base.module_path.getModuleNameAlloc(ctx.arena, args.path);
+    const output_path = try buildOutputBasePath(ctx, args);
 
-    const cache_config = CacheConfig{
-        .enabled = true,
-        .verbose = false,
-        .roc_ctx = ctx.coreCtx(),
-    };
-    var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
-    const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
-    const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
-
-    var build_env = try initCliBuildEnv(ctx, .{
-        .max_threads = args.max_threads,
-        .no_cache = args.no_cache,
-        .verbose_cache = args.verbose,
-        .timings = args.timings,
-        .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
-        .track_watch_inputs = args.watch_inputs_file != null,
-        .source_dir_override = args.source_dir_override,
-        .root_source_url = args.root_source_url,
-    });
-    if (args.synthetic_root_original_path) |original_path| {
-        if (args.synthetic_root_original_source) |original_source| {
-            build_env.setSyntheticRootSourceMappingWithLineOffset(original_path, original_source, args.synthetic_root_header_len, args.synthetic_root_header_lines);
-        }
-    }
+    var build_env = try initBuildCommandEnv(ctx, args);
     defer build_env.deinit();
     // Registered after build_env.deinit() so it runs first (LIFO), while build_env is still
     // valid: records discovered source inputs for `roc build --watch` on every exit path.
     defer writeBuildWatchInputsOnExit(ctx, args, &build_env);
 
-    reporter.begin("Resolving Dependencies");
-    build_env.discoverDependencies(args.path) catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    reporter.end();
-
-    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
-    const targets_config = platform.config;
-    const platform_source = platform.root_file;
-    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
-
-    const selected = if (args.require_host_runnable_output)
-        try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
-    else
-        try selectBuildPlatformTarget(ctx, targets_config, platform_source, args.target);
+    const platform_dir, const selected = try resolveBuildCommandPlatform(ctx, args, &build_env, &reporter);
     const target = selected.target;
     const link_type = selected.output;
 
@@ -11230,46 +12527,25 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     }
 
     if (args.require_executable_output and link_type != .exe) {
-        try rejectRequiredExecutableOutput(ctx, selected);
-        unreachable;
+        return rejectRequiredExecutableOutput(ctx, selected);
     }
 
     const target_arch = target.toCpuArch();
     const target_os = target.toOsTag();
-    const final_output_path = if (args.output != null)
-        output_path
-    else blk: {
-        const ext = target_selection.defaultBuildOutputExtension(link_type, target);
-        break :blk try std.fmt.allocPrint(ctx.arena, "{s}{s}", .{ output_path, ext });
-    };
+    const final_output_path = try buildFinalOutputPath(ctx, args, output_path, link_type, target);
+    try prepareBuildOutput(ctx, final_output_path);
 
     build_env.setTarget(target);
     build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
         .{ .platform_entrypoints = .lir_image },
         args.opt,
         currentRuntimeSpecializationStrategy(args.specialization_strategy),
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+        target,
         false,
     ));
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
-    reporter.begin("Type Checking");
-    build_env.compileDiscovered() catch |err| {
-        reporter.fail();
-        try renderDiagnostics(ctx, &build_env);
-        return err;
-    };
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-
-    const diag = try build_env.renderDiagnostics(ctx.io.stderr(), ctx.reportConfig(.stderr));
-    var total_warning_count = diag.warnings;
-    total_warning_count += try optimizedDbgWarningsForBuild(ctx, &build_env, args.opt);
-    const resolved_targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
+    const diag, const resolved_targets_config = try typeCheckBuildCommand(ctx, args, &build_env, &reporter);
 
     const root_artifact = try checkedArtifactForBuild(ctx, &build_env, args.path);
     const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
@@ -11284,29 +12560,8 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const shm_allocator = shm.allocator();
     const image_header = try shm_allocator.create(lir.LirImage.Header);
 
-    const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
-    reporter.begin(loweringProgressLabel(specialization_strategy));
-    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
-    if (args.timings) spec_timing.enableDetailedMonotypeBody();
-    var lowered = try lowerCheckedSourceToLir(
-        ctx.gpa,
-        ctx.gpa,
-        root_artifact,
-        imported_artifacts,
-        relation_artifacts,
-        .{ .platform_entrypoints = .lir_image },
-        args.opt,
-        specialization_strategy,
-        base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
-        false,
-        build_env.postCheckExecutor(),
-        &spec_timing,
-        build_env.runtimeProgramSession(),
-        null,
-        .source_bodies,
-    );
+    var lowered = try lowerBuildCommandToLir(ctx, args, &build_env, &reporter, root_artifact, imported_artifacts, relation_artifacts, .{ .platform_entrypoints = .lir_image }, target, false, null);
     defer lowered.deinit();
-    finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
 
     reporter.begin("LIR Image Generation");
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -11339,10 +12594,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const lir_image = try shm.dupeDetachedImage(ctx.arena);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
-        if (builtin.mode == .debug) {
-            base.invariant("embedded build invariant violated: no platform entrypoints", .{});
-        }
-        unreachable;
+        base.invariant("embedded build invariant violated: no platform entrypoints", .{});
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
@@ -11353,26 +12605,15 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
         return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
     };
-    if (args.keep_temp) {
-        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-        const config = reporting.ReportingConfig.initColorTerminal();
-        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{build_scratch_dir});
-        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
-    }
-    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
+    if (args.keep_temp) try reportKeptTempDir(ctx, build_scratch_dir);
+    defer if (!args.keep_temp) releaseScratchDir(ctx, build_scratch_dir);
 
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
-    const shim_path = publishedShimLibraryPath(
-        ctx,
-        .lir,
-        target,
-        try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename }),
-        try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename }),
-    ) catch |err| {
+    const staged_shim_path = try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename });
+    extractShimLibrary(ctx, .lir, staged_shim_path, target) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
+    const shim_path = staged_shim_path;
 
     const enable_debug = args.debug or (builtin.mode == .debug);
     const platform_shim_path = try generatePlatformHostShim(
@@ -11401,11 +12642,6 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     if (link_type == .archive) {
         try writeArchiveOutput(ctx, target, final_output_path, link_inputs, object_files.items);
     } else {
-        var extra_args = try std.array_list.Managed([]const u8).initCapacity(ctx.arena, 8);
-        if (target.isMacOS()) {
-            try extra_args.append("-lSystem");
-        }
-
         const link_config = linker.LinkConfig{
             .target_format = linker.TargetFormat.detectFromOs(target_os),
             .target_abi = buildLinkAbi(target, args.synthetic_default_platform),
@@ -11416,7 +12652,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .object_files = object_files.items,
             .platform_files_pre = link_inputs.platform_files_pre,
             .platform_files_post = link_inputs.platform_files_post,
-            .extra_args = extra_args.items,
+            .extra_args = &.{},
             .export_symbols = try sharedLibraryExports(ctx, link_type, link_inputs, entrypoint_names),
             .can_exit_early = false,
             .disable_output = false,
@@ -11435,33 +12671,15 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
 
         linker.link(ctx, link_config) catch |err| {
             reporter.fail();
-            return ctx.fail(.{ .linker_failed = .{
-                .err = err,
-                .target = link_inputs.target_name,
-            } });
+            return failLink(ctx, err, link_inputs.target_name);
         };
     }
     reporter.end();
 
-    const elapsed_ns_embed = @as(u64, @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - timer_start_ns));
-    reporter.finish();
-    const cache_stats = build_env.getBuildStats();
-    const cache_percent = if (cache_stats.modules_total > 0)
-        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
-    else
-        0;
-
-    if (!args.suppress_build_status) {
-        try printBuildSuccess(ctx, final_output_path, diag.errors, total_warning_count, elapsed_ns_embed, args.verbose, cache_stats, cache_percent);
-    }
-
-    return .{
-        .output_path = final_output_path,
-        .diagnostics = .{ .errors = diag.errors, .warnings = total_warning_count },
-    };
+    return finishBuildCommand(ctx, args, &build_env, &reporter, final_output_path, diag, timer_start_ns);
 }
 
-// Test cache blob format
+// Test transcript format
 // Binary format for caching test results.
 
 const CliTestResult = enum { passed, failed, compiler_error };
@@ -11489,32 +12707,84 @@ const CliTestTranscriptEvent = struct {
     payload: []const u8,
 };
 
+/// Where a result's `failure_detail` came from: the expect's own source,
+/// which a reused outcome rebuilds from the current checked module, or
+/// execution, whose message a reused outcome stores (design.md "Test
+/// outcome files").
+const CliTestDetailOrigin = enum(u8) {
+    none,
+    source,
+    execution,
+};
+
 const CliTestResultItem = struct {
     result: CliTestResult,
     order: u32,
     region: base.Region,
+    detail_origin: CliTestDetailOrigin = .none,
+    /// Whether the result observes the program alone, so a later run of the
+    /// same checked sources under the same execution mode has it again. A
+    /// failure of the executing process (the interpreter running out of
+    /// memory) is not an observation of the program.
+    reusable: bool = true,
+    /// Executing root that owns this inline observation, before coalescing.
+    owner_order: ?u32 = null,
     inline_expect: bool = false,
     inline_passed: u64 = 0,
     inline_failed: u64 = 0,
     inline_suppressed: bool = false,
     source_env: ?*const ModuleEnv = null,
+    source_common: ?*const base.CommonEnv = null,
+    source_name: []const u8 = "",
     source_path: ?[]const u8 = null,
     transcript: []const CliTestTranscriptEvent = &.{},
     failure_detail: ?[]const u8,
     failure_detail_visibility: CliTestFailureDetailVisibility = .always,
-    /// Whether the result follows from the module alone, so a later run of the
-    /// same module can replay it. A test backend failing to run is not.
-    cacheable: bool = true,
 };
 
 const CliModuleTestResult = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     path: []const u8,
     results: []const CliTestResultItem,
-    cached: bool,
 };
 
-const CliTestSourceModuleMap = std.StringHashMapUnmanaged(BuildEnv.CompiledModuleInfo);
+const CliTestSourceModule = struct {
+    env: ?*const ModuleEnv,
+    common: *const base.CommonEnv,
+    path: []const u8,
+    name: []const u8 = "",
+    /// Content identity; never a checkout path or a package display name.
+    identity: [32]u8,
+};
+const CliTestSourceModuleMap = struct {
+    // Workspace names select the current reporting occurrence only. They never
+    // enter persisted identities. Content and unit-link identities bind cached
+    // observations to those current occurrences.
+    modules: std.AutoHashMapUnmanaged([32]u8, CliTestSourceModule) = .{},
+    identities: std.AutoHashMapUnmanaged([32]u8, ?[32]u8) = .{},
+
+    fn deinit(self: *CliTestSourceModuleMap, allocator: Allocator) void {
+        self.modules.deinit(allocator);
+        self.identities.deinit(allocator);
+    }
+
+    fn bind(self: *CliTestSourceModuleMap, allocator: Allocator, identity: [32]u8, workspace: [32]u8) Allocator.Error!void {
+        const entry = try self.identities.getOrPut(allocator, identity);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = workspace;
+        } else if (entry.value_ptr.*) |existing| {
+            // Identical modules share code and reporting sites. Their first
+            // occurrence in the current plan owns diagnostics for that code.
+            // Distinct modules sharing a link name must use content names.
+            if (!std.mem.eql(u8, &self.modules.get(existing).?.identity, &self.modules.get(workspace).?.identity)) entry.value_ptr.* = null;
+        }
+    }
+
+    fn byIdentity(self: *const CliTestSourceModuleMap, identity: [32]u8) ?CliTestSourceModule {
+        const workspace = (self.identities.get(identity) orelse return null) orelse return null;
+        return self.modules.get(workspace);
+    }
+};
 
 const CliTestRunSummary = struct {
     passed: u32 = 0,
@@ -11524,7 +12794,6 @@ const CliTestRunSummary = struct {
     /// Checking diagnostics can occur outside tests or affect several tests.
     diagnostic_errors: usize = 0,
     modules_with_tests: u32 = 0,
-    cached_modules: u32 = 0,
 
     fn allPassed(self: CliTestRunSummary) bool {
         return self.failed == 0 and self.compiler_errors == 0 and self.diagnostic_errors == 0;
@@ -11535,7 +12804,6 @@ fn writeCliTestRunSummary(
     writer: *std.Io.Writer,
     summary: CliTestRunSummary,
     elapsed_ns: u64,
-    fully_cached: bool,
     use_color: bool,
 ) std.Io.Writer.Error!void {
     const all_passed = summary.allPassed();
@@ -11549,7 +12817,6 @@ fn writeCliTestRunSummary(
     try writer.writeAll(" in ");
     try formatElapsedTime(writer, elapsed_ns);
     try writer.writeByte('.');
-    if (fully_cached) try writer.writeAll(" (cached)");
 
     if (all_passed) {
         try writer.writeByte('\n');
@@ -11579,50 +12846,43 @@ fn writeCliTestRunSummary(
     }
 }
 
-test "issue 10624: roc test summaries share duration and cache formatting" {
+test "issue 10624: roc test summaries share duration formatting" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
 
     const cases = [_]struct {
         summary: CliTestRunSummary,
-        fully_cached: bool,
         expected: []const u8,
     }{
         .{
             .summary = .{ .passed = 3 },
-            .fully_cached = false,
             .expected = "All (3) tests passed in 1.2 ms.\n",
         },
         .{
             .summary = .{ .passed = 3 },
-            .fully_cached = true,
-            .expected = "All (3) tests passed in 1.2 ms. (cached)\n",
+            .expected = "All (3) tests passed in 1.2 ms.\n",
         },
         .{
             .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
-            .fully_cached = false,
             .expected = "Ran 3 tests in 1.2 ms.:\n    1 passed\n    1 failed\n    1 compiler errors\n",
         },
         .{
             .summary = .{ .passed = 1, .failed = 1, .compiler_errors = 1 },
-            .fully_cached = true,
-            .expected = "Ran 3 tests in 1.2 ms. (cached):\n    1 passed\n    1 failed\n    1 compiler errors\n",
+            .expected = "Ran 3 tests in 1.2 ms.:\n    1 passed\n    1 failed\n    1 compiler errors\n",
         },
         .{
             .summary = .{ .passed = 2, .compiler_errors = 1, .diagnostic_errors = 2 },
-            .fully_cached = false,
             .expected = "Ran 3 tests in 1.2 ms.:\n    2 passed\n    0 failed\n    1 compiler errors\nCompilation failed with 2 errors.\n",
         },
         .{
             .summary = .{ .passed = 1, .diagnostic_errors = 1 },
-            .fully_cached = false,
             .expected = "Ran 1 tests in 1.2 ms.:\n    1 passed\n    0 failed\n    0 compiler errors\nCompilation failed with 1 error.\n",
         },
     };
 
     for (cases) |case| {
         output.clearRetainingCapacity();
-        try writeCliTestRunSummary(&output.writer, case.summary, 1_200_000, case.fully_cached, false);
+        try writeCliTestRunSummary(&output.writer, case.summary, 1_200_000, false);
         try std.testing.expectEqualStrings(case.expected, output.written());
     }
 }
@@ -11637,23 +12897,49 @@ const CliTestPlanEntry = struct {
 };
 
 const CliTestPlanModule = struct {
+    /// Index in the complete source module plan, also carried by lowered roots.
+    module_index: u32,
     module: BuildEnv.CompiledModuleInfo,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     test_roots: []check.CheckedArtifact.RootRequest,
-    first_entry_index: u32,
-    entry_count: u32,
-    cached_results: ?[]CliTestResultItem = null,
-    cached_summary: CliTestRunSummary = .{},
+    /// Complete reporting-plan slot for each source root, independent of the subset.
+    result_indices: []u32,
+    /// For each source root, the index of its outcome in the module's
+    /// outcome file when that outcome is reused (design.md "Test outcome
+    /// files"); only roots without one run.
+    reused: []?u32,
+    /// The module's outcome file, when this command caches test outcomes.
+    outcome_file: ?CliTestOutcomeFile = null,
 
-    fn releaseCachedResults(self: *CliTestPlanModule) []CliTestResultItem {
-        const results = self.cached_results orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: cached results were released from an uncached plan module", .{});
-            }
-            unreachable;
-        };
-        self.cached_results = null;
-        return results;
+    /// How many of the module's roots this command runs.
+    fn runCount(self: *const CliTestPlanModule) usize {
+        var count: usize = 0;
+        for (self.reused) |reused| count += @intFromBool(reused == null);
+        return count;
+    }
+
+    fn deinit(self: *CliTestPlanModule, allocator: Allocator) void {
+        allocator.free(self.test_roots);
+        allocator.free(self.result_indices);
+        allocator.free(self.reused);
+        if (self.outcome_file) |*file| file.deinit(allocator);
+    }
+};
+
+/// One module's outcome file as this command read it (design.md "Test
+/// outcome files").
+const CliTestOutcomeFile = struct {
+    key: [32]u8,
+    /// The outcomes the file records; none when there was no file.
+    outcomes: test_outcome_file.Outcomes,
+    /// The file's bytes, which `outcomes` borrow and the cache manager's
+    /// allocator owns.
+    bytes: ?[]const u8,
+    bytes_allocator: Allocator,
+
+    fn deinit(self: *CliTestOutcomeFile, allocator: Allocator) void {
+        test_outcome_file.free(allocator, self.outcomes);
+        if (self.bytes) |bytes| self.bytes_allocator.free(bytes);
     }
 };
 
@@ -11663,76 +12949,15 @@ const CliTestPlan = struct {
     /// Only modules with executable test requests need runtime planning.
     modules: []CliTestPlanModule,
     entries: []CliTestPlanEntry,
+    /// Every entry's `symbol_name`, each followed by its terminator.
+    symbol_names: []u8,
 
     fn deinit(self: *CliTestPlan, allocator: Allocator) void {
-        for (self.modules) |*module| {
-            allocator.free(module.test_roots);
-            if (module.cached_results) |results| {
-                deinitCliTestResultItems(allocator, results);
-            }
-        }
+        for (self.modules) |*module| module.deinit(allocator);
         allocator.free(self.modules);
-        deinitCliTestPlanEntries(allocator, self.entries);
+        allocator.free(self.entries);
+        allocator.free(self.symbol_names);
     }
-};
-
-const CliTestCacheStats = struct {
-    modules_total: u64 = 0,
-    modules_cached: u64 = 0,
-    roots_total: u64 = 0,
-    roots_cached: u64 = 0,
-};
-
-fn cliTestCacheStats(plan: *const CliTestPlan) CliTestCacheStats {
-    var stats = CliTestCacheStats{
-        .modules_total = plan.modules.len,
-        .roots_total = plan.entries.len,
-    };
-    for (plan.modules) |module| {
-        if (module.cached_results != null) {
-            stats.modules_cached += 1;
-            stats.roots_cached += module.entry_count;
-        }
-    }
-    return stats;
-}
-
-fn cliTestCacheCounters(stats: CliTestCacheStats) [6]progress.Counter {
-    return .{
-        .{ .name = "Modules total", .count = stats.modules_total },
-        .{ .name = "Modules cached", .count = stats.modules_cached },
-        .{ .name = "Modules uncached", .count = stats.modules_total - stats.modules_cached },
-        .{ .name = "Roots total", .count = stats.roots_total },
-        .{ .name = "Roots cached", .count = stats.roots_cached },
-        .{ .name = "Roots uncached", .count = stats.roots_total - stats.roots_cached },
-    };
-}
-
-test "CLI test cache counters expose partial module and root hits" {
-    const counters = cliTestCacheCounters(.{
-        .modules_total = 46,
-        .modules_cached = 45,
-        .roots_total = 361,
-        .roots_cached = 356,
-    });
-
-    try std.testing.expectEqualStrings("Modules total", counters[0].name);
-    try std.testing.expectEqual(@as(u64, 46), counters[0].count);
-    try std.testing.expectEqualStrings("Modules cached", counters[1].name);
-    try std.testing.expectEqual(@as(u64, 45), counters[1].count);
-    try std.testing.expectEqualStrings("Modules uncached", counters[2].name);
-    try std.testing.expectEqual(@as(u64, 1), counters[2].count);
-    try std.testing.expectEqualStrings("Roots total", counters[3].name);
-    try std.testing.expectEqual(@as(u64, 361), counters[3].count);
-    try std.testing.expectEqualStrings("Roots cached", counters[4].name);
-    try std.testing.expectEqual(@as(u64, 356), counters[4].count);
-    try std.testing.expectEqualStrings("Roots uncached", counters[5].name);
-    try std.testing.expectEqual(@as(u64, 5), counters[5].count);
-}
-
-const CliCachedModuleTestResults = struct {
-    results: []CliTestResultItem,
-    summary: CliTestRunSummary,
 };
 
 fn deinitCliTestResultItemPayload(allocator: Allocator, result: CliTestResultItem) void {
@@ -11760,14 +12985,22 @@ fn deinitCliTestTranscriptEvents(allocator: Allocator, events: []const CliTestTr
     if (events.len > 0) allocator.free(@constCast(events));
 }
 
-fn deinitCliTestPlanEntries(allocator: Allocator, entries: []const CliTestPlanEntry) void {
-    for (entries) |entry| {
-        allocator.free(entry.symbol_name);
+/// Name every entry's test symbol after its result index, into one buffer
+/// that the plan owns.
+fn nameCliTestPlanSymbols(allocator: Allocator, entries: []CliTestPlanEntry) Allocator.Error![]u8 {
+    const symbol_format = "roc_test_expect_{d}";
+    var len: usize = 0;
+    for (entries) |entry| len += std.fmt.count(symbol_format, .{entry.result_index}) + 1;
+    const buffer = try allocator.alloc(u8, len);
+    var offset: usize = 0;
+    for (entries) |*entry| {
+        const name = std.fmt.bufPrintSentinel(buffer[offset..], symbol_format, .{entry.result_index}, 0) catch unreachable; // the buffer was sized by std.fmt.count of every name above
+        entry.symbol_name = name;
+        offset += name.len + 1;
     }
-    allocator.free(@constCast(entries));
+    std.debug.assert(offset == buffer.len);
+    return buffer;
 }
-
-const cli_test_cache_magic = "ROC_TEST_RESULTS_V9";
 
 fn appendU32(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) Allocator.Error!void {
     var buf: [4]u8 = undefined;
@@ -11782,19 +13015,6 @@ fn readU32(bytes: []const u8, offset: *usize) ?u32 {
     return value;
 }
 
-fn appendU64(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u64) Allocator.Error!void {
-    var buf: [8]u8 = undefined;
-    std.mem.writeInt(u64, &buf, value, .little);
-    try bytes.appendSlice(allocator, &buf);
-}
-
-fn readU64(bytes: []const u8, offset: *usize) ?u64 {
-    if (offset.* + 8 > bytes.len) return null;
-    const value = std.mem.readInt(u64, bytes[offset.*..][0..8], .little);
-    offset.* += 8;
-    return value;
-}
-
 fn readU8(bytes: []const u8, offset: *usize) ?u8 {
     if (offset.* >= bytes.len) return null;
     const value = bytes[offset.*];
@@ -11802,45 +13022,30 @@ fn readU8(bytes: []const u8, offset: *usize) ?u8 {
     return value;
 }
 
-fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
-    return event.payload;
-}
-
-fn cliTestCacheKey(
-    artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    specialization_strategy: base.SpecializationStrategy,
-    opt: cli_args.OptLevel,
-) [32]u8 {
-    var hasher = base.Sha256.init(.{});
-    hasher.update(cli_test_cache_magic);
-    hasher.update(build_options.compiler_compatibility_id);
-    hasher.update(@tagName(specialization_strategy));
-    // A result records what one execution mode did with the tests, including
-    // how long they ran and whether they exhausted its resources.
-    hasher.update(@tagName(opt));
-    hasher.update(&artifact_key.bytes);
-    var out: [32]u8 = undefined;
-    hasher.final(&out);
-    return out;
-}
-
-test "CLI test cache key includes specialization strategy" {
-    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = @as([32]u8, @splat(0x5a)),
-    };
-    const lss_key = cliTestCacheKey(artifact_key, .lss, .dev);
-    const boxy_key = cliTestCacheKey(artifact_key, .boxy, .dev);
-    try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
-}
-
-test "CLI test cache key includes execution mode" {
-    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = @as([32]u8, @splat(0x5a)),
-    };
-    const dev_key = cliTestCacheKey(artifact_key, .lss, .dev);
-    inline for (.{ cli_args.OptLevel.interpreter, cli_args.OptLevel.size, cli_args.OptLevel.speed }) |opt| {
-        const other_key = cliTestCacheKey(artifact_key, .lss, opt);
-        try std.testing.expect(!std.mem.eql(u8, &dev_key, &other_key));
+test "test source identities rebind across checkouts and disambiguate link names" {
+    const allocator = std.testing.allocator;
+    var common = try base.CommonEnv.init(allocator, "expect True");
+    defer common.deinit(allocator);
+    const identity: [32]u8 = @splat(1);
+    const link: [32]u8 = @splat(2);
+    for ([_][]const u8{ "/checkout-one/Main.roc", "/elsewhere/checkout-two/Main.roc" }) |path| {
+        var sources: CliTestSourceModuleMap = .{};
+        defer sources.deinit(allocator);
+        const workspace = compile.watch_inputs.hashBytes(path);
+        try sources.modules.put(allocator, workspace, .{ .env = null, .common = &common, .path = path, .identity = identity });
+        try sources.bind(allocator, identity, workspace);
+        try sources.bind(allocator, link, workspace);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(identity).?.path);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(link).?.path);
+        // A second version can have the same interface but different content.
+        const other_identity: [32]u8 = @splat(3);
+        const other_workspace: [32]u8 = @splat(4);
+        try sources.modules.put(allocator, other_workspace, .{ .env = null, .common = &common, .path = "other/Main.roc", .identity = other_identity });
+        try sources.bind(allocator, other_identity, other_workspace);
+        try sources.bind(allocator, link, other_workspace);
+        try std.testing.expect(sources.byIdentity(link) == null);
+        try std.testing.expectEqualStrings(path, sources.byIdentity(identity).?.path);
+        try std.testing.expectEqualStrings("other/Main.roc", sources.byIdentity(other_identity).?.path);
     }
 }
 
@@ -11857,255 +13062,6 @@ fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
     return summary;
 }
 
-fn storeCliTestResultsInCache(
-    ctx: *CliCtx,
-    cache_manager: ?*CacheManager,
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    specialization_strategy: base.SpecializationStrategy,
-    opt: cli_args.OptLevel,
-    results: []const CliTestResultItem,
-) (Allocator.Error || error{NoHomeDirectory})!void {
-    const manager = cache_manager orelse return;
-    for (results) |result| {
-        if (!result.cacheable) return;
-    }
-
-    var bytes = std.ArrayList(u8).empty;
-    defer bytes.deinit(ctx.gpa);
-    try bytes.appendSlice(ctx.gpa, cli_test_cache_magic);
-    try appendU32(&bytes, ctx.gpa, @intCast(results.len));
-    for (results) |result| {
-        std.debug.assert(!result.inline_suppressed);
-        try bytes.append(ctx.gpa, @intFromBool(result.inline_expect));
-        try appendU64(&bytes, ctx.gpa, result.inline_passed);
-        try appendU64(&bytes, ctx.gpa, result.inline_failed);
-        if (result.inline_expect and result.source_env == null) {
-            base.invariant("inline test cache result has no declaring module", .{});
-        }
-        if (result.source_env) |source_env| {
-            const qualified_name = source_env.qualifiedModuleName();
-            try appendU32(&bytes, ctx.gpa, @intCast(qualified_name.len));
-            try bytes.appendSlice(ctx.gpa, qualified_name);
-        } else {
-            try appendU32(&bytes, ctx.gpa, 0);
-        }
-        try appendU32(&bytes, ctx.gpa, result.order);
-        try appendU32(&bytes, ctx.gpa, result.region.start.offset);
-        try appendU32(&bytes, ctx.gpa, result.region.end.offset);
-        try bytes.append(ctx.gpa, switch (result.result) {
-            .passed => 0,
-            .failed => 1,
-            .compiler_error => 2,
-        });
-        try appendU32(&bytes, ctx.gpa, @intCast(result.transcript.len));
-        for (result.transcript) |event| {
-            try bytes.append(ctx.gpa, @backingInt(event.kind));
-            try bytes.append(ctx.gpa, @backingInt(event.stream));
-            const payload = cliTestTranscriptEventPayload(event);
-            try appendU32(&bytes, ctx.gpa, @intCast(payload.len));
-            try bytes.appendSlice(ctx.gpa, payload);
-        }
-        if (result.failure_detail) |message| {
-            try bytes.append(ctx.gpa, 1);
-            try bytes.append(ctx.gpa, @backingInt(result.failure_detail_visibility));
-            try appendU32(&bytes, ctx.gpa, @intCast(message.len));
-            try bytes.appendSlice(ctx.gpa, message);
-        } else {
-            try bytes.append(ctx.gpa, 0);
-        }
-    }
-
-    const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
-    defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
-}
-
-fn loadCliTestTranscriptEvents(
-    allocator: Allocator,
-    data: []const u8,
-    offset: *usize,
-) Allocator.Error!?[]CliTestTranscriptEvent {
-    const count = readU32(data, offset) orelse return null;
-    if (count == 0) return &.{};
-
-    var events = std.ArrayList(CliTestTranscriptEvent).empty;
-    var events_owned = false;
-    defer {
-        if (!events_owned) {
-            for (events.items) |event| allocator.free(event.payload);
-            events.deinit(allocator);
-        }
-    }
-
-    for (0..@as(usize, @intCast(count))) |_| {
-        const kind_raw = readU8(data, offset) orelse return null;
-        const kind: CliTestTranscriptEventKind = switch (kind_raw) {
-            0 => .dbg,
-            1 => .expect_failed,
-            2 => .crashed,
-            3 => .crash_diagnostic,
-            else => return null,
-        };
-        const stream_raw = readU8(data, offset) orelse return null;
-        const stream: CliTestTranscriptStream = switch (stream_raw) {
-            0 => .stdout,
-            1 => .stderr,
-            else => return null,
-        };
-        const payload_len = readU32(data, offset) orelse return null;
-        const payload_len_usize: usize = @intCast(payload_len);
-        if (offset.* + payload_len_usize > data.len) return null;
-        const payload = try allocator.dupe(u8, data[offset.*..][0..payload_len_usize]);
-        offset.* += payload_len_usize;
-        errdefer allocator.free(payload);
-        try events.append(allocator, .{
-            .stream = stream,
-            .kind = kind,
-            .payload = payload,
-        });
-    }
-
-    const owned = try events.toOwnedSlice(allocator);
-    events_owned = true;
-    return owned;
-}
-
-fn loadCachedCliTestResults(
-    ctx: *CliCtx,
-    cache_manager: ?*CacheManager,
-    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
-    specialization_strategy: base.SpecializationStrategy,
-    opt: cli_args.OptLevel,
-    module: BuildEnv.CompiledModuleInfo,
-    source_modules: *const CliTestSourceModuleMap,
-    test_roots: []const check.CheckedArtifact.RootRequest,
-) (Allocator.Error || error{NoHomeDirectory})!?CliCachedModuleTestResults {
-    const manager = cache_manager orelse return null;
-
-    const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
-    defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), entries_dir) orelse return null;
-    defer ctx.gpa.free(data);
-
-    var offset: usize = 0;
-    if (data.len < cli_test_cache_magic.len) return null;
-    if (!std.mem.eql(u8, data[0..cli_test_cache_magic.len], cli_test_cache_magic)) return null;
-    offset += cli_test_cache_magic.len;
-
-    const count = readU32(data, &offset) orelse return null;
-    if (count < test_roots.len) return null;
-
-    var results = std.ArrayList(CliTestResultItem).empty;
-    var results_owned_by_module = false;
-    defer {
-        if (!results_owned_by_module) {
-            deinitCliTestResultItemPayloads(ctx.gpa, results.items);
-            results.deinit(ctx.gpa);
-        }
-    }
-
-    var root_index: usize = 0;
-    for (0..@as(usize, @intCast(count))) |_| {
-        const inline_expect = switch (readU8(data, &offset) orelse return null) {
-            0 => false,
-            1 => true,
-            else => return null,
-        };
-        const inline_passed = readU64(data, &offset) orelse return null;
-        const inline_failed = readU64(data, &offset) orelse return null;
-        if (inline_expect != (inline_passed +| inline_failed != 0)) return null;
-        const source_name_len: usize = @intCast(readU32(data, &offset) orelse return null);
-        if (inline_expect and source_name_len == 0) return null;
-        if (!inline_expect and source_name_len != 0) return null;
-        if (offset + source_name_len > data.len) return null;
-        const source_name = data[offset..][0..source_name_len];
-        offset += source_name_len;
-        var source_env: ?*const ModuleEnv = null;
-        var source_path: ?[]const u8 = null;
-        if (source_name.len != 0) {
-            if (source_modules.get(source_name)) |source_module| {
-                source_env = source_module.semantic.env;
-                source_path = source_module.path;
-            }
-            if (source_env == null) return null;
-        }
-        const order = readU32(data, &offset) orelse return null;
-        const region_start = readU32(data, &offset) orelse return null;
-        const region_end = readU32(data, &offset) orelse return null;
-        if (region_start > region_end) return null;
-        if (!inline_expect) {
-            if (root_index >= test_roots.len) return null;
-            if (order != test_roots[root_index].order) return null;
-            root_index += 1;
-        }
-
-        const result_tag = readU8(data, &offset) orelse return null;
-        const result: CliTestResult = switch (result_tag) {
-            0 => .passed,
-            1 => .failed,
-            2 => .compiler_error,
-            else => return null,
-        };
-        if (inline_expect and (result == .failed) != (inline_failed != 0)) return null;
-        const transcript = (try loadCliTestTranscriptEvents(ctx.gpa, data, &offset)) orelse return null;
-        var transcript_owned_by_result = false;
-        defer {
-            if (!transcript_owned_by_result) deinitCliTestTranscriptEvents(ctx.gpa, transcript);
-        }
-
-        const has_message = readU8(data, &offset) orelse return null;
-
-        const region = base.Region.from_raw_offsets(region_start, region_end);
-        if (!inline_expect and !region.eq(testRootRegion(module.semantic.env, test_roots[root_index - 1].source))) return null;
-
-        var visibility: CliTestFailureDetailVisibility = .always;
-        const message = if (has_message == 0) null else blk: {
-            if (offset >= data.len) return null;
-            visibility = switch (data[offset]) {
-                0 => .always,
-                1 => .verbose_only,
-                else => return null,
-            };
-            offset += 1;
-            const message_len = readU32(data, &offset) orelse return null;
-            const message_len_usize: usize = @intCast(message_len);
-            if (offset + message_len_usize > data.len) return null;
-            const message = try ctx.gpa.dupe(u8, data[offset..][0..message_len_usize]);
-            offset += message_len_usize;
-            break :blk message;
-        };
-
-        try results.append(ctx.gpa, .{
-            .result = result,
-            .order = order,
-            .region = region,
-            .inline_expect = inline_expect,
-            .inline_passed = inline_passed,
-            .inline_failed = inline_failed,
-            .source_env = source_env,
-            .source_path = source_path,
-            .transcript = transcript,
-            .failure_detail = message,
-            .failure_detail_visibility = visibility,
-        });
-        transcript_owned_by_result = true;
-    }
-    if (root_index != test_roots.len) return null;
-    if (offset != data.len) return null;
-
-    var summary = summarizeTestResults(results.items);
-    summary.cached_modules = 1;
-    const owned_results = try results.toOwnedSlice(ctx.gpa);
-    errdefer {
-        deinitCliTestResultItems(ctx.gpa, owned_results);
-    }
-    results_owned_by_module = true;
-    return .{
-        .results = owned_results,
-        .summary = summary,
-    };
-}
-
 fn collectTestRootRequests(
     allocator: std.mem.Allocator,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
@@ -12114,7 +13070,7 @@ fn collectTestRootRequests(
     errdefer roots.deinit(allocator);
 
     for (artifact.root_requests.requests) |root| {
-        if (root.kind != .test_expect) continue;
+        if (root.kind != .test_expect or root.requires_pairing) continue;
         try roots.append(allocator, root);
     }
 
@@ -12130,16 +13086,8 @@ fn buildCliTestPlan(
     var entries = std.ArrayList(CliTestPlanEntry).empty;
     var modules_with_tests: u32 = 0;
     errdefer {
-        for (planned_modules.items) |*module| {
-            ctx.gpa.free(module.test_roots);
-            if (module.cached_results) |results| {
-                deinitCliTestResultItems(ctx.gpa, results);
-            }
-        }
+        for (planned_modules.items) |*module| module.deinit(ctx.gpa);
         planned_modules.deinit(ctx.gpa);
-        for (entries.items) |entry| {
-            ctx.gpa.free(entry.symbol_name);
-        }
         entries.deinit(ctx.gpa);
     }
 
@@ -12165,7 +13113,7 @@ fn buildCliTestPlan(
         defer checking_results.deinit(ctx.gpa);
         for (artifact.compile_time_roots.roots) |root| {
             if (root.kind != .expect or root.request_eligibility != .ineligible) continue;
-            std.debug.assert(artifact.checked_bodies.exprContainsDiagnosticError(root.expr));
+            if (std.debug.runtime_safety) std.debug.assert(try artifact.bodies().exprContainsDiagnosticError(root.rootExpr()));
             try checking_results.append(ctx.gpa, .{
                 .result = .compiler_error,
                 .order = @backingInt(root.id),
@@ -12173,15 +13121,25 @@ fn buildCliTestPlan(
                 .failure_detail = null,
             });
         }
+        // `roc test` pairs no platform with an app, so an expect that reads a
+        // value the platform `requires` has nothing to read and cannot run.
+        for (artifact.root_requests.requests) |root| {
+            if (root.kind != .test_expect or !root.requires_pairing) continue;
+            try checking_results.append(ctx.gpa, .{
+                .result = .compiler_error,
+                .order = root.order,
+                .region = testRootRegion(module.semantic.env, root.source),
+                .failure_detail = try ctx.gpa.dupe(u8, "This expect reads a value the platform requires from its app, and `roc test` runs platform expects without an app."),
+            });
+        }
         if (test_roots.len != 0 or checking_results.items.len != 0) modules_with_tests += 1;
         if (checking_results.items.len != 0) {
             const results = try checking_results.toOwnedSlice(ctx.gpa);
             errdefer ctx.gpa.free(results);
             try module_results.append(ctx.gpa, .{
-                .env = module.semantic.env,
+                .env = &module.semantic.env.common,
                 .path = module.path,
                 .results = results,
-                .cached = false,
             });
         }
         if (test_roots.len == 0) {
@@ -12189,49 +13147,49 @@ fn buildCliTestPlan(
             continue;
         }
 
-        const first_entry_index: u32 = @intCast(entries.items.len);
-        for (test_roots, 0..) |root, root_index| {
+        const result_indices = try ctx.gpa.alloc(u32, test_roots.len);
+        errdefer ctx.gpa.free(result_indices);
+        const reused = try ctx.gpa.alloc(?u32, test_roots.len);
+        errdefer ctx.gpa.free(reused);
+        @memset(reused, null);
+        for (test_roots, result_indices, 0..) |root, *result_slot, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
-            const symbol_name = try std.fmt.allocPrintSentinel(ctx.gpa, "roc_test_expect_{d}", .{result_index}, 0);
-            entries.append(ctx.gpa, .{
+            result_slot.* = result_index;
+            // Named below, once every entry is known.
+            try entries.append(ctx.gpa, .{
                 .module_index = @intCast(module_index),
                 .root_index = @intCast(root_index),
                 .root_order = root.order,
                 .result_index = result_index,
                 .region = testRootRegion(module.semantic.env, root.source),
-                .symbol_name = symbol_name,
-            }) catch |err| {
-                ctx.gpa.free(symbol_name);
-                return err;
-            };
+                .symbol_name = "",
+            });
         }
 
         try planned_modules.append(ctx.gpa, .{
+            .module_index = @intCast(module_index),
             .module = module,
             .artifact = artifact,
             .test_roots = test_roots,
-            .first_entry_index = first_entry_index,
-            .entry_count = @intCast(test_roots.len),
+            .result_indices = result_indices,
+            .reused = reused,
         });
     }
 
     const owned_modules = try planned_modules.toOwnedSlice(ctx.gpa);
     errdefer {
-        for (owned_modules) |*module| {
-            ctx.gpa.free(module.test_roots);
-            if (module.cached_results) |results| {
-                deinitCliTestResultItems(ctx.gpa, results);
-            }
-        }
+        for (owned_modules) |*module| module.deinit(ctx.gpa);
         ctx.gpa.free(owned_modules);
     }
     const owned_entries = try entries.toOwnedSlice(ctx.gpa);
-    errdefer deinitCliTestPlanEntries(ctx.gpa, owned_entries);
-
+    errdefer ctx.gpa.free(owned_entries);
+    const symbol_names = try nameCliTestPlanSymbols(ctx.gpa, owned_entries);
+    errdefer ctx.gpa.free(symbol_names);
     return .{
         .modules_with_tests = modules_with_tests,
         .modules = owned_modules,
         .entries = owned_entries,
+        .symbol_names = symbol_names,
     };
 }
 
@@ -12241,13 +13199,257 @@ fn testRootRegion(
 ) base.Region {
     return switch (source) {
         .statement => |statement| env.store.getStatementRegion(statement),
-        .def, .expr, .required_binding, .hoisted => {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
-            }
-            unreachable;
+        .def, .expr, .required_binding, .hoisted, .literal => {
+            base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
         },
     };
+}
+
+/// The directory group of every test outcome file.
+const cli_test_outcome_scope = "test outcomes";
+
+/// The identity of a module's outcome file (design.md "Test outcome files").
+fn cliTestOutcomeFileKey(artifact: *const check.CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy, opt: cli_args.OptLevel) [32]u8 {
+    const inputs = test_outcome_file.Inputs{
+        .artifact_key = artifact.key.bytes,
+        .compiler = build_options.compiler_compatibility_id,
+        .target = @tagName(RocTarget.detectNative()),
+        .strategy = @tagName(strategy),
+        .opt = @tagName(opt),
+    };
+    return inputs.key();
+}
+
+fn compareTestRootOrder(target: u32, outcome: test_outcome_file.Outcome) std.math.Order {
+    return std.math.order(target, outcome.order);
+}
+
+/// Read every planned module's outcome file and reuse the outcome of each
+/// test root it records, so that only the other roots are lowered and run.
+/// An outcome naming an inline expect in a module the plan cannot report
+/// against is not reused. Returns how many roots are reused.
+fn admitCliTestOutcomes(
+    ctx: *CliCtx,
+    manager: *CacheManager,
+    plan: *CliTestPlan,
+    strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!usize {
+    var reused_count: usize = 0;
+    for (plan.modules) |*planned| {
+        const key = cliTestOutcomeFileKey(planned.artifact, strategy, opt);
+        const bytes = manager.loadFamilyBytes(.test_outcomes, key, cli_test_outcome_scope);
+        const outcomes: test_outcome_file.Outcomes = if (bytes) |owned| test_outcome_file.parse(ctx.gpa, owned) catch |err| {
+            manager.allocator.free(owned);
+            return err;
+        } else &.{};
+        planned.outcome_file = .{ .key = key, .outcomes = outcomes, .bytes = bytes, .bytes_allocator = manager.allocator };
+        for (planned.test_roots, planned.reused) |root, *reused| {
+            const index = std.sort.binarySearch(test_outcome_file.Outcome, outcomes, root.order, compareTestRootOrder) orelse continue;
+            const outcome = outcomes[index];
+            // The file's bytes are data: an event this compiler cannot
+            // render, like an inline expect it cannot report against, makes
+            // the entry a miss rather than an assumption.
+            var renderable = true;
+            for (outcome.events) |event| {
+                if (std.enums.fromInt(CliTestTranscriptStream, event.stream) == null or std.enums.fromInt(CliTestTranscriptEventKind, event.kind) == null) renderable = false;
+            }
+            for (outcome.inline_expects) |inline_expect| {
+                const source_module = source_modules.byIdentity(inline_expect.module) orelse {
+                    renderable = false;
+                    continue;
+                };
+                if (source_module.env == null) renderable = false;
+            }
+            if (!renderable) continue;
+            reused.* = @intCast(index);
+            reused_count += 1;
+        }
+    }
+    return reused_count;
+}
+
+/// The result items of a root whose outcome a module's outcome file
+/// records: its own, then one per inline expect it reached, appended to
+/// `own` and `inline_expects` respectively. The root's region and a detail
+/// from its source are read from the current checked module.
+fn appendReusedCliTestOutcome(
+    ctx: *CliCtx,
+    planned: *const CliTestPlanModule,
+    root: check.CheckedArtifact.RootRequest,
+    outcome: test_outcome_file.Outcome,
+    source_modules: *const CliTestSourceModuleMap,
+    own: *std.ArrayList(CliTestResultItem),
+    inline_expects: *std.ArrayList(CliTestResultItem),
+) Allocator.Error!void {
+    // Reserve both destinations before publishing an owning result. Once it
+    // is appended, no allocation may fail and run the local payload cleanup.
+    try own.ensureUnusedCapacity(ctx.gpa, 1);
+    try inline_expects.ensureUnusedCapacity(ctx.gpa, outcome.inline_expects.len);
+    const env = planned.module.semantic.env;
+    const transcript = try ctx.gpa.alloc(CliTestTranscriptEvent, outcome.events.len);
+    var copied_events: usize = 0;
+    errdefer {
+        deinitCliTestTranscriptEventPayloads(ctx.gpa, transcript[0..copied_events]);
+        ctx.gpa.free(transcript);
+    }
+    for (outcome.events, transcript) |event, *copy| {
+        copy.* = .{
+            .stream = @fromBackingInt(@intCast(event.stream)),
+            .kind = @fromBackingInt(@intCast(event.kind)),
+            .payload = try ctx.gpa.dupe(u8, event.payload),
+        };
+        copied_events += 1;
+    }
+    var detail_visibility: CliTestFailureDetailVisibility = .always;
+    const failure_detail: ?[]const u8 = switch (outcome.detail) {
+        .none => null,
+        .source => blk: {
+            const detail = try buildExpectFailureDetail(ctx.gpa, env, root);
+            detail_visibility = detail.visibility;
+            break :blk detail.message;
+        },
+        .message => |message| try ctx.gpa.dupe(u8, message),
+    };
+    errdefer if (failure_detail) |message| ctx.gpa.free(message);
+    own.appendAssumeCapacity(.{
+        .result = if (outcome.passed) .passed else .failed,
+        .order = root.order,
+        .region = if (outcome.region) |region| base.Region.from_raw_offsets(region.start, region.end) else testRootRegion(env, root.source),
+        .detail_origin = switch (outcome.detail) {
+            .none => .none,
+            .source => .source,
+            .message => .execution,
+        },
+        .transcript = if (transcript.len == 0) &.{} else transcript,
+        .failure_detail = failure_detail,
+        .failure_detail_visibility = detail_visibility,
+    });
+    if (transcript.len == 0) ctx.gpa.free(transcript);
+    for (outcome.inline_expects, 0..) |inline_expect, index| {
+        const source_module = source_modules.byIdentity(inline_expect.module) orelse
+            base.invariant("roc test invariant violated: a reused outcome names an inline expect admission did not resolve", .{});
+        const result: CliTestResult = if (inline_expect.failed == 0) .passed else .failed;
+        inline_expects.appendAssumeCapacity(.{
+            .result = result,
+            .order = std.math.maxInt(u32) - @as(u32, @intCast(outcome.inline_expects.len - index)),
+            .region = base.Region.from_raw_offsets(inline_expect.region_start, inline_expect.region_end),
+            .owner_order = root.order,
+            .inline_expect = true,
+            .inline_passed = inline_expect.passed,
+            .inline_failed = inline_expect.failed,
+            .source_env = source_module.env,
+            .source_path = source_module.path,
+            .source_name = source_module.name,
+            .failure_detail = null,
+            .failure_detail_visibility = .always,
+        });
+    }
+}
+
+/// The outcome a module's outcome file records for a root this run
+/// executed, from the root's own merged result item and the inline
+/// observations owned by it, or null when the result is not an observation
+/// of the program (`CliTestResultItem.reusable`, a compiler error). The
+/// inline expects are sorted into the file's order.
+fn cliTestOutcomeOfResults(
+    ctx: *CliCtx,
+    planned: *const CliTestPlanModule,
+    root: check.CheckedArtifact.RootRequest,
+    own: CliTestResultItem,
+    observations: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!?test_outcome_file.Outcome {
+    if (!own.reusable or own.result == .compiler_error) return null;
+    const events = try ctx.gpa.alloc(test_outcome_file.Event, own.transcript.len);
+    errdefer ctx.gpa.free(events);
+    for (own.transcript, events) |event, *record| record.* = .{ .stream = @backingInt(event.stream), .kind = @backingInt(event.kind), .payload = event.payload };
+    var inline_expects: std.ArrayList(test_outcome_file.InlineExpect) = .empty;
+    errdefer inline_expects.deinit(ctx.gpa);
+    for (observations) |item| {
+        if (item.owner_order != root.order) continue;
+        std.debug.assert(item.inline_expect);
+        const env = item.source_env orelse base.invariant("roc test invariant violated: an inline observation has no source module", .{});
+        // The observation reports against the current occurrence of its
+        // module; the file names that module by content.
+        const workspace = compile.watch_inputs.hashBytes(env.qualifiedModuleName());
+        const source_module = source_modules.modules.get(workspace) orelse base.invariant("roc test invariant violated: an inline observation's module is not in the plan", .{});
+        try inline_expects.append(ctx.gpa, .{
+            .module = source_module.identity,
+            .region_start = item.region.start.offset,
+            .region_end = item.region.end.offset,
+            .passed = item.inline_passed,
+            .failed = item.inline_failed,
+        });
+    }
+    std.mem.sort(test_outcome_file.InlineExpect, inline_expects.items, {}, struct {
+        fn lessThan(_: void, a: test_outcome_file.InlineExpect, b: test_outcome_file.InlineExpect) bool {
+            return test_outcome_file.inlineExpectLessThan(a, b);
+        }
+    }.lessThan);
+    const root_region = testRootRegion(planned.module.semantic.env, root.source);
+    const region_is_root = own.region.start.offset == root_region.start.offset and own.region.end.offset == root_region.end.offset;
+    return .{
+        .order = root.order,
+        .passed = own.result == .passed,
+        .region = if (region_is_root) null else .{ .start = own.region.start.offset, .end = own.region.end.offset },
+        .detail = switch (own.detail_origin) {
+            .none => .none,
+            .source => .source,
+            .execution => .{ .message = own.failure_detail orelse base.invariant("roc test invariant violated: a detail from execution has no message", .{}) },
+        },
+        .events = events,
+        .inline_expects = try inline_expects.toOwnedSlice(ctx.gpa),
+    };
+}
+
+/// Republish the module's outcome file with the outcomes this run reused
+/// and every outcome it observed. A file that already records exactly those
+/// is left in place. `results` are the module's merged results: each root's
+/// own item in plan order, then the inline observations, which belong to
+/// the root `owner_order` names.
+fn publishCliTestOutcomes(
+    ctx: *CliCtx,
+    manager: *CacheManager,
+    planned: *const CliTestPlanModule,
+    results: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!void {
+    const file = if (planned.outcome_file) |*file| file else return;
+    var outcomes: std.ArrayList(test_outcome_file.Outcome) = .empty;
+    defer {
+        for (outcomes.items) |outcome| test_outcome_file.freeBorrowed(ctx.gpa, outcome);
+        outcomes.deinit(ctx.gpa);
+    }
+    // Every constructed outcome immediately enters the owning cleanup list.
+    try outcomes.ensureTotalCapacity(ctx.gpa, planned.test_roots.len);
+    const observations = results[planned.test_roots.len..];
+    for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+        if (reused) |index| {
+            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
+            continue;
+        }
+        const own = results[root_index];
+        if (own.inline_expect or own.order != root.order) base.invariant("roc test invariant violated: merged results are not in plan order", .{});
+        if (try cliTestOutcomeOfResults(ctx, planned, root, own, observations, source_modules)) |outcome| outcomes.appendAssumeCapacity(outcome);
+    }
+    std.mem.sort(test_outcome_file.Outcome, outcomes.items, {}, struct {
+        fn lessThan(_: void, a: test_outcome_file.Outcome, b: test_outcome_file.Outcome) bool {
+            return a.order < b.order;
+        }
+    }.lessThan);
+    if (file.bytes != null and outcomes.items.len == file.outcomes.len) {
+        const unchanged = for (outcomes.items, file.outcomes) |a, b| {
+            if (!test_outcome_file.eql(a, b)) break false;
+        } else true;
+        if (unchanged) return;
+    }
+    if (file.bytes == null and outcomes.items.len == 0) return;
+    var file_bytes = try test_outcome_file.Builder.init(ctx.gpa);
+    defer file_bytes.deinit(ctx.gpa);
+    for (outcomes.items) |outcome| try file_bytes.append(ctx.gpa, outcome);
+    manager.storeFamilyBytes(.test_outcomes, file.key, file_bytes.written(), cli_test_outcome_scope, planned.module.semantic.env.qualifiedModuleName());
 }
 
 const CliTestFailureDetail = struct {
@@ -12273,7 +13475,7 @@ fn collectExpectBindingPatterns(
 ) Allocator.Error![]CIR.Pattern.Idx {
     const statement_idx = switch (root.source) {
         .statement => |statement| statement,
-        .def, .expr, .required_binding, .hoisted => return allocator.alloc(CIR.Pattern.Idx, 0),
+        .def, .expr, .required_binding, .hoisted, .literal => return allocator.alloc(CIR.Pattern.Idx, 0),
     };
     const statement = env.store.getStatement(statement_idx);
     if (statement != .s_expect) return allocator.alloc(CIR.Pattern.Idx, 0);
@@ -12532,7 +13734,7 @@ test "runtime specialization strategy helpers" {
 test "post-check optimization scope per opt level" {
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers, postCheckInlineModeForOpt(.size));
-    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.wrappers_and_source_single_use, postCheckInlineModeForOpt(.dev));
+    try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.procedures, postCheckInlineModeForOpt(.dev));
     try std.testing.expectEqual(lir.CheckedPipeline.InlineMode.none, postCheckInlineModeForOpt(.interpreter));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.speed));
     try std.testing.expectEqual(lir.CheckedPipeline.SpecConstrCloneInlining.all_calls, specConstrCloneInliningForOpt(.size));
@@ -12540,25 +13742,37 @@ test "post-check optimization scope per opt level" {
 }
 
 test "only optimized builds emit thread-confined count updates" {
-    // Dev builds write the object cache, whose entries link into programs
-    // with different callers, so they never assume an allocation is confined.
+    // Dev builds skip whole-program thread confinement analysis.
     for ([_]struct { opt: cli_args.OptLevel, confined: bool }{
         .{ .opt = .speed, .confined = true },
         .{ .opt = .size, .confined = true },
         .{ .opt = .dev, .confined = false },
         .{ .opt = .interpreter, .confined = false },
     }) |case| {
-        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, .native, false);
+        const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, .lss, RocTarget.detectNative(), false);
         try std.testing.expectEqual(case.confined, config.target.thread_confined_rc);
+    }
+}
+
+test "only optimized builds prove uniqueness" {
+    for ([_]struct { opt: cli_args.OptLevel, proves: bool }{
+        .{ .opt = .speed, .proves = true },
+        .{ .opt = .size, .proves = true },
+        .{ .opt = .dev, .proves = false },
+        .{ .opt = .interpreter, .proves = false },
+    }) |case| {
+        for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+            const config = checkedRuntimeLoweringConfig(.linked_output, case.opt, strategy, RocTarget.detectNative(), false);
+            try std.testing.expectEqual(case.proves, config.target.prove_uniqueness);
+            try std.testing.expectEqual(case.proves, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).prove_uniqueness);
+        }
     }
 }
 
 fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineMode {
     return switch (opt) {
         .size, .speed => .wrappers,
-        // The object cache links dev procedures into other programs, so dev
-        // decides inlining from source alone, the same in every program.
-        .dev => .wrappers_and_source_single_use,
+        .dev => lir.CheckedPipeline.dev_inline_mode,
         .interpreter => .none,
     };
 }
@@ -12571,7 +13785,24 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
 fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
     return switch (opt) {
         .size, .speed => .all_calls,
-        .dev, .interpreter => .iterator_fusion,
+        .dev, .interpreter => lir.CheckedPipeline.dev_spec_constr_clone_inlining,
+    };
+}
+
+/// Only optimized builds, which are what get deployed, keep `Dict`'s runtime
+/// seed (`TargetConfig.zero_dict_seed`).
+fn zeroDictSeedForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .size, .speed => false,
+        .dev, .interpreter => true,
+    };
+}
+
+/// Give dev procedures stable code keys for hot reload (`TargetConfig.site_code_keys`).
+fn siteCodeKeysForOpt(opt: cli_args.OptLevel) bool {
+    return switch (opt) {
+        .dev => true,
+        .size, .speed, .interpreter => false,
     };
 }
 
@@ -12615,6 +13846,7 @@ fn optimizedDbgWarningsForBuild(
         .size, .speed => try build_env.renderOptimizedDbgWarnings(
             ctx.io.stderr(),
             @tagName(opt),
+            @tagName(cli_args.default_dev_opt),
             ctx.reportConfig(.stderr),
         ),
         .dev, .interpreter => 0,
@@ -12653,7 +13885,7 @@ fn checkedRuntimeLoweringConfig(
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
-    target_usize: base.target.TargetUsize,
+    target: RocTarget,
     proc_debug_names: bool,
 ) compile.build.RuntimeLoweringConfig {
     return .{
@@ -12664,55 +13896,62 @@ fn checkedRuntimeLoweringConfig(
             .test_plan => false,
         },
         .target = .{
-            .target_usize = target_usize,
-            .erased_capture_prefix = switch (roots) {
-                .platform_entrypoints => |artifact| switch (artifact) {
-                    .dev_run_image => |image| if (image.hot_reload) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0,
-                    .lir_image => 0,
-                },
-                .linked_output, .test_plan => 0,
-            },
+            .target_usize = base.target.TargetUsize.fromPtrBitWidth(target.ptrBitWidth()),
+            .erased_capture_prefix = devCapturePrefix(roots, opt, target),
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
+            .specialize_arc_modes = optimizeLirForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
             .consume_dead_boxes = switch (roots) {
                 .linked_output => true,
                 .platform_entrypoints => |artifact| artifact == .dev_run_image,
-                .test_plan => false,
+                .test_plan => opt == .dev,
             },
             .inline_expects = switch (roots) {
                 .test_plan => .run,
                 .platform_entrypoints, .linked_output => inlineExpectModeForOpt(opt),
             },
             .list_in_place_map = listInPlaceMapForOpt(opt),
+            .zero_dict_seed = zeroDictSeedForOpt(opt),
+            .site_code_keys = siteCodeKeysForOpt(opt),
+            .owned_proc_signatures = opt == .dev,
             .tag_reachability = tagReachabilityForOpt(opt),
             .prove_ranges = proveRangesForOpt(opt),
-            .scalarize_joins = optimizeLirForOpt(opt),
             .reuse_boxes = optimizeLirForOpt(opt),
             .thread_confined_rc = optimizeLirForOpt(opt),
+            .prove_uniqueness = optimizeLirForOpt(opt),
             .proc_debug_names = proc_debug_names,
         },
     };
 }
 
-/// Native builds promise object provision only when their emitter has a
-/// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
-fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool) lir.CheckedPipeline.CodeProvision {
-    if (!has_splice_source or opt != .dev) return .source_bodies;
-    return if (target == RocTarget.detectNative()) .host_dev_objects else .target_dev_objects;
+/// The bytes a program's erased callables reserve at the start of their
+/// captures. Native dev code always supports a hot-reload session, so every
+/// native dev build, like compile-time evaluation, reserves the hot-reload
+/// prefix and compiles the same erased callables; other backends and the
+/// interpreter reserve none.
+fn devCapturePrefix(roots: CheckedLirRoots, opt: cli_args.OptLevel, target: RocTarget) u32 {
+    if (opt != .dev) return 0;
+    switch (roots) {
+        .platform_entrypoints => |artifact| switch (artifact) {
+            .dev_run_image => {},
+            .lir_image => return 0,
+        },
+        .linked_output, .test_plan => {},
+    }
+    return if (backend.dev.isa.isaOfOrNull(target) != null) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0;
 }
 
-test "native code provision names the emitter target and splice capability" {
+test "native test generic procedures use the ordinary native dev representation and ownership policy" {
     const native = RocTarget.detectNative();
-    for (std.enums.values(cli_args.OptLevel)) |opt| {
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false));
-        const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
-        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true));
-    }
-    for (std.enums.values(RocTarget)) |target| {
-        if (target == native) continue;
-        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true));
-    }
+    const tests = checkedRuntimeLoweringConfig(.{ .test_plan = .{ .requests = &.{}, .metadata = &.{} } }, .dev, .lss, native, false);
+    const build = checkedRuntimeLoweringConfig(.linked_output, .dev, .lss, native, false);
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.LirPolicy.fromTarget(build.target), lir.CheckedPipeline.LirPolicy.fromTarget(tests.target));
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.SolvedPolicy.fromTarget(build.target), lir.CheckedPipeline.SolvedPolicy.fromTarget(tests.target));
+    try std.testing.expectEqual(build.target.erased_capture_prefix, tests.target.erased_capture_prefix);
+    try std.testing.expectEqual(build.target.target_usize, tests.target.target_usize);
+    try std.testing.expectEqual(build.target.inline_expects, tests.target.inline_expects);
+    try std.testing.expect(build.target.owned_proc_signatures);
 }
 
 fn lowerCheckedSourceToLir(
@@ -12724,13 +13963,13 @@ fn lowerCheckedSourceToLir(
     roots: CheckedLirRoots,
     opt: cli_args.OptLevel,
     specialization_strategy: base.SpecializationStrategy,
-    target_usize: base.target.TargetUsize,
+    target: RocTarget,
     proc_debug_names: bool,
+    host_boundary_digests: bool,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
-    spec_cache: ?postcheck.Common.SpecCacheLookup,
-    code_provision: lir.CheckedPipeline.CodeProvision,
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12742,11 +13981,11 @@ fn lowerCheckedSourceToLir(
         .test_plan => {},
     };
 
-    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target_usize, proc_debug_names);
+    var config = checkedRuntimeLoweringConfig(roots, opt, specialization_strategy, target, proc_debug_names);
+    config.target.host_boundary_digests = host_boundary_digests;
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
-    config.target.spec_cache = spec_cache;
-    config.target.code_provision = code_provision;
+    config.target.boxy_unit = boxy_unit;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,
@@ -12778,6 +14017,17 @@ const CliTestRootRun = struct {
     arg_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
     symbol_name: [:0]const u8,
+
+    fn report(self: CliTestRootRun) CliTestRootReport {
+        return .{ .root = self.root, .env = self.env, .region = self.region };
+    }
+};
+
+/// What a test root's outcome is reported against.
+const CliTestRootReport = struct {
+    root: check.CheckedArtifact.RootRequest,
+    env: *const ModuleEnv,
+    region: base.Region,
 };
 
 const CliLoweredTestModule = struct {
@@ -12814,32 +14064,23 @@ fn collectCliTestRootRuns(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (builtin.mode == .debug) {
-            base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
-        }
-        unreachable;
+        base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
     }
 
     for (root_procs, root_metadata) |root_proc, metadata| {
         if (metadata.kind != .test_expect) continue;
         const test_plan = metadata.test_plan orelse {
-            if (builtin.mode == .debug) {
-                base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
-            }
-            unreachable;
+            base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
         };
-        if (test_plan.result_index < planned.first_entry_index or
-            test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
+        if (test_plan.module_index != planned.module_index) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
-            if (builtin.mode == .debug) {
-                base.invariant(
-                    "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
-                    .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
-                );
-            }
-            unreachable;
+            base.invariant(
+                "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
+                .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
+            );
         }
         const root_index: usize = @intCast(test_plan.root_index);
+        if (planned.reused[root_index] != null) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
         const root = planned.test_roots[root_index];
         const plan_entry = plan_entries[@intCast(test_plan.result_index)];
         if (builtin.mode == .debug and
@@ -12879,14 +14120,11 @@ fn collectCliTestRootRuns(
         });
     }
 
-    if (runs.items.len != planned.test_roots.len) {
-        if (builtin.mode == .debug) {
-            base.invariant(
-                "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
-                .{ runs.items.len, planned.test_roots.len },
-            );
-        }
-        unreachable;
+    if (runs.items.len != planned.runCount()) {
+        base.invariant(
+            "CLI test invariant violated: lowered {d} test roots for {d} checked test roots to run",
+            .{ runs.items.len, planned.runCount() },
+        );
     }
 
     return try runs.toOwnedSlice(ctx.gpa);
@@ -12901,11 +14139,10 @@ fn interpreterTestFailureMessage(
         error.OutOfMemory => return error.OutOfMemory,
         error.RuntimeError => interpreter.getRuntimeErrorMessage() orelse "Roc runtime error",
         error.DivisionByZero => interpreter.getRuntimeErrorMessage() orelse "Division by zero",
-        error.ComptimeExhaustiveness => "compile-time exhaustiveness failure reached runtime code",
         error.Crash => interpreter.getCrashMessage(),
         error.ExpectErr => interpreter.getExpectErrMessage() orelse
             "The `?` operator evaluated an `Err` inside an `expect`",
-        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable,
+        error.UnsupportedHostedFunction, error.InvalidHostedFunctionSignature => unreachable, // only inspected_run's hosted dependency lookup returns these; the LIR interpreter never does
     };
     return try allocator.dupe(u8, message);
 }
@@ -12913,17 +14150,19 @@ fn interpreterTestFailureMessage(
 fn appendFailedCliTestResult(
     ctx: *CliCtx,
     results: *std.ArrayList(CliTestResultItem),
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     result: CliTestResult,
     transcript: []CliTestTranscriptEvent,
     message: []const u8,
     visibility: CliTestFailureDetailVisibility,
+    detail_origin: CliTestDetailOrigin,
 ) Allocator.Error!void {
     errdefer ctx.gpa.free(message);
     try results.append(ctx.gpa, .{
         .result = result,
         .order = run.root.order,
         .region = run.region,
+        .detail_origin = detail_origin,
         .transcript = transcript,
         .failure_detail = message,
         .failure_detail_visibility = visibility,
@@ -13025,14 +14264,10 @@ fn copyCliTestResultItem(
         null;
     errdefer if (failure_detail) |message| allocator.free(message);
 
-    return .{
-        .result = result.result,
-        .order = result.order,
-        .region = result.region,
-        .transcript = transcript,
-        .failure_detail = failure_detail,
-        .failure_detail_visibility = result.failure_detail_visibility,
-    };
+    var copied = result;
+    copied.transcript = transcript;
+    copied.failure_detail = failure_detail;
+    return copied;
 }
 
 const CliInterpreterTestHostEnv = struct {
@@ -13125,11 +14360,10 @@ fn runInterpreterTestRoots(
     defer static_values.deinit();
     var static_strings = try eval.LirInterpreter.buildStaticStrings(ctx.gpa, &lowered.lir_result.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         ctx.gpa,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         static_strings.view(),
         &roc_ops,
     );
@@ -13157,118 +14391,137 @@ fn runInterpreterTestRoots(
     });
 
     for (root_runs) |run| {
-        host_env.resetObservation();
-        const eval_result = interpreter.eval(.{
-            .proc_id = run.root_proc,
-            .arg_layouts = run.arg_layouts,
-            .ret_layout = run.ret_layout,
-        }) catch |err| {
-            var transcript: []const CliTestTranscriptEvent = try host_env.takeTranscript();
-            errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
-            // The expect reached code checking rejected; that problem is
-            // already reported, so the expect counts as a compiler error.
-            const reached_checked_error = switch (err) {
-                error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(&lowered.lir_result, interpreter.getFailedCrashStmt()),
-                error.ComptimeExhaustiveness,
-                error.DivisionByZero,
-                error.ExpectErr,
-                error.InvalidHostedFunctionSignature,
-                error.OutOfMemory,
-                error.RuntimeError,
-                error.UnsupportedHostedFunction,
-                => false,
-            };
-            if (reached_checked_error) {
-                summary.compiler_errors += 1;
+        base.dev_diagnostics.countTestWork(.test_root_execution, 1);
+        root_eval: {
+            host_env.resetObservation();
+            const eval_result = interpreter.eval(.{
+                .proc_id = run.root_proc,
+                .arg_layouts = run.arg_layouts,
+                .ret_layout = run.ret_layout,
+            }) catch |err| {
+                var transcript: []const CliTestTranscriptEvent = try host_env.takeTranscript();
+                errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
+                // The expect reached code checking rejected; that problem is
+                // already reported, so the expect counts as a compiler error.
+                const reached_checked_error = switch (err) {
+                    error.Crash => eval.CompileTimeFinalization.failedAtCheckedError(if (interpreter.getFailedCrashStmt()) |stmt| lowered.lir_result.store.failureMeaning(stmt) else null),
+                    error.DivisionByZero,
+                    error.ExpectErr,
+                    error.InvalidHostedFunctionSignature,
+                    error.OutOfMemory,
+                    error.RuntimeError,
+                    error.UnsupportedHostedFunction,
+                    => false,
+                };
+                if (reached_checked_error) {
+                    summary.compiler_errors += 1;
+                    try results.append(ctx.gpa, .{
+                        .result = .compiler_error,
+                        .order = run.root.order,
+                        .region = run.region,
+                        .transcript = transcript,
+                        .failure_detail = null,
+                    });
+                    break :root_eval;
+                }
+                summary.failed += 1;
+                // When a `?` operator failed the expect, point the report's
+                // source snippet at the `?` itself.
+                const failure_region = switch (err) {
+                    error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
+                    error.Crash,
+                    error.DivisionByZero,
+                    error.InvalidHostedFunctionSignature,
+                    error.OutOfMemory,
+                    error.RuntimeError,
+                    error.UnsupportedHostedFunction,
+                    => run.region,
+                };
+                const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
+                var message_owned = true;
+                errdefer if (message_owned) ctx.gpa.free(message);
+                const failure_detail: ?[]const u8 = switch (err) {
+                    error.Crash => blk: {
+                        // The interpreter reports a Roc crash as `error.Crash`
+                        // rather than through the host's `roc_crashed`, which
+                        // never returns.
+                        transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crashed, interpreter.getCrashMessage());
+                        transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crash_diagnostic, message);
+                        ctx.gpa.free(message);
+                        message_owned = false;
+                        break :blk null;
+                    },
+                    error.DivisionByZero,
+                    error.ExpectErr,
+                    error.InvalidHostedFunctionSignature,
+                    error.OutOfMemory,
+                    error.RuntimeError,
+                    error.UnsupportedHostedFunction,
+                    => blk: {
+                        message_owned = false;
+                        break :blk message;
+                    },
+                };
                 try results.append(ctx.gpa, .{
-                    .result = .compiler_error,
+                    .result = .failed,
                     .order = run.root.order,
-                    .region = run.region,
+                    .region = failure_region,
+                    .detail_origin = if (failure_detail == null) .none else .execution,
+                    .reusable = switch (err) {
+                        error.OutOfMemory => false,
+                        error.Crash, error.DivisionByZero, error.ExpectErr, error.InvalidHostedFunctionSignature, error.RuntimeError, error.UnsupportedHostedFunction => true,
+                    },
                     .transcript = transcript,
-                    .failure_detail = null,
+                    .failure_detail = failure_detail,
+                    .failure_detail_visibility = .always,
                 });
-                continue;
+                break :root_eval;
+            };
+            const transcript = try host_env.takeTranscript();
+            errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
+
+            const passed = switch (eval_result) {
+                .value => |value| blk: {
+                    const ok = value.read(u8) != 0;
+                    interpreter.dropValue(value, run.ret_layout);
+                    break :blk ok;
+                },
+            };
+
+            if (passed) {
+                summary.passed += 1;
+                try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .transcript = transcript, .failure_detail = null });
+            } else {
+                summary.failed += 1;
+                const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
+                try appendFailedCliTestResult(
+                    ctx,
+                    results,
+                    run.report(),
+                    .failed,
+                    transcript,
+                    detail.message,
+                    detail.visibility,
+                    .source,
+                );
             }
-            summary.failed += 1;
-            // When a `?` operator failed the expect, point the report's
-            // source snippet at the `?` itself.
-            const failure_region = switch (err) {
-                error.ExpectErr => interpreter.getExpectErrRegion() orelse run.region,
-                error.ComptimeExhaustiveness,
-                error.Crash,
-                error.DivisionByZero,
-                error.InvalidHostedFunctionSignature,
-                error.OutOfMemory,
-                error.RuntimeError,
-                error.UnsupportedHostedFunction,
-                => run.region,
-            };
-            const message = try interpreterTestFailureMessage(ctx.gpa, &interpreter, err);
-            var message_owned = true;
-            errdefer if (message_owned) ctx.gpa.free(message);
-            const failure_detail: ?[]const u8 = switch (err) {
-                error.Crash => blk: {
-                    // The interpreter reports a Roc crash as `error.Crash`
-                    // rather than through the host's `roc_crashed`, which
-                    // never returns.
-                    transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crashed, interpreter.getCrashMessage());
-                    transcript = try appendCliTestTranscriptEvent(ctx.gpa, transcript, .stderr, .crash_diagnostic, message);
-                    ctx.gpa.free(message);
-                    message_owned = false;
-                    break :blk null;
-                },
-                error.ComptimeExhaustiveness,
-                error.DivisionByZero,
-                error.ExpectErr,
-                error.InvalidHostedFunctionSignature,
-                error.OutOfMemory,
-                error.RuntimeError,
-                error.UnsupportedHostedFunction,
-                => blk: {
-                    message_owned = false;
-                    break :blk message;
-                },
-            };
-            try results.append(ctx.gpa, .{
-                .result = .failed,
-                .order = run.root.order,
-                .region = failure_region,
-                .transcript = transcript,
-                .failure_detail = failure_detail,
-                .failure_detail_visibility = .always,
-            });
-            continue;
-        };
-        const transcript = try host_env.takeTranscript();
-        errdefer deinitCliTestTranscriptEvents(ctx.gpa, transcript);
-
-        const passed = switch (eval_result) {
-            .value => |value| blk: {
-                const ok = value.read(u8) != 0;
-                interpreter.dropValue(value, run.ret_layout);
-                break :blk ok;
-            },
-        };
-
-        if (passed) {
-            summary.passed += 1;
-            try results.append(ctx.gpa, .{ .result = .passed, .order = run.root.order, .region = run.region, .transcript = transcript, .failure_detail = null });
-        } else {
-            summary.failed += 1;
-            const detail = try buildExpectFailureDetail(ctx.gpa, run.env, run.root);
-            try appendFailedCliTestResult(
-                ctx,
-                results,
-                run,
-                .failed,
-                transcript,
-                detail.message,
-                detail.visibility,
-            );
         }
+        const start = results.items.len;
+        try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, expect_counts, results, summary, source_modules);
+        for (results.items[start..]) |*item| item.owner_order = run.root.order;
+        @memset(expect_counts, .{});
     }
+}
 
-    try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, expect_counts, results, summary, source_modules);
+fn appendRootInlineExpectResults(ctx: *CliCtx, lowered: *const lir.CheckedPipeline.LoweredProgram, result: eval.Inspected.BoolRootEvalResult, owner_order: u32, results: *std.ArrayList(CliTestResultItem), summary: *CliTestRunSummary, source_modules: *const CliTestSourceModuleMap) Allocator.Error!void {
+    if (result.expect_observations.len == 0) return;
+    const counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, lowered.lir_result.expect_sites.items.len);
+    defer ctx.gpa.free(counts);
+    @memset(counts, .{});
+    for (result.expect_observations) |observation| counts[observation.site] = observation.counts;
+    const start = results.items.len;
+    try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, counts, results, summary, source_modules);
+    for (results.items[start..]) |*item| item.owner_order = owner_order;
 }
 
 fn appendInlineExpectResults(
@@ -13280,49 +14533,99 @@ fn appendInlineExpectResults(
     summary: *CliTestRunSummary,
     source_modules: *const CliTestSourceModuleMap,
 ) Allocator.Error!void {
-    std.debug.assert(sites.len == counts.len);
+    try appendObservedInlineExpectResults(ctx, LirExpectSites{ .store = store, .sites = sites }, counts, results, summary, source_modules);
+}
+
+/// The expect sites of one lowered program, as inline results read them.
+const LirExpectSites = struct {
+    store: *const lir.LirStore,
+    sites: []const lir.LIR.ExpectSite,
+
+    fn len(self: LirExpectSites) usize {
+        return self.sites.len;
+    }
+
+    fn lessThan(self: LirExpectSites, lhs: u32, rhs: u32) bool {
+        const a = self.sites[lhs];
+        const b = self.sites[rhs];
+        if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
+        if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
+        return a.region.end.offset < b.region.end.offset;
+    }
+
+    fn module(self: LirExpectSites, index: u32) [32]u8 {
+        const site = self.sites[index];
+        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
+        return self.store.sourceFileModuleIdentity(site.loc.file);
+    }
+
+    fn region(self: LirExpectSites, index: u32) base.Region {
+        return self.sites[index].region;
+    }
+};
+
+/// The program-wide expect sites of loaded test units, as inline results
+/// read them.
+const UnitExpectSites = struct {
+    records: []const compile.boxy_object_cache.ExpectSiteRecord,
+
+    fn len(self: UnitExpectSites) usize {
+        return self.records.len;
+    }
+
+    fn lessThan(self: UnitExpectSites, lhs: u32, rhs: u32) bool {
+        const a = self.records[lhs];
+        const b = self.records[rhs];
+        const modules = std.mem.order(u8, &a.module, &b.module);
+        if (modules != .eq) return modules == .lt;
+        if (a.region_start != b.region_start) return a.region_start < b.region_start;
+        return a.region_end < b.region_end;
+    }
+
+    fn module(self: UnitExpectSites, index: u32) [32]u8 {
+        return self.records[index].module;
+    }
+
+    fn region(self: UnitExpectSites, index: u32) base.Region {
+        const record = self.records[index];
+        return base.Region.from_raw_offsets(record.region_start, record.region_end);
+    }
+};
+
+/// Append a result for every site of `sites` (`LirExpectSites` or
+/// `UnitExpectSites`) that `counts` observed.
+fn appendObservedInlineExpectResults(
+    ctx: *CliCtx,
+    sites: anytype,
+    counts: []const eval.Inspected.ExpectCounts,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error!void {
+    std.debug.assert(sites.len() == counts.len);
     var observed = std.ArrayList(u32).empty;
     defer observed.deinit(ctx.gpa);
     for (counts, 0..) |count, site_index| {
         if (count.passed +| count.failed != 0) try observed.append(ctx.gpa, @intCast(site_index));
     }
-    const SortContext = struct {
-        sites: []const lir.LIR.ExpectSite,
-
-        fn lessThan(sort: @This(), lhs: u32, rhs: u32) bool {
-            const a = sort.sites[lhs];
-            const b = sort.sites[rhs];
-            if (a.loc.file != b.loc.file) return a.loc.file < b.loc.file;
-            if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
-            return a.region.end.offset < b.region.end.offset;
-        }
-    };
-    std.mem.sort(u32, observed.items, SortContext{ .sites = sites }, SortContext.lessThan);
+    std.mem.sort(u32, observed.items, sites, @TypeOf(sites).lessThan);
 
     for (observed.items, 0..) |site_index, observed_index| {
-        const site = sites[site_index];
         const count = counts[site_index];
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
-        var source_env: ?*const ModuleEnv = null;
-        var source_path: ?[]const u8 = null;
-        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
-        const qualified_name = store.sourceFileQualifiedName(site.loc.file);
-        if (source_modules.get(qualified_name)) |source_module| {
-            source_env = source_module.semantic.env;
-            source_path = source_module.path;
-        }
-        if (source_env == null) {
-            base.invariant("test expect source module {s} was absent from the checked module plan", .{qualified_name});
-        }
+        const source_module = source_modules.byIdentity(sites.module(site_index)) orelse
+            base.invariant("test expect source module was absent from the checked module plan", .{});
+        if (source_module.env == null) base.invariant("test expect source module {s} has no module environment", .{source_module.name});
         try results.append(ctx.gpa, .{
             .result = result,
             .order = std.math.maxInt(u32) - @as(u32, @intCast(observed.items.len - observed_index)),
-            .region = site.region,
+            .region = sites.region(site_index),
             .inline_expect = true,
             .inline_passed = count.passed,
             .inline_failed = count.failed,
-            .source_env = source_env,
-            .source_path = source_path,
+            .source_env = source_module.env,
+            .source_path = source_module.path,
+            .source_name = source_module.name,
             .failure_detail = null,
             .failure_detail_visibility = .always,
         });
@@ -13338,19 +14641,28 @@ fn appendCompilerErrorsForRuns(
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
 ) Allocator.Error!void {
-    for (root_runs) |run| {
-        summary.compiler_errors += 1;
-        try appendFailedCliTestResult(
-            ctx,
-            results,
-            run,
-            .compiler_error,
-            &.{},
-            try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
-            .always,
-        );
-        results.items[results.items.len - 1].cacheable = false;
-    }
+    for (root_runs) |run| try appendCompilerErrorForRoot(ctx, mode, err, run.report(), results, summary);
+}
+
+fn appendCompilerErrorForRoot(
+    ctx: *CliCtx,
+    mode: CliTestExecutionMode,
+    err: CliMainError,
+    run: CliTestRootReport,
+    results: *std.ArrayList(CliTestResultItem),
+    summary: *CliTestRunSummary,
+) Allocator.Error!void {
+    summary.compiler_errors += 1;
+    try appendFailedCliTestResult(
+        ctx,
+        results,
+        run,
+        .compiler_error,
+        &.{},
+        try std.fmt.allocPrint(ctx.gpa, "{s} test backend failed: {s}", .{ mode.displayName(), @errorName(err) }),
+        .always,
+        .execution,
+    );
 }
 
 fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult) void {
@@ -13363,7 +14675,7 @@ fn addCliTestResultToSummary(summary: *CliTestRunSummary, result: CliTestResult)
 
 fn cliTestResultItemFromEval(
     ctx: *CliCtx,
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     eval_result: eval.Inspected.BoolRootEvalResult,
 ) Allocator.Error!CliTestResultItem {
     var transcript: []const CliTestTranscriptEvent = try copyCliTestTranscriptEventsFromEval(ctx.gpa, eval_result.events);
@@ -13379,6 +14691,7 @@ fn cliTestResultItemFromEval(
                     .result = .failed,
                     .order = run.root.order,
                     .region = run.region,
+                    .detail_origin = .source,
                     .transcript = transcript,
                     .failure_detail = detail.message,
                     .failure_detail_visibility = detail.visibility,
@@ -13406,6 +14719,7 @@ fn cliTestResultItemFromEval(
                 .result = .failed,
                 .order = run.root.order,
                 .region = base.Region.from_raw_offsets(failure.region_start, failure.region_end),
+                .detail_origin = .execution,
                 .transcript = transcript,
                 .failure_detail = message,
                 .failure_detail_visibility = .always,
@@ -13425,7 +14739,7 @@ fn cliTestResultItemFromEval(
 
 fn appendEvalResultForRun(
     ctx: *CliCtx,
-    run: CliTestRootRun,
+    run: CliTestRootReport,
     eval_result: eval.Inspected.BoolRootEvalResult,
     results: *std.ArrayList(CliTestResultItem),
     summary: *CliTestRunSummary,
@@ -13465,7 +14779,7 @@ fn runCompiledTestRoots(
             .{
                 .store = &lowered.lir_result.store,
                 .layouts = &lowered.lir_result.layouts,
-                .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+                .erased_capture_prefix = lowered.lir_result.erased_capture_prefix,
                 .roots = bool_roots,
                 .expect_site_count = lowered.lir_result.expect_sites.items.len,
                 .static_data = .{
@@ -13480,7 +14794,7 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
-            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+            lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
             .size,
@@ -13489,12 +14803,12 @@ fn runCompiledTestRoots(
             ctx.gpa,
             &lowered.lir_result.store,
             &lowered.lir_result.layouts,
-            eval.boxy_runtime.BoxyTables.fromResult(&lowered.lir_result),
+            lowered.lir_result.erased_capture_prefix,
             bool_roots,
             lowered.lir_result.expect_sites.items.len,
             .speed,
         ),
-        .interpreter => unreachable,
+        .interpreter => unreachable, // runCheckedArtifactTests calls this only in dev mode
     } catch |err| switch (ReplSession.programFailureKind(err)) {
         .out_of_memory => return error.OutOfMemory,
         .type_check, .parse, .operational => {
@@ -13505,9 +14819,9 @@ fn runCompiledTestRoots(
     defer eval_batch.deinit(ctx.gpa);
 
     for (root_runs, eval_batch.results) |run, eval_result| {
-        try appendEvalResultForRun(ctx, run, eval_result, results, summary);
+        try appendEvalResultForRun(ctx, run.report(), eval_result, results, summary);
+        try appendRootInlineExpectResults(ctx, lowered, eval_result, run.root.order, results, summary, source_modules);
     }
-    try appendInlineExpectResults(ctx, &lowered.lir_result.store, lowered.lir_result.expect_sites.items, eval_batch.expect_counts, results, summary, source_modules);
 }
 
 fn lowerPlannedTestModule(
@@ -13527,18 +14841,16 @@ fn lowerPlannedTestModule(
 fn runCheckedArtifactTests(
     ctx: *CliCtx,
     shared: *lir.CheckedPipeline.LoweredProgram,
-    planned: *const CliTestPlanModule,
+    planned: *CliTestPlanModule,
     plan_entries: []const CliTestPlanEntry,
     opt: cli_args.OptLevel,
-    specialization_strategy: base.SpecializationStrategy,
-    cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
     source_modules: *const CliTestSourceModuleMap,
+    outcome_store: ?*CacheManager,
 ) (Allocator.Error || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!CliTestRunSummary {
     const module = planned.module;
-    const artifact = planned.artifact;
     var lowered_module = try lowerPlannedTestModule(ctx, shared, 0, planned, plan_entries);
     defer lowered_module.deinit(ctx.gpa);
 
@@ -13553,17 +14865,19 @@ fn runCheckedArtifactTests(
     switch (mode) {
         .interpreter => try runInterpreterTestRoots(ctx, lowered_module.lowered, lowered_module.root_runs, &results, &summary, source_modules),
         .dev => try runCompiledTestRoots(ctx, mode, lowered_module.lowered, lowered_module.root_runs, &results, &summary, dev_timing, max_workers, source_modules),
-        .llvm_size, .llvm_speed => unreachable,
+        .llvm_size, .llvm_speed => unreachable, // rocTest sends LLVM modes to runCompiledTestPlan
     }
     summary.modules_with_tests = 1;
 
-    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, opt, results.items);
+    const merged = try completePlannedModuleResults(ctx, outcome_store, planned, results.items, source_modules);
+    results.clearRetainingCapacity();
+    errdefer deinitCliTestResultItems(ctx.gpa, merged);
+    summary = summarizeTestResults(merged);
 
     try module_results.append(ctx.gpa, .{
-        .env = module.semantic.env,
+        .env = &module.semantic.env.common,
         .path = module.path,
-        .results = try ctx.gpa.dupe(CliTestResultItem, results.items),
-        .cached = false,
+        .results = merged,
     });
     results.deinit(ctx.gpa);
 
@@ -13589,6 +14903,7 @@ fn runCompiledLoweredTestModulesOnce(
     max_workers: ?usize,
     live_output: ?*CliOptimizedLiveTestOutput,
     source_modules: *const CliTestSourceModuleMap,
+    native_options: ?eval.Inspected.DevTestOptions,
 ) ReportRenderError!void {
     if (lowered_modules.len == 0) return;
 
@@ -13621,7 +14936,7 @@ fn runCompiledLoweredTestModulesOnce(
         try bool_modules.append(ctx.gpa, .{
             .store = &lowered_module.lowered.lir_result.store,
             .layouts = &lowered_module.lowered.lir_result.layouts,
-            .tables = eval.boxy_runtime.BoxyTables.fromResult(&lowered_module.lowered.lir_result),
+            .erased_capture_prefix = lowered_module.lowered.lir_result.erased_capture_prefix,
             .roots = bool_roots,
             .expect_site_count = lowered_module.lowered.lir_result.expect_sites.items.len,
             .static_data = .{
@@ -13647,7 +14962,7 @@ fn runCompiledLoweredTestModulesOnce(
     defer if (live_output) |live| live.clearRuns();
 
     var eval_batch = (switch (mode) {
-        .dev => eval.Inspected.devEvalSharedBoolRootModules(ctx.gpa, bool_modules.items, dev_timing, max_workers),
+        .dev => eval.Inspected.devEvalSharedBoolRootModulesWithOptions(ctx.gpa, bool_modules.items, dev_timing, max_workers, native_options),
         .llvm_size, .llvm_speed => eval.Inspected.llvmEvalSharedBoolRootModules(
             ctx.gpa,
             bool_modules.items,
@@ -13656,7 +14971,7 @@ fn runCompiledLoweredTestModulesOnce(
             completion_callback,
             event_callback,
         ),
-        .interpreter => unreachable,
+        .interpreter => unreachable, // runCompiledTestPlan is the only caller, and rocTest gives it only compiled modes
     }) catch |err| switch (ReplSession.programFailureKind(err)) {
         .out_of_memory => return error.OutOfMemory,
         .type_check, .parse, .operational => {
@@ -13692,7 +15007,6 @@ fn runCompiledLoweredTestModulesOnce(
     if (live_output) |live| try live.checkError();
 
     var eval_index: usize = 0;
-    var expect_site_base: usize = 0;
     for (lowered_modules) |*lowered_module| {
         var results = std.ArrayList(CliTestResultItem).empty;
         errdefer {
@@ -13703,27 +15017,93 @@ fn runCompiledLoweredTestModulesOnce(
         for (lowered_module.root_runs) |run| {
             try appendEvalResultForRun(
                 ctx,
-                run,
+                run.report(),
                 eval_batch.results[eval_index],
                 &results,
                 &summaries[lowered_module.planned_index],
             );
+            try appendRootInlineExpectResults(ctx, lowered_module.lowered, eval_batch.results[eval_index], run.root.order, &results, &summaries[lowered_module.planned_index], source_modules);
             eval_index += 1;
         }
-        const sites = lowered_module.lowered.lir_result.expect_sites.items;
-        try appendInlineExpectResults(
-            ctx,
-            &lowered_module.lowered.lir_result.store,
-            sites,
-            eval_batch.expect_counts[expect_site_base..][0..sites.len],
-            &results,
-            &summaries[lowered_module.planned_index],
-            source_modules,
-        );
-        expect_site_base += sites.len;
         summaries[lowered_module.planned_index].modules_with_tests = 1;
         fresh_results[lowered_module.planned_index] = try results.toOwnedSlice(ctx.gpa);
     }
+}
+
+fn cliInlineResultLessThan(_: void, a: CliTestResultItem, b: CliTestResultItem) bool {
+    const names = std.mem.order(u8, a.source_name, b.source_name);
+    if (names != .eq) return names == .lt;
+    if (a.region.start.offset != b.region.start.offset) return a.region.start.offset < b.region.start.offset;
+    return a.region.end.offset < b.region.end.offset;
+}
+
+/// Each root's own result item in plan order, a reused outcome's from the
+/// module's outcome file and a run root's from `fresh`, then every inline
+/// observation `fresh` holds.
+fn mergeCliRootOutcomes(ctx: *CliCtx, planned: *CliTestPlanModule, fresh: []const CliTestResultItem, source_modules: *const CliTestSourceModuleMap) Allocator.Error![]CliTestResultItem {
+    const allocator = ctx.gpa;
+    var merged = std.ArrayList(CliTestResultItem).empty;
+    var reused_inline = std.ArrayList(CliTestResultItem).empty;
+    defer reused_inline.deinit(allocator);
+    // Items reused from the outcome file own their payloads until they are
+    // handed over in the merged slice; `fresh` items are the caller's.
+    var reused_own_end: usize = 0;
+    errdefer {
+        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != null) deinitCliTestResultItemPayload(allocator, item);
+        deinitCliTestResultItemPayloads(allocator, reused_inline.items);
+        merged.deinit(allocator);
+    }
+    var fresh_index: usize = 0;
+    for (planned.test_roots, planned.reused) |root, reused| {
+        if (reused) |index| {
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &merged, &reused_inline);
+            reused_own_end = merged.items.len;
+            continue;
+        }
+        const item = item: {
+            while (fresh_index < fresh.len and fresh[fresh_index].inline_expect) : (fresh_index += 1) {}
+            if (fresh_index == fresh.len) base.invariant("fresh root outcome is missing", .{});
+            const result = fresh[fresh_index];
+            fresh_index += 1;
+            break :item result;
+        };
+        if (item.inline_expect or item.order != root.order) base.invariant("outcome belongs to a different checked root", .{});
+        try merged.append(allocator, item);
+        reused_own_end = merged.items.len;
+    }
+    for (fresh) |item| if (item.inline_expect) {
+        try merged.append(allocator, item);
+    };
+    try merged.appendSlice(allocator, reused_inline.items);
+    reused_inline.clearRetainingCapacity();
+    const inline_start = planned.test_roots.len;
+    std.mem.sort(CliTestResultItem, merged.items[inline_start..], {}, cliInlineResultLessThan);
+    const owned = try merged.toOwnedSlice(allocator);
+    return owned;
+}
+
+/// A planned module's complete results: its reused outcomes merged with
+/// what this run produced (`mergeCliRootOutcomes`), republished to its
+/// outcome file when `outcome_store` caches outcomes.
+fn completePlannedModuleResults(
+    ctx: *CliCtx,
+    outcome_store: ?*CacheManager,
+    planned: *CliTestPlanModule,
+    fresh: []const CliTestResultItem,
+    source_modules: *const CliTestSourceModuleMap,
+) Allocator.Error![]CliTestResultItem {
+    const results = try mergeCliRootOutcomes(ctx, planned, fresh, source_modules);
+    errdefer {
+        // Fresh payloads remain the caller's until completion succeeds.
+        // Replayed root payloads were allocated by mergeCliRootOutcomes;
+        // inline replay items only borrow current source-module data.
+        for (results[0..planned.test_roots.len], planned.reused) |item, reused| {
+            if (reused != null) deinitCliTestResultItemPayload(ctx.gpa, item);
+        }
+        ctx.gpa.free(results);
+    }
+    if (outcome_store) |manager| try publishCliTestOutcomes(ctx, manager, planned, results, source_modules);
+    return results;
 }
 
 fn appendPlannedModuleResult(
@@ -13731,21 +15111,201 @@ fn appendPlannedModuleResult(
     module_results: *std.ArrayList(CliModuleTestResult),
     planned: *const CliTestPlanModule,
     results: []CliTestResultItem,
-    cached: bool,
 ) Allocator.Error!void {
     var results_owned_by_module = false;
     errdefer if (!results_owned_by_module) deinitCliTestResultItems(ctx.gpa, results);
     try module_results.append(ctx.gpa, .{
-        .env = planned.module.semantic.env,
+        .env = &planned.module.semantic.env.common,
         .path = planned.module.path,
         .results = results,
-        .cached = cached,
     });
     results_owned_by_module = true;
 }
 
+const CliOutcomeOwnershipTest = enum { replay, publication, completion };
+
+/// Exercise the real ownership boundaries, including serialization, without
+/// filesystem publication. The source plan is borrowed across failure sweeps;
+/// all result payloads and publication scratch use the injected allocator.
+fn exerciseCliOutcomeOwnership(
+    allocator: Allocator,
+    planned: *CliTestPlanModule,
+    sources: *const CliTestSourceModuleMap,
+    operation: CliOutcomeOwnershipTest,
+) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const testing = std.testing;
+    var io_state = Io.create(testing.io);
+    var ctx = CliCtx.init(allocator, testing.allocator, &io_state, .test_cmd);
+    ctx.initIo();
+    defer ctx.deinit();
+    // publishCliTestOutcomes still constructs and encodes every outcome.
+    // Disabling the store only prevents the final filesystem write.
+    var manager = CacheManager.init(allocator, .{ .enabled = false }, ctx.coreCtx());
+    defer manager.deinit();
+
+    const replay_index: usize = if (planned.reused[0] != null) 0 else 1;
+    const fresh_index = 1 - replay_index;
+    if (operation == .replay) {
+        var own: std.ArrayList(CliTestResultItem) = .empty;
+        defer {
+            deinitCliTestResultItemPayloads(allocator, own.items);
+            own.deinit(allocator);
+        }
+        var inline_expects: std.ArrayList(CliTestResultItem) = .empty;
+        defer inline_expects.deinit(allocator);
+        appendReusedCliTestOutcome(&ctx, planned, planned.test_roots[replay_index], planned.outcome_file.?.outcomes[0], sources, &own, &inline_expects) catch |err| {
+            try testing.expectEqual(@as(usize, 0), own.items.len);
+            try testing.expectEqual(@as(usize, 0), inline_expects.items.len);
+            return err;
+        };
+        try testing.expectEqual(@as(usize, 1), own.items.len);
+        try testing.expectEqual(@as(usize, 1), inline_expects.items.len);
+        try testing.expectEqualStrings("replayed detail", own.items[0].failure_detail.?);
+        try testing.expectEqualStrings("replayed stderr", own.items[0].transcript[1].payload);
+        try testing.expectEqual(planned.test_roots[replay_index].order, inline_expects.items[0].owner_order.?);
+        try testing.expect(inline_expects.items[0].source_env == planned.module.semantic.env);
+        return;
+    }
+
+    // Fresh payloads are independently owned before completion. On error the
+    // caller must still be able to read and free them; on success the returned
+    // array owns both these payloads and the newly allocated replay payloads.
+    const fresh_events = try allocator.alloc(CliTestTranscriptEvent, 1);
+    var fresh_owns_payloads = true;
+    defer if (fresh_owns_payloads) allocator.free(fresh_events);
+    const fresh_payload = try allocator.dupe(u8, "fresh stdout");
+    defer if (fresh_owns_payloads) allocator.free(fresh_payload);
+    fresh_events[0] = .{ .stream = .stdout, .kind = .dbg, .payload = fresh_payload };
+    const fresh_detail = try allocator.dupe(u8, "fresh detail");
+    defer if (fresh_owns_payloads) allocator.free(fresh_detail);
+    const fresh_order = planned.test_roots[fresh_index].order;
+    const fresh = [_]CliTestResultItem{
+        .{
+            .result = .failed,
+            .order = fresh_order,
+            .region = testRootRegion(planned.module.semantic.env, planned.test_roots[fresh_index].source),
+            .detail_origin = .execution,
+            .transcript = fresh_events,
+            .failure_detail = fresh_detail,
+        },
+        .{
+            .result = .failed,
+            .order = 10,
+            .region = base.Region.from_raw_offsets(7, 9),
+            .owner_order = fresh_order,
+            .inline_expect = true,
+            .inline_passed = 2,
+            .inline_failed = 1,
+            .source_env = planned.module.semantic.env,
+            .source_name = "Ownership",
+            .failure_detail = null,
+        },
+    };
+    const results = completePlannedModuleResults(&ctx, if (operation == .completion) &manager else null, planned, &fresh, sources) catch |err| {
+        try testing.expectEqualStrings("fresh stdout", fresh_events[0].payload);
+        try testing.expectEqualStrings("fresh detail", fresh_detail);
+        return err;
+    };
+    fresh_owns_payloads = false;
+    defer deinitCliTestResultItems(allocator, results);
+    try testing.expectEqual(@as(usize, 4), results.len);
+    try testing.expect(results[fresh_index].transcript.ptr == fresh_events.ptr);
+    try testing.expect(results[fresh_index].failure_detail.?.ptr == fresh_detail.ptr);
+    try testing.expectEqualStrings("replayed detail", results[replay_index].failure_detail.?);
+    try testing.expectEqualStrings("replayed stdout", results[replay_index].transcript[0].payload);
+    try testing.expectEqualStrings("replayed stderr", results[replay_index].transcript[1].payload);
+    try testing.expect(results[2].inline_expect and results[3].inline_expect);
+    try testing.expect(results[2].owner_order != results[3].owner_order);
+    if (operation == .publication) try publishCliTestOutcomes(&ctx, &manager, planned, results, sources);
+}
+
+fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult, SwallowedOutOfMemoryError, NondeterministicMemoryUsage, MemoryLeakDetected })!void {
+    const allocator = std.testing.allocator;
+    const source = "expect {}\nexpect {}\n";
+    var env = try ModuleEnv.init(allocator, source);
+    defer env.deinit();
+    try env.initCIRFields("Ownership");
+    // Only reporting consumes this CIR fixture: no checked types or lowered
+    // artifact are read by the helpers under test.
+    const body = try env.store.addExpr(.{ .e_empty_record = .{} }, base.Region.from_raw_offsets(7, 9));
+    var roots: [2]check.CheckedArtifact.RootRequest = undefined;
+    for (&roots, 0..) |*root, index| {
+        const start: u32 = @intCast(index * 10);
+        const statement = try env.store.addStatement(.{ .s_expect = .{ .body = body } }, base.Region.from_raw_offsets(start, start + 9));
+        root.* = .{
+            .order = @intCast(index),
+            .module_idx = 0,
+            .kind = .test_expect,
+            .source = .{ .statement = statement },
+            .checked_type = undefined,
+            .abi = .test_expect,
+            .exposure = .private,
+        };
+    }
+    const identity: [32]u8 = @splat(1);
+    var sources: CliTestSourceModuleMap = .{};
+    defer sources.deinit(allocator);
+    const workspace = compile.watch_inputs.hashBytes(env.qualifiedModuleName());
+    try sources.modules.put(allocator, workspace, .{ .env = &env, .common = &env.common, .path = "Ownership.roc", .name = "Ownership", .identity = identity });
+    try sources.bind(allocator, identity, workspace);
+    var outcomes = [_]test_outcome_file.Outcome{.{
+        .order = 0,
+        .passed = false,
+        .region = null,
+        .detail = .{ .message = "replayed detail" },
+        .events = &.{
+            .{ .stream = 0, .kind = 0, .payload = "replayed stdout" },
+            .{ .stream = 1, .kind = 2, .payload = "replayed stderr" },
+        },
+        .inline_expects = &.{.{ .module = identity, .region_start = 7, .region_end = 9, .passed = 3, .failed = 1 }},
+    }};
+    var indices = [_]u32{ 0, 1 };
+    var reused = [_]?u32{ 0, null };
+    var planned: CliTestPlanModule = .{
+        .module_index = 0,
+        .module = .{
+            .name = "Ownership",
+            .path = "Ownership.roc",
+            .semantic = .{ .env = &env, .checked_artifact = null },
+            .source = source,
+            .package_name = "",
+            .package_origin = .root,
+            .is_platform_main = false,
+            .is_app = false,
+            .is_platform_sibling = false,
+            .depth = 0,
+        },
+        .artifact = undefined,
+        .test_roots = &roots,
+        .result_indices = &indices,
+        .reused = &reused,
+        .outcome_file = .{ .key = identity, .outcomes = &outcomes, .bytes = null, .bytes_allocator = allocator },
+    };
+    var deterministic = base.DeterministicAllocator.init(allocator);
+    // Both first-entry constructors must be safe: replay duplicates borrowed
+    // arrays, while fresh publication constructs them from result items.
+    for (0..2) |replay_index| {
+        reused = .{ null, null };
+        reused[replay_index] = 0;
+        outcomes[0].order = @intCast(replay_index);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), exerciseCliOutcomeOwnership, .{ &planned, &sources, operation });
+    }
+}
+
+test "test outcome ownership replay transfers payloads atomically under OOM" {
+    try checkCliOutcomeOwnership(.replay);
+}
+
+test "test outcome ownership publication cleans constructed outcomes under OOM" {
+    try checkCliOutcomeOwnership(.publication);
+}
+
+test "test outcome ownership mixed completion preserves fresh payloads under OOM" {
+    try checkCliOutcomeOwnership(.completion);
+}
+
 const InlineExpectResultKey = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     region_start: u32,
     region_end: u32,
 };
@@ -13764,7 +15324,7 @@ fn coalesceInlineExpectResults(
     for (module_results) |module_result| {
         for (@constCast(module_result.results)) |*result| {
             if (!result.inline_expect) continue;
-            const source_env = result.source_env orelse {
+            const source_env = result.source_common orelse if (result.source_env) |env| &env.common else {
                 base.invariant("inline test result has no declaring module", .{});
             };
             const key: InlineExpectResultKey = .{
@@ -13801,25 +15361,54 @@ fn coalesceInlineExpectResults(
     }
 }
 
+/// Publish every reused root's own result to the live output, which prints
+/// it in its place once the entries before it are done.
+fn publishReusedCliTestOutcomesLive(
+    ctx: *CliCtx,
+    live: *CliOptimizedLiveTestOutput,
+    test_plan: *const CliTestPlan,
+    source_modules: *const CliTestSourceModuleMap,
+) ReportRenderError!void {
+    var own: std.ArrayList(CliTestResultItem) = .empty;
+    defer {
+        deinitCliTestResultItemPayloads(ctx.gpa, own.items);
+        own.deinit(ctx.gpa);
+    }
+    var inline_expects: std.ArrayList(CliTestResultItem) = .empty;
+    defer inline_expects.deinit(ctx.gpa);
+    for (test_plan.modules) |*planned| {
+        for (planned.test_roots, planned.reused, planned.result_indices) |root, reused, result_index| {
+            const index = reused orelse continue;
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &own, &inline_expects);
+            live.publishCopiedEntry(result_index, planned.module.semantic.env, planned.module.path, own.items[own.items.len - 1]);
+        }
+    }
+    try live.checkError();
+}
+
 fn runCompiledTestPlan(
     ctx: *CliCtx,
     shared: *lir.CheckedPipeline.LoweredProgram,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
-    specialization_strategy: base.SpecializationStrategy,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
     max_workers: ?usize,
-    cache_manager: ?*CacheManager,
     module_results: *std.ArrayList(CliModuleTestResult),
     total: *CliTestRunSummary,
     live_output: ?*CliOptimizedLiveTestOutput,
     source_modules: *const CliTestSourceModuleMap,
+    native_options: ?eval.Inspected.DevTestOptions,
+    outcome_store: ?*CacheManager,
 ) (ReportRenderError || lir.CheckedPipeline.HostedBindingError || error{NoHomeDirectory})!void {
     const mode = cliTestExecutionMode(opt);
     switch (mode) {
         .llvm_size, .llvm_speed, .dev => {},
-        .interpreter => unreachable,
+        .interpreter => unreachable, // rocTest sends interpreter mode to runCheckedArtifactTests
     }
+
+    // A reused outcome is complete before anything runs, so the live output
+    // prints it in its place as soon as the entries before it are done.
+    if (live_output) |live| try publishReusedCliTestOutcomesLive(ctx, live, test_plan, source_modules);
 
     const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
     defer ctx.gpa.free(summaries);
@@ -13842,53 +15431,589 @@ fn runCompiledTestPlan(
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
-        if (planned.cached_results != null) {
-            summaries[planned_index] = planned.cached_summary;
-            if (live_output) |live| {
-                var root_index: u32 = 0;
-                for (planned.cached_results.?) |result| {
-                    if (result.inline_expect) continue;
-                    live.publishCopiedEntry(
-                        @intCast(planned.first_entry_index + root_index),
-                        planned.module.semantic.env,
-                        planned.module.path,
-                        result,
-                    );
-                    root_index += 1;
-                }
-                try live.checkError();
-            }
-            continue;
-        }
-
         try lowered_modules.append(
             ctx.gpa,
             try lowerPlannedTestModule(ctx, shared, planned_index, planned, test_plan.entries),
         );
     }
 
-    try runCompiledLoweredTestModulesOnce(ctx, mode, dev_timing, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules);
-
-    for (lowered_modules.items) |*lowered_module| {
-        const planned = &test_plan.modules[lowered_module.planned_index];
-        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?);
-    }
+    try runCompiledLoweredTestModulesOnce(ctx, mode, dev_timing, lowered_modules.items, fresh_results, summaries, max_workers, live_output, source_modules, native_options);
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
-        const cached = planned.cached_results != null;
-        const results = if (cached) planned.releaseCachedResults() else fresh: {
-            const owned = fresh_results[planned_index].?;
-            fresh_results[planned_index] = null;
-            break :fresh owned;
-        };
-        try appendPlannedModuleResult(ctx, module_results, planned, results, cached);
-
-        const summary = summaries[planned_index];
+        const fresh = fresh_results[planned_index] orelse &.{};
+        const results = try completePlannedModuleResults(ctx, outcome_store, planned, fresh, source_modules);
+        if (fresh_results[planned_index]) |items| ctx.gpa.free(items);
+        fresh_results[planned_index] = null;
+        try appendPlannedModuleResult(ctx, module_results, planned, results);
+        const summary = summarizeTestResults(results);
         total.passed += summary.passed;
         total.failed += summary.failed;
         total.compiler_errors += summary.compiler_errors;
         total.modules_with_tests += summary.modules_with_tests;
-        total.cached_modules += summary.cached_modules;
+    }
+}
+
+/// Whether `roc test` runs its roots from test units' images loaded into
+/// its own process, rather than from one program lowered for the execution
+/// subset: a dev test under `.boxy` with a cache on a Linux x86_64
+/// compiler, whose own target's units carry images (design.md "Unit-Image
+/// Test Execution"). Callers guard with `unit_image_tests_supported` too.
+/// A default app keeps the shared program, as it does in a dev run: the
+/// hosted functions its code calls belong to its synthetic platform, which
+/// no unit of the app has in view.
+fn unitImageTestApplies(opt: cli_args.OptLevel, no_cache: bool, strategy: base.SpecializationStrategy, root: *const check.CheckedArtifact.CheckedModuleArtifact) bool {
+    if (root.module_identity.kind == .default_app) return false;
+    return unitImageRunApplies(opt, no_cache, strategy, RocTarget.detectNative());
+}
+
+/// Whether this compiler can load test units' images into its own process.
+const unit_image_tests_supported = backend.dev.UnitImageLoader != void;
+
+/// A test root's wrapper in a test unit, by its module and its index among
+/// the module's test roots.
+const UnitTestRootKey = struct {
+    module: [32]u8,
+    root_index: u32,
+};
+
+/// One test unit's image, with what its cache entry files beside it.
+const UnitTestImage = struct {
+    bytes: []align(backend.dev.UnitImage.alignment.toByteUnits()) const u8,
+    tests: BoxyUnitTests,
+    /// Hosted symbols its code calls.
+    hosted_symbols: []const []const u8,
+};
+
+/// A `roc test` program as test units: built or restored, then loaded into
+/// the compiler's own process, where their wrappers run the test roots.
+const UnitImageTestProgram = struct {
+    gpa: Allocator,
+    tables: RunUnitTables,
+    library: ?BoxyLibraryObjects = null,
+    /// The root unit's image, when the root pairs with a platform. Owned.
+    root_image: ?[]align(backend.dev.UnitImage.alignment.toByteUnits()) u8 = null,
+    loaded: std.ArrayList(backend.dev.UnitImageLoader.Loaded) = .empty,
+    /// What the loaded images export, by name: a procedure two units define
+    /// binds to the first image loaded.
+    exports: std.StringHashMapUnmanaged(backend.dev.UnitImageLoader.Binding) = .empty,
+    /// Each hosted symbol the units call, bound to a stub that crashes as
+    /// a hosted call in an in-process test does.
+    hosted: std.StringHashMapUnmanaged(usize) = .empty,
+    hosted_stubs: ?backend.dev.ExecutableMemory = null,
+    /// Every loaded image's expect sites, in load order: the program-wide
+    /// site table.
+    sites: std.ArrayList(compile.boxy_object_cache.ExpectSiteRecord) = .empty,
+    wrappers: std.AutoHashMapUnmanaged(UnitTestRootKey, eval.Inspected.UnitImageBoolRootEntryFn) = .empty,
+
+    fn deinit(self: *UnitImageTestProgram) void {
+        for (self.loaded.items) |*image| image.unload();
+        self.loaded.deinit(self.gpa);
+        self.exports.deinit(self.gpa);
+        self.hosted.deinit(self.gpa);
+        if (self.hosted_stubs) |*stubs| stubs.deinit();
+        self.sites.deinit(self.gpa);
+        self.wrappers.deinit(self.gpa);
+        if (self.library) |library| library.deinit(self.gpa);
+        if (self.root_image) |image| self.gpa.free(image);
+        self.tables.deinit();
+    }
+
+    /// Binds one image's imports while it loads.
+    const LoadContext = struct {
+        program: *UnitImageTestProgram,
+        site_base: u32,
+
+        fn resolve(context: *anyopaque, name: []const u8) ?backend.dev.UnitImageLoader.Binding {
+            const self: *LoadContext = @ptrCast(@alignCast(context));
+            if (std.mem.eql(u8, name, backend.dev.expect_site_base_symbol)) return .{ .address = self.site_base, .function = false };
+            // A builtin binds to its implementation, as in-process test
+            // code calls it.
+            if (builtins_registry.BuiltinFn.fromSymbolName(name)) |builtin_fn| return .{ .address = builtin_fn.wrapperAddress(), .function = true };
+            if (backend.dev.HostSplice.hostFunction(name)) |address| return .{ .address = address, .function = true };
+            if (self.program.exports.get(name)) |binding| return binding;
+            if (self.program.hosted.get(name)) |address| return .{ .address = address, .function = true };
+            return null;
+        }
+    };
+
+    /// Load `image`, whose sites start at the next program-wide site id.
+    fn load(self: *UnitImageTestProgram, image: UnitTestImage) CliMainError!void {
+        const view = backend.dev.UnitImage.View.init(image.bytes) catch |err| base.invariant("roc test invariant violated: an admitted test unit image does not read: {s}", .{@errorName(err)});
+        var context: LoadContext = .{ .program = self, .site_base = @intCast(self.sites.items.len) };
+        var diagnostic: backend.dev.UnitImageLoader.Diagnostic = .{};
+        try self.loaded.ensureUnusedCapacity(self.gpa, 1);
+        var loaded = backend.dev.UnitImageLoader.load(self.gpa, view, .{ .context = &context, .resolve = LoadContext.resolve }, &diagnostic) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UndefinedImport => base.invariant("roc test invariant violated: a test unit's image imports {s}, which nothing loaded defines", .{diagnostic.name}),
+            error.SiteOutOfRange => base.invariant("roc test invariant violated: a test unit's image has a reference to '{s}' out of its field's reach", .{diagnostic.name}),
+        };
+        errdefer loaded.unload();
+        (backend.dev.CodeLocations{ .bytes = image.tests.code_locations }).dumpAllocationMap(@intFromPtr(loaded.text().ptr));
+        const symbols = view.symbols();
+        try self.exports.ensureUnusedCapacity(self.gpa, @intCast(view.exports().len));
+        for (view.exports()) |index| {
+            const symbol = symbols[index];
+            const entry = self.exports.getOrPutAssumeCapacity(view.name(symbol.name));
+            if (entry.found_existing) continue;
+            entry.value_ptr.* = .{ .address = loaded.symbolAddress(symbol), .function = symbol.type == @backingInt(backend.dev.UnitImage.SymbolType.func) };
+        }
+        try self.wrappers.ensureUnusedCapacity(self.gpa, @intCast(image.tests.test_roots.len));
+        for (image.tests.test_roots) |root| {
+            if (root.symbol >= symbols.len) base.invariant("roc test invariant violated: a test unit's wrapper names symbol {d} of {d}", .{ root.symbol, symbols.len });
+            self.wrappers.putAssumeCapacity(.{ .module = root.module, .root_index = root.root_index }, @ptrFromInt(loaded.symbolAddress(symbols[root.symbol])));
+        }
+        try self.sites.appendSlice(self.gpa, image.tests.expect_sites);
+        self.loaded.appendAssumeCapacity(loaded);
+    }
+
+    /// Bind every one of `names` the units call to a stub that reports the
+    /// call as a crash, as a hosted call in an in-process test does. The
+    /// stub calls `roc_crashed(message, length)` in the host's own calling
+    /// convention and traps after it.
+    fn bindHostedStubs(self: *UnitImageTestProgram, arena: Allocator, names: []const []const u8) CliMainError!void {
+        if (names.len == 0) return;
+        const stub_size: usize = if (builtin.cpu.arch == .aarch64) 15 * 4 else 4 + 10 + 10 + 10 + 2 + 2;
+        const crashed = @import("builtins").in_process_host.Symbol.roc_crashed.address();
+        const code = try arena.alloc(u8, names.len * stub_size);
+        for (names, 0..) |name, index| {
+            const message = try std.fmt.allocPrint(arena, "hosted function `{s}` is not available while evaluating at compile time", .{name});
+            const stub = code[index * stub_size ..][0..stub_size];
+            if (builtin.cpu.arch == .aarch64) {
+                // movz/movk x0, message; movz/movk x1, length; movz/movk
+                // x16, crashed; blr x16; brk #0
+                var word: usize = 0;
+                for ([_]u64{ @intFromPtr(message.ptr), message.len, crashed }, [_]u32{ 0, 1, 16 }) |value, register| {
+                    for (0..4) |quarter| {
+                        const imm: u32 = @truncate(value >> @intCast(quarter * 16));
+                        const opcode: u32 = if (quarter == 0) 0xd280_0000 else 0xf280_0000;
+                        std.mem.writeInt(u32, stub[word * 4 ..][0..4], opcode | (@as(u32, @intCast(quarter)) << 21) | (imm << 5) | register, .little);
+                        word += 1;
+                    }
+                }
+                std.mem.writeInt(u32, stub[word * 4 ..][0..4], 0xd63f_0200, .little);
+                std.mem.writeInt(u32, stub[(word + 1) * 4 ..][0..4], 0xd420_0000, .little);
+                continue;
+            }
+            // sub rsp, 8 (or 40 for the Windows shadow space); mov (rdi or
+            // rcx), message; mov (rsi or rdx), length; mov rax, crashed;
+            // call rax; ud2
+            const win64 = builtin.os.tag == .windows;
+            stub[0..4].* = .{ 0x48, 0x83, 0xec, if (win64) 0x28 else 0x08 };
+            stub[4..6].* = .{ 0x48, if (win64) 0xb9 else 0xbf };
+            std.mem.writeInt(u64, stub[6..14], @intFromPtr(message.ptr), .little);
+            stub[14..16].* = .{ 0x48, if (win64) 0xba else 0xbe };
+            std.mem.writeInt(u64, stub[16..24], message.len, .little);
+            stub[24..26].* = .{ 0x48, 0xb8 };
+            std.mem.writeInt(u64, stub[26..34], crashed, .little);
+            stub[34..36].* = .{ 0xff, 0xd0 };
+            stub[36..38].* = .{ 0x0f, 0x0b };
+        }
+        self.hosted_stubs = backend.dev.ExecutableMemory.init(code) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.OutOfMemory,
+        };
+        const start = @intFromPtr(self.hosted_stubs.?.codePtr());
+        try self.hosted.ensureUnusedCapacity(self.gpa, @intCast(names.len));
+        for (names, 0..) |name, index| self.hosted.putAssumeCapacity(name, start + index * stub_size);
+    }
+};
+
+/// Build or restore `roc test`'s test units and load them: a test unit
+/// per module the planned roots need (design.md "Unit-Image Test
+/// Execution"), each restored from the per-module cache or lowered and
+/// filed there, and, for a root that pairs with a platform, a root unit of
+/// the root and its paired platform modules.
+fn prepareUnitImageTests(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    test_plan: *const CliTestPlan,
+) CliMainError!UnitImageTestProgram {
+    if (comptime !unit_image_tests_supported) unreachable; // unitImageTestApplies holds only on a compiler that loads unit images
+    const Artifact = check.CheckedArtifact.CheckedModuleArtifact;
+    const target = RocTarget.detectNative();
+    var program: UnitImageTestProgram = .{ .gpa = ctx.gpa, .tables = RunUnitTables.init(ctx) };
+    errdefer program.deinit();
+    program.tables.digests = try build_env.boxyLinkDigests();
+    const cache_manager = build_env.cache_manager orelse base.invariant("roc test invariant violated: a test run from unit images has no cache manager", .{});
+    const root_artifact = build_env.rootModuleCheckedArtifact() orelse base.invariant("roc test invariant violated: a planned test program has no root module", .{});
+
+    // As in a composed run, a program with a platform is rooted at its
+    // executable root, the platform module paired with the app, whose
+    // hosted section binds every hosted function; the app and every other
+    // module without platform requirements is a library unit, and the
+    // modules with platform requirements lower together in a root unit.
+    const unit_root = switch (root_artifact.module_identity.kind) {
+        .app => build_env.executableRootCheckedArtifact(),
+        .default_app => unreachable, // unitImageTestApplies keeps a default app on the shared program
+        .type_module, .package, .platform, .hosted, .module, .malformed => root_artifact,
+    };
+    const visible = try build_env.collectVisibleArtifacts(ctx.gpa, unit_root);
+    defer ctx.gpa.free(visible);
+    var paired: std.ArrayList(*const Artifact) = .empty;
+    defer paired.deinit(ctx.gpa);
+    if (unit_root.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, unit_root);
+    for (visible) |artifact| if (artifact.platform_type_inputs.requirements.len != 0) try paired.append(ctx.gpa, artifact);
+    var test_modules: std.ArrayList(*const Artifact) = .empty;
+    defer test_modules.deinit(ctx.gpa);
+    // A root unit exists only to export the paired modules' wrappers. A
+    // module whose every outcome is reused ("Test outcome files") runs no
+    // root, so nothing needs its unit; the units of the modules that do run
+    // bring their imports' units with them.
+    var paired_roots = false;
+    for (test_plan.modules) |planned| {
+        if (planned.runCount() == 0) continue;
+        if (planned.artifact.platform_type_inputs.requirements.len != 0) {
+            const is_paired = for (paired.items) |artifact| {
+                if (artifact == planned.artifact) break true;
+            } else false;
+            if (!is_paired) base.invariant("roc test invariant violated: a planned module with platform requirements pairs with no root", .{});
+            paired_roots = true;
+            continue;
+        }
+        try test_modules.append(ctx.gpa, planned.artifact);
+    }
+    // The root unit calls into its modules' imports and the app.
+    if (paired_roots) {
+        for (paired.items) |artifact| for (artifact.direct_import_module_keys) |key| {
+            const imported = program.tables.digests.artifacts.get(key.bytes) orelse continue;
+            try test_modules.append(ctx.gpa, imported);
+        };
+        if (unit_root != root_artifact) try test_modules.append(ctx.gpa, root_artifact);
+    }
+
+    const policy: BoxyUnitPolicy = .{ .opt = .dev, .no_cache = false, .synthetic_default_platform = false, .test_units = true };
+    program.library = try buildBoxyLibraryObjects(ctx, policy, build_env, reporter, unit_root, target, &program.tables.interfaces, &program.tables.digests, true, test_modules.items, "Lowering Modules");
+    const library = &program.library.?;
+
+    var root_unit: ?UnitTestImage = null;
+    if (paired_roots) root_unit = try unitTestRootImage(ctx, build_env, reporter, &program, cache_manager, unit_root, paired.items, policy, target);
+
+    reporter.begin("Unit Image Load");
+    var hosted_names: std.ArrayList([]const u8) = .empty;
+    var seen_hosted = std.StringHashMap(void).init(ctx.arena);
+    for (library.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+    if (root_unit) |unit| for (unit.hosted_symbols) |name| if (!(try seen_hosted.getOrPut(name)).found_existing) try hosted_names.append(ctx.arena, name);
+    try program.bindHostedStubs(ctx.arena, hosted_names.items);
+    // Every unit's imports are loaded before it: the builtins, then the
+    // rest after everything they import, then the root unit.
+    const order = try unitLoadOrder(ctx.gpa, library.artifacts);
+    defer ctx.gpa.free(order);
+    for (order) |index| try program.load(.{ .bytes = library.images[index], .tests = library.tests[index], .hosted_symbols = &.{} });
+    if (root_unit) |unit| try program.load(unit);
+    reporter.end();
+    reporter.recordCounters("Test units", &.{
+        .{ .name = "Images loaded", .count = program.loaded.items.len },
+        .{ .name = "Expect sites", .count = program.sites.items.len },
+        .{ .name = "Test root wrappers", .count = program.wrappers.count() },
+    });
+    return program;
+}
+
+/// The order to load `artifacts`' units in: the first (the builtins), then
+/// each other one after every one of `artifacts` it imports.
+fn unitLoadOrder(gpa: Allocator, artifacts: []const *const check.CheckedArtifact.CheckedModuleArtifact) Allocator.Error![]u32 {
+    var index_by_key = std.AutoHashMap([32]u8, u32).init(gpa);
+    defer index_by_key.deinit();
+    for (artifacts, 0..) |artifact, index| try index_by_key.put(artifact.key.bytes, @intCast(index));
+    const order = try gpa.alloc(u32, artifacts.len);
+    errdefer gpa.free(order);
+    const placed = try gpa.alloc(bool, artifacts.len);
+    defer gpa.free(placed);
+    @memset(placed, false);
+    var count: usize = 0;
+    // The builtins come first: every unit calls into them.
+    order[0] = 0;
+    placed[0] = true;
+    count = 1;
+    const Frame = struct { index: u32, next_import: usize };
+    var stack: std.ArrayList(Frame) = .empty;
+    defer stack.deinit(gpa);
+    for (1..artifacts.len) |start| {
+        if (placed[start]) continue;
+        try stack.append(gpa, .{ .index = @intCast(start), .next_import = 0 });
+        while (stack.items.len != 0) {
+            const frame = &stack.items[stack.items.len - 1];
+            const imports = artifacts[frame.index].direct_import_module_keys;
+            if (frame.next_import < imports.len) {
+                const key = imports[frame.next_import];
+                frame.next_import += 1;
+                const imported = index_by_key.get(key.bytes) orelse continue;
+                if (placed[imported]) continue;
+                // Module imports are acyclic, so an import on the stack is
+                // never met again before it is placed.
+                try stack.append(gpa, .{ .index = imported, .next_import = 0 });
+                continue;
+            }
+            if (!placed[frame.index]) {
+                placed[frame.index] = true;
+                order[count] = frame.index;
+                count += 1;
+            }
+            _ = stack.pop();
+        }
+    }
+    std.debug.assert(count == artifacts.len);
+    return order;
+}
+
+/// The root unit of a test program whose root pairs with a platform: the
+/// root and `paired`, its platform modules with requirements, lowered
+/// together with their top-level expects as roots, restored from the
+/// per-module cache or lowered, compiled and filed there.
+fn unitTestRootImage(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    reporter: *progress.Reporter,
+    program: *UnitImageTestProgram,
+    cache_manager: *CacheManager,
+    root_artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    paired: []const *const check.CheckedArtifact.CheckedModuleArtifact,
+    policy: BoxyUnitPolicy,
+    target: RocTarget,
+) CliMainError!UnitTestImage {
+    const library = &program.library.?;
+    const key = try boxyObjectKey(ctx.gpa, &program.tables.digests, root_artifact, boxyUnitPlatform(root_artifact, library.platform), policy, target, library.paired_platforms, false);
+    if (try compile.boxy_unit.restore(ctx.gpa, cache_manager, key, target, &program.tables.interfaces)) |entry| {
+        defer compile.boxy_object_cache.deinitEntry(ctx.gpa, entry);
+        const image = try ctx.gpa.alignedAlloc(u8, backend.dev.UnitImage.alignment, entry.image.len);
+        @memcpy(image, entry.image);
+        program.root_image = image;
+        const hosted = try ctx.arena.alloc([]const u8, entry.hosted_symbols.len);
+        for (entry.hosted_symbols, hosted) |symbol, *owned| owned.* = try ctx.arena.dupe(u8, symbol);
+        build_env.recordBoxyObjects(1, 0);
+        return .{
+            .bytes = image,
+            .tests = .{
+                .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, entry.expect_sites),
+                .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, entry.test_roots),
+                .code_locations = try ctx.arena.dupe(u8, entry.code_locations),
+            },
+            .hosted_symbols = hosted,
+        };
+    }
+
+    reporter.begin(loweringProgressLabel(.boxy));
+    var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    if (reporter.always) spec_timing.enableDetailedMonotypeBody();
+    var requests: std.ArrayList(check.CheckedArtifact.RootRequest) = .empty;
+    defer requests.deinit(ctx.gpa);
+    var source_modules: std.ArrayList(check.CheckedArtifact.ModuleId) = .empty;
+    defer source_modules.deinit(ctx.gpa);
+    var module_digests: std.ArrayList([32]u8) = .empty;
+    defer module_digests.deinit(ctx.gpa);
+    var root_indices: std.ArrayList(u32) = .empty;
+    defer root_indices.deinit(ctx.gpa);
+    for (paired) |artifact| {
+        const roots = try compile.boxy_unit.testRootRequests(ctx.gpa, artifact);
+        defer ctx.gpa.free(roots);
+        const digest = program.tables.digests.nameOf(artifact.key.bytes);
+        for (roots, 0..) |root, index| {
+            try requests.append(ctx.gpa, root);
+            try source_modules.append(ctx.gpa, artifact.key.digest());
+            try module_digests.append(ctx.gpa, digest);
+            try root_indices.append(ctx.gpa, @intCast(index));
+        }
+    }
+    const metadata = try compile.boxy_unit.testPlanMetadata(ctx.gpa, requests.items);
+    defer ctx.gpa.free(metadata);
+    const imported_artifacts = try build_env.collectImportedArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(imported_artifacts);
+    const relation_artifacts = try build_env.collectRelationArtifactViews(ctx.gpa, root_artifact);
+    defer ctx.gpa.free(relation_artifacts);
+    const modules: lir.CheckedPipeline.CheckedModuleSet = .{
+        .root = check.CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    };
+    var config = checkedRuntimeLoweringConfig(.linked_output, .dev, .boxy, target, false).target;
+    config.boxy_unit = .{ .imports = &program.tables.interfaces, .root = true, .names = &program.tables.digests.names, .expect_sites = true };
+    config.post_check_executor = build_env.postCheckExecutor();
+    config.timing = &spec_timing;
+    var lowered = try eval.CompileTimeFinalization.lowerBoxyRuntime(ctx.gpa, modules, .{
+        .requests = requests.items,
+        .source_modules = source_modules.items,
+        .test_plan_metadata = metadata,
+    }, config);
+    defer lowered.deinit();
+    finishPostCheckLowering(reporter, &spec_timing, .boxy);
+
+    const static_data = try compile.static_data_exports.buildStaticData(ctx.gpa, .{ .root = modules.root, .imports = imported_artifacts }, &lowered, target, .{});
+    defer compile.static_data_exports.deinitStaticData(ctx.gpa, static_data);
+    var wrappers = try compile.boxy_unit.testEntrypoints(ctx.gpa, &lowered, module_digests.items, root_indices.items);
+    defer wrappers.deinit(ctx.gpa);
+    reporter.begin(devBackendPhaseName(target));
+    var object_compiler = backend.ObjectFileCompiler.init(ctx.gpa);
+    var backend_timing = backend.ObjectFileCompiler.Timing.init(ctx.io.std_io);
+    object_compiler.timing = &backend_timing;
+    object_compiler.post_check_executor = build_env.postCheckExecutor();
+    object_compiler.erased_capture_prefix = lowered.lir_result.erased_capture_prefix;
+    object_compiler.internal_entrypoints = true;
+    object_compiler.relocatable_expect_sites = true;
+    var pieces = object_compiler.compileToPieces(
+        &lowered.lir_result.store,
+        &lowered.lir_result.layouts,
+        wrappers.entrypoints,
+        static_data,
+        lowered.lir_result.store.getProcSpecs(),
+        target,
+    ) catch |err| {
+        reporter.fail();
+        std.log.err("Native compilation failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    defer pieces.deinit();
+    reporter.endWithBreakdown(&devBackendBreakdown(backend_timing.snapshot()));
+    reporter.begin("Unit Image");
+    var code_locations: []const u8 = &.{};
+    const image = object_compiler.buildUnitImage(&pieces, target, .entrypoints, &code_locations) catch |err| {
+        reporter.fail();
+        std.log.err("Building the root unit's image failed: {}", .{err});
+        return error.NativeCompilationFailed;
+    };
+    program.root_image = image;
+    defer ctx.gpa.free(code_locations);
+    reporter.end();
+
+    const expect_sites = try compile.boxy_unit.expectSiteRecords(ctx.gpa, &lowered);
+    defer ctx.gpa.free(expect_sites);
+    const test_roots = try compile.boxy_unit.testRootRecords(ctx.gpa, image, module_digests.items, root_indices.items);
+    defer ctx.gpa.free(test_roots);
+    const hosted = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store);
+    const records = try compile.boxy_unit.exportRecords(ctx.gpa, &lowered, &program.tables.interfaces);
+    defer ctx.gpa.free(records);
+    try compile.boxy_unit.store(ctx.gpa, cache_manager, key, .{
+        .exports = records,
+        .hosted_symbols = hosted,
+        // No link composes a test program's root unit.
+        .pieces = &.{},
+        .code_locations = code_locations,
+        .image = image,
+        .expect_sites = expect_sites,
+        .test_roots = test_roots,
+    });
+    build_env.recordBoxyObjects(0, 1);
+    return .{
+        .bytes = image,
+        .tests = .{
+            .expect_sites = try ctx.arena.dupe(compile.boxy_object_cache.ExpectSiteRecord, expect_sites),
+            .test_roots = try ctx.arena.dupe(compile.boxy_object_cache.TestRootRecord, test_roots),
+            .code_locations = try ctx.arena.dupe(u8, code_locations),
+        },
+        .hosted_symbols = hosted,
+    };
+}
+
+/// Run the planned roots from `program`'s loaded test units, then merge and
+/// report every planned module's outcomes as `runCompiledTestPlan` does.
+fn runUnitImageTestPlan(
+    ctx: *CliCtx,
+    program: *const UnitImageTestProgram,
+    test_plan: *CliTestPlan,
+    opt: cli_args.OptLevel,
+    dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
+    max_workers: ?usize,
+    module_results: *std.ArrayList(CliModuleTestResult),
+    total: *CliTestRunSummary,
+    source_modules: *const CliTestSourceModuleMap,
+    outcome_store: ?*CacheManager,
+) (ReportRenderError || error{NoHomeDirectory})!void {
+    const mode = cliTestExecutionMode(opt);
+    std.debug.assert(mode == .dev);
+    const summaries = try ctx.gpa.alloc(CliTestRunSummary, test_plan.modules.len);
+    defer ctx.gpa.free(summaries);
+    @memset(summaries, .{});
+    const fresh_results = try ctx.gpa.alloc(?[]CliTestResultItem, test_plan.modules.len);
+    defer deinitFreshResultSlots(ctx.gpa, fresh_results);
+    @memset(fresh_results, null);
+
+    // The roots each module runs, in plan order, and what each reports.
+    var partitions: std.ArrayList(eval.Inspected.UnitImageBoolRootModule) = .empty;
+    defer {
+        for (partitions.items) |partition| ctx.gpa.free(partition.roots);
+        partitions.deinit(ctx.gpa);
+    }
+    var partition_modules: std.ArrayList(usize) = .empty;
+    defer partition_modules.deinit(ctx.gpa);
+    var reports: std.ArrayList(CliTestRootReport) = .empty;
+    defer reports.deinit(ctx.gpa);
+    for (test_plan.modules, 0..) |*planned, planned_index| {
+        const module = program.tables.digests.nameOf(planned.artifact.key.bytes);
+        const roots = try ctx.gpa.alloc(eval.Inspected.UnitImageBoolRoot, planned.runCount());
+        errdefer ctx.gpa.free(roots);
+        var cursor: usize = 0;
+        for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+            if (reused != null) continue;
+            const entry = program.wrappers.get(.{ .module = module, .root_index = @intCast(root_index) }) orelse
+                base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
+            roots[cursor] = .{ .entry = entry };
+            cursor += 1;
+            try reports.append(ctx.gpa, .{ .root = root, .env = planned.module.semantic.env, .region = testRootRegion(planned.module.semantic.env, root.source) });
+        }
+        try partitions.append(ctx.gpa, .{ .roots = roots });
+        try partition_modules.append(ctx.gpa, planned_index);
+    }
+
+    const site_count = program.sites.items.len;
+    if (partitions.items.len != 0) {
+        var batch_result = eval.Inspected.runUnitImageBoolRootModules(ctx.gpa, partitions.items, site_count, dev_timing, max_workers);
+        if (batch_result) |*batch| {
+            defer batch.deinit(ctx.gpa);
+            const counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, site_count);
+            defer ctx.gpa.free(counts);
+            var report_index: usize = 0;
+            for (partitions.items, partition_modules.items) |partition, planned_index| {
+                var results = std.ArrayList(CliTestResultItem).empty;
+                errdefer {
+                    deinitCliTestResultItemPayloads(ctx.gpa, results.items);
+                    results.deinit(ctx.gpa);
+                }
+                for (partition.roots) |_| {
+                    const report = reports.items[report_index];
+                    const eval_result = batch.results[report_index];
+                    report_index += 1;
+                    try appendEvalResultForRun(ctx, report, eval_result, &results, &summaries[planned_index]);
+                    if (eval_result.expect_observations.len == 0) continue;
+                    @memset(counts, .{});
+                    for (eval_result.expect_observations) |observation| counts[observation.site] = observation.counts;
+                    const start = results.items.len;
+                    try appendObservedInlineExpectResults(ctx, UnitExpectSites{ .records = program.sites.items }, counts, &results, &summaries[planned_index], source_modules);
+                    for (results.items[start..]) |*item| item.owner_order = report.root.order;
+                }
+                summaries[planned_index].modules_with_tests = 1;
+                fresh_results[planned_index] = try results.toOwnedSlice(ctx.gpa);
+            }
+        } else |err| switch (ReplSession.programFailureKind(err)) {
+            .out_of_memory => return error.OutOfMemory,
+            .type_check, .parse, .operational => {
+                var report_index: usize = 0;
+                for (partitions.items, partition_modules.items) |partition, planned_index| {
+                    var results = std.ArrayList(CliTestResultItem).empty;
+                    errdefer {
+                        deinitCliTestResultItemPayloads(ctx.gpa, results.items);
+                        results.deinit(ctx.gpa);
+                    }
+                    for (partition.roots) |_| {
+                        try appendCompilerErrorForRoot(ctx, mode, err, reports.items[report_index], &results, &summaries[planned_index]);
+                        report_index += 1;
+                    }
+                    summaries[planned_index].modules_with_tests = 1;
+                    fresh_results[planned_index] = try results.toOwnedSlice(ctx.gpa);
+                }
+            },
+        }
+    }
+
+    for (test_plan.modules, 0..) |*planned, planned_index| {
+        const fresh = fresh_results[planned_index] orelse &.{};
+        const results = try completePlannedModuleResults(ctx, outcome_store, planned, fresh, source_modules);
+        if (fresh_results[planned_index]) |items| ctx.gpa.free(items);
+        fresh_results[planned_index] = null;
+        try appendPlannedModuleResult(ctx, module_results, planned, results);
+        const summary = summarizeTestResults(results);
+        total.passed += summary.passed;
+        total.failed += summary.failed;
+        total.compiler_errors += summary.compiler_errors;
+        total.modules_with_tests += summary.modules_with_tests;
     }
 }
 
@@ -13919,7 +16044,7 @@ const CliOutputWriteError = error{WriteFailed};
 const WatchChildOutputError = std.Io.File.MultiReader.UnendingError || std.Io.Timeout.Error || std.process.Child.WaitError;
 const WatchCommandError = error{UnsupportedWatchMode} || WatchInputsPathError || WatchSpawnChildError || WatchCollectPathsError || WatchRefreshError || WatchReadInputsError || WatchChangeError || WatchChildOutputError || CliOutputWriteError;
 const ReportRenderError = Allocator.Error || CliOutputWriteError;
-const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName };
+const CheckFileWithBuildEnvPreservedError = compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || Allocator.Error || std.Io.Dir.RealPathFileAllocError || error{ ExpectedAppHeader, InvalidPackageName, NativeCompilationFailed };
 const RocTestError = lir.CheckedPipeline.HostedBindingError || WatchCommandError || compile.build.InitError || compile.build.BuildError || compile.build.CompileDiscoveredError || compile.build.BuildWithMainError || WatchWriteInputsError || ReportRenderError || std.Io.Dir.RealPathFileAllocError || SourceRefResolveError || error{ CompilationFailed, TestsFailed, NoHomeDirectory };
 const RocCheckError = WatchCommandError || CheckFileWithBuildEnvPreservedError || WatchWriteInputsError || ReportRenderError || CliError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || SourceRefResolveError || error{CheckFailed};
 
@@ -14099,7 +16224,7 @@ fn appendOwnedWatchPath(
     return true;
 }
 
-fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
+fn collectWatchPaths(ctx: *CliCtx, extra_paths: []const []const u8) WatchCollectPathsError![]const []const u8 {
     var paths = std.ArrayList([]const u8).empty;
     errdefer {
         for (paths.items) |path| ctx.gpa.free(path);
@@ -14108,15 +16233,6 @@ fn collectWatchPaths(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []const [
 
     var seen: std.StringHashMapUnmanaged(void) = .{};
     defer seen.deinit(ctx.gpa);
-
-    if (build_env) |env| {
-        const inputs = try env.collectWatchInputs();
-        defer env.freeWatchInputs(inputs);
-
-        for (inputs) |path| {
-            _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
-        }
-    }
 
     for (extra_paths) |path| {
         _ = try appendOwnedWatchPath(ctx, &paths, &seen, path);
@@ -14203,7 +16319,7 @@ fn collectWatchInputSet(ctx: *CliCtx, build_env: ?*BuildEnv, extra_paths: []cons
         return collectWatchInputSetFromCompilerInputs(ctx, inputs, extra_paths);
     }
 
-    const paths = try collectWatchPaths(ctx, null, extra_paths);
+    const paths = try collectWatchPaths(ctx, extra_paths);
     return captureWatchInputSet(ctx, paths);
 }
 
@@ -14610,19 +16726,6 @@ fn refreshWatchState(
     return changed_during_refresh;
 }
 
-fn watchStateHasByteChanges(ctx: *CliCtx, state: *WatchState) WatchChangeError!bool {
-    if (state.inputs.len == 0) return true;
-    const current = try computeWatchSnapshot(ctx, state.inputs);
-    if (!watchSnapshotChanged(state.snapshot, current)) {
-        ctx.gpa.free(current);
-        return false;
-    }
-
-    ctx.gpa.free(state.snapshot);
-    state.snapshot = current;
-    return true;
-}
-
 fn consumeDebouncedWatchChange(ctx: *CliCtx, signal: *WatchEventSignal, state: *WatchState) WatchChangeError!bool {
     if (!signal.dirty.swap(false, .seq_cst)) return false;
     std.Io.sleep(ctx.io.std_io, std.Io.Duration.fromMilliseconds(watch_debounce_ms), .awake) catch {};
@@ -14837,7 +16940,7 @@ test "watch child argv forwards every dependency replacement" {
             .check => |args| args.resolve_limits,
             .build => |args| args.resolve_limits,
             .test_cmd => |args| args.resolve_limits,
-            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
+            .run, .docs, .deps, .help, .problem, .fmt, .bundle, .unbundle, .repl, .glue, .version, .bump, .install, .loc, .experimental_lsp, .licenses => return error.TestUnexpectedResult,
         };
         try std.testing.expectEqual(@as(usize, 2), limits.replace_deps.len);
         try std.testing.expectEqualStrings(url, limits.replace_deps.slice()[0].old);
@@ -14994,7 +17097,16 @@ fn runWatchCommand(ctx: *CliCtx, arg0: []const u8, command: WatchCommand) WatchC
     }
 }
 
-fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestError!void {
+fn printCliTestWork(ctx: *CliCtx) void {
+    if (base.dev_diagnostics.isSet(.test_command_work)) {
+        inline for (@typeInfo(base.dev_diagnostics.TestWork).@"enum".field_names) |field| {
+            ctx.io.stderr().print("test-work {s}={d}\n", .{ field, base.dev_diagnostics.testWorkCount(@field(base.dev_diagnostics.TestWork, field)) }) catch {};
+        }
+    }
+}
+
+fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainError!void {
+    defer printCliTestWork(ctx);
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -15032,6 +17144,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
+        .specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy),
         .root_source_url = args.root_source_url,
         .main_source_url = args.main_source_url,
         // `roc test` never links a program, so it publishes no executable
@@ -15082,12 +17195,19 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var source_modules = CliTestSourceModuleMap{};
     defer source_modules.deinit(ctx.gpa);
     for (modules) |module| {
+        // Failed checking produces diagnostics, but no executable report sites.
+        const artifact = module.semantic.checked_artifact orelse continue;
         const qualified_name = module.semantic.env.qualifiedModuleName();
-        const entry = try source_modules.getOrPut(ctx.gpa, qualified_name);
+        const workspace = compile.watch_inputs.hashBytes(qualified_name);
+        const entry = try source_modules.modules.getOrPut(ctx.gpa, workspace);
         if (entry.found_existing) {
             base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
-        entry.value_ptr.* = module;
+        const identity = artifact.module_identity.stable_hash;
+        const link_identity = lir.CheckedPipeline.BoxyModuleNames.stableName(check.CheckedArtifact.importedView(artifact));
+        entry.value_ptr.* = .{ .env = module.semantic.env, .common = &module.semantic.env.common, .path = module.path, .name = qualified_name, .identity = identity };
+        try source_modules.bind(ctx.gpa, identity, workspace);
+        try source_modules.bind(ctx.gpa, link_identity, workspace);
     }
 
     const report_config = testReportingConfig(ctx);
@@ -15104,6 +17224,18 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     defer test_plan.deinit(ctx.gpa);
 
     const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+
+    // A root whose module's outcome file records what running it observed
+    // under these exact checked sources and this execution mode observes
+    // the same again (design.md "Test outcome files"); it is neither
+    // lowered nor run.
+    const outcome_store: ?*CacheManager = if (args.no_cache) null else build_env.cache_manager;
+    const reused_roots = if (outcome_store) |manager| try admitCliTestOutcomes(ctx, manager, &test_plan, specialization_strategy, args.opt, &source_modules) else 0;
+
+    var discovery_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
+    defer discovery_requests.deinit(ctx.gpa);
+    var discovery_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
+    defer discovery_sources.deinit(ctx.gpa);
     var runtime_requests = std.ArrayList(check.CheckedArtifact.RootRequest).empty;
     defer runtime_requests.deinit(ctx.gpa);
     var runtime_sources = std.ArrayList(check.CheckedArtifact.ModuleId).empty;
@@ -15111,10 +17243,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     var runtime_metadata = std.ArrayList(postcheck.Common.RootTestPlanMetadata).empty;
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
-        try runtime_requests.appendSlice(ctx.gpa, planned.test_roots);
-        try runtime_sources.appendNTimes(ctx.gpa, planned.artifact.key, planned.test_roots.len);
-        for (planned.test_roots, 0..) |root, root_index| {
-            const entry = test_plan.entries[planned.first_entry_index + root_index];
+        for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
+            if (reused != null) continue;
+            try runtime_requests.append(ctx.gpa, root);
+            try runtime_sources.append(ctx.gpa, planned.artifact.key.digest());
+            const entry = test_plan.entries[planned.result_indices[root_index]];
             try runtime_metadata.append(ctx.gpa, .{
                 .request_index = @intCast(runtime_metadata.items.len),
                 .root_order = root.order,
@@ -15133,38 +17266,38 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .{ .test_plan = .{ .requests = runtime_requests.items, .metadata = runtime_metadata.items } },
         args.opt,
         specialization_strategy,
-        base.target.TargetUsize.native,
+        RocTarget.detectNative(),
         false,
     );
     runtime_config.explicit_roots = runtime_roots;
-    if (runtime_requests.items.len != 0) {
+    runtime_config.compile_time_discovery_roots = .{
+        .requests = discovery_requests.items,
+        .source_modules = discovery_sources.items,
+    };
+    if (test_plan.modules.len != 0) {
         runtime_config.root_module = test_plan.modules[0].artifact;
+        // Even an all-hit plan explicitly supplies empty execution demand.
+        // A file with no test plan instead retains ordinary checking, which
+        // also handles modules that have no executable ownership anchor.
         build_env.setRuntimeLowering(runtime_config);
     }
     build_env.finishCheckedProgram() catch |err| {
         _ = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
         return err;
     };
-    const diag = try build_env.renderDiagnostics(stderr, ctx.reportConfig(.stderr));
-    finishFrontEndPhase(&reporter, build_env.getTimingInfo());
-    reporter.begin("Test Planning");
-    for (test_plan.modules) |*planned| {
-        if (try loadCachedCliTestResults(
-            ctx,
-            build_env.cache_manager,
-            planned.artifact,
-            specialization_strategy,
-            args.opt,
-            planned.module,
-            &source_modules,
-            planned.test_roots,
-        )) |cached| {
-            planned.cached_results = cached.results;
-            planned.cached_summary = cached.summary;
-        }
-    }
-    reporter.end();
-    reporter.recordCounters("Test result cache", &cliTestCacheCounters(cliTestCacheStats(&test_plan)));
+    const command_diagnostics = try build_env.drainReports();
+    defer build_env.freeDrainedReports(command_diagnostics);
+    var diag = BuildEnv.RenderDiagnosticsResult{ .errors = 0, .warnings = 0 };
+    for (command_diagnostics) |module| for (module.reports) |*report| {
+        if (report.severity.isError()) diag.errors += 1 else diag.warnings += 1;
+        reporting.renderReportToTerminal(report, stderr, reporting.ColorUtils.getPaletteForConfig(ctx.reportConfig(.stderr)), ctx.reportConfig(.stderr)) catch {};
+    };
+    try finishFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, build_env.getTimingInfo());
+    reporter.recordCounters("Test outcome admission", &.{
+        .{ .name = "Checked dependency records", .count = test_plan.entries.len },
+        .{ .name = "Roots reused from outcome files", .count = reused_roots },
+        .{ .name = "Roots submitted for specialization", .count = runtime_requests.items.len },
+    });
 
     var spec_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
     if (args.timings) spec_timing.enableDetailedMonotypeBody();
@@ -15175,7 +17308,17 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     runtime_config.target.timing = &spec_timing;
     var shared_test_program: ?lir.CheckedPipeline.LoweredProgram = null;
     defer if (shared_test_program) |*program| program.deinit();
-    if (runtime_requests.items.len != 0) {
+    // A dev test under `.boxy` with a cache runs its roots from test units'
+    // images, not from one program lowered for them.
+    const unit_image_tests = if (comptime unit_image_tests_supported)
+        (if (build_env.rootModuleCheckedArtifact()) |root| unitImageTestApplies(args.opt, args.no_cache, specialization_strategy, root) else false)
+    else
+        false;
+    var unit_test_program: if (unit_image_tests_supported) ?UnitImageTestProgram else ?void = null;
+    defer if (comptime unit_image_tests_supported) if (unit_test_program) |*program| program.deinit();
+    if (runtime_requests.items.len != 0 and unit_image_tests) {
+        if (comptime unit_image_tests_supported) unit_test_program = try prepareUnitImageTests(ctx, &build_env, &reporter, &test_plan);
+    } else if (runtime_requests.items.len != 0) {
         shared_test_program = try build_env.runtimeProgramSession().?.takeRuntime(ctx.gpa, runtime_roots, runtime_config.target);
         const session_modules = build_env.runtimeProgramSession().?.modules;
         const test_static_data = compile.static_data_exports.buildStaticData(
@@ -15192,8 +17335,11 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         shared_test_program.?.frozen_static_data = .{ .allocator = ctx.gpa, .exports = test_static_data };
     }
 
+    const native_options: ?eval.Inspected.DevTestOptions = if (args.opt == .dev and specialization_strategy == .lss) .{
+        .executor = build_env.postCheckExecutor(),
+    } else null;
     const test_mode = cliTestExecutionMode(args.opt);
-    const use_live_optimized_output = runtime_requests.items.len != 0 and switch (test_mode) {
+    const use_live_optimized_output = test_plan.entries.len != 0 and switch (test_mode) {
         .llvm_size, .llvm_speed => true,
         .interpreter, .dev => false,
     };
@@ -15258,48 +17404,69 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // execution. The completed timing rows recorded below split out the
     // expensive subsets without pretending their durations are extra work.
     reporter.begin("Compile + Run Tests (wall)");
-    if (shared_test_program) |*program| switch (test_mode) {
+    const unit_program: if (unit_image_tests_supported) ?*UnitImageTestProgram else ?*void = if (unit_test_program) |*program| program else null;
+    if (unit_program) |program| {
+        if (comptime unit_image_tests_supported) try runUnitImageTestPlan(
+            ctx,
+            program,
+            &test_plan,
+            args.opt,
+            &dev_timing,
+            args.max_threads,
+            &module_results,
+            &total,
+            &source_modules,
+            outcome_store,
+        );
+    } else if (shared_test_program) |*program| switch (test_mode) {
         .llvm_size, .llvm_speed, .dev => try runCompiledTestPlan(
             ctx,
             program,
             &test_plan,
             args.opt,
-            specialization_strategy,
             &dev_timing,
             args.max_threads,
-            build_env.cache_manager,
             &module_results,
             &total,
             if (live_output) |*output| output else null,
             &source_modules,
+            native_options,
+            outcome_store,
         ),
         .interpreter => {
             for (test_plan.modules) |*planned| {
-                const summary = if (planned.cached_results != null) cached: {
-                    const results = planned.releaseCachedResults();
-                    try appendPlannedModuleResult(ctx, &module_results, planned, results, true);
-                    break :cached planned.cached_summary;
-                } else try runCheckedArtifactTests(
+                const summary = try runCheckedArtifactTests(
                     ctx,
                     program,
                     planned,
                     test_plan.entries,
                     args.opt,
-                    specialization_strategy,
-                    build_env.cache_manager,
                     &module_results,
                     &dev_timing,
                     args.max_threads,
                     &source_modules,
+                    outcome_store,
                 );
                 total.passed += summary.passed;
                 total.failed += summary.failed;
                 total.compiler_errors += summary.compiler_errors;
                 total.modules_with_tests += summary.modules_with_tests;
-                total.cached_modules += summary.cached_modules;
             }
         },
-    };
+    } else {
+        // Every planned root's outcome is reused: nothing was lowered, and
+        // each module's results are its outcome file's.
+        if (live_output) |*live| try publishReusedCliTestOutcomesLive(ctx, live, &test_plan, &source_modules);
+        for (test_plan.modules) |*planned| {
+            const results = try completePlannedModuleResults(ctx, outcome_store, planned, &.{}, &source_modules);
+            try appendPlannedModuleResult(ctx, &module_results, planned, results);
+            const summary = summarizeTestResults(results);
+            total.passed += summary.passed;
+            total.failed += summary.failed;
+            total.compiler_errors += summary.compiler_errors;
+            total.modules_with_tests += summary.modules_with_tests;
+        }
+    }
     try coalesceInlineExpectResults(ctx.gpa, module_results.items, &total);
     total.modules_with_tests = test_plan.modules_with_tests;
     total.diagnostic_errors = diag.errors;
@@ -15311,11 +17478,6 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
     // Calculate elapsed time
     const end_time = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
     const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const fully_cached = total.compiler_errors == 0 and total.diagnostic_errors == 0 and
-        total.modules_with_tests > 0 and total.cached_modules == total.modules_with_tests;
-
-    // Render the per-module bodies once into in-memory buffers so we can
-    // print them after the summary line.
     var stdout_body = std.Io.Writer.Allocating.init(ctx.gpa);
     defer stdout_body.deinit();
     var stderr_body = std.Io.Writer.Allocating.init(ctx.gpa);
@@ -15346,14 +17508,15 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
 
     // Report results
     if (total.allPassed()) {
-        try writeCliTestRunSummary(stdout, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
+        try writeCliTestRunSummary(stdout, total, elapsed_ns, report_config.shouldUseColors());
         // Same warning exit policy as check/build/run: passing tests with
         // compile warnings exit 2.
+        if (diag.warnings > 0) printCliTestWork(ctx);
         exitOnWarnings(ctx, diag.warnings);
         return;
     }
 
-    try writeCliTestRunSummary(stderr, total, elapsed_ns, fully_cached, report_config.shouldUseColors());
+    try writeCliTestRunSummary(stderr, total, elapsed_ns, report_config.shouldUseColors());
 
     // Diagnostics determine the command status only after every independent
     // test root has run; they never gate checked-artifact execution.
@@ -15446,7 +17609,7 @@ fn renderCliTestTranscriptEventRecords(
 }
 
 const CliTestRenderEntry = struct {
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     path: []const u8,
     result: *const CliTestResultItem,
 };
@@ -15830,7 +17993,7 @@ const CliOptimizedLiveTestOutput = struct {
         };
         self.owned_results[result_index] = copied;
         self.coordinator.publishFinished(result_index, .{
-            .env = env,
+            .env = &env.common,
             .path = path,
             .result = &self.owned_results[result_index].?,
         }) catch |err| {
@@ -15847,7 +18010,7 @@ const CliOptimizedLiveTestOutput = struct {
             base.invariant("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
-        const result = cliTestResultItemFromEval(self.ctx, run, eval_result) catch |err| {
+        const result = cliTestResultItemFromEval(self.ctx, run.report(), eval_result) catch |err| {
             self.lock();
             self.err = err;
             self.unlock();
@@ -15871,7 +18034,7 @@ const CliOptimizedLiveTestOutput = struct {
 
         self.owned_results[result_index] = result;
         self.coordinator.publishFinished(result_index, .{
-            .env = run.env,
+            .env = &run.env.common,
             .path = run.path,
             .result = &self.owned_results[result_index].?,
         }) catch |err| {
@@ -15892,7 +18055,7 @@ const CliOptimizedLiveTestOutput = struct {
             .dbg => |payload| .{ .stream = .stderr, .kind = .dbg, .payload = payload },
             .expect_failed => |payload| .{ .stream = .stderr, .kind = .expect_failed, .payload = payload },
             .crashed => |payload| .{ .stream = .stderr, .kind = .crashed, .payload = payload },
-            .effect => unreachable,
+            .effect => base.invariant("CLI optimized live output invariant violated: a bool root reported a hosted effect event", .{}),
         };
 
         self.lock();
@@ -15942,7 +18105,7 @@ test "test transcript coordinator streams and buffers in plan order" {
     );
     defer coordinator.deinit();
 
-    const dummy_env: *const ModuleEnv = undefined;
+    const dummy_env: *const base.CommonEnv = undefined;
 
     const event_zero = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "zero" };
     const event_one_a = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "one-a" };
@@ -15993,7 +18156,7 @@ test "test transcript coordinator spills later buffered entries to isolated temp
     var stderr_body = std.Io.Writer.Allocating.init(allocator);
     defer stderr_body.deinit();
 
-    const dummy_env: *const ModuleEnv = undefined;
+    const dummy_env: *const base.CommonEnv = undefined;
     const event_zero = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "first" };
     const event_one_spilled = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "later-spilled" };
     const event_one_live = CliTestTranscriptEvent{ .stream = .stderr, .kind = .dbg, .payload = "later-live" };
@@ -16055,7 +18218,7 @@ fn renderCliTestResultEntry(
         );
     }
     try renderCliTestTranscriptEvents(stdout_body, stderr_body, entry.result.transcript[transcript_events_already_rendered..]);
-    const source_env = entry.result.source_env orelse entry.env;
+    const source_env = entry.result.source_common orelse if (entry.result.source_env) |env| &env.common else entry.env;
     const source_path = entry.result.source_path orelse entry.path;
     var inline_detail: ?[]u8 = null;
     defer if (inline_detail) |detail| allocator.free(detail);
@@ -16075,7 +18238,9 @@ fn renderCliTestResultEntry(
             const region_info = source_env.calcRegionInfo(entry.result.region);
             const green = if (report_config.shouldUseColors()) ansi_term.green else "";
             const reset = if (report_config.shouldUseColors()) ansi_term.reset else "";
-            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = source_path }, region_info.start_line_idx + 1 });
+            const display_path = try reporting.displayPath(allocator, source_path, report_config.source_path_base);
+            defer allocator.free(display_path);
+            try stdout_body.print("{s}PASS{s}: {f}:{}\n", .{ green, reset, base.bidi.Display{ .bytes = display_path }, region_info.start_line_idx + 1 });
         },
         .failed => {
             const region_info = source_env.calcRegionInfo(entry.result.region);
@@ -16191,7 +18356,7 @@ fn printTestProblem(
     allocator: Allocator,
     stderr: *std.Io.Writer,
     path: []const u8,
-    env: *const ModuleEnv,
+    env: *const base.CommonEnv,
     region_info: base.RegionInfo,
     label: []const u8,
     severity: reporting.Severity,
@@ -16203,7 +18368,7 @@ fn printTestProblem(
     const src = env.getSourceAll();
 
     const doc_comment: ?[]const u8 = blk: {
-        const line_starts = env.getLineStarts();
+        const line_starts = env.getLineStartsAll();
         const curr_line_start_idx = region_info.start_line_idx;
         const curr_line_start = line_starts[curr_line_start_idx];
         const prev_line_start = if (curr_line_start_idx > 0) line_starts[curr_line_start_idx - 1] else break :blk null;
@@ -16231,7 +18396,7 @@ fn printTestProblem(
     var report = try reporting.Report.init(allocator, label, headline, severity);
     defer report.deinit();
 
-    try report.addSourceContext(region_info, path, src, env.getLineStarts());
+    try report.addSourceContext(region_info, path, src, env.getLineStartsAll());
 
     const should_print_detail = switch (failure_detail_visibility) {
         .always => true,
@@ -16310,6 +18475,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
 
+    var multiline_string_at_eof = false;
     var should_exit = false;
     var had_diagnostics = false;
     while (!should_exit) {
@@ -16333,6 +18499,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
             .line => |raw_line| {
                 defer ctx.gpa.free(raw_line);
 
+                // A complete multiline string remains pending until a line
+                // without a string prefix arrives (or EOF). Process that line
+                // separately so it can begin the next REPL statement.
+                if (multiline_string_at_eof and !ReplSession.lineStartsMultilineString(raw_line)) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                    multiline_string_at_eof = false;
+                    if (should_exit) break;
+                }
+
                 if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
                     continue;
                 }
@@ -16343,8 +18519,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 try pending.appendSlice(ctx.gpa, raw_line);
 
                 switch (try session.inputStatus(pending.items)) {
-                    .incomplete => {},
-                    .complete, .invalid => {
+                    .incomplete => multiline_string_at_eof = false,
+                    .complete => |info| {
+                        multiline_string_at_eof = info.multiline_string_at_eof;
+                        if (!multiline_string_at_eof) {
+                            should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                            pending.clearRetainingCapacity();
+                        }
+                    },
+                    .invalid => {
+                        multiline_string_at_eof = false;
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },
@@ -16478,9 +18662,9 @@ fn rocGlue(ctx: *CliCtx, args: cli_args.GlueArgs) RocGlueError!void {
             .dev => .dev,
             .size => .size,
             .speed => .speed,
-            .interpreter => unreachable,
+            .interpreter => unreachable, // the glue command's --opt accepts only dev, size, and speed
         },
-    }, ctx.coreCtx(), ctx.io.std_io) catch |err| {
+    }, ctx.io.std_io) catch |err| {
         switch (err) {
             error.GluePluginStampMismatch, error.GluePluginUnavailable => if (installed_plugin_path != null) {
                 try ctx.io.stderr().print(
@@ -16518,7 +18702,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
     // compiler is a newer nightly than the one it names.
     var builtin_facts = fmt.BuiltinFacts{ .allocator = ctx.gpa };
     defer builtin_facts.deinit();
-    const format_options: fmt.Options = .{ .compiler_version = @import("compiler_version").compiler_version, .builtin_facts = &builtin_facts };
+    const format_options: fmt.Options = .{ .compiler_version = @import("compiler_version").compiler_version, .builtin_facts = &builtin_facts, .working_dir = ctx.reportConfig(.stderr).source_path_base };
     if (args.stdin) {
         fmt.formatStdin(ctx.gpa, format_options, ctx.io.std_io, std.Io.File.stdin(), std.Io.File.stdout(), stderr) catch |err| return err;
         return;
@@ -16551,7 +18735,7 @@ fn rocFormat(ctx: *CliCtx, args: cli_args.FormatArgs) CliMainError!void {
         if (unformatted_files.items.len > 0) {
             try stdout.print("The following file(s) failed `roc fmt --check`:", .{});
             for (unformatted_files.items) |file_name| {
-                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = file_name }});
+                try stdout.print("    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(file_name) }});
             }
             try stdout.print("You can fix this with `roc fmt FILENAME.roc`.", .{});
             had_errors = true;
@@ -16607,16 +18791,54 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 /// in the breakdown once type checking completes.
 /// Module-level work runs on several worker threads at once, so each row is
 /// that work's time summed across threads rather than a slice of wall time.
-fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
+fn frontEndBreakdown(timing: anytype) [7]progress.SubTiming {
     return .{
         .{ .name = "Parsing (summed)", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
-        .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
+        .{ .name = "Fresh Checking (summed)", .ns = timing.checking_work.fresh_check_ns },
+        .{ .name = "Checked Publication (summed)", .ns = timing.checking_work.publication_ns },
+        .{ .name = "Other Checking Work (summed)", .ns = timing.type_checking_ns -| timing.checking_work.fresh_check_ns -| timing.checking_work.publication_ns },
+        .{ .name = "Check Diagnostics (summed)", .ns = timing.check_diagnostics_ns },
         .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
     };
 }
 
-fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [12]progress.SubTiming {
+test "typing reuse work counters display zero-duration hits without inference" {
+    const timing: compile.package.TimingInfo = .{
+        .type_checking_ns = 13 * std.time.ns_per_ms,
+        .checking_work = .{ .typing_hits = 2, .publications = 2, .publication_ns = 11 * std.time.ns_per_ms },
+    };
+    const breakdown = frontEndBreakdown(timing);
+    try std.testing.expectEqual(@as(u64, 0), breakdown[2].ns);
+    try std.testing.expectEqual(@as(u64, 11 * std.time.ns_per_ms), breakdown[3].ns);
+    try std.testing.expectEqual(@as(u64, 2 * std.time.ns_per_ms), breakdown[4].ns);
+
+    var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer buf.deinit();
+    var reporter = progress.Reporter.init(.{
+        .std_io = std.testing.io,
+        .writer = &buf.writer,
+        .op_label = "roc test",
+        .timings_flag = true,
+        .is_tty = false,
+    });
+    defer reporter.deinit();
+    reporter.start();
+    reporter.begin("Type Checking");
+    try finishFrontEndPhase(std.testing.allocator, reporting.ReportingConfig.initForTesting(), &reporter, timing);
+    reporter.finish();
+    const output = buf.written();
+    try std.testing.expect(std.mem.find(u8, output, "Type Inference") == null);
+    try std.testing.expect(std.mem.find(u8, output, "Checked Publication (summed)") != null);
+    for ([_][]const u8{ "Typing-only cache hits", "Checked publications" }) |label| {
+        const start = std.mem.find(u8, output, label) orelse return error.TestUnexpectedResult;
+        const remainder = output[start + label.len ..];
+        const end = std.mem.findScalar(u8, remainder, '\n') orelse remainder.len;
+        try std.testing.expectEqualStrings("2", std.mem.trim(u8, remainder[0..end], " \r"));
+    }
+}
+
+fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSnapshot) [18]progress.SubTiming {
     return .{
         .{ .name = "Shared Monotype Lowering", .ns = timing.lowering.monotype_ns },
         .{ .name = "Shared Closure Lifting", .ns = timing.lowering.lift_ns },
@@ -16627,15 +18849,24 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
         .{ .name = "Shared LIR Passes", .ns = timing.lowering.lir_passes_ns },
         .{ .name = "Shared ARC", .ns = timing.lowering.arc_ns },
         .{ .name = "Static Data", .ns = timing.static_data_ns },
-        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target.toCpuArch()), .ns = timing.code_generation_ns },
+        .{ .name = devInstructionGenerationPhaseName(backend.dev.LirCodeGenMod.host_lir_codegen_target), .ns = timing.code_generation_ns },
         .{ .name = "Execution", .ns = timing.execution_ns },
         .{ .name = "Store Results", .ns = timing.store_results_ns },
+        .{ .name = "Shared Boxy Lowering", .ns = timing.lowering.boxy_lowering_ns },
+        .{ .name = "Shared Boxy Unit Codegen", .ns = timing.lowering.boxy_unit_codegen_ns },
+        .{ .name = "Shared Boxy Object Cache", .ns = timing.lowering.boxy_unit_cache_ns },
+        .{ .name = "Shared Boxy Object Restore", .ns = timing.lowering.boxy_unit_restore_ns },
+        .{ .name = "Boxy Object Compose", .ns = timing.unit_compose_ns },
+        .{ .name = "Boxy Object Load", .ns = timing.unit_load_ns },
     };
 }
 
 const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (summed)";
 
-fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
+/// The leading rows of `postCheckLoweringBreakdown` that are Monotype's own.
+const monotype_breakdown_rows = 18;
+
+fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [26]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
         timing.monotype_procedure_body_call_dispatch_ns +|
         timing.monotype_procedure_body_draft_ir_ns +|
@@ -16666,15 +18897,7 @@ fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]pr
         .{ .name = "Lambda-Set Solving", .ns = timing.lambda_solve_ns },
         .{ .name = "Inline Planning", .ns = timing.inline_plan_ns },
         .{ .name = "LIR Generation", .ns = timing.lir_gen_ns },
-        .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
-        .{ .name = "ARC", .ns = timing.arc_ns },
-    };
-}
-
-fn boxyPostCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [4]progress.SubTiming {
-    return .{
-        .{ .name = "Boxy Planning", .ns = timing.boxy_plan_ns },
-        .{ .name = "Boxy Lowering", .ns = timing.boxy_lower_ns },
+        .{ .name = "Boxy Lowering", .ns = timing.boxy_lowering_ns },
         .{ .name = "LIR Passes", .ns = timing.lir_passes_ns },
         .{ .name = "ARC", .ns = timing.arc_ns },
     };
@@ -16690,11 +18913,8 @@ fn finishPostCheckLowering(
         reporter.end();
         return;
     }
-    var subs_buf: [25]progress.SubTiming = undefined;
-    switch (strategy) {
-        .lss => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot))),
-        .boxy => reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &boxyPostCheckLoweringBreakdown(snapshot))),
-    }
+    var subs_buf: [26]progress.SubTiming = undefined;
+    reporter.endWithParentBreakdown(measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)));
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
 
@@ -16705,6 +18925,9 @@ fn recordLoweringCounters(
     comptime prefix: []const u8,
 ) void {
     if (strategy == .lss) {
+        if (!std.meta.eql(snapshot.demand, lir.CheckedPipeline.DemandMetrics{})) {
+            reporter.recordCounters(prefix ++ "Demand-driven specialization", &demandCounters(snapshot.demand));
+        }
         reporter.recordCounters(prefix ++ "Monotype specialization", &monotypeSpecializationCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype type graph", &monotypeGraphCounters(snapshot.monotype_diagnostics));
         reporter.recordCounters(prefix ++ "Monotype body + dispatch", &monotypeBodyCounters(snapshot.monotype_diagnostics));
@@ -16718,13 +18941,12 @@ fn recordLoweringCounters(
 
 fn postCheckLoweringTotalNs(timing: lir.CheckedPipeline.TimingSnapshot) u64 {
     return timing.monotype_ns +|
-        timing.boxy_plan_ns +|
-        timing.boxy_lower_ns +|
         timing.lift_ns +|
         timing.spec_constr_ns +|
         timing.lambda_solve_ns +|
         timing.inline_plan_ns +|
         timing.lir_gen_ns +|
+        timing.boxy_lowering_ns +|
         timing.lir_passes_ns +|
         timing.arc_ns;
 }
@@ -16736,20 +18958,13 @@ fn recordPostCheckLowering(
 ) void {
     const snapshot = timing.snapshot();
     if (std.meta.eql(snapshot, lir.CheckedPipeline.TimingSnapshot{})) return;
-    switch (strategy) {
-        .lss => reporter.recordCompletedWithBreakdown(
-            aggregate_post_check_lowering_phase_name,
-            postCheckLoweringTotalNs(snapshot),
-            .{},
-            &postCheckLoweringBreakdown(snapshot),
-        ),
-        .boxy => reporter.recordCompletedWithBreakdown(
-            aggregate_post_check_lowering_phase_name,
-            postCheckLoweringTotalNs(snapshot),
-            .{},
-            &boxyPostCheckLoweringBreakdown(snapshot),
-        ),
-    }
+    var subs_buf: [26]progress.SubTiming = undefined;
+    reporter.recordCompletedWithBreakdown(
+        aggregate_post_check_lowering_phase_name,
+        postCheckLoweringTotalNs(snapshot),
+        .{},
+        measuredSubTimings(&subs_buf, &postCheckLoweringBreakdown(snapshot)),
+    );
     recordLoweringCounters(reporter, snapshot, strategy, "");
 }
 
@@ -16766,21 +18981,52 @@ fn devTestExecutionBreakdown(timing: eval.test_helpers.DevBoolRootTimingSnapshot
 
 fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test_helpers.DevBoolRootTiming) void {
     const snapshot = timing.snapshot();
+    reporter.recordCounters("Dev test emission", &.{
+        .{ .name = "Lowered LIR statements", .count = snapshot.lir_statements },
+        .{ .name = "Procedures emitted", .count = snapshot.emitted_procedures },
+        .{ .name = "Entrypoints emitted", .count = snapshot.emitted_entrypoints },
+        .{ .name = "Code bytes emitted", .count = snapshot.emitted_code_bytes },
+    });
     const total_ns = snapshot.static_strings_ns +|
         snapshot.codegen_setup_ns +|
         snapshot.procedure_codegen_ns +|
         snapshot.entrypoint_codegen_ns +|
         snapshot.executable_memory_ns +|
         snapshot.root_execution_ns;
+    reporter.recordCounters("Native test procedures", &.{
+        .{ .name = "Emitted", .count = snapshot.procedures_emitted },
+    });
     reporter.recordCompletedWithBreakdown(
         "Dev Codegen + Execution",
         total_ns,
         .{},
         &devTestExecutionBreakdown(snapshot),
     );
+    reporter.recordCounters("Test backend work", &.{
+        .{ .name = "Root wrappers generated", .count = snapshot.root_codegen_count },
+        .{ .name = "Roots executed", .count = snapshot.root_execution_count },
+    });
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
+fn demandCounters(demand: lir.CheckedPipeline.DemandMetrics) [13]progress.Counter {
+    return .{
+        .{ .name = "Program roots", .count = demand.program_roots },
+        .{ .name = "Discovery roots", .count = demand.discovery_roots },
+        .{ .name = "Checked modules", .count = demand.modules },
+        .{ .name = "Procedure templates", .count = demand.templates },
+        .{ .name = "Literal source templates", .count = demand.source_templates },
+        .{ .name = "Literal reaching templates", .count = demand.reaching_templates },
+        .{ .name = "Custom literal types", .count = demand.custom_literal_types },
+        .{ .name = "Discovery roots lowered", .count = demand.monotype.discovery_roots },
+        .{ .name = "Discovery bodies", .count = demand.monotype.discovery_bodies },
+        .{ .name = "Parked requests", .count = demand.monotype.parked },
+        .{ .name = "Unparked requests", .count = demand.monotype.unparked },
+        .{ .name = "Upgraded bodies", .count = demand.monotype.upgraded },
+        .{ .name = "Never-run stubs", .count = demand.monotype.stubs },
+    };
+}
+
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -16811,11 +19057,10 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
-        .{ .name = "Object specialization cache hits", .count = counters.spec_cache_hits },
     };
 }
 
-fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
+fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [42]progress.Counter {
     const graph = diagnostics.graph;
     return .{
         .{ .name = "Graphs created", .count = diagnostics.body.graphs_created },
@@ -16846,13 +19091,39 @@ fn monotypeGraphCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]
         .{ .name = "Structural backing visited slots", .count = graph.structural_backing_scan_slots },
         .{ .name = "Generated-private guard returns", .count = graph.generated_private_guard_returns },
         .{ .name = "Generated-iterator index lookups", .count = graph.generated_iterator_lookups },
+        .{ .name = "Completion queries", .count = graph.completion_queries },
+        .{ .name = "Completion pair entries", .count = graph.completion_pair_entries },
+        .{ .name = "Completion pair expansions", .count = graph.completion_pair_expansions },
+        .{ .name = "Completion memo hits", .count = graph.completion_memo_hits },
+        .{ .name = "Completion repeated pairs", .count = graph.completion_repeated_pairs },
+        .{ .name = "Inhabitation queries", .count = graph.inhabitation_queries },
+        .{ .name = "Inhabitation node entries", .count = graph.inhabitation_node_entries },
+        .{ .name = "Inhabitation node expansions", .count = graph.inhabitation_node_expansions },
+        .{ .name = "Inhabitation memo hits", .count = graph.inhabitation_memo_hits },
+        .{ .name = "Analysis changed nodes", .count = graph.analysis_changed_nodes },
+        .{ .name = "Analysis invalidation edges", .count = graph.analysis_invalidation_edges },
+        .{ .name = "Analysis peak entries", .count = graph.analysis_peak_entries },
+        .{ .name = "Analysis peak payload bytes", .count = graph.analysis_peak_payload_bytes },
+        .{ .name = "Analysis invalidated groups", .count = graph.analysis_invalidated_groups },
     };
 }
 
-fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [26]progress.Counter {
+fn monotypeBodyCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [38]progress.Counter {
     const body = diagnostics.body;
     return .{
         .{ .name = "Interface summary hits", .count = diagnostics.specialization.interface_summary_hits },
+        .{ .name = "Persistent interface hits", .count = diagnostics.specialization.interface_persistent_hits },
+        .{ .name = "Persistent interface misses", .count = diagnostics.specialization.interface_persistent_misses },
+        .{ .name = "Persistent interface invalid", .count = diagnostics.specialization.interface_persistent_invalid },
+        .{ .name = "Persistent interface types", .count = diagnostics.specialization.interface_persistent_types },
+        .{ .name = "Persistent interface references", .count = diagnostics.specialization.interface_persistent_references },
+        .{ .name = "Persistent interface composite records", .count = diagnostics.specialization.interface_persistent_composite_records },
+        .{ .name = "Persistent interface default records", .count = diagnostics.specialization.interface_persistent_default_records },
+        .{ .name = "Persistent interface composite hits", .count = diagnostics.specialization.interface_persistent_composite_hits },
+        .{ .name = "Persistent interface default hits", .count = diagnostics.specialization.interface_persistent_default_hits },
+        .{ .name = "Persistent interface bytes", .count = diagnostics.specialization.interface_persistent_bytes },
+        .{ .name = "Persistent interface records", .count = diagnostics.specialization.interface_persistent_records },
+        .{ .name = "Persistent interface unrepresentable", .count = diagnostics.specialization.interface_persistent_unrepresentable },
         .{ .name = "Interface summary expansions", .count = diagnostics.specialization.interface_summary_expansions },
         .{ .name = "Body contexts created", .count = body.body_contexts_created },
         .{ .name = "Type instantiation scopes", .count = body.instantiation_scopes_created },
@@ -16900,15 +19171,17 @@ fn solvedLirParallelCounters(parallel: lir.CheckedPipeline.SolvedLirParallelMetr
     };
 }
 
-const spec_constr_counter_count = 7 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
+const spec_constr_counter_count = 9 + 2 * @typeInfo(lir.CheckedPipeline.SpecConstrPhase).@"enum".field_names.len;
 
 fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMetrics) [spec_constr_counter_count]progress.Counter {
     var rows: [spec_constr_counter_count]progress.Counter = undefined;
-    rows[0..7].* = .{
+    rows[0..9].* = .{
         .{ .name = "Tasks submitted", .count = parallel.tasks_submitted },
         .{ .name = "Tasks committed", .count = parallel.tasks_committed },
         .{ .name = "Patterns recorded", .count = parallel.patterns_recorded },
         .{ .name = "Patterns admitted", .count = parallel.patterns_admitted },
+        .{ .name = "Workers written", .count = parallel.workers_written },
+        .{ .name = "Worker budget denials", .count = parallel.spec_count_denials },
         .{ .name = "Bodies committed", .count = parallel.bodies_committed },
         .{ .name = "Expressions committed", .count = parallel.expressions_committed },
         .{ .name = "Peak retained body shards", .count = parallel.peak_retained_shards },
@@ -16919,8 +19192,8 @@ fn specConstrParallelCounters(parallel: lir.CheckedPipeline.SpecConstrParallelMe
             .unused_loop_results => "Loop-result projection",
             .iterator_fusion => "Iterator fusion",
         };
-        rows[7 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
-        rows[8 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
+        rows[9 + 2 * index] = .{ .name = name ++ " tasks", .count = parallel.committed_by_phase[index] };
+        rows[10 + 2 * index] = .{ .name = name ++ " changes", .count = parallel.changed_by_phase[index] };
     }
     return rows;
 }
@@ -16931,17 +19204,19 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
         .tasks_committed = 2,
         .patterns_recorded = 3,
         .patterns_admitted = 4,
-        .bodies_committed = 5,
-        .expressions_committed = 6,
-        .peak_retained_shards = 7,
-        .committed_by_phase = .{ 8, 10, 12 },
-        .changed_by_phase = .{ 9, 11, 13 },
+        .workers_written = 5,
+        .spec_count_denials = 6,
+        .bodies_committed = 7,
+        .expressions_committed = 8,
+        .peak_retained_shards = 9,
+        .committed_by_phase = .{ 10, 12, 14 },
+        .changed_by_phase = .{ 11, 13, 15 },
     });
     const names = [_][]const u8{
-        "Tasks submitted",           "Tasks committed",              "Patterns recorded",              "Patterns admitted",
-        "Bodies committed",          "Expressions committed",        "Peak retained body shards",      "Pattern discovery tasks",
-        "Pattern discovery changes", "Loop-result projection tasks", "Loop-result projection changes", "Iterator fusion tasks",
-        "Iterator fusion changes",
+        "Tasks submitted",                "Tasks committed",         "Patterns recorded",         "Patterns admitted",
+        "Workers written",                "Worker budget denials",   "Bodies committed",          "Expressions committed",
+        "Peak retained body shards",      "Pattern discovery tasks", "Pattern discovery changes", "Loop-result projection tasks",
+        "Loop-result projection changes", "Iterator fusion tasks",   "Iterator fusion changes",
     };
     for (rows, names, 1..) |row, name, count| {
         try std.testing.expectEqualStrings(name, row.name);
@@ -16950,8 +19225,10 @@ test "post-check diagnostics preserve labeled SpecConstr counts" {
     for (specConstrParallelCounters(.{})) |row| try std.testing.expectEqual(@as(u64, 0), row.count);
 }
 
-fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]progress.Counter {
+fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [21]progress.Counter {
     return .{
+        .{ .name = "Dismantle tasks submitted", .count = parallel.dismantle_tasks_submitted },
+        .{ .name = "Dismantle tasks committed", .count = parallel.dismantle_tasks_committed },
         .{ .name = "Source tasks submitted", .count = parallel.source_tasks_submitted },
         .{ .name = "Source tasks committed", .count = parallel.source_tasks_committed },
         .{ .name = "Planning tasks submitted", .count = parallel.planning_tasks_submitted },
@@ -16965,6 +19242,8 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]pro
         .{ .name = "Uniqueness component runs", .count = parallel.uniqueness.component_runs },
         .{ .name = "Uniqueness tasks submitted", .count = parallel.uniqueness.task_submitted },
         .{ .name = "Uniqueness tasks committed", .count = parallel.uniqueness.task_committed },
+        .{ .name = "Uniqueness topology tasks submitted", .count = parallel.uniqueness.topology_tasks_submitted },
+        .{ .name = "Uniqueness topology tasks committed", .count = parallel.uniqueness.topology_tasks_committed },
         .{ .name = "Uniqueness signature waves", .count = parallel.uniqueness.signature_waves },
         .{ .name = "Uniqueness signature changes", .count = parallel.uniqueness.signature_changes },
         .{ .name = "Uniqueness statement rows", .count = parallel.uniqueness.statement_visits },
@@ -16974,27 +19253,33 @@ fn arcParallelCounters(parallel: lir.CheckedPipeline.ArcParallelMetrics) [17]pro
 
 test "post-check diagnostics preserve labeled ARC counts" {
     const rows = arcParallelCounters(.{
-        .source_tasks_submitted = 1,
-        .source_tasks_committed = 2,
-        .planning_tasks_submitted = 3,
-        .planning_tasks_committed = 4,
-        .emission_tasks_submitted = 5,
-        .emission_tasks_committed = 6,
-        .waves = 7,
-        .variants_reserved = 8,
+        .dismantle_tasks_submitted = 1,
+        .dismantle_tasks_committed = 2,
+        .source_tasks_submitted = 3,
+        .source_tasks_committed = 4,
+        .planning_tasks_submitted = 5,
+        .planning_tasks_committed = 6,
+        .emission_tasks_submitted = 7,
+        .emission_tasks_committed = 8,
+        .waves = 9,
+        .variants_reserved = 10,
         .uniqueness = .{
-            .settlements = 9,
-            .components = 10,
-            .component_runs = 11,
-            .task_submitted = 12,
-            .task_committed = 13,
-            .signature_waves = 14,
-            .signature_changes = 15,
-            .statement_visits = 16,
-            .local_visits = 17,
+            .settlements = 11,
+            .components = 12,
+            .component_runs = 13,
+            .task_submitted = 14,
+            .task_committed = 15,
+            .topology_tasks_submitted = 16,
+            .topology_tasks_committed = 17,
+            .signature_waves = 18,
+            .signature_changes = 19,
+            .statement_visits = 20,
+            .local_visits = 21,
         },
     });
     const names = [_][]const u8{
+        "Dismantle tasks submitted",
+        "Dismantle tasks committed",
         "Source tasks submitted",
         "Source tasks committed",
         "Planning tasks submitted",
@@ -17008,6 +19293,8 @@ test "post-check diagnostics preserve labeled ARC counts" {
         "Uniqueness component runs",
         "Uniqueness tasks submitted",
         "Uniqueness tasks committed",
+        "Uniqueness topology tasks submitted",
+        "Uniqueness topology tasks committed",
         "Uniqueness signature waves",
         "Uniqueness signature changes",
         "Uniqueness statement rows",
@@ -17125,29 +19412,6 @@ test "post-check timing names distinct work and keep inlining separate from Spec
     }
 }
 
-test "post-check Boxy timing uses a strategy-specific breakdown" {
-    const rows = boxyPostCheckLoweringBreakdown(.{
-        .boxy_plan_ns = 7,
-        .boxy_lower_ns = 11,
-        .lir_passes_ns = 13,
-        .arc_ns = 17,
-    });
-    try std.testing.expectEqualStrings("Boxy Planning", rows[0].name);
-    try std.testing.expectEqual(@as(u64, 7), rows[0].ns);
-    try std.testing.expectEqualStrings("Boxy Lowering", rows[1].name);
-    try std.testing.expectEqual(@as(u64, 11), rows[1].ns);
-    try std.testing.expectEqualStrings("LIR Passes", rows[2].name);
-    try std.testing.expectEqual(@as(u64, 13), rows[2].ns);
-    try std.testing.expectEqualStrings("ARC", rows[3].name);
-    try std.testing.expectEqual(@as(u64, 17), rows[3].ns);
-    try std.testing.expectEqual(@as(u64, 48), postCheckLoweringTotalNs(.{
-        .boxy_plan_ns = 7,
-        .boxy_lower_ns = 11,
-        .lir_passes_ns = 13,
-        .arc_ns = 17,
-    }));
-}
-
 test "post-check diagnostics preserve labeled Solved-LIR counts" {
     const rows = solvedLirParallelCounters(.{
         .tasks_submitted = 1,
@@ -17261,16 +19525,16 @@ test "post-check diagnostics preserve labeled Monotype counts" {
     try std.testing.expectEqual(@as(u64, 206), graph[27].count);
 
     const body = monotypeBodyCounters(diagnostics);
-    try std.testing.expectEqualStrings("Type instantiation scopes", body[3].name);
-    try std.testing.expectEqual(@as(u64, 303), body[3].count);
-    try std.testing.expectEqualStrings("Checked node cache hits", body[5].name);
-    try std.testing.expectEqual(@as(u64, 301), body[5].count);
-    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[12].name);
-    try std.testing.expectEqual(@as(u64, 304), body[12].count);
-    try std.testing.expectEqualStrings("Deferred template reuses", body[13].name);
-    try std.testing.expectEqual(@as(u64, 305), body[13].count);
-    try std.testing.expectEqualStrings("Nested closures prepared", body[22].name);
-    try std.testing.expectEqual(@as(u64, 302), body[22].count);
+    try std.testing.expectEqualStrings("Type instantiation scopes", body[15].name);
+    try std.testing.expectEqual(@as(u64, 303), body[15].count);
+    try std.testing.expectEqualStrings("Checked node cache hits", body[17].name);
+    try std.testing.expectEqual(@as(u64, 301), body[17].count);
+    try std.testing.expectEqualStrings("Eager iterator template bodies lowered", body[24].name);
+    try std.testing.expectEqual(@as(u64, 304), body[24].count);
+    try std.testing.expectEqualStrings("Deferred template reuses", body[25].name);
+    try std.testing.expectEqual(@as(u64, 305), body[25].count);
+    try std.testing.expectEqualStrings("Nested closures prepared", body[34].name);
+    try std.testing.expectEqual(@as(u64, 302), body[34].count);
 
     const parallel = monotypeParallelCounters(.{
         .worker_work_ns = 401,
@@ -17320,17 +19584,61 @@ test "timings display every Monotype graph counter" {
 /// End the front-end phase. Whole-program finalization runs after every
 /// module is checked, inside the same call, so its wall time is reported as
 /// its own phase and excluded from Type Checking.
-fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
-    reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns);
+/// Packages without a shorthand are labeled by their path, which is shown
+/// relative to `config`'s working directory.
+fn finishFrontEndPhase(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, timing: anytype) Allocator.Error!void {
+    return finishFrontEndPhaseExcluding(gpa, config, reporter, timing, 0);
+}
+
+fn finishCheckFrontEndPhase(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, result: *const CheckResult) Allocator.Error!void {
+    try finishFrontEndPhase(gpa, config, reporter, result.timing);
+}
+
+fn finishFrontEndPhaseExcluding(gpa: Allocator, config: reporting.ReportingConfig, reporter: *progress.Reporter, timing: anytype, extra_excluded_ns: u64) Allocator.Error!void {
+    reporter.endWithBreakdownExcluding(&frontEndBreakdown(timing), timing.program_finalization_ns + extra_excluded_ns);
+    const slowest = timing.slowest_type_checks.slice();
+    var names = std.heap.ArenaAllocator.init(gpa);
+    defer names.deinit();
+    var slowest_rows: [compile.package.SlowestTypeChecks.capacity]progress.SubTiming = undefined;
+    for (slowest, slowest_rows[0..slowest.len]) |*module, *row| {
+        const package = try reporting.displayPath(names.allocator(), module.packageLabel(), config.source_path_base);
+        const name = try std.fmt.allocPrint(names.allocator(), "{s}.{s}", .{ package, module.moduleName() });
+        row.* = .{ .name = name, .ns = module.ns };
+    }
+    reporter.recordRankedTimings("Slowest Module Check and Publication", slowest_rows[0..slowest.len]);
+    reporter.recordCounters("Frontend checking work", &.{
+        .{ .name = "Fresh checks", .count = timing.checking_work.fresh_checks },
+        .{ .name = "Typing-only cache hits", .count = timing.checking_work.typing_hits },
+        .{ .name = "Full checked-artifact hits", .count = timing.checking_work.artifact_hits },
+        .{ .name = "Checked publications", .count = timing.checking_work.publications },
+    });
     const compile_time = timing.compile_time_evaluation;
     if (timing.program_finalization_ns != 0) {
-        var subs_buf: [12]progress.SubTiming = undefined;
+        var subs_buf: [18]progress.SubTiming = undefined;
         reporter.recordCompletedWithBreakdown(
             "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
             .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
         );
+        // The shared program's Monotype sub-phases, as the runtime program's
+        // breakdown shows them.
+        if (compile_time.lowering.monotype_ns != 0) {
+            var monotype_buf: [monotype_breakdown_rows]progress.SubTiming = undefined;
+            const rows = postCheckLoweringBreakdown(compile_time.lowering);
+            reporter.recordCompletedWithBreakdown(
+                "Shared Monotype Lowering Detail",
+                compile_time.lowering.monotype_ns,
+                .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
+                measuredSubTimings(&monotype_buf, rows[0..monotype_breakdown_rows]),
+            );
+        }
+    }
+    if (compile_time.roots_declared != 0) {
+        reporter.recordCounters("Compile-time roots", &.{
+            .{ .name = "Declared", .count = compile_time.roots_declared },
+            .{ .name = "Evaluated", .count = compile_time.roots_evaluated },
+        });
     }
     const counters = timing.compile_time_counters;
     if (!std.meta.eql(counters.lowering, lir.CheckedPipeline.TimingSnapshot{})) {
@@ -17365,6 +19673,10 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             .lir_gen_ns = 6,
             .lir_passes_ns = 7,
             .arc_ns = 8,
+            .boxy_lowering_ns = 13,
+            .boxy_unit_codegen_ns = 14,
+            .boxy_unit_cache_ns = 15,
+            .boxy_unit_restore_ns = 16,
             .solved_lir_parallel = .{ .tasks_submitted = 61, .tasks_committed = 61 },
             .spec_constr_parallel = .{ .tasks_submitted = 63, .tasks_committed = 63 },
             .lir_pass_parallel = .{ .tasks_submitted = 67, .tasks_committed = 67 },
@@ -17374,6 +19686,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         .code_generation_ns = 10,
         .execution_ns = 11,
         .store_results_ns = 12,
+        .unit_compose_ns = 17,
+        .unit_load_ns = 18,
         .native_emission = .{ .procedures_emitted = 83 },
     };
     const rows = compileTimeEvaluationBreakdown(shared);
@@ -17399,6 +19713,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             shared_input.code_generation_ns = 0;
             shared_input.execution_ns = 0;
             shared_input.store_results_ns = 0;
+            shared_input.unit_compose_ns = 0;
+            shared_input.unit_load_ns = 0;
         }
         var buf = std.Io.Writer.Allocating.init(std.testing.allocator);
         defer buf.deinit();
@@ -17412,16 +19728,20 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         defer reporter.deinit();
         reporter.start();
         reporter.begin("Type Checking");
-        finishFrontEndPhase(&reporter, .{
+        var slowest_type_checks: compile.package.SlowestTypeChecks = .{};
+        slowest_type_checks.offer("pdf", "KernelFont", 7 * std.time.ns_per_ms);
+        try finishFrontEndPhase(std.testing.allocator, reporting.ReportingConfig.initForTesting(), &reporter, .{
             .tokenize_parse_ns = @as(u64, 0),
             .canonicalize_ns = @as(u64, 0),
             .canonicalize_diagnostics_ns = @as(u64, 0),
             .type_checking_ns = @as(u64, 0),
+            .checking_work = compile.package.CheckingWork{},
             .check_diagnostics_ns = @as(u64, 0),
             .module_compile_time_evaluation_ns = @as(u64, 0),
             .program_finalization_ns = shared_input.total_ns,
             .compile_time_evaluation = shared_input,
             .compile_time_counters = shared_input,
+            .slowest_type_checks = slowest_type_checks,
         });
         var runtime = lir.CheckedPipeline.Timing.init(std.testing.io);
         if (case.runtime_continuation) runtime.addSnapshot(.{
@@ -17431,7 +19751,7 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
         reporter.begin("Specializing");
         finishPostCheckLowering(&reporter, &runtime, .lss);
         reporter.recordCounters("Native artifact emission", &nativeEmissionCounters(.{ .procedures_reused = 89 }));
-        reporter.recordCounters("Test result cache", &.{.{ .name = "Hits", .count = 79 }});
+        reporter.recordCounters("Test counters", &.{.{ .name = "Hits", .count = 79 }});
         reporter.finish();
         const output = buf.written();
         for ([_][]const u8{
@@ -17446,7 +19766,8 @@ test "shared lowering reporting preserves counters for runtime reuse and continu
             "Shared native artifact emission",
             "Native artifact emission",
         }) |label| try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, label));
-        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test result cache"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "Test counters"));
+        try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, "pdf.KernelFont"));
         try std.testing.expect(std.mem.find(u8, output, "71") != null);
         try std.testing.expectEqual(
             @as(usize, if (case.runtime_continuation) 1 else 0),
@@ -17463,9 +19784,12 @@ fn printBuildSuccess(
     warning_count: usize,
     elapsed_ns: u64,
     verbose: bool,
-    cache_stats: anytype,
-    cache_percent: u32,
-) std.Io.Writer.Error!void {
+    cache_stats: BuildEnv.BuildStats,
+) (Allocator.Error || std.Io.Writer.Error)!void {
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
     const stdout = ctx.io.stdout();
     const use_color = ctx.usesColor(.stdout);
     const green = if (use_color) ansi_term.green else "";
@@ -17481,7 +19805,7 @@ fn printBuildSuccess(
         error_color, error_count, reset, errors_word, warning_color, warning_count, reset, warnings_word,
     });
     try progress.writeDuration(stdout, elapsed_ns);
-    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = final_output_path }});
+    try stdout.print(" while successfully building:\n\n    {f}\n", .{base.bidi.Display{ .bytes = try ctx.displayPath(final_output_path) }});
 
     if (verbose) {
         try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
@@ -17495,6 +19819,18 @@ fn printBuildSuccess(
             cache_stats.canonicalized_cache_misses,
             cache_stats.canonicalized_cache_stores,
         });
+        if (cache_stats.boxy_objects_restored != 0 or cache_stats.boxy_objects_built != 0) {
+            try stdout.print("    Boxy objects: {} cached, {} built\n", .{
+                cache_stats.boxy_objects_restored,
+                cache_stats.boxy_objects_built,
+            });
+        }
+        if (cache_stats.wasm_units_restored != 0 or cache_stats.wasm_units_built != 0) {
+            try stdout.print("    Wasm units: {} cached, {} built\n", .{
+                cache_stats.wasm_units_restored,
+                cache_stats.wasm_units_built,
+            });
+        }
     }
 }
 
@@ -17546,7 +19882,6 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         error.ExpectedPlatformString => stderr.print("Expected platform string in header\n", .{}) catch {},
         error.PathOutsideWorkspace => stderr.print("Dependency path outside workspace not allowed\n", .{}) catch {},
         error.UnsupportedHeader => stderr.print("Unsupported header type\n", .{}) catch {},
-        error.ExpectedString => stderr.print("Expected string in header\n", .{}) catch {},
         error.Internal => stderr.print("Internal compiler error\n", .{}) catch {},
         error.InvalidDependency => stderr.print("Invalid dependency relationship\n", .{}) catch {},
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
@@ -17554,6 +19889,7 @@ fn handleProcessFileError(err: ProcessFileError, stderr: anytype, path: []const 
         // Catch-all for any other errors
         error.AccessDenied,
         error.AlreadyStarted,
+        error.NativeCompilationFailed,
         error.AntivirusInterference,
         error.BadPathName,
         error.BrokenPipe,
@@ -17698,149 +20034,6 @@ const DrainedReport = struct {
     }
 };
 
-fn remapDefaultAppSourceRegion(
-    allocator: Allocator,
-    region: *reporting.SourceCodeDisplayRegion,
-    original_path: []const u8,
-    original_source: []const u8,
-    original_line_starts: []const u32,
-    synthetic_header_lines: u32,
-    staged_app_path: ?[]const u8,
-) Allocator.Error!void {
-    if (!defaultAppElementNamesStagedApp(region.filename, staged_app_path)) return;
-    if (region.start_line <= synthetic_header_lines or region.end_line <= synthetic_header_lines) return;
-    if (original_line_starts.len == 0) return;
-    if (region.end_line - synthetic_header_lines > original_line_starts.len) return;
-
-    const original_start_line = region.start_line - synthetic_header_lines;
-    const original_end_line = region.end_line - synthetic_header_lines;
-    const region_info = base.RegionInfo{
-        .start_line_idx = original_start_line - 1,
-        .start_col_idx = region.start_column - 1,
-        .end_line_idx = original_end_line - 1,
-        .end_col_idx = region.end_column - 1,
-    };
-
-    const line_text = try allocator.dupe(u8, region_info.calculateLineText(original_source, original_line_starts));
-    errdefer allocator.free(line_text);
-    const filename = try allocator.dupe(u8, original_path);
-    errdefer allocator.free(filename);
-
-    allocator.free(region.line_text);
-    if (region.filename) |old_filename| allocator.free(old_filename);
-
-    region.line_text = line_text;
-    region.filename = filename;
-    region.start_line = original_start_line;
-    region.end_line = original_end_line;
-}
-
-/// Whether a report element belongs to the staged app: either the caller
-/// already matched the module it came from (`staged_app_path` is null), or the
-/// element names the staged file itself, which is how reports the workspace
-/// emitted before any module was registered—header parsing, dependency
-/// resolution—are attributed.
-fn defaultAppElementNamesStagedApp(filename: ?[]const u8, staged_app_path: ?[]const u8) bool {
-    const staged = staged_app_path orelse return true;
-    const named = filename orelse return false;
-    return std.mem.eql(u8, named, staged);
-}
-
-fn remapDefaultAppDocumentElement(
-    allocator: Allocator,
-    element: *reporting.DocumentElement,
-    original_path: []const u8,
-    original_source: []const u8,
-    original_line_starts: []const u32,
-    synthetic_header_lines: u32,
-    staged_app_path: ?[]const u8,
-) Allocator.Error!void {
-    if (element.* == .source_code_region) {
-        try remapDefaultAppSourceRegion(
-            allocator,
-            &element.source_code_region,
-            original_path,
-            original_source,
-            original_line_starts,
-            synthetic_header_lines,
-            staged_app_path,
-        );
-    } else if (element.* == .source_code_with_underlines) {
-        const underlines = &element.source_code_with_underlines;
-        const old_start_line = underlines.display_region.start_line;
-        const old_filename_matched = defaultAppElementNamesStagedApp(underlines.display_region.filename, staged_app_path);
-        try remapDefaultAppSourceRegion(
-            allocator,
-            &underlines.display_region,
-            original_path,
-            original_source,
-            original_line_starts,
-            synthetic_header_lines,
-            staged_app_path,
-        );
-        if (!old_filename_matched) return;
-        if (old_start_line <= synthetic_header_lines) return;
-        for (underlines.underline_regions) |*underline| {
-            if (underline.start_line > synthetic_header_lines) {
-                underline.start_line -= synthetic_header_lines;
-            }
-            if (underline.end_line > synthetic_header_lines) {
-                underline.end_line -= synthetic_header_lines;
-            }
-        }
-    } else if (element.* == .source_location) {
-        const location = &element.source_location;
-        if (!defaultAppElementNamesStagedApp(location.filename, staged_app_path)) return;
-        if (location.line <= synthetic_header_lines) return;
-
-        const filename = try allocator.dupe(u8, original_path);
-        if (location.filename) |old_filename| allocator.free(old_filename);
-        location.filename = filename;
-        location.line -= synthetic_header_lines;
-    }
-}
-
-fn remapDefaultAppCheckReports(
-    ctx: *CliCtx,
-    check_result: *CheckResult,
-    synthetic_app_path: []const u8,
-    original_path: []const u8,
-    original_source: []const u8,
-    synthetic_header_lines: u32,
-) Allocator.Error!void {
-    var original_line_starts = try base.RegionInfo.findLineStarts(ctx.gpa, original_source);
-    defer original_line_starts.deinit(ctx.gpa);
-
-    for (check_result.reports) |*module| {
-        const module_is_staged_app = std.mem.eql(u8, module.file_path, synthetic_app_path);
-        // A report the workspace emitted before any module was registered has
-        // no module path of its own; the file its regions name is what says
-        // whether it belongs to the staged app.
-        if (!module_is_staged_app and module.file_path.len != 0) continue;
-
-        if (module_is_staged_app) {
-            const remapped_file_path = try ctx.gpa.dupe(u8, original_path);
-            errdefer ctx.gpa.free(remapped_file_path);
-            ctx.gpa.free(module.file_path);
-            module.file_path = remapped_file_path;
-        }
-
-        for (module.reports) |*report| {
-            for (report.document.elements.items) |*element| {
-                try remapDefaultAppDocumentElement(
-                    report.document.allocator,
-                    element,
-                    original_path,
-                    original_source,
-                    original_line_starts.items.items,
-                    synthetic_header_lines,
-                    if (module_is_staged_app) null else synthetic_app_path,
-                );
-            }
-        }
-    }
-}
-
 /// Timing information for check phases
 const CheckTimingInfo = if (builtin.target.cpu.arch == .wasm32) struct {} else TimingInfo;
 
@@ -17858,9 +20051,9 @@ const CheckResultWithBuildEnv = struct {
 
 /// Only failures that already have build reports may enter report recovery.
 /// Operational interpreter failures must never become a zero-error result.
-fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error{ OutOfMemory, RuntimeError }!void {
+fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error{ OutOfMemory, RuntimeError, NativeCompilationFailed }!void {
     switch (err) {
-        error.OutOfMemory, error.RuntimeError => |operational| return operational,
+        error.OutOfMemory, error.RuntimeError, error.NativeCompilationFailed => |operational| return operational,
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
@@ -17875,7 +20068,6 @@ fn requireReportableCheckFailure(err: CheckFileWithBuildEnvPreservedError) error
         error.EmptyCode,
         error.ExpectedAppHeader,
         error.ExpectedPlatformString,
-        error.ExpectedString,
         error.FileBusy,
         error.FileError,
         error.FileNotFound,
@@ -17933,6 +20125,44 @@ test "check report recovery propagates terminal interpreter failures" {
     try requireReportableCheckFailure(error.FileNotFound);
 }
 
+/// Drains the reports of a check that failed with `err`. A failure one of
+/// them carries as an error is shown through that report alone; a failure no
+/// error report carries propagates instead, since the check would otherwise
+/// announce "No errors found" with nothing to say what went wrong.
+fn drainReportedCheckFailure(build_env: *BuildEnv, err: CheckFileWithBuildEnvPreservedError) CheckFileWithBuildEnvPreservedError![]const BuildEnv.DrainedModuleReports {
+    try requireReportableCheckFailure(err);
+    const drained = try build_env.drainReports();
+    if (!drainedReportsCarryError(drained)) {
+        build_env.freeDrainedReports(drained);
+        return err;
+    }
+    return drained;
+}
+
+/// Whether any drained report has error severity.
+fn drainedReportsCarryError(drained: []const BuildEnv.DrainedModuleReports) bool {
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            if (report.severity.isError()) return true;
+        }
+    }
+    return false;
+}
+
+test "a check failure is carried only by a report of error severity" {
+    const gpa = std.testing.allocator;
+    var warnings = [_]reporting.Report{try reporting.Report.init(gpa, "Unused Value", "unused", .warning)};
+    defer warnings[0].deinit();
+    var errors = [_]reporting.Report{try reporting.Report.init(gpa, "Type Mismatch", "mismatch", .runtime_error)};
+    defer errors[0].deinit();
+    try std.testing.expect(!drainedReportsCarryError(&.{}));
+    try std.testing.expect(!drainedReportsCarryError(&.{.{ .abs_path = "App.roc", .reports = &warnings }}));
+    try std.testing.expect(drainedReportsCarryError(&.{
+        .{ .abs_path = "App.roc", .reports = &warnings },
+        .{ .abs_path = "Dep.roc", .reports = &errors },
+    }));
+}
+
 /// Resolving dependencies can download packages, so it is reported as its own
 /// phase rather than as part of Type Checking.
 fn buildForCheckWithOptionalMain(
@@ -17966,8 +20196,9 @@ fn checkFileWithBuildEnvPreserved(
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
     track_watch_inputs: bool,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResultWithBuildEnv {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -17981,115 +20212,25 @@ fn checkFileWithBuildEnvPreserved(
         .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
-        .synthetic_default_app = synthetic_default_app,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
     });
 
     errdefer build_env.deinit();
+    applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
-        try requireReportableCheckFailure(err);
-
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-        build_env.freeDrainedReportsPathsOnly(drained);
-
-        const timing = if (builtin.target.cpu.arch == .wasm32)
-            CheckTimingInfo{}
-        else
-            build_env.getTimingInfo();
-        const cache_stats = build_env.getBuildStats();
-
+        const drained = try drainReportedCheckFailure(&build_env, err);
         return CheckResultWithBuildEnv{
-            .check_result = .{
-                .reports = reports,
-                .timing = timing,
-                .error_count = error_count,
-                .warning_count = warning_count,
-                .modules_total = cache_stats.modules_total,
-                .cache_hits = cache_stats.cache_hits,
-                .cache_misses = cache_stats.cache_misses,
-                .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-                .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-                .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-                .modules_compiled = cache_stats.modules_compiled,
-                .module_time_min_ns = cache_stats.module_time_min_ns,
-                .module_time_max_ns = cache_stats.module_time_max_ns,
-                .module_time_sum_ns = cache_stats.module_time_sum_ns,
-            },
+            .check_result = try collectCheckResult(ctx, &build_env, drained, true),
             .build_env = build_env,
         };
     };
 
-    // Drain all reports
-    const drained = try build_env.drainReports();
-
-    // Count errors and warnings
-    var error_count: u32 = 0;
-    var warning_count: u32 = 0;
-
-    for (drained) |mod| {
-        for (mod.reports) |report| {
-            if (report.severity.isError()) error_count += 1 else warning_count += 1;
-        }
-    }
-
-    // Convert BuildEnv drained reports to our format
-    var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-    for (drained, 0..) |mod, i| {
-        reports[i] = .{
-            .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-            .reports = mod.reports, // Transfer ownership
-        };
-    }
-
-    // Free the original drained reports (abs_path strings and outer slice only)
-    // Note: reports ownership was transferred above, abs_path was duped
-    build_env.freeDrainedReportsPathsOnly(drained);
-
-    // Get timing information from BuildEnv
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
-    const cache_stats = build_env.getBuildStats();
-
-    const check_result = CheckResult{
-        .reports = reports,
-        .timing = timing,
-        .error_count = error_count,
-        .warning_count = warning_count,
-        .modules_total = cache_stats.modules_total,
-        .cache_hits = cache_stats.cache_hits,
-        .cache_misses = cache_stats.cache_misses,
-        .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-        .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-        .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-        .modules_compiled = cache_stats.modules_compiled,
-        .module_time_min_ns = cache_stats.module_time_min_ns,
-        .module_time_max_ns = cache_stats.module_time_max_ns,
-        .module_time_sum_ns = cache_stats.module_time_sum_ns,
-    };
-
     return CheckResultWithBuildEnv{
-        .check_result = check_result,
+        .check_result = try collectCheckResult(ctx, &build_env, try build_env.drainReports(), true),
         .build_env = build_env,
     };
 }
@@ -18106,8 +20247,9 @@ fn checkFileWithBuildEnv(
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
     source_dir_override: ?[]const u8,
-    synthetic_default_app: bool,
+    synthetic_default_app: ?SyntheticDefaultAppMapping,
     reporter: ?*progress.Reporter,
+    specialization_strategy: base.SpecializationStrategy,
 ) CheckFileWithBuildEnvPreservedError!CheckResult {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -18118,8 +20260,8 @@ fn checkFileWithBuildEnv(
         .verbose_cache = cache_config.verbose,
         .timings = timings,
         .resolution_config = resolution_config,
+        .specialization_strategy = specialization_strategy,
         .source_dir_override = source_dir_override,
-        .synthetic_default_app = synthetic_default_app,
         .root_source_url = root_source_url,
         .main_source_url = main_source_url,
         // Checking is not complete until the platform/app relation output
@@ -18129,48 +20271,26 @@ fn checkFileWithBuildEnv(
         .post_check_publication_mode = .executable_artifacts,
     });
     defer build_env.deinit();
+    applySyntheticDefaultAppMapping(&build_env, synthetic_default_app);
 
     buildForCheckWithOptionalMain(&build_env, filepath, main_filepath, reporter) catch |err| {
-        try requireReportableCheckFailure(err);
-
-        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
-        defer build_env.freeDrainedReportsPathsOnly(drained);
-
-        var error_count: u32 = 0;
-        var warning_count: u32 = 0;
-        for (drained) |mod| {
-            for (mod.reports) |report| {
-                if (report.severity.isError()) error_count += 1 else warning_count += 1;
-            }
-        }
-
-        var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
-        for (drained, 0..) |mod, i| {
-            reports[i] = .{
-                .file_path = try ctx.gpa.dupe(u8, mod.abs_path),
-                .reports = mod.reports,
-            };
-        }
-
-        const cache_stats = build_env.getBuildStats();
-        return CheckResult{
-            .reports = reports,
-            .error_count = error_count,
-            .warning_count = warning_count,
-            .modules_total = cache_stats.modules_total,
-            .cache_hits = cache_stats.cache_hits,
-            .cache_misses = cache_stats.cache_misses,
-            .canonicalized_cache_hits = cache_stats.canonicalized_cache_hits,
-            .canonicalized_cache_misses = cache_stats.canonicalized_cache_misses,
-            .canonicalized_cache_stores = cache_stats.canonicalized_cache_stores,
-            .modules_compiled = cache_stats.modules_compiled,
-            .module_time_min_ns = cache_stats.module_time_min_ns,
-            .module_time_max_ns = cache_stats.module_time_max_ns,
-            .module_time_sum_ns = cache_stats.module_time_sum_ns,
-        };
+        const drained = try drainReportedCheckFailure(&build_env, err);
+        return collectCheckResult(ctx, &build_env, drained, false);
     };
 
-    const drained = try build_env.drainReports();
+    return collectCheckResult(ctx, &build_env, try build_env.drainReports(), true);
+}
+
+/// Collects a check's drained reports (taking ownership of the reports and
+/// freeing the drained paths), their error and warning counts, and the build
+/// statistics of `build_env` into a `CheckResult`. Phase timings are included
+/// only when `include_timing` is set.
+fn collectCheckResult(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    drained: []const BuildEnv.DrainedModuleReports,
+    include_timing: bool,
+) CheckFileWithBuildEnvPreservedError!CheckResult {
     defer build_env.freeDrainedReportsPathsOnly(drained);
 
     var error_count: u32 = 0;
@@ -18180,7 +20300,6 @@ fn checkFileWithBuildEnv(
             if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
-
     var reports = try ctx.gpa.alloc(DrainedReport, drained.len);
     for (drained, 0..) |mod, i| {
         reports[i] = .{
@@ -18189,15 +20308,9 @@ fn checkFileWithBuildEnv(
         };
     }
 
-    const timing = if (builtin.target.cpu.arch == .wasm32)
-        CheckTimingInfo{}
-    else
-        build_env.getTimingInfo();
     const cache_stats = build_env.getBuildStats();
-
-    return CheckResult{
+    var result = CheckResult{
         .reports = reports,
-        .timing = timing,
         .error_count = error_count,
         .warning_count = warning_count,
         .modules_total = cache_stats.modules_total,
@@ -18211,6 +20324,8 @@ fn checkFileWithBuildEnv(
         .module_time_max_ns = cache_stats.module_time_max_ns,
         .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
+    if (builtin.target.cpu.arch != .wasm32 and include_timing) result.timing = build_env.getTimingInfo();
+    return result;
 }
 
 fn finishRocCheck(
@@ -18233,7 +20348,7 @@ fn finishRocCheck(
     ctx.io.flush();
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, check_result.error_count, check_result.warning_count, args.path, stderr_report_config) catch {};
 
         if (args.verbose) {
             printVerboseStats(stderr, check_result);
@@ -18250,7 +20365,8 @@ fn finishRocCheck(
         writeNoErrors(stdout, ctx.usesColor(.stdout)) catch {};
         stdout.writeAll(" found in ") catch {};
         formatElapsedTimeMs(stdout, elapsed) catch {};
-        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = args.path }}) catch {};
+        const display_path = try ctx.displayPath(args.path);
+        stdout.print(" for {f}\n", .{base.bidi.Display{ .bytes = display_path }}) catch {};
 
         if (args.verbose) {
             printVerboseStats(stdout, check_result);
@@ -18264,17 +20380,12 @@ fn finishRocCheck(
     }
 }
 
-const DefaultAppCheckSourceFiles = struct {
-    app_path: []const u8,
-    header_lines: u32,
-};
-
 fn writeDefaultAppCheckSourceFiles(
     ctx: *CliCtx,
     temp_dir: []const u8,
     original_path: []const u8,
     staged: *const default_app.Staged,
-) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!DefaultAppCheckSourceFiles {
+) (Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)![]const u8 {
     const platform_dir = try std.fs.path.join(ctx.arena, &.{ temp_dir, default_app.platform_dir_name });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, platform_dir);
 
@@ -18287,10 +20398,7 @@ fn writeDefaultAppCheckSourceFiles(
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = echo_platform.platform_main_source });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
-    return .{
-        .app_path = app_path,
-        .header_lines = staged.header_lines,
-    };
+    return app_path;
 }
 
 fn rocCheckDefaultApp(
@@ -18307,12 +20415,12 @@ fn rocCheckDefaultApp(
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
+    const app_path = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var check_result = try checkFileWithBuildEnv(
         ctx,
-        files.app_path,
+        app_path,
         null,
         null,
         null,
@@ -18321,19 +20429,11 @@ fn rocCheckDefaultApp(
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
-        true,
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer check_result.deinit(ctx.gpa);
-
-    try remapDefaultAppCheckReports(
-        ctx,
-        &check_result,
-        files.app_path,
-        args.path,
-        staged.original_source,
-        files.header_lines,
-    );
 
     return check_result;
 }
@@ -18362,12 +20462,12 @@ fn rocCheckDefaultAppPreserved(
     };
     defer std.Io.Dir.cwd().deleteTree(ctx.io.std_io, temp_dir) catch {};
 
-    const files = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
+    const app_path = try writeDefaultAppCheckSourceFiles(ctx, temp_dir, args.path, staged);
     const original_source_dir = std.fs.path.dirname(args.path) orelse ".";
 
     var result_with_env = try checkFileWithBuildEnvPreserved(
         ctx,
-        files.app_path,
+        app_path,
         null,
         null,
         null,
@@ -18377,23 +20477,15 @@ fn rocCheckDefaultAppPreserved(
         resolutionConfigFromLimits(args.resolve_limits),
         original_source_dir,
         track_watch_inputs,
-        true,
+        SyntheticDefaultAppMapping.fromStaged(args.path, staged),
         reporter,
+        currentRuntimeSpecializationStrategy(args.specialization_strategy),
     );
     errdefer result_with_env.deinit(ctx.gpa);
 
-    try remapDefaultAppCheckReports(
-        ctx,
-        &result_with_env.check_result,
-        files.app_path,
-        args.path,
-        staged.original_source,
-        files.header_lines,
-    );
-
     return .{
         .result_with_env = result_with_env,
-        .synthetic_app_path = files.app_path,
+        .synthetic_app_path = app_path,
     };
 }
 
@@ -18466,7 +20558,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             if (builtin.target.cpu.arch == .wasm32) {
                 reporter.end();
             } else {
-                finishFrontEndPhase(&reporter, check_result.timing);
+                try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result);
             }
             reporter.finish();
 
@@ -18486,8 +20578,9 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             resolutionConfigFromLimits(args.resolve_limits),
             null,
             true,
-            false,
+            null,
             &reporter,
+            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             try writeWatchInputsFile(ctx, file_path, null, extra_paths);
@@ -18499,7 +20592,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
         if (builtin.target.cpu.arch == .wasm32) {
             reporter.end();
         } else {
-            finishFrontEndPhase(&reporter, check_result.timing);
+            try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, check_result);
         }
         reporter.finish();
 
@@ -18525,8 +20618,9 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
             null,
-            false,
+            null,
             &reporter,
+            currentRuntimeSpecializationStrategy(args.specialization_strategy),
         ) catch |err| {
             reporter.fail();
             return handleProcessFileError(err, stderr, args.path);
@@ -18536,7 +20630,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
     if (builtin.target.cpu.arch == .wasm32) {
         reporter.end();
     } else {
-        finishFrontEndPhase(&reporter, check_result.timing);
+        try finishCheckFrontEndPhase(ctx.arena, ctx.reportConfig(.stderr), &reporter, &check_result);
     }
     reporter.finish();
 
@@ -18555,7 +20649,7 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
         writer.print("  can diagnostics:              ", .{}) catch {};
         formatElapsedTime(writer, t.canonicalize_diagnostics_ns) catch {};
         writer.print("  ({} ns)", .{t.canonicalize_diagnostics_ns}) catch {};
-        writer.print("  type checking:                ", .{}) catch {};
+        writer.print("  check, restore + publish:     ", .{}) catch {};
         formatElapsedTime(writer, t.type_checking_ns) catch {};
         writer.print("  ({} ns)", .{t.type_checking_ns}) catch {};
         writer.print("  type checking diagnostics:    ", .{}) catch {};
@@ -18839,7 +20933,7 @@ fn rocBump(ctx: *CliCtx, args_in: cli_args.BumpArgs) CliMainError!void {
     var result = try bump.diff.diff(ctx.gpa, &old_api, &new_api);
     defer result.deinit();
 
-    stdout.print("Comparing {s} (old, {f}) with {s} (new)...\n", .{ args.old, old_version_value, args.path }) catch {};
+    stdout.print("Comparing {s} (old, {f}) with {s} (new)...\n", .{ try ctx.displayPath(args.old), old_version_value, try ctx.displayPath(args.path) }) catch {};
 
     if (result.changes.len == 0) {
         stdout.print("\nNo API changes detected.\n", .{}) catch {};
@@ -18925,8 +21019,9 @@ fn bumpCheckSide(
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
         null,
+        null,
+        .lss,
     ) catch |err| {
         try handleProcessFileError(err, stderr, path);
         return error.CliError;
@@ -18957,7 +21052,7 @@ fn extractBundleForBump(ctx: *CliCtx, archive_path: []const u8) CliMainError![]c
     const basename = std.fs.path.basename(archive_path);
     const hash = basename[0 .. basename.len - ".tar.zst".len];
 
-    const cache_dir_path = getRocCacheDir(ctx.arena) catch {
+    const cache_dir_path = compile.build.packagesCacheDir(ctx.coreCtx(), ctx.arena) catch {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = "Could not determine cache directory" } });
     };
     const package_dir_path = try std.fs.path.join(ctx.arena, &.{ cache_dir_path, hash });
@@ -19016,7 +21111,7 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
             .message = try std.fmt.allocPrint(
                 ctx.arena,
                 "roc bump compares package APIs, but the {s} module ({s}) has neither a package nor a platform header.",
-                .{ side, root_pkg.root_file },
+                .{ side, try ctx.displayPath(root_pkg.root_file) },
             ),
         } });
     }
@@ -19090,11 +21185,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         const public_modules = try build_env.getPublicRootModules(ctx.gpa);
         defer ctx.gpa.free(public_modules);
         for (public_modules) |module| {
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19102,12 +21196,13 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
 
     if (root_pkg.kind == .platform and root_pkg.public_surface.root_names.items.len > 0) {
         const root_module = build_env.rootModule(root_name) orelse return error.Internal;
-        const root_data = root_module.semanticData() orelse return error.Internal;
-        const root_artifact = root_data.checked_artifact orelse return error.Internal;
+        const root_data = root_module.checkedModule() orelse {
+            base.invariant("bump invariant violated: platform root module did not complete successfully", .{});
+        };
         try inputs.append(ctx.gpa, .{
             .exposed_name = root_module.name,
             .module_env = root_data.env,
-            .artifact = root_artifact,
+            .artifact = root_data.checked_artifact,
             .exposed_names = root_pkg.public_surface.root_names.items,
         });
     }
@@ -19119,11 +21214,10 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
         for (routing_modules) |module| {
             if (std.mem.eql(u8, module.package_name, root_name)) continue;
             if (module.public_type_decl == null) continue;
-            const artifact = module.semantic.checked_artifact orelse return error.Internal;
             try inputs.append(ctx.gpa, .{
                 .exposed_name = module.name,
-                .module_env = module.semantic.env,
-                .artifact = artifact,
+                .module_env = module.checked.env,
+                .artifact = module.checked.checked_artifact,
                 .public_type_decl = module.public_type_decl,
             });
         }
@@ -19164,13 +21258,63 @@ fn bumpExtractApi(ctx: *CliCtx, build_env: *compile.BuildEnv, side: []const u8) 
                 ),
                 .private_type_in_public_api => try std.fmt.allocPrint(
                     ctx.arena,
-                    "The {s} package's public API references the type `{s}`, which is not itself part of the exposed API.",
+                    "The {s} package's public API references the type `{s}`, which is not itself part of the exposed API.\n\nTip: Expose the module that declares it, or give it a public name with a type alias in an exposed module.",
                     .{ side, info.detail },
                 ),
             };
             return ctx.fail(.{ .bump_failed = .{ .title = "Cannot Extract Public API", .message = message } });
         },
     };
+}
+
+/// Count the source import graph using the resolver and parser inventories;
+/// no BuildEnv or builtin artifacts are needed for this command.
+fn rocLoc(ctx: *CliCtx, args: cli_args.LocArgs) CliMainError!void {
+    const start = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
+    const source = try resolveSourceArg(ctx, args.path, false);
+    const fs = ctx.coreCtx();
+    const root = fs.canonicalize(source.path, ctx.arena) catch |err| {
+        try ctx.io.stderr().print("Could not count {f}: {s}\n", .{ base.bidi.Display{ .bytes = source.path }, @errorName(err) });
+        return error.LocFailed;
+    };
+    const package_cache = compile.build.packagesCacheDir(fs, ctx.arena) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoCacheDir => null,
+    };
+    var fetcher: compile.package_resolution.CtxFetcher = .{ .fs = fs, .gpa = ctx.gpa, .cache_packages_dir = package_cache };
+    var resolver = compile.package_resolution.Resolver.init(ctx.gpa, fetcher.fetcher(), resolutionConfigFromLimits(args.resolve_limits));
+    defer resolver.deinit();
+    if (source.url) |url| resolver.setRootUrl(url);
+    var resolved = resolver.resolve(root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ResolutionFailed => {
+            const config = ctx.reportConfig(.stderr);
+            for (resolver.diagnostics.items) |*diagnostic| {
+                if (diagnostic.located) |*report| {
+                    try reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(config), config);
+                } else {
+                    try ctx.io.stderr().print("{s}: {s}\n", .{ diagnostic.title, diagnostic.message });
+                }
+            }
+            return error.LocFailed;
+        },
+    };
+    defer resolved.deinit();
+    var manager = CacheManager.init(ctx.gpa, .{ .enabled = !args.no_cache, .roc_ctx = fs }, fs);
+    var graph = compile.source_graph.Graph.init(ctx.gpa, fs, &manager, &resolved);
+    defer graph.deinit();
+    graph.run() catch |err| {
+        try ctx.io.stderr().print("Could not count {f}", .{base.bidi.Display{ .bytes = graph.failure.path }});
+        if (graph.failure.import_name) |name| try ctx.io.stderr().print(" (import {f})", .{base.bidi.Display{ .bytes = name }});
+        try ctx.io.stderr().print(": {s}\n", .{@errorName(err)});
+        return error.LocFailed;
+    };
+    const stdout = ctx.io.stdout();
+    try @import("loc.zig").render(stdout, graph.rootKind(), graph.totals());
+    const elapsed: u64 = @intCast(std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds - start);
+    try stdout.writeAll("Counted in ");
+    try formatElapsedTimeMs(stdout, elapsed);
+    try stdout.writeByte('\n');
 }
 
 /// `roc deps`: resolve the root's dependency graph and print it as a tree
@@ -19362,12 +21506,29 @@ test "renderDependencyTree shows declared sources, provenance, and shared subtre
     try std.testing.expect(std.mem.find(u8, out.items, "characters") == null);
 }
 
+/// Apply optional search metadata after all documentation destinations exist.
+fn configureDocsSearch(ctx: *CliCtx, args: cli_args.DocsArgs) CliMainError!void {
+    if (args.search_config) |path| {
+        var diagnostic: docs.search_config.Diagnostic = .{};
+        docs.search_config.apply(ctx.gpa, ctx.io.std_io, args.output, path, &diagnostic) catch |err| {
+            const stderr = ctx.io.stderr();
+            if (diagnostic.line > 0) {
+                stderr.print("{s}:{d}: could not configure documentation search: {}\n", .{ path, diagnostic.line, err }) catch {};
+            } else {
+                stderr.print("{s}: could not configure documentation search: {}\n", .{ path, err }) catch {};
+            }
+            return error.DocsFailed;
+        };
+    }
+}
+
 fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     if (args_in.builtins) {
         try generateBuiltinDocs(ctx, args_in.output, args_in.with_lang_ref);
+        try configureDocsSearch(ctx, args_in);
         ctx.io.stdout().print("\nGenerated docs for the builtins\n", .{}) catch {};
         if (args_in.serve) {
             try serveDocumentation(ctx, args_in.output);
@@ -19409,8 +21570,9 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         resolutionConfigFromLimits(args.resolve_limits),
         null,
         false,
-        false,
         null,
+        null,
+        .lss,
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };
@@ -19434,7 +21596,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
     }
 
     if (check_result.error_count > 0 or check_result.warning_count > 0) {
-        renderSummaryHeaderLine(stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
+        renderSummaryHeaderLine(ctx.arena, stderr, check_result.error_count, check_result.warning_count, args.path, report_config) catch {};
 
         if (check_result.error_count > 0) {
             return error.DocsFailed;
@@ -19448,8 +21610,9 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
 
     // Generate documentation for all packages and modules
     try generateDocs(ctx, &result_with_env.build_env, args.path, args.output, args.with_lang_ref);
+    try configureDocsSearch(ctx, args);
 
-    stdout.print("\nGenerated docs for {s}\n", .{args.path}) catch {};
+    stdout.print("\nGenerated docs for {s}\n", .{try ctx.displayPath(args.path)}) catch {};
 
     // Start HTTP server if --serve flag is enabled
     if (args.serve) {
@@ -19502,12 +21665,11 @@ fn generateDocs(
         defer ctx.gpa.free(routing_modules);
         for (routing_modules) |module_info| {
             const source_decl = module_info.public_type_decl orelse continue;
-            const artifact = module_info.semantic.checked_artifact orelse unreachable;
             try public_type_projections.append(ctx.gpa, .{
                 .public_name = module_info.name,
                 .package_name = build_env.displayNameForPackage(module_info.package_name),
-                .source_env = module_info.semantic.env,
-                .source_identity = &artifact.key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             });
@@ -19521,18 +21683,17 @@ fn generateDocs(
         const sched_pkg_name = build_env.displayNameForPackage(module_info.package_name);
         modules_seen += 1;
 
-        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.semantic.env, sched_pkg_name, module_info.path, .{
+        var mod_docs = extract.extractModuleDocsWithOptions(ctx.gpa, module_info.checked.env, sched_pkg_name, module_info.path, .{
             .exposed_names = module_info.docs_exposed_names,
             .public_type = if (module_info.public_type_decl) |source_decl| .{
                 .public_name = module_info.name,
                 .package_name = sched_pkg_name,
-                .source_env = module_info.semantic.env,
-                .source_identity = &(module_info.semantic.checked_artifact orelse unreachable).key.module_identity_hash,
+                .source_env = module_info.checked.env,
+                .source_identity = &module_info.checked.checked_artifact.module_identity.stable_hash,
                 .source_decl = source_decl,
                 .public_order = module_info.public_order,
             } else null,
             .public_types = public_type_projections.items,
-            .checked_artifact = module_info.semantic.checked_artifact,
         }) catch |err| {
             std.debug.print("Warning: failed to extract docs for module {s}: {}\n", .{ module_info.name, err });
             extract_failed += 1;
@@ -19599,7 +21760,7 @@ fn generateDocs(
 /// the exact module, already checked when the compiler was built, that every
 /// program this compiler builds uses.
 fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref: bool) CliMainError!void {
-    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
+    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa, ctx.io.std_io);
     defer builtin_modules.deinit();
 
     const package_docs = package_docs: {
@@ -19607,9 +21768,7 @@ fn generateBuiltinDocs(ctx: *CliCtx, base_output_dir: []const u8, with_lang_ref:
         errdefer ctx.gpa.free(modules);
         // The builtin is documented as a standalone root type module, whose
         // display package name is `module` (see `BuildEnv.displayNameForPackage`).
-        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{
-            .checked_artifact = &builtin_modules.checked_artifact,
-        });
+        modules[0] = try docs.extract.extractModuleDocsWithOptions(ctx.gpa, builtin_modules.builtin_module.env, "module", "Builtin.roc", .{});
         errdefer modules[0].deinit(ctx.gpa);
         break :package_docs docs.DocModel.PackageDocs{ .name = try ctx.gpa.dupe(u8, "Builtin"), .modules = modules };
     };
@@ -19863,40 +22022,6 @@ test "refreshWatchState reports stale snapshot for existing watch set" {
     try testing.expect(changed);
 }
 
-test "watch byte change advances snapshot before rebuild completes" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var io_state = Io.create(testing.io);
-    var ctx = CliCtx.init(allocator, arena.allocator(), &io_state, .check);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
-    defer allocator.free(tmp_root);
-    const watched_path = try std.fs.path.join(allocator, &.{ tmp_root, "watched.txt" });
-    defer allocator.free(watched_path);
-
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "old" });
-
-    var signal = WatchEventSignal{};
-    var state = WatchState{};
-    defer state.deinit(&ctx);
-    const initial_inputs = try collectWatchInputSet(&ctx, null, &.{watched_path});
-    try testing.expect(!try refreshWatchState(&ctx, &state, &signal, initial_inputs));
-
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "watched.txt", .data = "new" });
-
-    try testing.expect(try watchStateHasByteChanges(&ctx, &state));
-    try testing.expect(!try watchStateHasByteChanges(&ctx, &state));
-}
-
 test "watch exact inputs recover missing directories and atomic replacement" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
     const testing = std.testing;
@@ -19961,7 +22086,7 @@ test "appendWindowsQuotedArg" {
     // Helper to test the quoting function
     const testQuote = struct {
         fn run(input: []const u8, expected: []const u8) CliMainError!void {
-            var cmd = std.array_list.Managed(u8).initCapacity(testing.allocator, 64) catch unreachable;
+            var cmd = try std.array_list.Managed(u8).initCapacity(testing.allocator, 64);
             defer cmd.deinit();
             try appendWindowsQuotedArg(&cmd, input);
             try testing.expectEqualStrings(expected, cmd.items);
@@ -20045,9 +22170,19 @@ test "bidi controls in diagnostic summary paths remain visible" {
     var output = std.Io.Writer.Allocating.init(std.testing.allocator);
     defer output.deinit();
     for (base.bidi.controls) |control| {
-        try renderSummaryHeaderLine(&output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
+        try renderSummaryHeaderLine(std.testing.allocator, &output.writer, 1, 0, control.utf8, reporting.ReportingConfig.initForTesting());
         try std.testing.expect(std.mem.find(u8, output.written(), control.visible) != null);
     }
     var iter = base.bidi.Iterator{ .bytes = output.written() };
     try std.testing.expect(iter.next() == null);
+}
+
+test "dev ARC specialization is independent of source inlining" {
+    for ([_]cli_args.OptLevel{ .dev, .interpreter, .speed, .size }) |opt| {
+        const config = checkedRuntimeLoweringConfig(.linked_output, opt, .lss, .x64glibc, false);
+        const expected = opt == .speed or opt == .size;
+        try std.testing.expectEqual(expected, config.target.specialize_arc_modes);
+        try std.testing.expectEqual(expected, lir.CheckedPipeline.LirPolicy.fromTarget(config.target).specialize_arc_modes);
+        if (opt == .dev) try std.testing.expect(config.target.inline_mode != .none);
+    }
 }

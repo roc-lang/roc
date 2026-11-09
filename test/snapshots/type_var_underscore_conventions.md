@@ -47,7 +47,7 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")
@@ -81,7 +81,7 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "list")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_list")
@@ -115,7 +115,7 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")
@@ -129,7 +129,7 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")
@@ -143,7 +143,7 @@ TYPE MISMATCH - type_var_underscore_conventions.md:9:26:9:35
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")

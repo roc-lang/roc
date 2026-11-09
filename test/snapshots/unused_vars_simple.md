@@ -40,7 +40,7 @@ UNDERSCORE VARIABLE USED - unused_vars_simple.md:7:28:7:34
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "x")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_x")
@@ -208,7 +208,7 @@ main! = |_| {
 		(e-lambda
 			(args
 				(p-assign (ident "number")))
-			(e-dispatch-call (method "plus") (constraint-fn-var 282)
+			(e-dispatch-call (method "plus") (constraint-fn-var 287)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "number"))))
@@ -222,33 +222,33 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "a"))
-					(e-call (constraint-fn-var 296)
+					(e-call (constraint-fn-var 301)
 						(e-lookup-local
 							(p-assign (ident "unused_regular")))
 						(e-num (value "5"))))
 				(s-let
 					(p-assign (ident "b"))
-					(e-call (constraint-fn-var 306)
+					(e-call (constraint-fn-var 311)
 						(e-lookup-local
 							(p-assign (ident "used_underscore")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "c"))
-					(e-call (constraint-fn-var 319)
+					(e-call (constraint-fn-var 324)
 						(e-lookup-local
 							(p-assign (ident "unused_underscore")))
 						(e-num (value "15"))))
 				(s-let
 					(p-assign (ident "d"))
-					(e-call (constraint-fn-var 333)
+					(e-call (constraint-fn-var 338)
 						(e-lookup-local
 							(p-assign (ident "used_regular")))
 						(e-num (value "20"))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 338)
+				(e-dispatch-call (method "plus") (constraint-fn-var 343)
 					(receiver
-						(e-dispatch-call (method "plus") (constraint-fn-var 336)
+						(e-dispatch-call (method "plus") (constraint-fn-var 341)
 							(receiver
-								(e-dispatch-call (method "plus") (constraint-fn-var 334)
+								(e-dispatch-call (method "plus") (constraint-fn-var 339)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "a"))))

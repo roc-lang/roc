@@ -15,6 +15,7 @@ const uriFromPath = helpers.uriFromPath;
 const UnitTestError = std.mem.Allocator.Error ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Reader.Error ||
+    std.Io.ConcurrentError ||
     std.json.ParseError(std.json.Scanner) ||
     helpers.HelperError ||
     error{
@@ -52,7 +53,7 @@ fn requestInput(
     request_body: []const u8,
 ) std.mem.Allocator.Error![]u8 {
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
     ;
     const initialized_body =
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}
@@ -186,7 +187,9 @@ test "formatting handler formats simple expression with test syntax driver" {
     var writer_buffer: [16384]u8 = undefined;
     const run = try runUnitServer(allocator, input, &writer_buffer);
     defer freeRun(allocator, run);
-    try std.testing.expectEqual(@as(usize, 1), run.check_calls);
+    // Parsing alone answers this request, so it does not run the check the
+    // open scheduled, and shutdown drops that check.
+    try std.testing.expectEqual(@as(usize, 0), run.check_calls);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
     defer parsed.deinit();
@@ -245,7 +248,9 @@ test "folding range handler finds bracket ranges with test syntax driver" {
     var writer_buffer: [16384]u8 = undefined;
     const run = try runUnitServer(allocator, input, &writer_buffer);
     defer freeRun(allocator, run);
-    try std.testing.expectEqual(@as(usize, 1), run.check_calls);
+    // Parsing alone answers this request, so it does not run the check the
+    // open scheduled, and shutdown drops that check.
+    try std.testing.expectEqual(@as(usize, 0), run.check_calls);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
     defer parsed.deinit();
@@ -323,7 +328,9 @@ test "selection range handler returns range hierarchy with test syntax driver" {
     var writer_buffer: [16384]u8 = undefined;
     const run = try runUnitServer(allocator, input, &writer_buffer);
     defer freeRun(allocator, run);
-    try std.testing.expectEqual(@as(usize, 1), run.check_calls);
+    // Parsing alone answers this request, so it does not run the check the
+    // open scheduled, and shutdown drops that check.
+    try std.testing.expectEqual(@as(usize, 0), run.check_calls);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, allocator, try responseWithId(allocator, run.responses, 2), .{});
     defer parsed.deinit();

@@ -54,11 +54,38 @@ x = {
 }
 ~~~
 # EXPECTED
+EXPECTED PACKAGE PATH - multiline_string_complex.md:4:6:4:17
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
+MISSING METHOD - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
+	(report
+		(severity runtime_error)
+		(title "Expected Package Path")
+		(region (start 4 6) (end 4 17))
+		(headline
+			(reflow "I was parsing a dependency entry, and I expected a string path."))
+		(document
+			(reflow "Normal package dependencies use a string path after the colon. Use ")
+			(annotated code "platform \"...\"")
+			(reflow " only for the single platform entry.")
+			(line-break)
+			(line-break)
+			(text "For example:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "json: \"../json/main.roc\"")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(text "I found ")
+			(annotated code "\\\\Multiline")
+			(text " here.")
+			(line-break)
+			(line-break)
+			(source-region (file "multiline_string_complex.md") (start 4 6) (end 4 17) (annotation error) (line-text "\t\tx: \\\\Multiline"))))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -77,10 +104,18 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "Nothing in this program determines the type of this number:"))
+			(reflow "This number's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "minus")
+			(reflow " ")
+			(reflow "method for")
+			(reflow " ")
+			(annotated code "-")
+			(reflow " ")
+			(reflow "to call."))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)
@@ -93,16 +128,7 @@ TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated operator "-")
-			(reflow " ")
-			(reflow "to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a suffix or a type annotation saying which type it should be."))))
+			(reflow "Giving the number a suffix, using it somewhere that requires a specific type, or annotating it will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -218,7 +244,48 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package
+	[]
+	{
+		x: \\Multiline
+	}
+
+value1 = \\This is a "string" with just one line
+
+value2 =
+	\\This is a "string" with just one line
+
+value3 = \\This is a string
+	\\With multiple lines
+	\\${value1}
+
+value4 =
+	\\This is a string
+	# A comment in between
+	\\With multiple lines
+	\\${value2}
+
+value5 = {
+	a: \\Multiline
+	,
+	b: (
+		\\Multiline
+		,
+		\\Multiline
+	),
+	c: [
+		\\multiline
+	],
+	d: (
+		0 - \\
+	),
+	e: !\\
+}
+
+x = {
+	\\
+	\\
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -238,7 +305,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 290) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 298) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -254,7 +321,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 304) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 336) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -283,14 +350,12 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 355)
-						(receiver
-							(e-runtime-error (tag "erroneous_value_expr")))
-						(args
-							(e-string))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "0"))
+						(e-string)))
 				(field (name "e")
-					(e-call (constraint-fn-var 370)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18187") (target-def "18187"))
+					(e-call (constraint-fn-var 415)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18508") (target-def "18508"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

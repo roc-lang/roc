@@ -37,7 +37,7 @@ NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 				(file "fuzz_crash_099.md")
 				(line 3)
 				(column 22))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "fuzz_crash_099.md") (start 3 22) (end 3 23) (annotation dim) (line-text "    fn1 = |a,insert({a: 1, a: 2}, 3)nt b||||| a + b Ok({})"))
 			(line-break)
@@ -49,7 +49,7 @@ NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "insert")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_insert")
@@ -63,7 +63,7 @@ NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "nt")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_nt")
@@ -77,7 +77,7 @@ NON EXHAUSTIVE DESTRUCTURE - fuzz_crash_099.md:3:20:3:37
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "fn1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_fn1")
@@ -193,9 +193,9 @@ main! = |_args| {
 				(p-assign (ident "_args")))
 			(e-block
 				(s-dbg
-					(e-dispatch-call (method "insert") (constraint-fn-var 283)
+					(e-dispatch-call (method "insert") (constraint-fn-var 288)
 						(receiver
-							(e-call (constraint-fn-var 279)
+							(e-call (constraint-fn-var 284)
 								(e-lookup-external
 									(builtin))))
 						(args
@@ -234,7 +234,7 @@ main! = |_args| {
 										(capture (ident "b")))
 									(e-lambda
 										(args)
-										(e-dispatch-call (method "plus") (constraint-fn-var 370)
+										(e-dispatch-call (method "plus") (constraint-fn-var 375)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "a"))))

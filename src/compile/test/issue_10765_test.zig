@@ -83,7 +83,7 @@ test "issue 10765: nested erroneous dispatch operand reports the name" {
 test "issue 10765: erroneous for iterable does not introduce iterator constraints" {
     try expectChecksWithNameNotInScope(
         \\f = || {
-        \\    for _ in { bad: d } 0
+        \\    for _ in { bad: d } {}
         \\}
         \\
         \\main! = |_| Ok({})

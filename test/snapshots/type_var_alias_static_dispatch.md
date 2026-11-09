@@ -392,7 +392,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "default") (type-dispatch-stmt 11) (constraint-fn-var 408)
+				(e-type-dispatch-call (method "default") (type-dispatch-stmt 11) (constraint-fn-var 413)
 					(args))))
 		(annotation
 			(ty-fn (effectful false)
@@ -411,7 +411,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "A") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 29) (constraint-fn-var 416)
+				(e-type-dispatch-call (method "from_b") (type-dispatch-stmt 29) (constraint-fn-var 421)
 					(args
 						(e-lookup-local
 							(p-assign (ident "second")))))))
@@ -436,12 +436,12 @@ from_str = |str| {
 				(e-if
 					(if-branches
 						(if-branch
-							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 51) (constraint-fn-var 429)
+							(e-type-dispatch-call (method "validate") (type-dispatch-stmt 51) (constraint-fn-var 434)
 								(args
 									(e-lookup-local
 										(p-assign (ident "input")))))
 							(e-block
-								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 51) (constraint-fn-var 434)
+								(e-type-dispatch-call (method "transform") (type-dispatch-stmt 51) (constraint-fn-var 439)
 									(args
 										(e-lookup-local
 											(p-assign (ident "input"))))))))
@@ -472,9 +472,9 @@ from_str = |str| {
 					(ty-rigid-var (name "x")))
 				(s-let
 					(p-assign (ident "initial"))
-					(e-type-dispatch-call (method "first") (type-dispatch-stmt 79) (constraint-fn-var 445)
+					(e-type-dispatch-call (method "first") (type-dispatch-stmt 79) (constraint-fn-var 450)
 						(args)))
-				(e-type-dispatch-call (method "second") (type-dispatch-stmt 79) (constraint-fn-var 448)
+				(e-type-dispatch-call (method "second") (type-dispatch-stmt 79) (constraint-fn-var 453)
 					(args
 						(e-lookup-local
 							(p-assign (ident "initial")))))))
@@ -503,11 +503,11 @@ from_str = |str| {
 					(ty-rigid-var (name "b")))
 				(e-tuple
 					(elems
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 108) (constraint-fn-var 458)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 108) (constraint-fn-var 463)
 							(args
 								(e-lookup-local
 									(p-assign (ident "x")))))
-						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 109) (constraint-fn-var 461)
+						(e-type-dispatch-call (method "convert") (type-dispatch-stmt 109) (constraint-fn-var 466)
 							(args
 								(e-lookup-local
 									(p-assign (ident "y")))))))))
@@ -536,7 +536,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "T") (type-var "t")
 					(ty-rigid-var (name "t")))
-				(e-type-dispatch-call (method "create") (type-dispatch-stmt 132) (constraint-fn-var 478)
+				(e-type-dispatch-call (method "create") (type-dispatch-stmt 132) (constraint-fn-var 483)
 					(args
 						(e-lookup-local
 							(p-assign (ident "name")))
@@ -560,7 +560,7 @@ from_str = |str| {
 			(e-block
 				(s-type-var-alias (alias "Thing") (type-var "thing")
 					(ty-rigid-var (name "thing")))
-				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 150) (constraint-fn-var 489)
+				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 150) (constraint-fn-var 494)
 					(args
 						(e-lookup-local
 							(p-assign (ident "str")))))))
@@ -578,18 +578,18 @@ from_str = |str| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{} -> thing where [thing.default : ({}) -> thing]"))
+		(patt (type "{} -> thing where [thing.default : () -> thing]"))
 		(patt (type "a, b -> a where [a.from_b : b -> a]"))
 		(patt (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
-		(patt (type "x -> x where [x.first : ({}) -> x, x.second : x -> x]"))
+		(patt (type "x -> x where [x.first : () -> x, x.second : x -> x]"))
 		(patt (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
 		(patt (type "t, Str -> t where [t.create : Str, U64 -> t]"))
 		(patt (type "Str -> thing where [thing.from_str : Str -> thing]")))
 	(expressions
-		(expr (type "{} -> thing where [thing.default : ({}) -> thing]"))
+		(expr (type "{} -> thing where [thing.default : () -> thing]"))
 		(expr (type "a, b -> a where [a.from_b : b -> a]"))
 		(expr (type "val -> val where [val.transform : val -> val, val.validate : val -> Bool]"))
-		(expr (type "x -> x where [x.first : ({}) -> x, x.second : x -> x]"))
+		(expr (type "x -> x where [x.first : () -> x, x.second : x -> x]"))
 		(expr (type "a, b -> (a, b) where [a.convert : a -> a, b.convert : b -> b]"))
 		(expr (type "t, Str -> t where [t.create : Str, U64 -> t]"))
 		(expr (type "Str -> thing where [thing.from_str : Str -> thing]"))))

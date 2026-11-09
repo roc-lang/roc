@@ -16,11 +16,17 @@ const ImmortalLocals = @import("immortal_locals.zig");
 const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
+const ErasedOwner = @import("erased_owner.zig");
 const StrAppend = @import("str_append.zig");
 const SingleUseInline = @import("single_use_inline.zig");
 
 /// Completed compile-time scalar roots a forked continuation lowers as literals.
 pub const CompletedScalarValues = postcheck.ComptimeScalarValues.CompletedScalarValues;
+/// The erased callables completed compile-time values hold, which a
+/// continuation compiles whether or not its own code creates them.
+pub const CompletedErasedMembers = postcheck.CompletedErasedMembers;
+/// Which runtime specializations compile-time evaluation must lower.
+pub const LiteralDemand = postcheck.LiteralDemand;
 const TagReachability = @import("tag_reachability.zig");
 const ReachableProcs = @import("reachable_procs.zig");
 const DebugPrint = @import("debug_print.zig");
@@ -36,34 +42,56 @@ const checked = check.CheckedModule;
 /// Committed ordinary-data layouts for checked source ABI requests.
 pub const CheckedAbiLayouts = struct {
     allocator: Allocator,
-    layouts: @import("layout").Store,
+    lowered: LoweredProgram,
     roots: []const @import("layout").Idx,
+
+    /// The layout store every root layout belongs to.
+    pub fn layouts(self: *CheckedAbiLayouts) *@import("layout").Store {
+        return &self.lowered.lir_result.layouts;
+    }
 
     pub fn deinit(self: *CheckedAbiLayouts) void {
         self.allocator.free(self.roots);
-        self.layouts.deinit();
+        self.lowered.deinit();
     }
 };
 
-/// Resolve public data layouts without running procedure specialization or LIR
-/// lowering. Requests and results have the same order and share one layout store.
+/// Resolve public data layouts for checked source ABI requests. Requests and
+/// results have the same order and share one layout store. Every ABI fact a
+/// caller reads is an explicit width query, so `target_usize` only sizes the
+/// store.
 pub fn resolveCheckedAbiLayouts(
     allocator: Allocator,
     modules: CheckedModuleSet,
     requests: []const checked.CheckedTypeId,
     target_usize: base.target.TargetUsize,
-) Allocator.Error!CheckedAbiLayouts {
-    var plan = try postcheck.Boxy.Plan.analyzeHostAbi(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .layout_requests = requests,
-    });
-    defer plan.deinit();
-    var layouts = try @import("layout").Store.init(allocator, target_usize);
-    errdefer layouts.deinit();
-    const roots = try postcheck.Boxy.Layouts.commitHostAbi(allocator, &plan, &layouts);
-    return .{ .allocator = allocator, .layouts = layouts, .roots = roots };
+) LowerResourceError!CheckedAbiLayouts {
+    var lowered = try lowerCheckedModulesToLir(
+        allocator,
+        modules,
+        .{ .layout_requests = requests },
+        .{ .target_usize = target_usize, .specialization_strategy = .lss, .layout_request_const_plans = false },
+    );
+    errdefer lowered.deinit();
+    const roots = try allocator.alloc(@import("layout").Idx, requests.len);
+    errdefer allocator.free(roots);
+    for (requests, roots) |request, *root| {
+        root.* = for (lowered.lir_result.requested_layouts.items) |served| {
+            if (served.checked_type == request) break served.layout_idx;
+        } else checkedPipelineInvariant("lowering served no layout for a requested checked ABI type");
+    }
+    return .{ .allocator = allocator, .lowered = lowered, .roots = roots };
 }
+
+/// The export interfaces a `.boxy` module unit compiles its calls against.
+pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
+/// The identity a `.boxy` unit's object defines a module's template worker under.
+pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdentity;
+/// What reading a `.boxy` program's function values takes after lowering.
+pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+pub const BoxyFunctionMetadata = postcheck.Boxy.StoredFn;
+/// The names the modules of one link give their workers and nominal types.
+pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
 /// Resource failure while lowering checked modules to LIR, plus the one
 /// checked input this entrance rejects outright: see
@@ -98,6 +126,10 @@ pub const RootRequestSet = struct {
     /// Restore eligible stored constants as internal readonly static values.
     include_internal_static_data: bool = false,
     test_plan_metadata: []const postcheck.Common.RootTestPlanMetadata = &.{},
+    /// The requests from this position on are discovery roots; see
+    /// `postcheck.Common.RootRequests.discovery_start`.
+    discovery_start: ?usize = null,
+    literal_demand: ?*const postcheck.LiteralDemand.LiteralDemand = null,
 };
 
 /// Deterministic task counts for parallel solved-LIR body lowering.
@@ -121,6 +153,14 @@ pub const WorkMetrics = struct {
     lir_continuations: u32 = 0,
 };
 
+/// Dev keeps standalone procedures eligible for reuse in other programs.
+/// Compile-time evaluation uses the same source-independent policy.
+pub const dev_inline_mode: InlineMode = .procedures;
+
+/// SpecConstr's clone-inlining scope for dev builds and compile-time
+/// evaluation.
+pub const dev_spec_constr_clone_inlining: SpecConstrCloneInlining = .iterator_fusion;
+
 /// Target settings and checked module state for the checked-to-LIR pipeline.
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
@@ -130,15 +170,39 @@ pub const TargetConfig = struct {
     erased_capture_prefix: u32 = 0,
     specialization_strategy: SpecializationStrategy = .lss,
     /// The consumer's actual code provider, declared before producer lowering.
-    code_provision: CodeProvision = .source_bodies,
     /// Reuse checking workers for generic post-check tasks when available.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
     /// The compilation session supplies evaluated root slots for these reads.
     comptime_value_reads: bool = false,
+    /// With `comptime_value_reads`, the program lowers and publishes only the
+    /// compile-time roots it demands (design.md "Demand-Driven Compile-Time
+    /// Evaluation").
+    demand_driven_comptime_roots: bool = false,
+    /// Validate every compile-time root, as an explicit test run does.
+    validate_every_comptime_root: bool = false,
+    /// For `.boxy`: the module whose object this lowering emits, with every
+    /// other module's worker an imported symbol (design.md "Per-Module
+    /// Output"); null lowers everything the roots reach as one program.
+    boxy_unit: ?postcheck.Boxy.Lower.ModuleUnit = null,
+    /// A `.boxy` lowering of a compile-time evaluator's roots
+    /// (`postcheck.Boxy.Lower.Input.compile_time`).
+    boxy_compile_time: bool = false,
+    /// With `boxy_compile_time`, the roots hold function values
+    /// (`postcheck.Boxy.Lower.Input.stored_functions`).
+    boxy_stored_functions: bool = false,
+    /// Content identity of a compiler-only module unit's function/type metadata.
+    boxy_function_unit: ?[32]u8 = null,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     inline_mode: InlineMode = .none,
+    /// Optional ARC mode specialization belongs to the consumer's optimization
+    /// policy, independently of whether source wrappers are inlined.
+    specialize_arc_modes: bool = false,
+    /// ARC's static uniqueness proofs. They only remove runtime refcount
+    /// checks, so optimized consumers enable them and the rest keep the
+    /// checks and skip the analysis.
+    prove_uniqueness: bool = false,
     /// Direct-call inlining scope for SpecConstr's value-aware clones.
     /// Optimized builds use `.all_calls`; dev builds use `.iterator_fusion`
     /// so post-check time and emitted program size stay bounded. Consulted
@@ -148,6 +212,12 @@ pub const TargetConfig = struct {
     inline_expects: InlineExpectMode = .run,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
+    /// Lower `Dict`'s pseudo-random seed to zero. The seed decides only bucket
+    /// placement, never anything a program observes, so it changes only
+    /// hash-flooding resistance; dev builds and compile-time evaluation lower
+    /// it to zero so their code is identical, and optimized builds, which are
+    /// what get deployed, keep the runtime seed.
+    zero_dict_seed: bool = false,
     /// Allow `List.map` and `List.update` to reuse a unique input list's
     /// allocation. Map additionally requires interchangeable input and output
     /// element layouts. Optimized builds enable this; dev builds and
@@ -156,18 +226,15 @@ pub const TargetConfig = struct {
     list_in_place_map: bool = false,
     /// Preserve source-level procedure names in LIR for runtime diagnostics.
     proc_debug_names: bool = false,
-    /// The object cache Monotype asks for closed specializations.
-    spec_cache: ?postcheck.Common.SpecCacheLookup = null,
-    /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
-    /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
-    /// modules: a match whose exhaustiveness only the evaluation can decide
-    /// must run as the evaluator's own code, which reports the branches it
-    /// takes, and a spliced entry reports nothing.
-    comptime_closure_hits: bool = false,
-    /// Keep every keyed specialization procedure through compaction; a pack
-    /// program offers them from its manifest whether or not its export
-    /// wrappers inlined their calls.
-    keep_specialization_procs: bool = false,
+    /// Record each platform entrypoint's host boundary digest in its root
+    /// metadata. Only consumers that compare host interfaces across hot
+    /// reload generations ask for it.
+    host_boundary_digests: bool = false,
+    /// Give site-named procedures stable code identities across consumers.
+    site_code_keys: bool = false,
+    /// Keep the dev procedure ownership ABI independent of caller demand.
+    /// Optimized consumers leave this off and infer their base signatures.
+    owned_proc_signatures: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
     /// per-element ownership and capacity checks amortize. Always on outside
     /// tests; shape-comparison tests turn it off because promotion
@@ -185,16 +252,13 @@ pub const TargetConfig = struct {
     /// other arms keep is live across the producer, so a list the producer
     /// appends to is copied once per loop iteration.
     fuse_tag_cases: bool = true,
-    /// The rewrites that exist only to make the produced program faster:
-    /// join scalarization and box reuse. `--opt=dev` skips them, since it
-    /// trades program speed for compile speed.
-    scalarize_joins: bool = true,
+    /// Box reuse exists only to make the produced program faster, so
+    /// `--opt=dev` skips it, since it trades program speed for compile speed.
     reuse_boxes: bool = true,
     /// Let ARC prove allocations the host can never touch and give them
     /// single-threaded count updates. Optimized builds enable this; dev
     /// builds, compile-time evaluation, and the interpreter use only atomic
-    /// count updates, which also keeps every object-cache entry sound for any
-    /// caller.
+    /// count updates.
     thread_confined_rc: bool = false,
     /// Build ConstStore materialization plans for requested layouts.
     /// Disable this only for consumers that read requested layout metadata and
@@ -208,10 +272,6 @@ pub const TargetConfig = struct {
     /// is enabled for optimized builds and kept off for dev and compile-time
     /// evaluation.
     prove_ranges: bool = false,
-    /// Debug-only: forwarded to `SolvedLirLower.Options.debug_materialized_out`
-    /// so a differential harness can execute the Debug verifier's materialized
-    /// Lambda Mono program. The slot receives a value only in Debug builds.
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     /// Optional deterministic task counts for solved-LIR body-shard lowering.
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     /// Per-run staged specialization counters; SpecConstr owns resetting them.
@@ -232,9 +292,44 @@ pub const TargetConfig = struct {
     timing: ?*Timing = null,
 };
 
+/// Counts of the demand-driven compile-time specialization decisions
+/// (design.md "Demand-Driven Compile-Time Specialization").
+pub const DemandMetrics = struct {
+    /// Runtime roots of the program, offered to discovery.
+    program_roots: u64 = 0,
+    /// Runtime roots specialized for discovery.
+    discovery_roots: u64 = 0,
+    /// Checked modules the literal-demand analysis read.
+    modules: u64 = 0,
+    /// Procedure templates the literal-demand analysis read.
+    templates: u64 = 0,
+    /// Templates whose own checked data can contribute to a literal root.
+    source_templates: u64 = 0,
+    /// Templates whose specializations can register a literal root.
+    reaching_templates: u64 = 0,
+    /// Nominal types with their own literal conversion.
+    custom_literal_types: u64 = 0,
+    /// Monotype counters; see `postcheck.Monotype.Lower.DemandCounters`.
+    monotype: postcheck.Monotype.Lower.DemandCounters = .{},
+
+    pub fn add(self: *DemandMetrics, other: DemandMetrics) void {
+        inline for (@typeInfo(DemandMetrics).@"struct".field_names) |name| {
+            if (comptime std.mem.eql(u8, name, "monotype")) {
+                inline for (@typeInfo(postcheck.Monotype.Lower.DemandCounters).@"struct".field_names) |inner| {
+                    @field(self.monotype, inner) += @field(other.monotype, inner);
+                }
+            } else {
+                @field(self, name) += @field(other, name);
+            }
+        }
+    }
+};
+
 /// Thread-safe timing totals for the checked-to-LIR pipeline.
 pub const Timing = struct {
     std_io: std.Io,
+    demand_mutex: std.Io.Mutex = .init,
+    demand: DemandMetrics = .{},
     detailed_monotype_body: bool = false,
     monotype_diagnostics_mutex: std.Io.Mutex = .init,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
@@ -279,13 +374,15 @@ pub const Timing = struct {
     monotype_parallel_within_lowering_lane_reuse_tasks: TimingCounter = .{},
     monotype_parallel_peak_specialization_jobs_pending: TimingCounter = .{},
     monotype_parallel_peak_specialization_shards_retained: TimingCounter = .{},
-    boxy_plan_ns: TimingCounter = .{},
-    boxy_lower_ns: TimingCounter = .{},
     lift_ns: TimingCounter = .{},
     spec_constr_ns: TimingCounter = .{},
     lambda_solve_ns: TimingCounter = .{},
     inline_plan_ns: TimingCounter = .{},
     lir_gen_ns: TimingCounter = .{},
+    boxy_lowering_ns: TimingCounter = .{},
+    boxy_unit_codegen_ns: TimingCounter = .{},
+    boxy_unit_cache_ns: TimingCounter = .{},
+    boxy_unit_restore_ns: TimingCounter = .{},
     lir_passes_ns: TimingCounter = .{},
     arc_ns: TimingCounter = .{},
 
@@ -337,13 +434,15 @@ pub const Timing = struct {
                 .peak_specialization_jobs_pending = self.monotype_parallel_peak_specialization_jobs_pending.load(),
                 .peak_specialization_shards_retained = self.monotype_parallel_peak_specialization_shards_retained.load(),
             },
-            .boxy_plan_ns = self.boxy_plan_ns.load(),
-            .boxy_lower_ns = self.boxy_lower_ns.load(),
             .lift_ns = self.lift_ns.load(),
             .spec_constr_ns = self.spec_constr_ns.load(),
             .lambda_solve_ns = self.lambda_solve_ns.load(),
             .inline_plan_ns = self.inline_plan_ns.load(),
             .lir_gen_ns = self.lir_gen_ns.load(),
+            .boxy_lowering_ns = self.boxy_lowering_ns.load(),
+            .boxy_unit_codegen_ns = self.boxy_unit_codegen_ns.load(),
+            .boxy_unit_cache_ns = self.boxy_unit_cache_ns.load(),
+            .boxy_unit_restore_ns = self.boxy_unit_restore_ns.load(),
             .lir_passes_ns = self.lir_passes_ns.load(),
             .arc_ns = self.arc_ns.load(),
             .monotype_diagnostics = diagnostics,
@@ -351,7 +450,21 @@ pub const Timing = struct {
             .spec_constr_parallel = self.specConstrParallelSnapshot(),
             .lir_pass_parallel = self.lirPassParallelSnapshot(),
             .arc_parallel = self.arcParallelSnapshot(),
+            .demand = self.demandSnapshot(),
         };
+    }
+
+    fn demandSnapshot(self: *const Timing) DemandMetrics {
+        const mutable = @constCast(self);
+        mutable.demand_mutex.lockUncancelable(self.std_io);
+        defer mutable.demand_mutex.unlock(self.std_io);
+        return self.demand;
+    }
+
+    pub fn addDemand(self: *Timing, metrics: DemandMetrics) void {
+        self.demand_mutex.lockUncancelable(self.std_io);
+        defer self.demand_mutex.unlock(self.std_io);
+        self.demand.add(metrics);
     }
 
     pub fn addSnapshot(self: *Timing, snapshot_value: TimingSnapshot) void {
@@ -380,13 +493,16 @@ pub const Timing = struct {
         self.addSpecConstrParallel(snapshot_value.spec_constr_parallel);
         self.addLirPassParallel(snapshot_value.lir_pass_parallel);
         self.addArcParallel(snapshot_value.arc_parallel);
-        self.boxy_plan_ns.add(snapshot_value.boxy_plan_ns);
-        self.boxy_lower_ns.add(snapshot_value.boxy_lower_ns);
+        self.addDemand(snapshot_value.demand);
         self.lift_ns.add(snapshot_value.lift_ns);
         self.spec_constr_ns.add(snapshot_value.spec_constr_ns);
         self.lambda_solve_ns.add(snapshot_value.lambda_solve_ns);
         self.inline_plan_ns.add(snapshot_value.inline_plan_ns);
         self.lir_gen_ns.add(snapshot_value.lir_gen_ns);
+        self.boxy_lowering_ns.add(snapshot_value.boxy_lowering_ns);
+        self.boxy_unit_codegen_ns.add(snapshot_value.boxy_unit_codegen_ns);
+        self.boxy_unit_cache_ns.add(snapshot_value.boxy_unit_cache_ns);
+        self.boxy_unit_restore_ns.add(snapshot_value.boxy_unit_restore_ns);
         self.lir_passes_ns.add(snapshot_value.lir_passes_ns);
         self.arc_ns.add(snapshot_value.arc_ns);
         self.addMonotypeDiagnostics(snapshot_value.monotype_diagnostics);
@@ -406,10 +522,12 @@ pub const Timing = struct {
             .lambda_solve => self.lambda_solve_ns.add(elapsed_ns),
             .inline_plan => self.inline_plan_ns.add(elapsed_ns),
             .lir_gen => self.lir_gen_ns.add(elapsed_ns),
+            .boxy_lowering => self.boxy_lowering_ns.add(elapsed_ns),
+            .boxy_unit_codegen => self.boxy_unit_codegen_ns.add(elapsed_ns),
+            .boxy_unit_cache => self.boxy_unit_cache_ns.add(elapsed_ns),
+            .boxy_unit_restore => self.boxy_unit_restore_ns.add(elapsed_ns),
             .lir_passes => self.lir_passes_ns.add(elapsed_ns),
             .arc => self.arc_ns.add(elapsed_ns),
-            .boxy_plan => self.boxy_plan_ns.add(elapsed_ns),
-            .boxy_lower => self.boxy_lower_ns.add(elapsed_ns),
         }
     }
 
@@ -550,46 +668,66 @@ pub const TimingSnapshot = struct {
     spec_constr_parallel: SpecConstrParallelMetrics = .{},
     lir_pass_parallel: LirPassParallelMetrics = .{},
     arc_parallel: ArcParallelMetrics = .{},
-    boxy_plan_ns: u64 = 0,
-    boxy_lower_ns: u64 = 0,
     lift_ns: u64 = 0,
     spec_constr_ns: u64 = 0,
     lambda_solve_ns: u64 = 0,
     inline_plan_ns: u64 = 0,
     lir_gen_ns: u64 = 0,
+    boxy_lowering_ns: u64 = 0,
+    boxy_unit_codegen_ns: u64 = 0,
+    boxy_unit_cache_ns: u64 = 0,
+    boxy_unit_restore_ns: u64 = 0,
     lir_passes_ns: u64 = 0,
     arc_ns: u64 = 0,
     monotype_diagnostics: postcheck.Monotype.Lower.Diagnostics = .{},
+    demand: DemandMetrics = .{},
 };
 
-const TimingPhase = enum {
+/// A post-check stage `--timings` itemizes on its own line.
+pub const TimingPhase = enum {
     monotype,
     lift,
     spec_constr,
     lambda_solve,
     inline_plan,
     lir_gen,
+    boxy_lowering,
+    /// Native code generation of a module unit's object (`compile.boxy_unit`).
+    boxy_unit_codegen,
+    /// Encoding and filing a module unit's object in the object cache.
+    boxy_unit_cache,
+    /// Reading a module unit's object from the object cache, decoding its
+    /// pieces when the caller wants them.
+    boxy_unit_restore,
     lir_passes,
     arc,
-    boxy_plan,
-    boxy_lower,
 };
 
-const PipelineTimingScope = struct {
+/// One post-check stage in progress: records the stage for crash reports and,
+/// when timing is enabled, its duration. `end` is idempotent so a stage can end
+/// explicitly and still be covered by a `defer` on error paths.
+pub const PipelineStageScope = struct {
     timing: ?*Timing = null,
     started_ns: i64 = 0,
-    phase: TimingPhase = undefined,
+    phase: TimingPhase,
+    ice: ?base.ice_context.Guard,
 
-    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineTimingScope {
-        const active = timing orelse return .{};
+    pub fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
+        const ice = base.ice_context.enter(.{ .phase = .post_check, .stage = @tagName(phase) });
+        const active = timing orelse return .{ .phase = phase, .ice = ice };
         return .{
             .timing = active,
             .started_ns = active.start(),
             .phase = phase,
+            .ice = ice,
         };
     }
 
-    fn end(self: *PipelineTimingScope) void {
+    pub fn end(self: *PipelineStageScope) void {
+        if (self.ice) |ice| {
+            ice.leave();
+            self.ice = null;
+        }
         const timing = self.timing orelse return;
         timing.finish(self.started_ns, self.phase);
         self.timing = null;
@@ -841,7 +979,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
         .peak_specialization_jobs_pending = 42,
         .peak_specialization_shards_retained = 43,
     });
-    timing.addSnapshot(.{ .boxy_plan_ns = 43, .boxy_lower_ns = 47 });
 
     const snapshot_value = timing.snapshot();
     const parallel = snapshot_value.monotype_parallel;
@@ -859,8 +996,6 @@ test "pipeline timing keeps aggregate Monotype worker work separate from wall ti
     try std.testing.expectEqual(@as(u64, 62), parallel.within_lowering_lane_reuse_tasks);
     try std.testing.expectEqual(@as(u64, 42), parallel.peak_specialization_jobs_pending);
     try std.testing.expectEqual(@as(u64, 43), parallel.peak_specialization_shards_retained);
-    try std.testing.expectEqual(@as(u64, 43), snapshot_value.boxy_plan_ns);
-    try std.testing.expectEqual(@as(u64, 47), snapshot_value.boxy_lower_ns);
 }
 
 /// Whether the root checked module is complete or inside checking finalization.
@@ -895,7 +1030,6 @@ pub const Observers = struct {
     work_metrics: ?*WorkMetrics = null,
     timing: ?*Timing = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
-    debug_materialized_out: ?*?postcheck.LambdaMono.Ast.Program = null,
     solved_lir_parallel_metrics_out: ?*SolvedLirParallelMetrics = null,
     lir_pass_parallel_metrics_out: ?*LirPassParallelMetrics = null,
     arc_parallel_metrics_out: ?*ArcParallelMetrics = null,
@@ -916,41 +1050,12 @@ pub const Observers = struct {
     }
 };
 
-/// Serves closed specializations from the object cache.
-pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
-
-/// Native provision is an explicit backend/target/splice contract, not an
-/// optimization policy. Only host dev objects share CTFE's artifact domain.
-pub const CodeProvision = enum {
-    /// LLVM, interpreter, images, or an emitter without an object splice source.
-    source_bodies,
-    /// Native dev emission with a splice source for CTFE's exact host domain.
-    host_dev_objects,
-    /// Native dev emission with its own target-specific splice source.
-    target_dev_objects,
-
-    pub fn permitsNativeObjects(self: CodeProvision) bool {
-        return self != .source_bodies;
-    }
-
-    /// Domain compatibility is necessary but not sufficient for shared body
-    /// elision: the session must also prove both readers own the same provider.
-    /// Other targets may still splice objects in their own continuation.
-    pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
-        return if (self == .host_dev_objects and other == .host_dev_objects)
-            .host_dev_objects
-        else
-            .source_bodies;
-    }
-};
-
 /// The settings a program's Solved stage is prepared under: the inlining
 /// and SpecConstr decisions made before any consumer lowers LIR. Consumers
 /// share one Solved program only when they share these.
 pub const SolvedPolicy = struct {
     inline_mode: InlineMode,
     spec_constr_clone_inlining: SpecConstrCloneInlining,
-    keep_specialization_procs: bool,
 
     pub fn fromTarget(target: TargetConfig) SolvedPolicy {
         var policy: SolvedPolicy = undefined;
@@ -970,16 +1075,17 @@ pub const SolvedPolicy = struct {
 /// The settings one consumer's LIR generation, procedure passes and ARC run
 /// under. A consumer continuing a shared Solved program brings its own.
 pub const LirPolicy = struct {
+    specialize_arc_modes: bool,
+    prove_uniqueness: bool,
     consume_dead_boxes: bool,
+    zero_dict_seed: bool,
     list_in_place_map: bool,
     proc_debug_names: bool,
-    spec_cache: ?postcheck.Common.SpecCacheLookup,
-    code_provision: CodeProvision,
-    comptime_closure_hits: bool,
-    keep_specialization_procs: bool,
+    host_boundary_digests: bool,
+    site_code_keys: bool,
+    owned_proc_signatures: bool,
     promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
-    scalarize_joins: bool,
     reuse_boxes: bool,
     thread_confined_rc: bool,
     layout_request_const_plans: bool,
@@ -1015,6 +1121,8 @@ pub const Consumer = struct {
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
     completed_scalar_values: ?*const CompletedScalarValues = null,
+    /// The erased callables held by the completed values this consumer reads.
+    completed_erased_members: ?*const CompletedErasedMembers = null,
     /// Completed values produced by an earlier consumer, materialized in this
     /// consumer's representation after LIR generation and before reachability.
     /// The materializer receives the un-compacted target program so callable
@@ -1033,10 +1141,6 @@ pub const FrozenMaterializer = struct {
     context: *anyopaque,
     materialize: *const fn (Allocator, *anyopaque, *LirProgram.Result) Allocator.Error!LirProgram.FrozenStaticData,
 };
-
-/// Materialized Lambda Mono program type, re-exported for harnesses that
-/// receive one through `TargetConfig.debug_materialized_out`.
-pub const LambdaMonoProgram = postcheck.LambdaMono.Ast.Program;
 
 /// Runtime record and tag-union schemas needed by dev tooling.
 pub const RuntimeValueSchemaStore = struct {
@@ -1072,20 +1176,14 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.records.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .debug) {
-            base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
-        }
-        unreachable;
+        base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
     }
 
     pub fn tagUnion(self: *const RuntimeValueSchemaStore, type_name: []const u8) RuntimeTagUnionSchema {
         for (self.tag_unions.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .debug) {
-            base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
-        }
-        unreachable;
+        base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
     }
 };
 
@@ -1113,18 +1211,6 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     metadata = .empty;
     result.const_roots.clearRetainingCapacity();
     result.literal_roots.clearRetainingCapacity();
-    try completeComptimeValueSlots(lowered);
-}
-
-/// Turn a runtime consumer's completed compile-time value slots into ordinary
-/// frozen program data.
-///
-/// This consumer lowered only its own roots, so nothing here selects roots. It
-/// reaches each compile-time value through a slot the evaluation has since
-/// filled, and its own roots are the program's roots already.
-pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
-    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     try completeComptimeValueSlots(lowered);
 }
 
@@ -1172,8 +1258,11 @@ pub const LoweredProgram = struct {
     target_usize: base.target.TargetUsize,
     runtime_value_schemas: RuntimeValueSchemaStore,
     frozen_static_data: ?LirProgram.FrozenStaticData = null,
+    /// See `TargetConfig.boxy_stored_functions`.
+    boxy_functions: ?*postcheck.Boxy.StoredFn.Retained = null,
 
     pub fn deinit(self: *LoweredProgram) void {
+        if (self.boxy_functions) |retained| retained.deinit();
         if (self.frozen_static_data) |*data| data.deinit();
         self.runtime_value_schemas.deinit();
         self.lir_result.deinit();
@@ -1244,6 +1333,17 @@ pub const PreparedMonotype = struct {
     target: TargetConfig,
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
+    /// What a shared program demands of compile-time evaluation; null for a
+    /// program that reads no compile-time root slots. The compile-time
+    /// consumer takes it before the program continues to Solved.
+    comptime_demand: ?ComptimeDemand = null,
+
+    /// Take ownership of the program's compile-time demand.
+    pub fn takeComptimeDemand(self: *PreparedMonotype) ComptimeDemand {
+        const demand = self.comptime_demand orelse checkedPipelineInvariant("Monotype program recorded no compile-time demand");
+        self.comptime_demand = null;
+        return demand;
+    }
 
     /// A shared program preserves both expect semantics explicitly. A program
     /// specialized for one mode cannot acquire the missing continuation later.
@@ -1269,9 +1369,21 @@ pub const PreparedMonotype = struct {
     pub fn deinit(self: *PreparedMonotype) void {
         self.program.deinit();
         self.allocator.free(self.test_plan_metadata);
+        if (self.comptime_demand) |*demand| demand.deinit();
         self.* = undefined;
     }
 };
+
+/// See `postcheck.Monotype.Lower.ComptimeDemand`.
+pub const ComptimeDemand = postcheck.Monotype.Lower.ComptimeDemand;
+/// See `PreparedSolved.producerGraph`.
+pub const ComptimeRootGraph = postcheck.ComptimeRootGraph;
+/// See `postcheck.Common.ComptimeRootRead`.
+pub const ComptimeRootRead = postcheck.Common.ComptimeRootRead;
+/// A root of a prepared Monotype program.
+pub const MonotypeRoot = postcheck.Monotype.Ast.Root;
+/// Source identity of a literal demand, before the producer is released.
+pub const MonotypeLiteralRoot = postcheck.Monotype.Ast.LiteralRoot;
 
 /// Lower checked modules and explicit roots directly into an ARC-ready LIR program.
 pub fn lowerCheckedModulesToLir(
@@ -1283,6 +1395,7 @@ pub fn lowerCheckedModulesToLir(
     if (target.specialization_strategy == .lss) {
         return lowerPreparedMonotypeToLir(try prepareCheckedModulesMonotype(allocator, modules, roots, target));
     }
+    // Lowered outside a program session, nothing evaluated its literals.
     var prepared = try prepareBoxyCheckedModules(allocator, modules, roots, target);
     defer prepared.deinit();
     return prepared.lower(target);
@@ -1300,12 +1413,6 @@ pub fn prepareCheckedModulesMonotype(
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
-    // One checked-program proof governs both lookup stages. An early hit
-    // removes the source body, so Direct LIR cannot defer this decision until
-    // it discovers which procedures the evaluator reaches.
-    var prepared_target = target;
-    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
-
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(
@@ -1318,7 +1425,10 @@ pub fn prepareCheckedModulesMonotype(
 
     const test_plan_metadata = try allocator.dupe(postcheck.Common.RootTestPlanMetadata, roots.test_plan_metadata);
     errdefer allocator.free(test_plan_metadata);
-    const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var comptime_demand: ComptimeDemand = .{ .allocator = allocator };
+    errdefer comptime_demand.deinit();
+    var monotype_scope = PipelineStageScope.begin(target.timing, .monotype);
+    defer monotype_scope.end();
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
     else
@@ -1330,12 +1440,17 @@ pub fn prepareCheckedModulesMonotype(
     if (monotype_timing) |*detail| {
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
+    var demand_counters: postcheck.Monotype.Lower.DemandCounters = .{};
     const mono = monotype: {
-        defer if (target.timing) |timing| {
-            timing.finish(monotype_started_ns, .monotype);
-            if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
-            if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
-        };
+        defer {
+            monotype_scope.end();
+            if (target.timing) |timing| {
+                if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+                if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+                timing.addDemand(.{ .monotype = demand_counters });
+            }
+        }
+        base.dev_diagnostics.countTestWork(.specialization, 1);
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
@@ -1343,14 +1458,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                .spec_cache = if (monotypeCacheHitsAllowed(
-                    target.checked_module_state,
-                    prepared_target.comptime_closure_hits,
-                    target.code_provision,
-                )) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
-                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
+                .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
+                .validate_every_comptime_root = target.validate_every_comptime_root,
+                .comptime_demand_out = if (target.comptime_value_reads) &comptime_demand else null,
                 .literal_roots = target.literal_roots,
                 .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
@@ -1360,87 +1472,32 @@ pub fn prepareCheckedModulesMonotype(
                 },
                 .timing = if (monotype_timing) |*timing| timing else null,
                 .diagnostics = if (monotype_diagnostics) |*diagnostics| diagnostics else null,
+                .demand_counters_out = &demand_counters,
             },
         );
     };
     if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
+    // A demand-driven program publishes only the compile-time roots it
+    // demands; every other program publishes one root per request.
+    const root_count = mono.rootsView().len;
+    if (!target.demand_driven_comptime_roots and root_count != roots.requests.len) {
+        checkedPipelineInvariant("Monotype lowering published a root count different from its requests");
+    }
+    if (target.demand_driven_comptime_roots) {
+        // Only compile-time requests are removed, all from the prefix. Test
+        // reporting retains its original source/result identity while its
+        // execution position follows the producer's selected root prefix.
+        const omitted: u32 = @intCast(roots.requests.len - root_count);
+        for (test_plan_metadata) |*metadata| metadata.request_index -= omitted;
+    }
     return .{
         .allocator = allocator,
         .program = mono,
-        .target = prepared_target,
-        .root_count = roots.requests.len,
+        .target = target,
+        .root_count = root_count,
         .test_plan_metadata = test_plan_metadata,
+        .comptime_demand = if (target.comptime_value_reads) comptime_demand else null,
     };
-}
-
-/// Early hits erase producer bodies, so both native provision and the
-/// compile-time observation proof must authorize them before lowering.
-fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool, provision: CodeProvision) bool {
-    return provision.permitsNativeObjects() and (state == .complete or comptime_closure_hits);
-}
-
-test "early cache requires declared native provision and the CTFE observation proof" {
-    for (std.enums.values(CodeProvision)) |provision| {
-        for ([_]bool{ false, true }) |proof| {
-            try std.testing.expectEqual(provision.permitsNativeObjects(), monotypeCacheHitsAllowed(.complete, proof, provision));
-            try std.testing.expectEqual(provision.permitsNativeObjects() and proof, monotypeCacheHitsAllowed(.checking_finalization, proof, provision));
-        }
-    }
-}
-
-test "shared producer native provision requires every consumer in the host dev domain" {
-    for (std.enums.values(CodeProvision)) |host| {
-        for (std.enums.values(CodeProvision)) |runtime| {
-            const expected: CodeProvision = if (host == .host_dev_objects and runtime == .host_dev_objects) .host_dev_objects else .source_bodies;
-            try std.testing.expectEqual(expected, host.sharedDomain(runtime));
-            try std.testing.expectEqual(expected, runtime.sharedDomain(host));
-        }
-    }
-}
-
-/// Whether every exhaustiveness site of the program resolves without the
-/// evaluator observing the branch it takes. A site reachable only at compile
-/// time is resolved by the evaluation reaching it, which a spliced
-/// object-cache entry never reports.
-fn comptimeClosureHitsAllowed(modules: CheckedModuleSet) bool {
-    if (hasCompileTimeOnlySite(&modules.root.module.exhaustiveness_sites)) return false;
-    for (modules.root.relation_modules) |relation| {
-        if (hasCompileTimeOnlySite(relation.exhaustiveness_sites)) return false;
-    }
-    for (modules.imports) |import| {
-        if (hasCompileTimeOnlySite(import.exhaustiveness_sites)) return false;
-    }
-    return true;
-}
-
-fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) bool {
-    for (sites.sites) |site| {
-        switch (site.policy) {
-            .compile_time_only => return true,
-            .compile_time_replaced_by_root, .runtime_reachable, .not_pending => {},
-        }
-    }
-    return false;
-}
-
-test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
-    const policies = [_]checked.ExhaustivenessResolutionPolicy{
-        .not_pending,
-        .runtime_reachable,
-        .{ .compile_time_replaced_by_root = @fromBackingInt(3) },
-        .compile_time_only,
-    };
-    var sites = [_]checked.CheckedExhaustivenessSite{.{
-        .id = @fromBackingInt(5),
-        .kind = .match,
-        .region = std.mem.zeroes(base.Region),
-        .policy = .not_pending,
-    }};
-    for (policies) |policy| {
-        sites[0].policy = policy;
-        try std.testing.expectEqual(policy == .compile_time_only, hasCompileTimeOnlySite(&.{ .sites = &sites }));
-    }
-    try std.testing.expect(!hasCompileTimeOnlySite(&.{}));
 }
 
 /// Consumes the prepared program on success and failure. No specialization
@@ -1450,11 +1507,16 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     const target = prepared.target;
     if (target.work_metrics) |metrics| metrics.solved_runs += 1;
     errdefer allocator.free(prepared.test_plan_metadata);
+    // Only a compile-time consumer reads the demand, and it takes it first.
+    if (prepared.comptime_demand) |demand| {
+        var unread = demand;
+        unread.deinit();
+    }
     var mono = prepared.program;
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    var lift_timing_scope = PipelineTimingScope.begin(target.timing, .lift);
+    var lift_timing_scope = PipelineStageScope.begin(target.timing, .lift);
     defer lift_timing_scope.end();
 
     // Each post-check transform consumes its input even when it returns an
@@ -1474,16 +1536,17 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .executor = target.post_check_executor,
         .metrics_out = spec_constr_metrics,
     };
-    var procedure_usage = if (target.inline_mode != .none) blk: {
-        var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
+    var procedure_usage = if (target.inline_mode != .none and target.inline_mode != .procedures) blk: {
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
     } else blk: {
-        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
+        defer spec_constr_timing_scope.end();
         try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
-        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        spec_constr_timing_scope.end();
         break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     };
     defer procedure_usage.deinit();
@@ -1493,7 +1556,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
     if (SpecCensus.enabled()) SpecCensus.runLifted(&lifted);
 
-    var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
+    var lambda_solve_timing_scope = PipelineStageScope.begin(target.timing, .lambda_solve);
     defer lambda_solve_timing_scope.end();
     const lifted_input = lifted;
     lifted_owned = false;
@@ -1502,12 +1565,12 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
-    var inline_plan_timing_scope = PipelineTimingScope.begin(
+    var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,
         .inline_plan,
     );
     defer inline_plan_timing_scope.end();
-    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved, target.keep_specialization_procs);
+    const inline_plan = try postcheck.SolvedInline.analyze(allocator, target.inline_mode, procedure_usage.view(), &solved);
     inline_plan_timing_scope.end();
 
     return .{
@@ -1540,6 +1603,29 @@ pub const PreparedSolved = struct {
     /// How many literal roots the producer registered.
     pub fn literalRootCount(self: *const PreparedSolved) usize {
         return self.program.lifted.literalRootsView().len;
+    }
+
+    /// The producers each compile-time producer's evaluation reads: the
+    /// program's first `root_count` roots, which are compile-time roots, as
+    /// producers `0..root_count`, then its literal roots in id order.
+    pub fn producerGraph(self: *const PreparedSolved, allocator: Allocator, root_count: usize) Allocator.Error!postcheck.ComptimeRootGraph.Graph {
+        const lifted = &self.program.lifted;
+        const roots = lifted.rootsView();
+        const literal_roots = lifted.literalRootsView();
+        const lowering_modules = lifted.loweringModules();
+        const producers = try allocator.alloc(postcheck.ComptimeRootGraph.Producer, root_count + literal_roots.len);
+        defer allocator.free(producers);
+        for (roots[0..root_count], producers[0..root_count]) |root, *producer| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = lowering_modules[@backingInt(root.owner)],
+            .root = .{ .checked = root.request.compile_time_root orelse checkedPipelineInvariant("compile-time root reached producer ordering without its checked root identity") },
+        };
+        for (literal_roots, producers[root_count..], 0..) |root, *producer, index| producer.* = .{
+            .fn_id = root.fn_id,
+            .module = root.module,
+            .root = .{ .literal = @fromBackingInt(@intCast(index)) },
+        };
+        return postcheck.ComptimeRootGraph.build(allocator, lifted, producers);
     }
 
     /// Release the retained solved program and its owned continuation metadata.
@@ -1612,7 +1698,8 @@ pub fn lowerFinalConsumerToLir(prepared: PreparedSolved, consumer: Consumer) Low
     errdefer if (frozen) |*data| data.deinit();
     owned_live = false;
     owned.deinit();
-    return finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
+    const lowered = try finishLoweredOutput(allocator, root_count, target, &generated.output, &frozen);
+    return lowered;
 }
 
 /// How many roots this consumer lowers: its own share, or the producer's
@@ -1647,33 +1734,31 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     }
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
     if (target.lifted_expr_count_out) |slot| slot.* = prepared.lifted_expr_count;
-    var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
+    var lir_gen_timing_scope = PipelineStageScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
-        .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
-        .comptime_closure_hits = target.comptime_closure_hits,
+        .site_code_keys = target.site_code_keys,
+        .owned_proc_signatures = target.owned_proc_signatures,
         .inline_plan = prepared.inline_plan.view(),
-        .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
         .list_in_place_map = target.list_in_place_map,
-        .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
-            .complete => .runtime,
-            .checking_finalization => .comptime_zero,
-        },
+        .dict_seed_mode = if (target.zero_dict_seed) .comptime_zero else .runtime,
         .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+        .host_boundary_digests = target.host_boundary_digests,
         .layout_request_const_plans = target.layout_request_const_plans,
         .test_plan_metadata = prepared.test_plan_metadata,
-        .debug_materialized_out = target.debug_materialized_out,
         .parallel_metrics = parallel_metrics,
         .completed_scalar_values = target.completed_scalar_values,
+        .completed_erased_members = consumer.completed_erased_members,
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
     lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
+    errdefer lowered.deinit();
 
     return .{ .output = lowered, .target = target };
 }
@@ -1720,8 +1805,8 @@ fn finishLoweredOutput(
     lowered: anytype,
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
-    verifyArithmeticBoundary(&lowered.lir_result.store, false);
-    var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
+    verifyArithmeticBoundary(&lowered.lir_result.store);
+    var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
     var pass_target = target;
@@ -1732,6 +1817,17 @@ fn finishLoweredOutput(
         if (pass_target.lir_pass_parallel_metrics_out) |metrics| timing.addLirPassParallel(metrics.*);
     };
 
+    // A `.boxy` body's owned erased calls name their closure as their
+    // ownership source; the allocation's root is reached through the
+    // representation-transparent aliases lowering emitted (design.md
+    // "Destination-Passing Results and Allocation Reuse").
+    if (target.specialization_strategy != .lss) {
+        const store = &lowered.lir_result.store;
+        for (0..store.procSpecCount()) |index| {
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
+            try ErasedOwner.resolveProcReuseSources(allocator, store, &lowered.lir_result.layouts, proc_id);
+        }
+    }
     // Branch expectations are read off the lowered switches before any
     // rewrite reshapes them.
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .branch_expectation);
@@ -1753,15 +1849,14 @@ fn finishLoweredOutput(
         }
     }
     // Every mode: a join parameter nothing reads still keeps its written
-    // value alive past any consuming call on the entry path.
+    // value alive past any consuming call on the entry path. Scalarization
+    // first gives each variable carried out of a construct with its result
+    // its own parameter, so pruning can remove it.
+    try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     try runProcedurePass(allocator, &lowered.lir_result, pass_target, .prune_join_params);
-    if (target.scalarize_joins) {
-        try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
-    }
     if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
-    verifyArithmeticBoundary(&lowered.lir_result.store, true);
     if (target.prove_ranges) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .range);
     }
@@ -1769,32 +1864,37 @@ fn finishLoweredOutput(
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .box_reuse);
     }
     try ReturnSlot.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
-    try StrAppend.run(&lowered.lir_result.store);
+    try StrAppend.run(&lowered.lir_result.store, &lowered.lir_result.layouts);
     if (target.tag_reachability) {
         try TagReachability.run(&lowered.lir_result);
     }
-    if (target.keep_specialization_procs) {
-        if (frozen.*) |*data| {
-            try ReachableProcs.runKeepingSpecializationsWithFrozen(&lowered.lir_result, data);
-        } else {
-            try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
-        }
+    if (frozen.*) |*data| {
+        try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
-        if (frozen.*) |*data| {
-            try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
-        } else {
-            try ReachableProcs.run(&lowered.lir_result);
-        }
+        try ReachableProcs.run(&lowered.lir_result);
     }
     lir_passes_timing_scope.end();
 
-    var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
+    var arc_timing_scope = PipelineStageScope.begin(target.timing, .arc);
     defer arc_timing_scope.end();
     var local_arc_metrics: ArcParallelMetrics = .{};
     const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
     var arc_roots = std.ArrayList(LIR.LirProcSpecId).empty;
     defer arc_roots.deinit(allocator);
     try arc_roots.appendSlice(allocator, lowered.lir_result.root_procs.items);
+    // A unit's exported workers are not ARC roots: ARC solves each one's
+    // ownership signature from its body, the unit's object records it in the
+    // export interface its importers compile against (design.md "Per-Module
+    // Output"), and a root's signature would instead be pinned to the
+    // all-owned convention.
+    // The procedures something other than Roc code or the erased-call runtime
+    // enters (design.md "Deferred Erased Calls"): the roots, and every procedure frozen
+    // data holds the address of. A unit's exported workers are not among
+    // them: only Roc code in other units calls them, compiled against the
+    // `may_leave_pending` their export interface carries.
+    var entered_from_outside = std.ArrayList(LIR.LirProcSpecId).empty;
+    defer entered_from_outside.deinit(allocator);
+    try entered_from_outside.appendSlice(allocator, lowered.lir_result.root_procs.items);
     if (frozen.*) |data| {
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
@@ -1802,6 +1902,7 @@ fn finishLoweredOutput(
         for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
+            try entered_from_outside.append(allocator, proc);
             if (seen[@backingInt(proc)]) continue;
             seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
@@ -1809,7 +1910,8 @@ fn finishLoweredOutput(
     }
     try Arc.insert(&lowered.lir_result.store, &lowered.lir_result.layouts, .{
         .roots = arc_roots.items,
-        .specialize = target.inline_mode != .none,
+        .specialize = target.specialize_arc_modes,
+        .prove_uniqueness = target.prove_uniqueness,
         .consume_dead_boxes = target.consume_dead_boxes,
         .thread_confined_rc = target.thread_confined_rc,
         .post_check_executor = if (target.post_check_executor) |*executor| executor else null,
@@ -1818,17 +1920,10 @@ fn finishLoweredOutput(
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
 
-    try TailDrive.run(allocator, &lowered.lir_result.store, &.{ arc_roots.items, lowered.lir_result.boxy_worker_procs.items });
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
-    // ARC settled every read that named a fresh form, so a fresh-form
-    // procedure no read chose is now unreferenced.
-    if (target.keep_specialization_procs) {
-        if (frozen.*) |*data| {
-            try ReachableProcs.runKeepingSpecializationsWithFrozen(&lowered.lir_result, data);
-        } else {
-            try ReachableProcs.runKeepingSpecializations(&lowered.lir_result);
-        }
-    } else if (frozen.*) |*data| {
+    // Retain only procedures and data referenced after ARC.
+    if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
         try ReachableProcs.run(&lowered.lir_result);
@@ -1867,53 +1962,65 @@ fn finishLoweredOutput(
     };
 }
 
-/// Boxy's target-independent plan is shared by host literal evaluation and
-/// target lowering. This ownership boundary is used only by Boxy consumers.
+/// The values compile-time evaluation converted a `.boxy` program's
+/// instance-dependent literals to (design.md "Literal Tables").
+/// The checked inputs of one `.boxy` lowering, validated once before any
+/// lowering begins (design.md "`.boxy` Runtime Lowering").
 pub const PreparedBoxy = struct {
     allocator: Allocator,
     modules: CheckedModuleSet,
     roots: RootRequestSet,
     layout_requests: []const checked.CheckedTypeId,
     static_data_requests: []const postcheck.Common.StaticDataRequest,
-    plan: postcheck.Boxy.Plan.ProgramPlan,
 
     pub fn deinit(self: *PreparedBoxy) void {
-        self.plan.deinit();
         self.allocator.free(self.layout_requests);
         self.allocator.free(self.static_data_requests);
         self.* = undefined;
     }
 
-    pub fn hasLiteralRoots(self: *const PreparedBoxy) bool {
-        return if (self.plan.literal_evidence) |*evidence| evidence.initializers.items.len != 0 else false;
-    }
-
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        var scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
-        defer scope.end();
-        var lowered = try postcheck.Boxy.Lower.run(
-            self.allocator,
-            checkedModules(self.modules),
-            rootRequests(self.roots, self.layout_requests, self.static_data_requests),
-            &self.plan,
-            .{
-                .target_usize = target.target_usize,
-                .list_in_place_map = target.list_in_place_map,
-                .proc_debug_names = target.proc_debug_names,
-                .observe_expects = self.roots.test_plan_metadata.len != 0,
+        const allocator = self.allocator;
+        var boxy_timing_scope = PipelineStageScope.begin(target.timing, .boxy_lowering);
+        var output = try postcheck.Boxy.run(allocator, .{
+            .modules = checkedModules(self.modules),
+            .roots = rootRequests(self.roots, self.layout_requests, self.static_data_requests),
+            .target_usize = target.target_usize,
+            .inline_expects = switch (target.inline_expects) {
+                .run => .run,
+                .omit => .omit,
             },
-        );
-        errdefer lowered.deinit();
-        lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
-        scope.end();
-        var frozen: ?LirProgram.FrozenStaticData = null;
-        return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);
+            .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
+            .list_in_place_map = target.list_in_place_map,
+            .host_boundary_digests = target.host_boundary_digests,
+            .compile_time = target.boxy_compile_time,
+            .stored_functions = target.boxy_stored_functions,
+            .function_unit = target.boxy_function_unit,
+            .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
+        });
+        boxy_timing_scope.end();
+        try LirDump.run(&output.lir_result);
+        var lowered: struct {
+            lir_result: LirProgram.Result,
+            runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
+        } = .{
+            .lir_result = output.lir_result,
+            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+        };
+        defer lowered.runtime_schemas.deinit();
+        var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };
+        const retained = output.retained;
+        errdefer if (retained) |kept| kept.deinit();
+        output = undefined;
+        var program = try finishLoweredOutput(allocator, self.roots.requests.len, target, &lowered, &frozen);
+        program.boxy_functions = retained;
+        return program;
     }
 };
 
-/// Validate the checked boundary for a Boxy build and plan the Boxy program
-/// for these roots, before any lowering.
+/// Validate the checked boundary for a `.boxy` build and collect its requests,
+/// before any lowering.
 pub fn prepareBoxyCheckedModules(
     allocator: Allocator,
     modules: CheckedModuleSet,
@@ -1927,40 +2034,26 @@ pub fn prepareBoxyCheckedModules(
     errdefer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
     errdefer allocator.free(static_data_requests);
-    var scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
-    defer scope.end();
-    const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
-        .root_module = modules.root,
-        .imports = modules.imports,
-        .roots = roots.requests,
-        .source_modules = roots.source_modules,
-        .layout_requests = layout_requests,
-        .static_data_requests = static_data_requests,
-    }, .{});
     return .{
         .allocator = allocator,
         .modules = modules,
         .roots = roots,
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
-        .plan = plan,
     };
 }
 
-fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
+/// Source-policy arithmetic is resolved to a concrete family member during
+/// lowering, so none of it may survive into LIR. The proven members cannot be
+/// checked here: lowering mints them for the builtin module's private
+/// `plus_infallible` and `minus_infallible`, and LIR carries no provenance
+/// that would tell those apart from a pass that minted one it should not have.
+fn verifyArithmeticBoundary(store: *const core.LirStore) void {
     if (builtin.mode != .debug) return;
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_low_level) continue;
-        const op = stmt.assign_low_level.op;
-        if (CheckedArithmetic.isSourcePolicyOp(op)) {
+        if (CheckedArithmetic.isSourcePolicyOp(stmt.assign_low_level.op)) {
             checkedPipelineInvariant("source-policy arithmetic operation reached LIR");
-        }
-        if (before_prover) {
-            if (CheckedArithmetic.classify(op)) |entry| {
-                if (entry.mode == .proven_cannot_overflow) {
-                    checkedPipelineInvariant("proven integer arithmetic existed before range proving");
-                }
-            }
         }
     }
 }
@@ -2060,6 +2153,8 @@ fn rootRequests(
         .layout_requests = layout_requests,
         .static_data_requests = static_data_requests,
         .test_plan_metadata = roots.test_plan_metadata,
+        .discovery_start = roots.discovery_start,
+        .literal_demand = roots.literal_demand,
     };
 }
 
@@ -2116,7 +2211,7 @@ fn collectStaticDataRequests(
                     .checked_type = data.checked_type,
                 });
             },
-            .procedure => {},
+            .procedure, .checked_error => {},
         }
     }
 
@@ -2135,10 +2230,17 @@ fn convertRuntimeSchemas(
 }
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .debug) {
-        base.invariant("checked pipeline invariant violated: {s}", .{message});
+    base.invariant("checked pipeline invariant violated: {s}", .{message});
+}
+
+test "LIR ownership policy survives shared consumer continuation without a cache" {
+    for ([_]bool{ false, true }) |owned| {
+        const producer: TargetConfig = .{ .owned_proc_signatures = owned };
+        const policy = LirPolicy.fromTarget(producer);
+        var consumer: TargetConfig = .{ .owned_proc_signatures = !owned };
+        policy.applyTo(&consumer);
+        try std.testing.expectEqual(owned, consumer.owned_proc_signatures);
     }
-    unreachable;
 }
 
 test "checked pipeline declarations are referenced" {
@@ -2146,12 +2248,10 @@ test "checked pipeline declarations are referenced" {
 }
 
 /// Print the final LIR of every procedure whose debug name contains
-/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Off unless
-/// the variable is set, and absent on targets without an environment.
-/// Printing the final LIR of selected procedures, for reading what the passes
-/// actually produced. Selected by comptime target so a build without an
-/// environment or a standard error stream carries none of it.
-const LirDump = if (builtin.os.tag == .freestanding) struct {
+/// `ROC_LIR_DUMP`, for reading what the passes actually produced. Selected at
+/// compile time, so a compiler that does not read developer diagnostics
+/// carries none of it.
+const LirDump = if (!base.dev_diagnostics.available) struct {
     fn filter() ?[]const u8 {
         return null;
     }
@@ -2159,8 +2259,7 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
     fn run(_: *const LirProgram.Result) Allocator.Error!void {}
 } else struct {
     fn filter() ?[]const u8 {
-        const raw = std.c.getenv("ROC_LIR_DUMP") orelse return null;
-        return std.mem.span(raw);
+        return base.dev_diagnostics.get(.lir_dump);
     }
 
     fn run(result: *const LirProgram.Result) Allocator.Error!void {
@@ -2179,7 +2278,11 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
             DebugPrint.writeProc(store.allocator, store, layouts, proc_id, &buffer.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
             };
-            std.debug.print("=== LIR {s} (p{d}) ===\n{s}\n", .{ name orelse "<unnamed>", index, buffer.written() });
+            const proc = store.getProcSpecImmediate(proc_id);
+            const fingerprint = DebugPrint.procFingerprint(store.allocator, store, layouts, proc_id) catch |err| switch (err) {
+                error.OutOfMemory, error.WriteFailed => return error.OutOfMemory,
+            };
+            std.debug.print("=== LIR {s} (p{d}, identity={x}, fingerprint={x:0>16}, borrowed={x}, ret_borrowed={}, unique={}) ===\n{s}\n", .{ name orelse "<unnamed>", index, proc.identity.bytes, fingerprint, proc.rc_borrowed_params, proc.rc_ret_borrowed, proc.rc_ret_unique, buffer.written() });
         }
     }
 };
@@ -2268,11 +2371,10 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
-    try adoptCompletedComptimeValues(&lowered);
+    try completeComptimeValueSlots(&lowered);
 
     const slot = lowered.lir_result.static_data_values.items[0];
     try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);
@@ -2290,8 +2392,9 @@ test "adopting completed compile-time values drops their initializers and identi
 /// procedure base and template ordinals, callable name, whether the declared
 /// source type has type variables, whether the request type contains a
 /// function type or an erased callable, and the request and solved type
-/// digests. Never enabled by default; it only reads the finished stores.
-const SpecCensus = if (builtin.os.tag == .freestanding) struct {
+/// digests. Never enabled by default; it only reads the finished stores, and a
+/// compiler built without developer diagnostics carries none of it.
+const SpecCensus = if (!base.dev_diagnostics.available) struct {
     fn enabled() bool {
         return false;
     }
@@ -2303,7 +2406,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     const MonoType = postcheck.Monotype.Type;
 
     fn enabled() bool {
-        return std.c.getenv("ROC_SPEC_CENSUS") != null;
+        return base.dev_diagnostics.isSet(.spec_census);
     }
 
     fn runLifted(lifted: *const postcheck.MonotypeLifted.Ast.Program) void {
@@ -2371,7 +2474,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             .name = root.canonical_names.moduleNameText(root.module_identity.display_module_name),
             .kind = @tagName(root.module_identity.kind),
             .names = &root.canonical_names,
-            .types = root.checked_types.view(),
+            .types = root.typesView(),
             .templates = &root.checked_procedure_templates,
             .env = root.moduleEnvConst(),
         });
@@ -2417,14 +2520,17 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.payload(ty)) {
-                .pending, .err, .empty_record, .empty_tag_union => {},
+                .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
                 .flex, .rigid => return true,
                 .alias => |alias| {
                     try stack.append(allocator, alias.backing);
                     try stack.appendSlice(allocator, alias.args);
                 },
                 .record => |record| {
-                    for (record.fields) |field| try stack.append(allocator, field.ty);
+                    for (0..record.fields.len()) |field_index| {
+                        const field = record.fields.get(field_index);
+                        try stack.append(allocator, field.ty);
+                    }
                     try stack.append(allocator, record.ext);
                 },
                 .tuple => |elems| try stack.appendSlice(allocator, elems),
@@ -2434,7 +2540,10 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                     try stack.append(allocator, func.ret);
                 },
                 .tag_union => |tag_union| {
-                    for (tag_union.tags) |tag| try stack.appendSlice(allocator, tag.argsSlice(types));
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try stack.appendSlice(allocator, tag.args);
+                    }
                     try stack.append(allocator, tag_union.ext);
                 },
             }
@@ -2476,7 +2585,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.get(ty)) {
-                .primitive, .zst => {},
+                .primitive, .zst, .hole => {},
                 .erased, .func => return true,
                 .named => |named| {
                     try stack.appendSlice(allocator, types.span(named.args));
@@ -2494,7 +2603,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     fn classifyRequestShape(allocator: Allocator, types: MonoType.Store.View, root: MonoType.TypeId, shape: *RequestShape) Allocator.Error!void {
         const func = switch (types.get(root)) {
             .func => |func| func,
-            .primitive, .zst, .erased, .named, .record, .tuple, .tag_union, .list, .box => return,
+            .primitive, .zst, .hole, .erased, .named, .record, .tuple, .tag_union, .list, .box => return,
         };
         for (types.span(func.args)) |arg| {
             switch (types.get(arg)) {
@@ -2507,7 +2616,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                     if (higher) shape.fn_higher_order = true else shape.fn_bare_param = true;
                 },
                 .erased => shape.fn_bare_param = true,
-                .primitive, .zst, .named, .record, .tuple, .tag_union, .list, .box => {
+                .primitive, .zst, .hole, .named, .record, .tuple, .tag_union, .list, .box => {
                     if (try typeMentionsFn(allocator, types, arg)) shape.fn_nested_in_data = true;
                 },
             }
@@ -2528,6 +2637,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             },
             .primitive,
             .zst,
+            .hole,
             .erased,
             .named,
             .record,
@@ -2541,7 +2651,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             const gop = try visited.getOrPut(ty);
             if (gop.found_existing) continue;
             switch (types.get(ty)) {
-                .primitive, .zst => {},
+                .primitive, .zst, .hole => {},
                 .erased => shape.has_erased = true,
                 .func => |func| {
                     shape.has_fn = true;
@@ -2571,6 +2681,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         switch (types.get(ty)) {
             .primitive => |p| try w.writeAll(@tagName(p)),
             .zst => try w.writeAll("zst"),
+            .hole => try w.writeAll("hole"),
             .erased => try w.writeAll("erased"),
             .func => |func| {
                 try w.writeAll("(");
@@ -2689,7 +2800,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
                         const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
-                        if (@backingInt(source_fn_ty) < info.types.stored_payloads.len) {
+                        if (info.types.containsId(source_fn_ty)) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }
                     }
@@ -2699,7 +2810,6 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
             var rendered: std.Io.Writer.Allocating = .init(allocator);
             defer rendered.deinit();
             renderType(&rendered.writer, allocator, mono, view.types, spec.identity.request_fn_ty, 0) catch return error.OutOfMemory;
-            const key_hex = std.fmt.bytesToHex(spec.request_fn_ty_digest.bytes, .lower);
             const req_hex = std.fmt.bytesToHex(spec.identity.request_fn_ty_digest.bytes, .lower);
             const solved_hex = std.fmt.bytesToHex(spec.solved_fn_ty_digest.bytes, .lower);
             std.debug.print("CENSUS_SPEC\t{d}\t{s}\t{s}\t{s}\t{d}\t{d}\t{s}\t{d}\t{d}\t{d}\t{s}\t{s}\t{s}\t{s}\n", .{
@@ -2718,7 +2828,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                 @tagName(spec.status),
                 &shape.classes(),
             });
-            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, key_hex[0..16], rendered.written() });
+            std.debug.print("CENSUS_REQ\t{s}\t{s}\t{s}\n", .{ callable_name, req_hex[0..16], rendered.written() });
         }
     }
 
@@ -2727,7 +2837,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-            const spec = store.getProcSpec(proc_id);
+            const spec = store.getProcSpecImmediate(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {
                 std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\t{s}\n", .{ index, name, if (spec.is_static_initializer) "nobody-init" else "nobody" });

@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.17.0",
+    .minimum_zig_version = "0.17.1",
     // CPU baseline notes for each dependency.
     //
     // Dependencies fall into two groups that behave differently under `-Dcpu`:

@@ -57,10 +57,12 @@ pub const AppHeaderInfo = struct {
 };
 
 /// Errors `parseAppHeader` can return—either a header-shape problem
-/// (`NotAnAppHeader`), an allocation failure, or an `Io.readFile` failure.
+/// (`NotAnAppHeader`, `HeaderParseFailed`), an allocation failure, or an
+/// `Io.readFile` failure.
 pub const Error = error{
     NotAnAppHeader,
     SourceTokenizationFailed,
+    HeaderParseFailed,
     OutOfMemory,
 } || Io.ReadError;
 
@@ -120,6 +122,26 @@ pub fn parseAppHeaderReporting(
     if (header != .app) return error.NotAnAppHeader;
     const app = header.app;
 
+    // A parse problem inside the header (such as a repeated package
+    // shorthand) means its dependency record has no single reading to
+    // report. Problems after the header belong to the module's own parse.
+    const header_end = app.region.end;
+    const header_parse_failed = for (ast.parse_diagnostics.items) |diagnostic| {
+        if (diagnostic.region.start < header_end) break true;
+    } else false;
+    if (header_parse_failed) {
+        if (reports) |destination| {
+            try env.common.calcLineStarts(gpa);
+            for (ast.parse_diagnostics.items) |diagnostic| {
+                if (diagnostic.region.start >= header_end) continue;
+                var report = try ast.parseDiagnosticToReport(&env.common, diagnostic, gpa, app_path);
+                errdefer report.deinit();
+                try destination.append(gpa, report);
+            }
+        }
+        return error.HeaderParseFailed;
+    }
+
     const platform_field = if (app.platform_idx) |platform_idx|
         ast.store.getRecordField(platform_idx)
     else
@@ -151,19 +173,18 @@ pub fn parseAppHeaderReporting(
     const packages_coll = ast.store.getCollection(app.packages);
     const fields = ast.store.recordFieldSlice(.{ .span = packages_coll.span });
     for (fields) |field_idx| {
-        // The compiler version pin shares the packages record with the real
-        // dependencies, but is not one of them.
+        // The compiler version pin and the platform entry share the packages
+        // record with the real dependencies, but are not among them.
         if (app.roc_version) |roc_version_idx| {
             if (field_idx == roc_version_idx) continue;
+        }
+        if (app.platform_idx) |platform_idx| {
+            if (field_idx == platform_idx) continue;
         }
 
         const field = ast.store.getRecordField(field_idx);
         const key_region = ast.tokens.resolve(field.name);
         const shorthand = source[key_region.start.offset..key_region.end.offset];
-
-        if (platform_qualifier) |qual| {
-            if (std.mem.eql(u8, shorthand, qual)) continue;
-        }
 
         const value_idx = field.value.asSupplied() orelse continue;
         const value_node = ast.store.getExpr(value_idx);

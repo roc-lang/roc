@@ -16,6 +16,7 @@ const reporting = @import("reporting");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 const CIR = @import("CIR.zig");
+const HoistRoots = @import("hoist_roots.zig");
 const DependencyGraph = @import("DependencyGraph.zig");
 
 const TypeWriter = types_mod.TypeWriter;
@@ -398,61 +399,36 @@ pub const CommonIdents = extern struct {
     }
 };
 
-/// Owner identity for static-dispatch method lookup.
-///
-/// The owning module is named by content identity, never by a module's name:
-/// `self_module` for a declaration in this environment, and an env-local
-/// `ModuleIdentity.Idx` for one in another. Cross-environment lookup joins on
-/// those identities rather than spelling a module's name into another
-/// environment's ident store.
+/// Owner identity for static-dispatch method lookup: the declaration, in this
+/// environment, of the type whose `.{ … }` block declares the method. A type's
+/// methods are registered only by the module that declares the type, so every
+/// owner in a method table is one of that module's own declarations.
 pub const MethodOwner = extern struct {
-    owner_module: u32,
     owner: CIR.Statement.Idx,
 
-    /// The owning module is the environment that holds this table.
-    pub const self_module: u32 = std.math.maxInt(u32);
-
-    /// An owner declared in the environment that holds the method tables.
     pub fn initSelf(owner: CIR.Statement.Idx) MethodOwner {
-        return .{ .owner_module = self_module, .owner = owner };
-    }
-
-    /// An owner declared in another module, named by its content identity as
-    /// this environment interned it.
-    pub fn initImported(identity: base.ModuleIdentity.Idx, owner: CIR.Statement.Idx) MethodOwner {
-        return .{ .owner_module = @backingInt(identity), .owner = owner };
-    }
-
-    /// The owning module's content identity, or null when it is this one.
-    pub fn moduleIdentity(self: MethodOwner) ?base.ModuleIdentity.Idx {
-        if (self.owner_module == self_module) return null;
-        return @fromBackingInt(@intCast(self.owner_module));
+        return .{ .owner = owner };
     }
 
     pub fn eql(a: MethodOwner, b: MethodOwner) bool {
-        return a.owner_module == b.owner_module and a.owner == b.owner;
+        return a.owner == b.owner;
     }
 };
 
-/// Key for method lookup: (receiver owner declaration, method_ident) pair.
+/// Key for method lookup: (owner declaration, method_ident) pair.
 pub const MethodKey = extern struct {
-    owner_module: u32,
     owner: CIR.Statement.Idx,
     method_ident_bits: u32,
 
     pub fn init(owner: MethodOwner, method_ident: Ident.Idx) MethodKey {
         return .{
-            .owner_module = owner.owner_module,
             .owner = owner.owner,
             .method_ident_bits = @bitCast(method_ident),
         };
     }
 
     pub fn ownerIdent(self: MethodKey) MethodOwner {
-        return .{
-            .owner_module = self.owner_module,
-            .owner = self.owner,
-        };
+        return .{ .owner = self.owner };
     }
 
     pub fn methodIdent(self: MethodKey) Ident.Idx {
@@ -460,12 +436,6 @@ pub const MethodKey = extern struct {
     }
 
     pub fn order(a: MethodKey, b: MethodKey) std.math.Order {
-        const a_module = a.owner_module;
-        const b_module = b.owner_module;
-        if (a_module != b_module) {
-            return if (a_module < b_module) .lt else .gt;
-        }
-
         const a_owner = @backingInt(a.owner);
         const b_owner = @backingInt(b.owner);
         if (a_owner != b_owner) {
@@ -479,7 +449,7 @@ pub const MethodKey = extern struct {
     }
 };
 
-/// Mapping from (receiver owner declaration, method_ident) pairs to their qualified
+/// Mapping from (owner declaration, method_ident) pairs to their qualified
 /// method ident.
 ///
 /// This is populated during canonicalization when methods are defined in associated blocks.
@@ -492,14 +462,10 @@ pub const MethodBinding = extern struct {
     def_idx: CIR.Def.Idx,
 };
 
-/// Mapping from (receiver owner declaration, method_ident) pairs to the method binding.
+/// Mapping from (owner declaration, method_ident) pairs to the method binding.
 /// This keeps method implementation lookup explicit without requiring local
 /// associated methods to be published through the module exposure table.
 pub const MethodDefs = SortedArrayBuilder(MethodKey, MethodBinding);
-
-/// Construction-time position shared by the parallel method identity and
-/// definition tables.
-pub const MethodTableIndex = enum(u32) { _ };
 
 /// A definition whose implementation was authored by the compiler as one
 /// exact low-level operation. Canonicalization publishes this alongside CIR so
@@ -695,6 +661,10 @@ pub const DispatchRelationMerge = extern struct {
 /// them to stable checked type ids before post-check compilation.
 pub const GeneratedCodecDerivation = extern struct {
     kind: u32,
+    /// The scheme relation this derivation answers for. It differs from
+    /// `source_constraint_fn_var` when checking validated a private instance
+    /// of that relation instead of the relation itself.
+    template_constraint_fn_var: u32,
     source_constraint_fn_var: u32,
     source_runtime_fn_var: u32,
     source_shape_var: u32,
@@ -711,6 +681,10 @@ pub const GeneratedCodecDerivation = extern struct {
     error_var: u32,
     calls_start: u32,
     calls_len: u32,
+    /// Range of `generated_codec_renamings`: every variable-bearing type the
+    /// derivation's snapshot copied, with its copy.
+    renamings_start: u32,
+    renamings_len: u32,
 
     pub const SafeList = collections.SafeList(@This());
 
@@ -734,6 +708,19 @@ pub const GeneratedCodecCall = extern struct {
     subject_var: u32,
 
     pub const no_subject_var = std.math.maxInt(u32);
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A type a generated codec derivation's snapshot copied because it contains a
+/// type variable, and the copy the snapshot made of it. The derivation's
+/// callables name the copy; anything checking recorded against the source
+/// before the snapshot (a call's scheme substitution) names the source.
+pub const GeneratedCodecRenaming = extern struct {
+    /// Resolved root of the copied type at snapshot time (`Var`).
+    source_var: u32,
+    /// The snapshot's copy of it (`Var`).
+    copy_var: u32,
+
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -841,20 +828,82 @@ pub const RecordOmittedDefault = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
-/// One use of a top-level value whose checked type is a widening copy of the
-/// value's own type: every tag union the row coercion reaches from the root
-/// has a fresh extension (design.md "Value Rows: Local Values Share, Top-Level
-/// Values Widen At Each Use"). Recorded by checking; checked-body construction
-/// lowers the use as a `row_coerce` whose child reads the value at
-/// `value_var`.
-pub const RowCoercedUse = extern struct {
-    /// The use's lookup expression node (`Node.Idx`).
+/// A value expression that flows into an annotated function's result with a
+/// closed tag union where the annotation leaves the union open (design.md
+/// "Row Subsumption"). The expression keeps its own type; the function's
+/// result relates to `wide_var`, a copy of that type with each such closed
+/// row re-opened. The checked body reader reports the coercion on the
+/// expression's own node (`CheckedBodies.rowCoercion`), and each lowering
+/// coerces the value to the wide type where the expression's parent reads it.
+pub const RowCoercedResult = extern struct {
+    /// The value expression node (`Node.Idx`).
     node_idx: u32,
-    /// The value's own type in this module (`Var`): the definition's pattern
-    /// var, or the imported value's local copy.
-    value_var: u32,
+    /// The widened copy of the expression's type (`Var`).
+    wide_var: u32,
 
-    /// The checked module's sorted table of row-coerced uses.
+    /// The checked module's sorted table of row-coerced results.
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A source node whose own checked state is erroneous (`erroneous_nodes`).
+pub const ErroneousNode = extern struct {
+    node_idx: u32,
+
+    /// The checked module's sorted table of erroneous nodes.
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A compile-time root checking selected (`selected_hoisted_roots`).
+pub const SelectedHoistedRoot = HoistRoots.SelectedHoistedRoot;
+/// A local function binding checking promoted to a procedure of its own
+/// (`promoted_local_procedures`).
+pub const PromotedLocalProcedure = HoistRoots.PromotedLocalProcedure;
+
+/// The app definition checking solved one platform requirement with
+/// (`platform_requirement_solutions`).
+pub const PlatformRequirementSolution = struct {
+    /// Index of the requirement in the platform's requires clause.
+    requires_idx: u32,
+    /// The exported app definition the requirement resolved to.
+    def: CIR.Def.Idx,
+    /// The requirement type instantiated into the app's store and unified
+    /// against the app definition's expression.
+    solved_var: types_mod.Var,
+    /// Whether the platform declares the requirement at a function type.
+    is_function: bool,
+    outcome: Outcome,
+    /// Range of `platform_requirement_identity_vars`: the requirement type's
+    /// identity variables in the app's store, in canonical identity-slot
+    /// order.
+    identities_start: u32,
+    identities_len: u32,
+
+    pub const Outcome = enum(u8) { success, checked_error };
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// A `match` or destructure whose exhaustiveness checking left to be decided
+/// after checking (`exhaustiveness_obligations`). Its index in the module's
+/// list is the checked exhaustiveness site id.
+pub const ExhaustivenessObligation = struct {
+    mode: Mode,
+    source: Source,
+    region: Region,
+
+    pub const Mode = enum(u8) {
+        /// Missing cases are a diagnostic unless a compile-time root that
+        /// replaces the site decides it by evaluation.
+        static,
+        /// Only an evaluation that reaches a missing case reports it.
+        empirical,
+    };
+
+    pub const Source = union(enum) {
+        match_expr: CIR.Expr.Idx,
+        destructure_pattern: CIR.Pattern.Idx,
+    };
+
     pub const SafeList = collections.SafeList(@This());
 };
 
@@ -869,6 +918,57 @@ pub const BindingScheme = extern struct {
     node_idx: u32,
 
     pub const SafeList = collections.SafeList(@This());
+};
+
+/// Import-facing eligibility of a callable definition for stored constants.
+/// Checking publishes one row per module-global definition and per method
+/// binding's definition, ordered by definition id.
+/// The body and its transitive callee dependencies are owned by that checker.
+pub const CallableCheckingFact = extern struct {
+    def: CIR.Def.Idx,
+    allows_stored_const: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
+/// Checking's import-facing identity and the current content identities that
+/// bind its owner parameters. The digest never substitutes for an implementation
+/// identity. Canonicalized environments have an unpublished dependency.
+pub const CheckingDependency = struct {
+    digest: [32]u8 = @splat(0),
+    owners: collections.SafeList(base.ModuleIdentity.Hash) = .{},
+    /// Producer-owned interface slot to current source node.
+    references: collections.SafeList(u32) = .{},
+    published: bool = false,
+
+    pub fn deinit(self: *CheckingDependency, allocator: Allocator) void {
+        self.owners.deinit(allocator);
+        self.references.deinit(allocator);
+    }
+
+    pub const Serialized = extern struct {
+        digest: [32]u8,
+        owners: collections.SafeList(base.ModuleIdentity.Hash).Serialized,
+        references: collections.SafeList(u32).Serialized,
+        published: u64,
+
+        pub fn serialize(self: *@This(), value: *const CheckingDependency, allocator: Allocator, writer: *CompactWriter) Allocator.Error!void {
+            self.digest = value.digest;
+            self.published = @intFromBool(value.published);
+            try self.owners.serialize(&value.owners, allocator, writer);
+            try self.references.serialize(&value.references, allocator, writer);
+        }
+
+        pub fn deserializeInto(self: *const @This(), address: usize) CheckingDependency {
+            return .{ .digest = self.digest, .owners = self.owners.deserializeInto(address), .references = self.references.deserializeInto(address), .published = self.published != 0 };
+        }
+
+        pub fn deserializeWithCopy(self: *const @This(), address: usize, allocator: Allocator) Allocator.Error!CheckingDependency {
+            var owners = try self.owners.deserializeWithCopy(address, allocator);
+            errdefer owners.deinit(allocator);
+            return .{ .digest = self.digest, .owners = owners, .references = try self.references.deserializeWithCopy(address, allocator), .published = self.published != 0 };
+        }
+    };
 };
 
 /// One generated-codec dispatch relation that remains part of a binding's
@@ -999,17 +1099,20 @@ diagnostics: CIR.Diagnostic.Span,
 /// Uses an efficient data structure, and provides helpers for storing and retrieving nodes.
 store: NodeStore,
 
-/// Dependency analysis results (evaluation order for defs)
-/// Set after canonicalization completes. Must not be accessed before then.
-evaluation_order: ?*DependencyGraph.EvaluationOrder,
-
-/// Exact strict-demand edges between top-level definitions. Canonicalization
-/// produces the initial relation and checking replaces it after resolving
-/// literal dispatch; serialization preserves the finalized relation for
-/// checked-artifact publication. Unlike `evaluation_order`, it is not a
-/// transient traversal aid.
+/// Exact strict-demand edges between top-level definitions, which checking
+/// produces once it has resolved dispatch; serialization preserves them for
+/// checked-artifact publication. It is not a transient traversal aid.
 top_level_demand_dependencies: DependencyGraph.Dependency.SafeList,
 top_level_demand_dependencies_ready: bool,
+/// The top-level definitions whose calls can invoke a function value they do
+/// not name, in ascending order (design.md "Function Values In Strict
+/// Demand"): functions whose bodies can, and definitions holding values.
+/// Checking produces it with the strict-demand relation; importers read it.
+invoking_defs: collections.SafeList(CIR.Def.Idx),
+/// Exact stored-constant eligibility of each global or method callable, published after
+/// checking settles its body. Importers consume this instead of scanning CIR.
+callable_checking_facts: CallableCheckingFact.SafeList,
+checking_dependency: CheckingDependency,
 
 /// True only after `check.TypedCIR.prepareRuntimeEnv` has prepared this env for
 /// checked-artifact consumption. Serialized user modules intentionally do not
@@ -1055,12 +1158,27 @@ dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
-/// Uses of top-level values that checking related to a widening copy of the
-/// value's type (design.md "Value Rows: Local Values Share, Top-Level Values
-/// Widen At Each Use"). Checked-body construction lowers each as a
-/// `row_coerce` of the value, read at the value's own type. Sorted by
-/// source node.
-row_coerced_uses: RowCoercedUse.SafeList,
+/// Value expressions whose checked type is a widening copy of their own
+/// type, which lowering coerces the expression's value to. Sorted by source
+/// node.
+row_coerced_results: RowCoercedResult.SafeList,
+/// Nodes whose own checked state is erroneous: an expression or pattern
+/// whose type contains an error, a runtime error node, or a dispatch whose
+/// obligation checking rejected. Recorded once checking is complete.
+/// Sorted by source node.
+erroneous_nodes: ErroneousNode.SafeList,
+/// Compile-time roots checking selected, in selection order.
+selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot),
+/// Local function bindings checking promoted to procedures of their own.
+promoted_local_procedures: collections.SafeList(PromotedLocalProcedure),
+/// For an app checked against its platform's requirements: one solution per
+/// requirement checking finalized, in requires-clause order.
+platform_requirement_solutions: PlatformRequirementSolution.SafeList,
+/// Flat pool backing `PlatformRequirementSolution.identities_start/identities_len`.
+platform_requirement_identity_vars: collections.SafeList(types_mod.Var),
+/// Exhaustiveness checks checking left to evaluation or to the build's
+/// diagnostics, indexed by checked exhaustiveness site id.
+exhaustiveness_obligations: ExhaustivenessObligation.SafeList,
 /// Generated-codec relations carried by those schemes. Sorted by source node;
 /// multiple requirements for one binding occupy one contiguous run.
 binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
@@ -1069,6 +1187,8 @@ binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList,
 generated_codec_derivations: GeneratedCodecDerivation.SafeList,
 /// Flat pool backing `generated_codec_derivations.calls_start/calls_len`.
 generated_codec_calls: GeneratedCodecCall.SafeList,
+/// Flat pool backing `generated_codec_derivations.renamings_start/renamings_len`.
+generated_codec_renamings: GeneratedCodecRenaming.SafeList,
 /// Static-dispatch obligations explicitly rejected by checking. Publication
 /// consumes these records instead of inferring rejection from erroneous types.
 rejected_static_dispatches: RejectedStaticDispatch.SafeList,
@@ -1196,10 +1316,6 @@ pub const DeferredRefKind = enum(u8) {
     type_anno_apply,
     /// A literal suffix naming an imported type.
     numeric_suffix,
-    /// A receiver-extension method registration whose receiver type is
-    /// imported. Its owner identity is settled once the receiver type's own
-    /// deferred reference resolves.
-    receiver_method_owner,
     /// An `import` statement itself. Whether the name it spells denotes a
     /// module at all is not a source-local question, so the statement waits
     /// here for the answer.
@@ -1213,6 +1329,12 @@ pub const DeferredRefKind = enum(u8) {
     /// An `import "path" as name` file import. Reading the file is filesystem
     /// input, so the expression waits here for its bytes.
     file_import,
+    /// A platform or package header's `exposes` entry naming a type nested in
+    /// another module (`Util.Inner`). Whether that module defines it is
+    /// settled once, when the module completes, and handed to the drain.
+    /// `item_name` is the public name the entry makes, `module_name` its
+    /// qualifier, and `path` the nested type it names.
+    header_exposure,
 };
 
 /// The diagnostic a deferred import reference produces when resolution cannot
@@ -1255,9 +1377,7 @@ pub const DeferredImportRef = extern struct {
     /// The import this reference goes through, or `no_import` when the
     /// reference goes through no module import.
     import_idx: u32,
-    /// Raw node index of the node this entry resolves. For
-    /// `receiver_method_owner` this is the type-annotation node whose resolved
-    /// target names the owner declaration.
+    /// Raw node index of the node this entry resolves.
     node_idx: u32,
     /// Dotted path relative to the imported module root (e.g. `Files.Dir.Read`).
     path_bits: u32,
@@ -1271,9 +1391,6 @@ pub const DeferredImportRef = extern struct {
     /// The whole qualified spelling, for diagnostics that name it. For
     /// exposed-item checks, the local name bound by the item.
     qualified_name_bits: u32,
-    /// For `receiver_method_owner`, the method registration this entry
-    /// completes; unused otherwise.
-    method_ident_bits: u32,
     kind: DeferredRefKind,
     /// Diagnostic for an import that resolution rejected or that named no module.
     missing_module_failure: DeferredRefFailure,
@@ -1289,12 +1406,6 @@ pub const DeferredImportRef = extern struct {
     /// member: the call written `Q.U.v(...)`, or this entry's own node when the
     /// member is not called.
     tag_member_access_node: u32 = 0,
-    /// For `receiver_method_owner`, the node whose type variable holds the
-    /// method's checked type.
-    method_binding_type_node: u32,
-    /// For `receiver_method_owner`, the definition that owns the method's
-    /// implementation identity.
-    method_binding_def: u32,
     /// For `file_import`, the `file_dependencies` entry this import records
     /// its read state under.
     file_dependency_idx: u32,
@@ -1307,6 +1418,9 @@ pub const DeferredImportRef = extern struct {
     /// For an entry with `Flags.allows_tag_member`, where the qualified tag
     /// `Alias.Path.U` ends in the source. It starts where the node does.
     tag_receiver_end: u32 = 0,
+    /// For `exposed_item`, the exposed item this entry checks; the drain
+    /// records the declaration it resolves to on that item.
+    exposed_item: u32 = 0,
 
     /// Bit flags recording source-local facts the drain needs.
     pub const Flags = struct {
@@ -1374,33 +1488,16 @@ pub const DeferredImportRef = extern struct {
         return @bitCast(self.qualified_name_bits);
     }
 
-    pub fn methodIdent(self: @This()) Ident.Idx {
-        return @bitCast(self.method_ident_bits);
-    }
-
     /// `import_idx` value for a reference that goes through no module import.
     /// A file import is such a reference: the file it names is the
     /// `file_dependencies` entry at `file_dependency_idx`.
     pub const no_import: u32 = std.math.maxInt(u32);
-
-    /// `method_binding_type_node` value for an entry that registers no method.
-    pub const no_method_binding: u32 = std.math.maxInt(u32);
 
     /// The import this reference goes through, or null for a reference that
     /// goes through no module import.
     pub fn importIdx(self: @This()) ?CIR.Import.Idx {
         if (self.import_idx == no_import) return null;
         return @fromBackingInt(@intCast(self.import_idx));
-    }
-
-    /// The method registration this entry completes, or null when it
-    /// registers no method.
-    pub fn methodBinding(self: @This()) ?MethodBinding {
-        if (self.method_binding_type_node == no_method_binding) return null;
-        return .{
-            .type_node_idx = @fromBackingInt(@intCast(self.method_binding_type_node)),
-            .def_idx = @fromBackingInt(@intCast(self.method_binding_def)),
-        };
     }
 };
 
@@ -1424,9 +1521,11 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.display_module_name_idx = try self.insertIdent(Ident.for_text(module_name));
     self.diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } };
     // Note: self.store already exists from ModuleEnv.init(), so we don't create a new one
-    self.evaluation_order = null; // Will be set after canonicalization completes
     self.top_level_demand_dependencies = .{};
     self.top_level_demand_dependencies_ready = false;
+    self.invoking_defs = .{};
+    self.callable_checking_facts = .{};
+    self.checking_dependency = .{};
     self.runtime_prepared = false;
 }
 
@@ -1475,9 +1574,11 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .self_module_identity = base.ModuleIdentity.Idx.NONE,
         .diagnostics = CIR.Diagnostic.Span{ .span = base.DataSpan{ .start = 0, .len = 0 } },
         .store = try NodeStore.initCapacity(gpa, node_capacity),
-        .evaluation_order = null, // Will be set after canonicalization completes
         .top_level_demand_dependencies = .{},
         .top_level_demand_dependencies_ready = false,
+        .invoking_defs = .{},
+        .callable_checking_facts = .{},
+        .checking_dependency = .{},
         .runtime_prepared = false,
         .idents = idents,
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -1492,10 +1593,17 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
         .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
-        .row_coerced_uses = try RowCoercedUse.SafeList.initCapacity(gpa, 8),
+        .row_coerced_results = try RowCoercedResult.SafeList.initCapacity(gpa, 8),
+        .erroneous_nodes = try ErroneousNode.SafeList.initCapacity(gpa, 0),
+        .selected_hoisted_roots = try collections.SafeList(SelectedHoistedRoot).initCapacity(gpa, 0),
+        .promoted_local_procedures = try collections.SafeList(PromotedLocalProcedure).initCapacity(gpa, 0),
+        .platform_requirement_solutions = try PlatformRequirementSolution.SafeList.initCapacity(gpa, 0),
+        .platform_requirement_identity_vars = try collections.SafeList(types_mod.Var).initCapacity(gpa, 0),
+        .exhaustiveness_obligations = try ExhaustivenessObligation.SafeList.initCapacity(gpa, 0),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
         .generated_codec_calls = try GeneratedCodecCall.SafeList.initCapacity(gpa, 16),
+        .generated_codec_renamings = try GeneratedCodecRenaming.SafeList.initCapacity(gpa, 4),
         .rejected_static_dispatches = try RejectedStaticDispatch.SafeList.initCapacity(gpa, 4),
         .record_omitted_defaults = try RecordOmittedDefault.SafeList.initCapacity(gpa, 4),
         .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
@@ -1530,21 +1638,26 @@ pub fn deinit(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_uses.deinit(self.gpa);
+    self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
+    self.selected_hoisted_roots.deinit(self.gpa);
+    self.promoted_local_procedures.deinit(self.gpa);
+    self.platform_requirement_solutions.deinit(self.gpa);
+    self.platform_requirement_identity_vars.deinit(self.gpa);
+    self.exhaustiveness_obligations.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.generated_codec_renamings.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
+    self.invoking_defs.deinit(self.gpa);
+    self.callable_checking_facts.deinit(self.gpa);
+    self.checking_dependency.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
-
-    if (self.evaluation_order) |eval_order| {
-        eval_order.deinit();
-        self.gpa.destroy(eval_order);
-    }
 }
 
 /// Replace the module's exact strict-demand relation with freshly produced
@@ -1556,6 +1669,57 @@ pub fn setTopLevelDemandDependencies(
     self.top_level_demand_dependencies.deinit(self.gpa);
     self.top_level_demand_dependencies = dependencies;
     self.top_level_demand_dependencies_ready = true;
+}
+
+/// Replace the checked record of which top-level definitions' calls can
+/// invoke a function value they do not name. `defs` must be ascending.
+pub fn setInvokingDefs(self: *Self, defs: []const CIR.Def.Idx) std.mem.Allocator.Error!void {
+    var list = try collections.SafeList(CIR.Def.Idx).initCapacity(self.gpa, defs.len);
+    errdefer list.deinit(self.gpa);
+    for (defs) |def_idx| _ = try list.append(self.gpa, def_idx);
+    self.invoking_defs.deinit(self.gpa);
+    self.invoking_defs = list;
+}
+
+/// Whether calling top-level `def_idx` can invoke a function value it does
+/// not name.
+pub fn defInvokes(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    const defs = self.invoking_defs.items.items;
+    const wanted: u32 = @backingInt(def_idx);
+    var low: usize = 0;
+    var high: usize = defs.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const candidate: u32 = @backingInt(defs[mid]);
+        if (candidate < wanted) {
+            low = mid + 1;
+        } else if (candidate > wanted) {
+            high = mid;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Import-facing stored-constant eligibility. Every global definition and every
+/// method binding's definition has a producer row, including rejected
+/// definitions; absence is a compiler bug.
+pub fn callableAllowsStoredConst(self: *const Self, def_idx: CIR.Def.Idx) bool {
+    const facts = self.callable_checking_facts.items.items;
+    var low: usize = 0;
+    var high = facts.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (@backingInt(facts[mid].def) < @backingInt(def_idx)) {
+            low = mid + 1;
+        } else if (facts[mid].def != def_idx) {
+            high = mid;
+        } else {
+            return facts[mid].allows_stored_const != 0;
+        }
+    }
+    base.invariant("checked callable definition has no producer-owned stored-constant eligibility", .{});
 }
 
 /// Return the producer-authored low-level implementation for `def_idx`.
@@ -1637,10 +1801,17 @@ pub fn deinitCachedModule(self: *Self) void {
     self.scheme_use_pairs.deinit(self.gpa);
     self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
-    self.row_coerced_uses.deinit(self.gpa);
+    self.row_coerced_results.deinit(self.gpa);
+    self.erroneous_nodes.deinit(self.gpa);
+    self.selected_hoisted_roots.deinit(self.gpa);
+    self.promoted_local_procedures.deinit(self.gpa);
+    self.platform_requirement_solutions.deinit(self.gpa);
+    self.platform_requirement_identity_vars.deinit(self.gpa);
+    self.exhaustiveness_obligations.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
     self.generated_codec_calls.deinit(self.gpa);
+    self.generated_codec_renamings.deinit(self.gpa);
     self.rejected_static_dispatches.deinit(self.gpa);
     self.record_omitted_defaults.deinit(self.gpa);
     self.inspect_override_instances.deinit(self.gpa);
@@ -2116,7 +2287,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("Variable ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is defined here and then never used:");
+            try report.headline.addReflowingText(" is defined here and then never used.");
 
             try report.document.addReflowingText("If you don't need this variable, prefix it with an underscore like ");
             const ident_with_underscore = try std.fmt.allocPrint(allocator, "_{s}", .{owned_ident});
@@ -2198,7 +2369,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2223,7 +2394,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2248,7 +2419,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addType(owned_type_name);
             try report.document.addReflowingText(" was already declared in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2353,7 +2524,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addRecordField(owned_field_name);
             try report.document.addReflowingText(" was first defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2510,7 +2681,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addReflowingText("The name ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(" is being redeclared here:");
+            try report.headline.addReflowingText(" is being redeclared here.");
 
             // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
@@ -2521,7 +2692,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" was already defined in ");
             try report.document.addSourceLocation(original_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
@@ -2577,6 +2748,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreaks(2);
             try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
+            break :blk report;
+        },
+        .var_in_binder_pattern => |data| blk: {
+            const ident_name = self.getIdent(data.ident);
+            const region_info = self.calcRegionInfo(data.region);
+            var report = try Report.init(allocator, switch (data.position) {
+                .match_branch => "Var In Match Pattern",
+                .for_loop => "Var In For Pattern",
+            }, "", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+
+            try report.headline.addReflowingText(switch (data.position) {
+                .match_branch => "This match branch pattern binds ",
+                .for_loop => "This for loop pattern binds ",
+            });
+            try report.headline.addUnqualifiedSymbol(owned_ident);
+            try report.headline.addReflowingText(", but a pattern here cannot bind a ");
+            try report.headline.addKeyword("var");
+            try report.headline.addReflowingText(".");
+
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only an assignment with ");
+            try report.document.addInlineCode("=");
+            try report.document.addReflowingText(" changes a ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(". Bind a name without ");
+            try report.document.addInlineCode("$");
+            try report.document.addReflowingText(" here, and assign it to the ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" with ");
+            try report.document.addInlineCode("=");
+            try report.document.addReflowingText(" if it should change.");
+
             break :blk report;
         },
         .empty_tuple => |data| blk: {
@@ -2833,6 +3038,21 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addText("The module ");
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" was not found in this Roc project.");
+
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+
+            break :blk report;
+        },
+        .public_type_not_defined => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            const import_name_bytes = self.getIdent(data.import_name);
+
+            var report = try Report.init(allocator, "Public Type Not Defined", "", .runtime_error);
+            const import_name = try report.addOwnedString(import_name_bytes);
+            try report.headline.addText("The package import ");
+            try report.headline.addInlineCode(import_name);
+            try report.headline.addReflowingText(" names a type its package exposes, but the package does not define that type.");
 
             try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
@@ -3138,8 +3358,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             break :blk report;
         },
         .type_module_missing_matching_type => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
             var report = try Report.init(allocator, "Type Module Missing Matching Type", "Type modules must have a nominal type declaration matching the module name.", .runtime_error);
 
             const module_name_bytes = self.getIdent(data.module_name);
@@ -3168,7 +3386,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" (opaque nominal type)");
             try report.document.addLineBreak();
 
-            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.setFile(filename);
 
             break :blk report;
         },
@@ -3222,25 +3440,22 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .default_app_missing_main => |data| blk: {
-            const region_info = self.calcRegionInfo(data.region);
-
+        .default_app_missing_main => blk: {
             var report = try Report.init(allocator, "Missing `main!` Function", "", .runtime_error);
-            try report.headline.addReflowingText("Default app modules must have a ");
+            try report.headline.addReflowingText("This file has no header and declares no types, so it is a default app, but it has no ");
             try report.headline.addInlineCode("main!");
             try report.headline.addReflowingText(" function.");
 
-            try report.document.addText("No ");
+            try report.document.addReflowingText("Add a ");
             try report.document.addInlineCode("main!");
-            try report.document.addReflowingText(" function was found.");
+            try report.document.addReflowingText(" function that takes 1 argument:");
             try report.document.addLineBreaks(2);
-
-            try report.document.addReflowingText("Add a main! function like:");
+            try report.document.addCodeBlock("main! = |arg| { ... }");
+            try report.document.addLineBreaks(2);
+            try report.document.addReflowingText("If this file is meant to be imported by other files instead, declare a nominal type named after the file.");
             try report.document.addLineBreak();
-            try report.document.addInlineCode("main! = |arg| { ... }");
-            try report.document.addLineBreak();
 
-            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
+            try report.setFile(filename);
 
             break :blk report;
         },
@@ -3287,13 +3502,6 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
-        .execution_requires_app_or_default_app => |data| CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
-            allocator,
-            self.calcRegionInfo(data.region),
-            filename,
-            self.getSourceAll(),
-            self.getLineStartsAll(),
-        ),
         .type_name_case_mismatch => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3476,7 +3684,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Trailing `?`", "", .warning);
             try report.headline.addReflowingText("It's usually a mistake to use a postfix ");
             try report.headline.addAnnotated("?", .inline_code);
-            try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
+            try report.headline.addReflowingText(" on a value being returned implicitly at the end of a function.");
 
             try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, filename);
             try report.document.addLineBreak();
@@ -3551,6 +3759,19 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addAnnotated("?", .inline_code);
             try report.document.addReflowingText(" syntax sugar.");
 
+            break :blk report;
+        },
+        .unreachable_code => |data| blk: {
+            var report = try Report.init(allocator, "Unreachable Code", "", .warning);
+            try report.headline.addReflowingText("This code will never run, because the code before it always ends with a ");
+            try report.headline.addAnnotated("return", .inline_code);
+            try report.headline.addReflowingText(", ");
+            try report.headline.addAnnotated("crash", .inline_code);
+            try report.headline.addReflowingText(", or ");
+            try report.headline.addAnnotated("break", .inline_code);
+            try report.headline.addReflowingText(", or loops forever.");
+            try self.addSourceRegionTo(&report.document, self.calcRegionInfo(data.region), .error_highlight, filename);
+            try report.document.addReflowingText("Remove this code, or change the code before it so that it can finish.");
             break :blk report;
         },
         .redundant_return => |data| blk: {
@@ -3654,13 +3875,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("expect", .inline_code);
             try report.headline.addReflowingText(" reassigns ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
-            try report.headline.addReflowingText(", which was declared outside of it:");
+            try report.headline.addReflowingText(", which was declared outside of it.");
 
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addUnqualifiedSymbol(owned_ident);
-            try report.document.addReflowingText(" was declared here:");
+            try report.document.addReflowingText(" was declared in ");
+            try report.document.addSourceLocation(declaration_region_info, owned_filename);
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, declaration_region_info, .dimmed, owned_filename);
 
@@ -3684,29 +3907,30 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Mutually Recursive Type Aliases", "", .runtime_error);
             const owned_type_name = try report.addOwnedString(type_name);
             const owned_other_name = try report.addOwnedString(other_type_name);
-            try report.headline.addReflowingText("The type alias ");
+            try report.headline.addReflowingText("The type aliases ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" and ");
             try report.headline.addInlineCode(owned_other_name);
             try report.headline.addReflowingText(" form a recursive cycle.");
 
-            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
-            try report.document.addReflowingText("If you need recursive types, use nominal types (");
-            try report.document.addAnnotated(":=", .inline_code);
-            try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreaks(2);
-
             const owned_filename = try report.addOwnedString(filename);
             try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
-            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" references ");
             try report.document.addType(owned_other_name);
-            try report.document.addReflowingText(" declared in ");
+            try report.document.addReflowingText(", which is declared in ");
             try report.document.addSourceLocation(other_region_info, owned_filename);
-            try report.document.addReflowingText(":");
+            try report.document.addReflowingText(".");
             try report.document.addLineBreak();
             try self.addSourceRegionTo(&report.document, other_region_info, .dimmed, owned_filename);
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
 
             break :blk report;
         },
@@ -3852,8 +4076,10 @@ pub const Serialized = extern struct {
     self_module_identity_padding: u32 = 0,
     diagnostics: CIR.Diagnostic.Span,
     store: NodeStore.Serialized,
-    evaluation_order_reserved: u64, // Reserved space for evaluation_order field (required for in-place deserialization cast)
     top_level_demand_dependencies: DependencyGraph.Dependency.SafeList.Serialized,
+    invoking_defs: collections.SafeList(CIR.Def.Idx).Serialized,
+    callable_checking_facts: CallableCheckingFact.SafeList.Serialized,
+    checking_dependency: CheckingDependency.Serialized,
     top_level_demand_dependencies_ready: bool,
     runtime_prepared: bool,
     runtime_prepared_padding: [6]u8,
@@ -3871,10 +4097,17 @@ pub const Serialized = extern struct {
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
     dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
-    row_coerced_uses: RowCoercedUse.SafeList.Serialized,
+    row_coerced_results: RowCoercedResult.SafeList.Serialized,
+    erroneous_nodes: ErroneousNode.SafeList.Serialized,
+    selected_hoisted_roots: collections.SafeList(SelectedHoistedRoot).Serialized,
+    promoted_local_procedures: collections.SafeList(PromotedLocalProcedure).Serialized,
+    platform_requirement_solutions: PlatformRequirementSolution.SafeList.Serialized,
+    platform_requirement_identity_vars: collections.SafeList(types_mod.Var).Serialized,
+    exhaustiveness_obligations: ExhaustivenessObligation.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
     generated_codec_calls: GeneratedCodecCall.SafeList.Serialized,
+    generated_codec_renamings: GeneratedCodecRenaming.SafeList.Serialized,
     rejected_static_dispatches: RejectedStaticDispatch.SafeList.Serialized,
     record_omitted_defaults: RecordOmittedDefault.SafeList.Serialized,
     inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
@@ -3882,30 +4115,26 @@ pub const Serialized = extern struct {
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
 
-    comptime {
-        const renamed_fields = [_]collections.serde_validation.FieldRename{
-            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
-            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
-            .{ .owner = "evaluation_order", .serialized = "evaluation_order_reserved" },
-            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
-        };
-        const serialized_only_fields = [_][]const u8{
+    pub const root_contract: collections.serde_validation.RootContract = .{
+        .Owner = Self,
+        .owner_only_fields = &.{
+            "qualified_module_name", // Workspace information, recorded by the coordinator.
+        },
+        .serialized_only_fields = &.{
             "display_module_name_idx_padding", // Fixed-width padding after the display name slot.
             "self_module_identity_padding", // Fixed-width padding for the reserved identity slot.
             "runtime_prepared_padding", // Fixed-width padding for the serialized bool.
             "_reserved_flags", // Format-reserved bytes for fields removed from ModuleEnv.
             "_padding", // Tail padding kept explicit and zeroed for deterministic bytes.
-        };
-        const owner_only_fields = [_][]const u8{
-            "qualified_module_name", // Workspace information, recorded by the coordinator.
-        };
-        collections.serde_validation.assertBidirectionalFieldSet(
-            Self,
-            Serialized,
-            &owner_only_fields,
-            &serialized_only_fields,
-            &renamed_fields,
-        );
+        },
+        .renames = &.{
+            .{ .owner = "display_module_name_idx", .serialized = "display_module_name_idx_reserved" },
+            .{ .owner = "self_module_identity", .serialized = "self_module_identity_reserved" },
+            .{ .owner = "import_mapping", .serialized = "import_mapping_reserved" },
+        },
+    };
+
+    comptime {
         collections.serde_validation.assertSerializedRelocatable(Serialized);
     }
 
@@ -3959,8 +4188,11 @@ pub const Serialized = extern struct {
             allocator,
             writer,
         );
+        try self.invoking_defs.serialize(&env.invoking_defs, allocator, writer);
+        try self.callable_checking_facts.serialize(&env.callable_checking_facts, allocator, writer);
+        try self.checking_dependency.serialize(&env.checking_dependency, allocator, writer);
 
-        // Set gpa, module_name, evaluation_order_reserved to zeros;
+        // Set gpa and module_name to zeros;
         // these are runtime-only and will be set during deserialization.
         // Preserve display_module_name_idx since the ident store is also serialized and indices remain valid.
         self.gpa = .{ 0, 0 };
@@ -3971,7 +4203,6 @@ pub const Serialized = extern struct {
         try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
         self.self_module_identity_reserved = @backingInt(env.self_module_identity);
         self.self_module_identity_padding = 0;
-        self.evaluation_order_reserved = 0;
         self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
         self.runtime_prepared = env.module_role == .builtin and env.runtime_prepared;
         self.runtime_prepared_padding = .{ 0, 0, 0, 0, 0, 0 };
@@ -3996,10 +4227,17 @@ pub const Serialized = extern struct {
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
         try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
-        try self.row_coerced_uses.serialize(&env.row_coerced_uses, allocator, writer);
+        try self.row_coerced_results.serialize(&env.row_coerced_results, allocator, writer);
+        try self.erroneous_nodes.serialize(&env.erroneous_nodes, allocator, writer);
+        try self.selected_hoisted_roots.serialize(&env.selected_hoisted_roots, allocator, writer);
+        try self.promoted_local_procedures.serialize(&env.promoted_local_procedures, allocator, writer);
+        try self.platform_requirement_solutions.serialize(&env.platform_requirement_solutions, allocator, writer);
+        try self.platform_requirement_identity_vars.serialize(&env.platform_requirement_identity_vars, allocator, writer);
+        try self.exhaustiveness_obligations.serialize(&env.exhaustiveness_obligations, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
         try self.generated_codec_calls.serialize(&env.generated_codec_calls, allocator, writer);
+        try self.generated_codec_renamings.serialize(&env.generated_codec_renamings, allocator, writer);
         try self.rejected_static_dispatches.serialize(&env.rejected_static_dispatches, allocator, writer);
         try self.record_omitted_defaults.serialize(&env.record_omitted_defaults, allocator, writer);
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
@@ -4055,9 +4293,11 @@ pub const Serialized = extern struct {
             .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
-            .evaluation_order = null,
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
+            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4072,10 +4312,17 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
             .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
-            .row_coerced_uses = self.row_coerced_uses.deserializeInto(base_addr),
+            .row_coerced_results = self.row_coerced_results.deserializeInto(base_addr),
+            .erroneous_nodes = self.erroneous_nodes.deserializeInto(base_addr),
+            .selected_hoisted_roots = self.selected_hoisted_roots.deserializeInto(base_addr),
+            .promoted_local_procedures = self.promoted_local_procedures.deserializeInto(base_addr),
+            .platform_requirement_solutions = self.platform_requirement_solutions.deserializeInto(base_addr),
+            .platform_requirement_identity_vars = self.platform_requirement_identity_vars.deserializeInto(base_addr),
+            .exhaustiveness_obligations = self.exhaustiveness_obligations.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
             .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
+            .generated_codec_renamings = self.generated_codec_renamings.deserializeInto(base_addr),
             .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
             .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
@@ -4085,10 +4332,9 @@ pub const Serialized = extern struct {
         return env;
     }
 
-    /// Deserialize with mutable type store and node store for cache modules.
-    /// Allocates fresh memory for the type store and node store arrays,
-    /// allowing them to be mutated (e.g., during type checking).
-    /// Use this for disk cache modules that may need to add new types.
+    /// Deserialize a checked module from the checked-module cache.
+    /// Allocates fresh memory for the type store and node store arrays. The
+    /// type store holds the module's solved types, so it is sealed.
     pub fn deserializeWithMutableTypes(
         self: *const Serialized,
         base_addr: usize,
@@ -4103,7 +4349,6 @@ pub const Serialized = extern struct {
         env.* = Self{
             .gpa = gpa,
             .common = self.common.deserializeInto(base_addr, source),
-            // Use deserializeWithCopy to get mutable type store
             .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .module_role = self.module_role,
@@ -4137,9 +4382,11 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
-            .evaluation_order = null,
             .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = self.invoking_defs.deserializeInto(base_addr),
+            .callable_checking_facts = self.callable_checking_facts.deserializeInto(base_addr),
+            .checking_dependency = self.checking_dependency.deserializeInto(base_addr),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4154,14 +4401,22 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
+            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
+            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
+            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
         };
+        env.types.seal();
 
         env.debugAssertModuleBasename();
 
@@ -4231,9 +4486,11 @@ pub const Serialized = extern struct {
             .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
             .diagnostics = self.diagnostics,
             .store = try self.store.deserializeOwned(base_addr, gpa),
-            .evaluation_order = null,
             .top_level_demand_dependencies = try self.top_level_demand_dependencies.deserializeWithCopy(base_addr, gpa),
             .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
+            .invoking_defs = try self.invoking_defs.deserializeWithCopy(base_addr, gpa),
+            .callable_checking_facts = try self.callable_checking_facts.deserializeWithCopy(base_addr, gpa),
+            .checking_dependency = try self.checking_dependency.deserializeWithCopy(base_addr, gpa),
             .runtime_prepared = self.runtime_prepared,
             .idents = self.idents,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
@@ -4248,10 +4505,17 @@ pub const Serialized = extern struct {
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
             .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
-            .row_coerced_uses = try self.row_coerced_uses.deserializeWithCopy(base_addr, gpa),
+            .row_coerced_results = try self.row_coerced_results.deserializeWithCopy(base_addr, gpa),
+            .erroneous_nodes = try self.erroneous_nodes.deserializeWithCopy(base_addr, gpa),
+            .selected_hoisted_roots = try self.selected_hoisted_roots.deserializeWithCopy(base_addr, gpa),
+            .promoted_local_procedures = try self.promoted_local_procedures.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_solutions = try self.platform_requirement_solutions.deserializeWithCopy(base_addr, gpa),
+            .platform_requirement_identity_vars = try self.platform_requirement_identity_vars.deserializeWithCopy(base_addr, gpa),
+            .exhaustiveness_obligations = try self.exhaustiveness_obligations.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
             .generated_codec_calls = try self.generated_codec_calls.deserializeWithCopy(base_addr, gpa),
+            .generated_codec_renamings = try self.generated_codec_renamings.deserializeWithCopy(base_addr, gpa),
             .rejected_static_dispatches = try self.rejected_static_dispatches.deserializeWithCopy(base_addr, gpa),
             .record_omitted_defaults = try self.record_omitted_defaults.deserializeWithCopy(base_addr, gpa),
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
@@ -4457,26 +4721,59 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     ) != null;
 }
 
-/// Record that the use at `node_idx` reads the value at `value_var` through a
-/// row coercion (`RowCoercedUse`). Checker-produced use metadata.
-pub fn recordRowCoercedUse(self: *Self, node_idx: Node.Idx, value_var: types_mod.Var) std.mem.Allocator.Error!void {
+/// Record that the value expression at `node_idx` flows into its function's
+/// result as a widening copy `wide_var` of its own type (`RowCoercedResult`).
+/// Checker-produced use metadata.
+pub fn recordRowCoercedResult(self: *Self, node_idx: Node.Idx, wide_var: types_mod.Var) std.mem.Allocator.Error!void {
     try upsertSortedByNode(
-        RowCoercedUse,
-        &self.row_coerced_uses,
+        RowCoercedResult,
+        &self.row_coerced_results,
         self.gpa,
-        .{ .node_idx = @backingInt(node_idx), .value_var = @backingInt(value_var) },
+        .{ .node_idx = @backingInt(node_idx), .wide_var = @backingInt(wide_var) },
     );
 }
 
-/// The value's own type for a row-coerced use at `node_idx`, if checking
-/// recorded the use as one (`RowCoercedUse`).
-pub fn rowCoercedUseValueVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
+/// Drop the row-coerced result record for the expression at `node_idx`: its
+/// widening copy gained nothing, so the expression is read at its own type.
+pub fn removeRowCoercedResult(self: *Self, node_idx: Node.Idx) void {
+    const entries = self.row_coerced_results.items.items;
+    const slot = sortedNodeSlot(RowCoercedResult, entries, @backingInt(node_idx));
+    if (slot >= entries.len or entries[slot].node_idx != @backingInt(node_idx)) return;
+    _ = self.row_coerced_results.items.orderedRemove(slot);
+}
+
+/// The widening copy the expression at `node_idx` flows into its function's
+/// result as, if checking recorded one (`RowCoercedResult`).
+pub fn rowCoercedResultWideVar(self: *const Self, node_idx: Node.Idx) ?types_mod.Var {
     const entry = findSortedByNode(
-        RowCoercedUse,
-        self.row_coerced_uses.items.items,
+        RowCoercedResult,
+        self.row_coerced_results.items.items,
         @backingInt(node_idx),
     ) orelse return null;
-    return @fromBackingInt(entry.value_var);
+    return @fromBackingInt(entry.wide_var);
+}
+
+/// The identity variables of a platform requirement solution, in canonical
+/// identity-slot order.
+pub fn platformRequirementIdentityVars(self: *const Self, solution: PlatformRequirementSolution) []const types_mod.Var {
+    return self.platform_requirement_identity_vars.items.items[solution.identities_start..][0..solution.identities_len];
+}
+
+/// Record the nodes whose own checked state is erroneous, in increasing node
+/// order (`erroneous_nodes`).
+pub fn recordErroneousNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
+    self.erroneous_nodes.items.clearRetainingCapacity();
+    try self.erroneous_nodes.items.ensureTotalCapacity(self.gpa, nodes.len);
+    for (nodes, 0..) |node, index| {
+        std.debug.assert(index == 0 or nodes[index - 1] < node);
+        self.erroneous_nodes.items.appendAssumeCapacity(.{ .node_idx = node });
+    }
+}
+
+/// Whether checking recorded the node at `node_idx` as erroneous in its own
+/// right (`erroneous_nodes`).
+pub fn nodeIsErroneous(self: *const Self, node_idx: Node.Idx) bool {
+    return findSortedByNode(ErroneousNode, self.erroneous_nodes.items.items, @backingInt(node_idx)) != null;
 }
 
 /// Record one exact generated-codec relation owned by a source binding scheme.
@@ -4647,6 +4944,7 @@ pub fn recordSchemeUse(
 pub fn recordGeneratedCodecDerivation(
     self: *Self,
     kind: GeneratedCodecDerivation.Kind,
+    template_constraint_fn_var: TypeVar,
     source_constraint_fn_var: TypeVar,
     source_runtime_fn_var: TypeVar,
     source_shape_var: TypeVar,
@@ -4662,6 +4960,7 @@ pub fn recordGeneratedCodecDerivation(
     state_var: TypeVar,
     error_var: TypeVar,
     calls: []const GeneratedCodecCall,
+    renamings: []const GeneratedCodecRenaming,
 ) std.mem.Allocator.Error!void {
     var existing_index: ?usize = null;
     for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
@@ -4677,12 +4976,18 @@ pub fn recordGeneratedCodecDerivation(
         if (existing.calls_start + existing.calls_len == self.generated_codec_calls.items.items.len) {
             self.generated_codec_calls.items.shrinkRetainingCapacity(existing.calls_start);
         }
+        if (existing.renamings_start + existing.renamings_len == self.generated_codec_renamings.items.items.len) {
+            self.generated_codec_renamings.items.shrinkRetainingCapacity(existing.renamings_start);
+        }
     }
 
     const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
     _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
+    const renamings_start: u32 = @intCast(self.generated_codec_renamings.items.items.len);
+    _ = try self.generated_codec_renamings.appendSlice(self.gpa, renamings);
     const derivation = GeneratedCodecDerivation{
         .kind = @backingInt(kind),
+        .template_constraint_fn_var = @backingInt(template_constraint_fn_var),
         .source_constraint_fn_var = @backingInt(source_constraint_fn_var),
         .source_runtime_fn_var = @backingInt(source_runtime_fn_var),
         .source_shape_var = @backingInt(source_shape_var),
@@ -4699,6 +5004,8 @@ pub fn recordGeneratedCodecDerivation(
         .error_var = @backingInt(error_var),
         .calls_start = calls_start,
         .calls_len = @intCast(calls.len),
+        .renamings_start = renamings_start,
+        .renamings_len = @intCast(renamings.len),
     };
     if (existing_index) |index| {
         self.generated_codec_derivations.items.items[index] = derivation;
@@ -4861,44 +5168,19 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
 }
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
-    const expr_idx = try self.store.addDef(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addDef = storeAdder("addDef");
 
 /// Add a new type header to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeHeader(self: *Self, expr: CIR.TypeHeader, region: Region) std.mem.Allocator.Error!CIR.TypeHeader.Idx {
-    const expr_idx = try self.store.addTypeHeader(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeHeader = storeAdder("addTypeHeader");
 
 /// Add a new statement to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addStatement(self: *Self, expr: CIR.Statement, region: Region) std.mem.Allocator.Error!CIR.Statement.Idx {
-    const expr_idx = try self.store.addStatement(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addStatement = storeAdder("addStatement");
 
 /// Add a new pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addPattern(self: *Self, expr: CIR.Pattern, region: Region) std.mem.Allocator.Error!CIR.Pattern.Idx {
-    const expr_idx = try self.store.addPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addPattern = storeAdder("addPattern");
 
 /// Add a new expression to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExpr(self: *Self, expr: CIR.Expr, region: Region) std.mem.Allocator.Error!CIR.Expr.Idx {
-    const expr_idx = try self.store.addExpr(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addExpr = storeAdder("addExpr");
 
 /// Reserve one contiguous field-access path plus its enclosing expression.
 pub fn startFieldAccessPath(self: *Self, segment_count: u32) std.mem.Allocator.Error!NodeStore.FieldAccessPathBuilder {
@@ -4931,91 +5213,59 @@ pub fn rollbackFieldAccessPath(self: *Self, builder: NodeStore.FieldAccessPathBu
 }
 
 /// Add a new capture to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addCapture(self: *Self, capture: CIR.Expr.Capture, region: Region) std.mem.Allocator.Error!CIR.Expr.Capture.Idx {
-    const capture_idx = try self.store.addCapture(capture, region);
-    self.debugAssertArraysInSync();
-    return capture_idx;
-}
+pub const addCapture = storeAdder("addCapture");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordField(self: *Self, expr: CIR.RecordField, region: Region) std.mem.Allocator.Error!CIR.RecordField.Idx {
-    const expr_idx = try self.store.addRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordField = storeAdder("addRecordField");
 
 /// Add a new unset record field (`name: _`) to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addUnsetField(self: *Self, unset_field: CIR.UnsetField, region: Region) std.mem.Allocator.Error!CIR.UnsetField.Idx {
-    const unset_idx = try self.store.addUnsetField(unset_field, region);
-    self.debugAssertArraysInSync();
-    return unset_idx;
-}
+pub const addUnsetField = storeAdder("addUnsetField");
 
 /// Add a new record destructuring to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addRecordDestruct(self: *Self, expr: CIR.Pattern.RecordDestruct, region: Region) std.mem.Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const expr_idx = try self.store.addRecordDestruct(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addRecordDestruct = storeAdder("addRecordDestruct");
 
 /// Adds a new if branch to the store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addIfBranch(self: *Self, expr: CIR.Expr.IfBranch, region: Region) std.mem.Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const expr_idx = try self.store.addIfBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addIfBranch = storeAdder("addIfBranch");
 
 /// Add a new match branch to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranch(self: *Self, expr: CIR.Expr.Match.Branch, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.Branch.Idx {
-    const expr_idx = try self.store.addMatchBranch(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranch = storeAdder("addMatchBranch");
 
 /// Add a new where clause to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addWhereClause(self: *Self, expr: CIR.WhereClause, region: Region) std.mem.Allocator.Error!CIR.WhereClause.Idx {
-    const expr_idx = try self.store.addWhereClause(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addWhereClause = storeAdder("addWhereClause");
 
 /// Add a new type annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeAnno(self: *Self, expr: CIR.TypeAnno, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.Idx {
-    const expr_idx = try self.store.addTypeAnno(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addTypeAnno = storeAdder("addTypeAnno");
 
 /// Add a new annotation to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnotation(self: *Self, expr: CIR.Annotation, region: Region) std.mem.Allocator.Error!CIR.Annotation.Idx {
-    const expr_idx = try self.store.addAnnotation(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnotation = storeAdder("addAnnotation");
 
 /// Add a new record field to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addAnnoRecordField(self: *Self, expr: CIR.TypeAnno.RecordField, region: Region) std.mem.Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    const expr_idx = try self.store.addAnnoRecordField(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addAnnoRecordField = storeAdder("addAnnoRecordField");
 
 /// Add a new exposed item to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addExposedItem(self: *Self, expr: CIR.ExposedItem, region: Region) std.mem.Allocator.Error!CIR.ExposedItem.Idx {
-    const expr_idx = try self.store.addExposedItem(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
+pub const addExposedItem = storeAdder("addExposedItem");
+
+/// The value type `NodeStore.<name>` stores.
+fn StoreValue(comptime name: []const u8) type {
+    return @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn".param_types[1].?;
+}
+
+/// The index type `NodeStore.<name>` returns.
+fn StoreIdx(comptime name: []const u8) type {
+    const store_fn = @typeInfo(@TypeOf(@field(NodeStore, name))).@"fn";
+    return @typeInfo(store_fn.return_type.?).error_union.payload;
+}
+
+/// `NodeStore.<name>(value, region)` forwarded through this env, asserting the
+/// node and region arrays are in sync once the store has grown.
+fn storeAdder(comptime name: []const u8) fn (*Self, StoreValue(name), Region) std.mem.Allocator.Error!StoreIdx(name) {
+    return struct {
+        fn add(self: *Self, value: StoreValue(name), region: Region) std.mem.Allocator.Error!StoreIdx(name) {
+            const idx = try @field(NodeStore, name)(&self.store, value, region);
+            self.debugAssertArraysInSync();
+            return idx;
+        }
+    }.add;
 }
 
 /// Add a diagnostic.
@@ -5027,20 +5277,10 @@ pub fn addDiagnostic(self: *Self, reason: CIR.Diagnostic) std.mem.Allocator.Erro
 }
 
 /// Add a new malformed node to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMalformed(self: *Self, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) std.mem.Allocator.Error!CIR.Node.Idx {
-    const malformed_idx = try self.store.addMalformed(diagnostic_idx, region);
-    self.debugAssertArraysInSync();
-    return malformed_idx;
-}
+pub const addMalformed = storeAdder("addMalformed");
 
 /// Add a new match branch pattern to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, region: Region) std.mem.Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const expr_idx = try self.store.addMatchBranchPattern(expr, region);
-    self.debugAssertArraysInSync();
-    return expr_idx;
-}
+pub const addMatchBranchPattern = storeAdder("addMatchBranchPattern");
 
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
@@ -5588,33 +5828,12 @@ pub fn appendMethodForMethodOwner(
     method_ident: Ident.Idx,
     qualified_ident: Ident.Idx,
     binding: MethodBinding,
-) Allocator.Error!MethodTableIndex {
+) Allocator.Error!void {
     std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
-    const index: MethodTableIndex = @fromBackingInt(@intCast(self.method_idents.entries.items.len));
-
     try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.registerMethodIdentForMethodOwner(owner, method_ident, qualified_ident);
     try self.registerMethodDefForMethodOwner(owner, method_ident, binding);
-    return index;
-}
-
-/// Replaces the values at one construction-time method table position while
-/// preserving its explicit owner-and-name key.
-pub fn replaceMethodAt(
-    self: *Self,
-    index: MethodTableIndex,
-    owner: MethodOwner,
-    method_ident: Ident.Idx,
-    qualified_ident: Ident.Idx,
-    binding: MethodBinding,
-) void {
-    const table_index: usize = @backingInt(index);
-    const key = MethodKey.init(owner, method_ident);
-    std.debug.assert(MethodKey.order(self.method_idents.entries.items[table_index].key, key) == .eq);
-    std.debug.assert(MethodKey.order(self.method_defs.entries.items[table_index].key, key) == .eq);
-    self.method_idents.entries.items[table_index].value = qualified_ident;
-    self.method_defs.entries.items[table_index].value = binding;
 }
 
 /// Looks up a qualified method ident for an explicit owner declaration.
@@ -5651,22 +5870,10 @@ pub fn finalizeMethodTables(self: *Self) void {
     self.method_defs.ensureSortedUnique();
 }
 
-/// Looks up method metadata using a type declaration owner and a method ident
-/// that come from different source environments.
+/// Looks up method metadata for one of this environment's type declarations
+/// by a method ident from another source environment.
 pub fn lookupMethodBindingFromTwoEnvsAndDeclConst(
     self: *const Self,
-    source_decl: ?u32,
-    method_source_env: *const Self,
-    method_ident: Ident.Idx,
-) ?MethodBinding {
-    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(self, source_decl, method_source_env, method_ident);
-}
-
-/// Looks up method metadata using an owner declaration and method ident that may
-/// both come from different source environments.
-pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
-    self: *const Self,
-    owner_source_env: *const Self,
     source_decl: ?u32,
     method_source_env: *const Self,
     method_ident: Ident.Idx,
@@ -5674,19 +5881,7 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
     const method_name = method_source_env.getIdent(method_ident);
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
     const owner: CIR.Statement.Idx = @fromBackingInt(@intCast(source_decl orelse return null));
-
-    // The owner is this environment's own declaration when the two
-    // environments are the same one, and otherwise the content identity this
-    // environment interned for the owner's module.
-    const method_owner = if (owner_source_env == self)
-        MethodOwner.initSelf(owner)
-    else blk: {
-        const owner_hash = owner_source_env.contentIdentityHash() orelse return null;
-        const identity = self.lookupModuleIdentity(owner_hash) orelse return null;
-        break :blk MethodOwner.initImported(identity, owner);
-    };
-
-    return self.lookupMethodBindingForMethodOwnerConst(method_owner, local_method_ident);
+    return self.lookupMethodBindingForOwnerConst(owner, local_method_ident);
 }
 
 /// Returns the line start positions for source code position mapping.

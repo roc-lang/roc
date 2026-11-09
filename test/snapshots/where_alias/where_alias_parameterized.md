@@ -65,10 +65,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Encodable(fmt) :  where [a.encode : a, fmt -> fmt]
-
-encode_twice : a, fmt -> fmt where [a.Encodable(fmt)]
-encode_twice = |value, fmt| value.encode(value.encode(fmt))
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -79,12 +76,12 @@ encode_twice = |value, fmt| value.encode(value.encode(fmt))
 			(args
 				(p-assign (ident "value"))
 				(p-assign (ident "fmt")))
-			(e-dispatch-call (method "encode") (constraint-fn-var 249)
+			(e-dispatch-call (method "encode") (constraint-fn-var 254)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
 				(args
-					(e-dispatch-call (method "encode") (constraint-fn-var 246)
+					(e-dispatch-call (method "encode") (constraint-fn-var 251)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))

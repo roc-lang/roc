@@ -57,6 +57,10 @@ const semantic_test_exclusions = [_][]const u8{
     "src/sljmp/unix.zig",
     "src/sljmp/windows.zig",
     "src/sljmp/windows_aarch64.zig",
+    // Unit images hold x86_64 code for Linux, so src/backend/dev/mod.zig
+    // imports the loader only on a Linux x86_64 host; its tests run on the
+    // Linux x86_64 CI.
+    "src/backend/dev/UnitImageLoader.zig",
 };
 
 /// A named test declaration found in a source file under src/.

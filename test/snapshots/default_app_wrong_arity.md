@@ -23,7 +23,7 @@ UNUSED VARIABLE - default_app_wrong_arity.md:1:16:1:20
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "arg2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_arg2")

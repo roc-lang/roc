@@ -20,47 +20,47 @@ TupleType := (_, U32, _)
 TagType := [Some(_), None]
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:5:21:5:21
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:10:1:11
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:3:14:3:15
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:5:21:5:22
 UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:5:16:5:20
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:11:15:11:15
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:7:24:7:25
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:9:17:9:18
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:9:22:9:23
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:11:15:11:16
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:11:23:11:24
+UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:19
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 1 10) (end 1 11))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 1 10) (end 1 11) (annotation error) (line-text "MyType : _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 3 14) (end 3 15))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 3 14) (end 3 15) (annotation error) (line-text "OtherType := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 5 21) (end 5 21))
+		(region (start 5 21) (end 5 22))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 5 21) (end 5 21) (annotation error) (line-text "ComplexType := List(_)"))
+			(source-region (file "underscore_in_type_alias.md") (start 5 21) (end 5 22) (annotation error) (line-text "ComplexType := List(_)"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
@@ -76,61 +76,61 @@ UNDERSCORE IN TYPE ALIAS - underscore_in_type_alias.md:13:18:13:18
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 7 24) (end 7 25))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 7 24) (end 7 25) (annotation error) (line-text "RecordType := { field: _, other: U32 }"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 9 17) (end 9 18))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 9 17) (end 9 18) (annotation error) (line-text "FunctionType := _ -> _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 9 22) (end 9 23))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 9 22) (end 9 23) (annotation error) (line-text "FunctionType := _ -> _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 11 15) (end 11 15))
+		(region (start 11 15) (end 11 16))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 11 15) (end 11 15) (annotation error) (line-text "TupleType := (_, U32, _)"))
+			(source-region (file "underscore_in_type_alias.md") (start 11 15) (end 11 16) (annotation error) (line-text "TupleType := (_, U32, _)"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 11 23) (end 11 24))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 1 1) (end 1 1) (annotation error) (line-text "MyType : _"))
+			(source-region (file "underscore_in_type_alias.md") (start 11 23) (end 11 24) (annotation error) (line-text "TupleType := (_, U32, _)"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 13 18) (end 13 18))
+		(region (start 13 18) (end 13 19))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_in_type_alias.md") (start 13 18) (end 13 18) (annotation error) (line-text "TagType := [Some(_), None]"))
+			(source-region (file "underscore_in_type_alias.md") (start 13 18) (end 13 19) (annotation error) (line-text "TagType := [Some(_), None]"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead."))))
 ~~~

@@ -31,13 +31,13 @@ quux : BadTuple
 quux = ("hello", 42)
 ~~~
 # EXPECTED
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:6:17:6:17
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:12:1:13
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:6:17:6:18
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:6:12:6:16
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
-UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:11:23:11:24
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:16:16:17
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:16:21:16:22
+UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:15
 TYPE MISMATCH - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
 TYPE MISMATCH - underscore_error_type.md:19:7:19:10
@@ -48,21 +48,21 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 1 12) (end 1 13))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(source-region (file "underscore_error_type.md") (start 1 12) (end 1 13) (annotation error) (line-text "BadType := _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 6 17) (end 6 17))
+		(region (start 6 17) (end 6 18))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 6 17) (end 6 17) (annotation error) (line-text "BadList := List(_)"))
+			(source-region (file "underscore_error_type.md") (start 6 17) (end 6 18) (annotation error) (line-text "BadList := List(_)"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
@@ -78,41 +78,41 @@ TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 11 23) (end 11 24))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(source-region (file "underscore_error_type.md") (start 11 23) (end 11 24) (annotation error) (line-text "BadRecord := { field: _, other: U32 }"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 16 16) (end 16 17))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(source-region (file "underscore_error_type.md") (start 16 16) (end 16 17) (annotation error) (line-text "BadFunction := _ -> _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 1 1) (end 1 1))
+		(region (start 16 21) (end 16 22))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 1 1) (end 1 1) (annotation error) (line-text "BadType := _"))
+			(source-region (file "underscore_error_type.md") (start 16 21) (end 16 22) (annotation error) (line-text "BadFunction := _ -> _"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
 		(severity runtime_error)
 		(title "Underscore In Type Alias")
-		(region (start 21 14) (end 21 14))
+		(region (start 21 14) (end 21 15))
 		(headline
 			(reflow "Underscores are not allowed in type alias declarations."))
 		(document
-			(source-region (file "underscore_error_type.md") (start 21 14) (end 21 14) (annotation error) (line-text "BadTuple := (_, U32)"))
+			(source-region (file "underscore_error_type.md") (start 21 14) (end 21 15) (annotation error) (line-text "BadTuple := (_, U32)"))
 			(line-break)
 			(reflow "Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. If you need a placeholder type variable, use a named type variable like `a` instead.")))
 	(report
