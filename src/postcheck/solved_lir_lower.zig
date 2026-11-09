@@ -2391,7 +2391,24 @@ const Lowerer = struct {
             const data = l.solved.lifted.getExpr(id).data;
             const view = l.solved.lifted.view();
             switch (data) {
-                .static_data_candidate, .comptime_value, .comptime_exhaustiveness_failed => {
+                .static_data_candidate => |candidate| {
+                    const context_ty = try l.lowerExprContextTy(id);
+                    const own_layout = try l.layoutOfType(ty);
+                    const context_layout = try l.layoutOfType(context_ty);
+                    const own_slot = l.staticDataCandidateNeedsSlot(candidate, own_layout);
+                    const context_slot = l.staticDataCandidateNeedsSlot(candidate, context_layout);
+                    // The coordinator assigns every shared slot before body
+                    // shards borrow the map. Initializers stay on its queue;
+                    // workers emit only reads of these explicit IDs.
+                    if (own_slot) _ = try l.lirStaticDataFor(candidate, ty, own_layout);
+                    if (context_slot and context_layout != own_layout)
+                        _ = try l.lirStaticDataFor(candidate, context_ty, context_layout);
+                    if (!own_slot or !context_slot) switch (candidate.value) {
+                        .runtime => |value| try self.add(.{ .expr = value }),
+                        .stored => Common.invariant("an immediate static candidate has no construction"),
+                    };
+                },
+                .comptime_value, .comptime_exhaustiveness_failed => {
                     self.admissible = false;
                     return;
                 },
@@ -7389,6 +7406,13 @@ const Lowerer = struct {
         return .{ .tail = exprTask(where, cond, child, null, expect_stmt) };
     }
 
+    /// Boolean and inline-string reads keep the same construction before and
+    /// after a value is stored. Hiding them behind slots loses constant
+    /// conditions and makes a procedure's code depend on evaluation timing.
+    fn staticDataCandidateNeedsSlot(self: *const Lowerer, candidate: Mono.StaticDataCandidate, layout_idx: layout.Idx) bool {
+        return layout_idx != .bool and candidate.storage.needsTargetStorage(self.result.layouts.targetUsize());
+    }
+
     fn staticDataCandidateStep(
         self: *Lowerer,
         where: LowerSite,
@@ -7400,12 +7424,12 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        // These expressions describe data to the compile-time encoder only.
-        // Runtime reads always reference the finished value, even when it is
-        // empty or a consumer will subsequently mutate it.
-        if (in_initializer) switch (candidate.value) {
+        const needs_slot = self.staticDataCandidateNeedsSlot(candidate, layout_idx);
+        // Aggregate constructions belong to the encoder. Immediate values
+        // remain visible to runtime optimization and worker preparation.
+        if (in_initializer or !needs_slot) switch (candidate.value) {
             .runtime => |runtime| return .{ .tail = exprTask(where, target, runtime, ty, next) },
-            .stored => {},
+            .stored => if (!needs_slot) Common.invariant("an immediate static candidate has no construction"),
         };
         return .{ .ret = try self.result.store.addCFStmt(.{ .assign_literal = .{
             .target = target,

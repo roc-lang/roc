@@ -136,7 +136,14 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         .{ .compile_time = true, .exports_unrelated = false },
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
-    }) |case| {
+    }, 0..) |case, case_index| {
+        if (case_index == 1) {
+            // Runtime producer units consume completed values, unlike the
+            // first case which deliberately lowers pending evaluation roots.
+            coord.specialization_strategy = .boxy;
+            try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!library.hasUnevaluatedRequests(.boxy));
+        }
         var output = try boxy.run(allocator, .{
             .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
             .roots = .{ .requests = if (case.compile_time) roots else &.{} },

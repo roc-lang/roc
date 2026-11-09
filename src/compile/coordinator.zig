@@ -7739,6 +7739,8 @@ const CompiledBuildFacts = struct {
     reports: []u8,
     /// Every published checked-artifact key, sorted.
     artifact_keys: [][32]u8,
+    /// Producer-selected checked-entry storage keys, distinct from artifact IDs.
+    cache_keys: [][32]u8,
     artifact_digests: [][32]u8,
     checking: []ModuleCheckingFacts,
     rejected_modules: usize,
@@ -7748,6 +7750,7 @@ const CompiledBuildFacts = struct {
     fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
         allocator.free(self.reports);
         allocator.free(self.artifact_keys);
+        allocator.free(self.cache_keys);
         allocator.free(self.artifact_digests);
         for (self.checking) |facts| allocator.free(facts.name);
         allocator.free(self.checking);
@@ -7865,6 +7868,8 @@ fn compileAppFactsWithWorkers(
     var failed_modules: usize = 0;
     var keys = std.ArrayList([32]u8).empty;
     errdefer keys.deinit(allocator);
+    var cache_keys = std.ArrayList([32]u8).empty;
+    errdefer cache_keys.deinit(allocator);
     var digests = std.ArrayList([32]u8).empty;
     errdefer digests.deinit(allocator);
     var checking = std.ArrayList(ModuleCheckingFacts).empty;
@@ -7885,6 +7890,7 @@ fn compileAppFactsWithWorkers(
             }
             if (mod.checkedArtifact()) |artifact| {
                 try keys.append(allocator, artifact.key.bytes);
+                if (mod.typing_storage_key) |key| try cache_keys.append(allocator, key.bytes);
                 if (!coord.hasUserErrors()) {
                     // Compare all semantic columns, including evaluated values
                     // and their references.
@@ -7906,6 +7912,7 @@ fn compileAppFactsWithWorkers(
         }
     }
     std.mem.sort([32]u8, keys.items, {}, lessThanBytes);
+    std.mem.sort([32]u8, cache_keys.items, {}, lessThanBytes);
     std.mem.sort([32]u8, digests.items, {}, lessThanBytes);
 
     return .{
@@ -7914,6 +7921,7 @@ fn compileAppFactsWithWorkers(
         .reports = owned_reports,
         .checking_work = coord.getTimingInfo().checking_work,
         .artifact_keys = try keys.toOwnedSlice(allocator),
+        .cache_keys = try cache_keys.toOwnedSlice(allocator),
         .artifact_digests = try digests.toOwnedSlice(allocator),
         .checking = try checking.toOwnedSlice(allocator),
         .has_errors = coord.hasUserErrors(),
@@ -10302,8 +10310,8 @@ const lifted_const_lib_source =
     \\}
 ;
 
-/// Read one checked-module cache entry's bytes, or null when the cache holds
-/// no entry under `key`.
+/// Read bytes using the checked-entry storage key recorded by the producer,
+/// not the artifact's semantic identity.
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };
@@ -10344,12 +10352,12 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.artifact_keys) |key| {
-        const in_both = for (unlifted.artifact_keys) |other| {
+    for (lifted.cache_keys) |key| {
+        const in_both = for (unlifted.cache_keys) |other| {
             if (std.mem.eql(u8, &key, &other)) break true;
         } else false;
         if (!in_both) continue;
-        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_lifted);
         const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);

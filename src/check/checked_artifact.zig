@@ -1079,7 +1079,7 @@ pub const RootRequest = struct {
     order: u32,
     /// Producer-selected root withheld until the platform has its app bindings.
     requires_pairing: bool = false,
-    /// This session borrows a previously evaluated root from its platform.
+    /// This session borrows a platform root already complete for both strategies.
     evaluation_complete: bool = false,
     /// Full same-module evaluation order, including withheld roots.
     evaluation_order: ?u32 = null,
@@ -10160,6 +10160,7 @@ const TestImportViewTables = struct {
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
     provided_exports: ProvidedExportTable = .{},
+    top_level_values: TopLevelValueTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
@@ -10224,6 +10225,7 @@ const TestImportViewTables = struct {
             .exported_procedure_bindings = self.exported_procedure_bindings.view(),
             .exported_const_templates = self.exported_const_templates.view(),
             .provided_exports = &self.provided_exports,
+            .top_level_values = &self.top_level_values,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .platform_required_declarations = &self.platform_required_declarations,
             .platform_required_bindings = &self.platform_required_bindings,
@@ -22818,6 +22820,21 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
+    // Binding requirements can turn an unresolved callable into an exact
+    // procedure alias. Record forwarding in the pairing, without changing
+    // the unpaired platform's templates.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var type_memo = substitutions.substitutionIn(session);
     defer type_memo.deinit();
     var reaches: ?CheckedTypeSet = if (substitutions.formals.len != 0) try result.checked_types.rootsReachingAny(session, substitutions.formals) else null;
@@ -22938,7 +22955,10 @@ pub fn pairCheckedPlatform(
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) complete: {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            break :complete !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -22960,11 +22980,9 @@ pub fn pairCheckedPlatform(
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
         if (request.evaluation_order == null) continue;
-        // A paired platform may inherit a semantically completed value but
-        // still need the other strategy's function representation. Keep its
-        // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        // The producer records readiness for both representations above, so
+        // the request and its scheduled subset have one completion rule.
+        if (!request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -32410,6 +32428,7 @@ pub const ImportedModuleView = struct {
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
+    top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -32474,6 +32493,7 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
+        .top_level_values = &artifact.top_level_values,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
@@ -35769,6 +35789,7 @@ fn testVisibilityImportedView(
         .exported_procedure_bindings = undefined,
         .exported_const_templates = undefined,
         .provided_exports = undefined,
+        .top_level_values = undefined,
         .top_level_procedure_bindings = undefined,
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,

@@ -1923,7 +1923,10 @@ versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. Small strings may likewise use their
-immediate representation. All aggregate values, including empty lists,
+immediate representation. Restoring stored constants uses the same rule:
+scalar Bool and strings fitting the target's inline representation stay
+constructions, visible to constant propagation and worker preparation.
+All other aggregate values, including empty lists,
 records, tuples, tags, boxes, and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
@@ -6075,6 +6078,14 @@ A record type is concrete for this purpose only when every field kind is
 resolved. An undetermined field-kind cell remains specialization-owned even
 when its associated checked type cell is otherwise concrete, so it cannot make
 a compile-time root request eligible.
+
+A Boxy entry for such an ineligible root runs its expression under the
+worker's arguments. Only an eligible context-free root requires a completed
+stored representation before runtime lowering; request eligibility itself must
+already be decided by checking.
+An exact procedure alias likewise runs its checked forwarding lookup, not an
+evaluator. Module-unit wrapper emission consumes the recorded
+`CallableEvalTemplate.forwarded_lookup` decision for this case.
 
 A data root whose value contains a callable slot is context-free only when its
 producer fixes that callable graph with an explicit source annotation. A
@@ -14749,6 +14760,10 @@ the backend generates for that layout. Zero-capture functions are static,
 immortal callables. The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
+Completed callable parts carry the producer-selected drop helper along with
+the procedure. The static-data encoder preserves that relocation: an immortal
+allocation does not erase its callable ABI, including a host's explicit drop call.
+
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
 or root thunk) takes the erased ABI's reuse argument as its last parameter,
 named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
@@ -15437,6 +15452,11 @@ The baked Builtin producer completes both function representations before
 serialization, since its consumers cannot reopen it. A platform pairing keeps
 the declared requests for inherited values still missing either representation;
 completion under one strategy alone does not remove their producers from the schedule.
+The pairing's request completion bit records this same two-strategy rule, so
+the full request list and its scheduled subset cannot disagree.
+Pairing also records callable-alias forwarding again after binding requirements:
+a requirement that now names a procedure uses the same forwarding rule as an
+already-resolved import, without mutating the unpaired platform's metadata.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization
@@ -20544,6 +20564,10 @@ not a memory layout: field addresses and representation sizes still come
 from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
+
+Field reads in an explicit product use that product's slot boundaries. A
+scalar prefix can occupy zero slots there; the standalone scalar layout's
+one-slot domain must not make the read take its neighboring field's unit.
 
 ARC uses this explicit shape for the same field-take and residual-release
 rules as concrete products. Generic record field reads copy representation

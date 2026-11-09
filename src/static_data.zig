@@ -357,7 +357,7 @@ const StaticInitializerMachine = struct {
                         self.writeTargetWord(value.bytes, 0, word);
                         break :blk value;
                     },
-                    .callable => |proc| try self.freezeCallable(proc, if (values.len == 0) null else values[0], .none, definition.layout_idx),
+                    .callable => |callable| try self.freezeCallable(callable.proc, if (values.len == 0) null else values[0], callable.on_drop, definition.layout_idx),
                     .product, .list, .box, .tag => try self.assembleStored(definition.layout_idx, switch (parts.kind) {
                         .product => .product,
                         .list => .{ .list = self.layouts().builtinListAbi(definition.layout_idx).elem_layout_idx orelse .zst },
@@ -2350,7 +2350,8 @@ test "completed value parts encode shared nested lists and callables at both tar
         const word_id = try addCompletedValueForTest(program, .opaque_ptr, .{ .word = 7 }, &.{});
         const inner_id = try addCompletedValueForTest(program, item_layout, .list, &.{word_id});
         const outer_id = try addCompletedValueForTest(program, outer_layout, .list, &.{ inner_id, inner_id });
-        const callable_id = try addCompletedValueForTest(program, callable_layout, .{ .callable = proc }, &.{outer_id});
+        const drop: layout.RcHelperKey = .{ .op = .host_drop, .layout_idx = outer_layout };
+        const callable_id = try addCompletedValueForTest(program, callable_layout, .{ .callable = .{ .proc = proc, .on_drop = .{ .rc_helper = drop } } }, &.{outer_id});
         var machine = try StaticInitializerMachine.init(allocator, &lowered, .{}, width);
         defer machine.deinit();
         const callable = try machine.evaluateStatic(callable_id);
@@ -2363,7 +2364,10 @@ test "completed value parts encode shared nested lists and callables at both tar
         try std.testing.expectEqual(outer_backing.relocations.items[0].target.allocation, outer_backing.relocations.items[1].target.allocation);
         const captured = machine.allocations.items[@backingInt(callable.relocations.items[0].target.allocation)].payload;
         try std.testing.expectEqual(proc, captured.relocations.items[0].target.procedure);
-        try std.testing.expectEqual(builtins.erased_callable.capture_offset, captured.relocations.items[1].offset);
+        try std.testing.expectEqual(@as(usize, 3), captured.relocations.items.len);
+        try std.testing.expectEqual(drop, captured.relocations.items[1].target.rc_helper);
+        try std.testing.expectEqual(width.size(), captured.relocations.items[1].offset);
+        try std.testing.expectEqual(builtins.erased_callable.capture_offset, captured.relocations.items[2].offset);
         try std.testing.expectEqual(callable, try machine.evaluateStatic(callable_id));
         try std.testing.expectEqual(@as(usize, 3), machine.allocations.items.len);
     }

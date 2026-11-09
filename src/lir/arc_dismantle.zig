@@ -852,9 +852,17 @@ const Analysis = struct {
     /// The root container's slots a field read of `source` addresses.
     fn readSlots(self: *const Analysis, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) SlotRange {
         const view_base: u32 = if (self.isView(source)) self.view_base[@backingInt(source)] else 0;
+        const fields = ProductFields.of(self.store, self.layouts, source).?;
+        const first = fields.slotBase(field_idx);
         return .{
-            .first = view_base + ProductFields.of(self.store, self.layouts, source).?.slotBase(field_idx),
-            .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
+            .first = view_base + first,
+            // Dynamic products supply their own slot domain. A scalar field
+            // can occupy zero slots there even though its standalone layout
+            // has one; using that layout would take the next field's unit.
+            .count = if (fields.shape != null)
+                fields.slotBase(field_idx + 1) - first
+            else
+                self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         };
     }
 

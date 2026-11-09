@@ -1621,7 +1621,30 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending) invariant("a runtime entry wrapper has no completed Boxy value");
+                const forwards_procedure = if (root.kind == .callable_binding) alias: {
+                    const pattern = root.pattern orelse invariant("a callable binding root has no binding pattern");
+                    const value = self.view.view.top_level_values.lookupByPattern(pattern) orelse
+                        invariant("a callable binding root has no top-level value");
+                    const binding = switch (value.value) {
+                        .procedure_binding => |binding| self.view.view.top_level_procedure_bindings.get(binding),
+                        .const_ref => invariant("a callable binding root names a data constant"),
+                    };
+                    break :alias switch (binding.body) {
+                        .callable_eval_template => |id| self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != null,
+                        .direct_template, .checked_error => false,
+                    };
+                } else false;
+                switch (root.request_eligibility) {
+                    .pending => invariant("an entry wrapper's checked request eligibility is pending"),
+                    // Exact procedure aliases have an explicit forwarding
+                    // decision and no evaluator; their wrapper returns that
+                    // procedure through its checked lookup.
+                    .eligible => if (!forwards_procedure and !self.program.input.compile_time and root.payloadFor(.boxy) == .pending)
+                        invariant("a runtime entry wrapper has no completed Boxy value"),
+                    // A specialization-owned expression has no context-free
+                    // stored value; its entry consumes the worker's arguments.
+                    .ineligible => {},
+                }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
@@ -8167,9 +8190,14 @@ pub const Builder = struct {
             if (table) |local| try fields.append(self.allocator, local);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{});
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = .none } }, &.{});
         const record = try self.staticPartsLocal(record_layout, .product, fields.items);
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{record});
+        const layouts = &self.program.result.layouts;
+        const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
+            .{ .rc_helper = .{ .op = .host_drop, .layout_idx = record_layout } }
+        else
+            .none;
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it
