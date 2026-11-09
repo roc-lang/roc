@@ -5052,15 +5052,15 @@ is the enclosing function's, so the relation is an explicit requirement of
 requirement again, relating its own copy of that type to `r`'s method. `h`'s
 type reaches none of it.
 
-When the closing boundary drops `h`'s checker-only scheme, it publishes each
+When the closing boundary drops `h`'s checker-only scheme, it records each
 such requirement, one whose callable reaches a quantified variable the scheme's
 type and the constraints on it do not, on the binding scheme
 (`ModuleEnv.BindingSchemeCodecRequirement`, beside the generated-codec
-relations). The evidence pass walks the published callable, so the variable's
+relations). The evidence pass walks that callable, so the variable's
 own requirements, `from_quote` here, become parameters of `h`'s scope, and each
 use's scheme-use substitution supplies them from the caller's copy. A
 requirement whose callable reaches only variables the type reaches is not
-published: evidence already finds them through the type.
+recorded separately: evidence already finds them through the type.
 `test/cli/GeneralizedLocalReturnsEvidenceClosure.roc` pins the program above.
 
 ### Value Bindings Generalize By Expression
@@ -6340,7 +6340,7 @@ behavior, so the type's identity includes those variables: one declaration
 used at two instantiations is two types, exactly as if it had declared a
 parameter for each and every use applied it to the variable.
 
-Checking decides each such declaration's context from the canonical IR
+Checking decides each such declaration's context from CIR
 before any type declaration is generated (`decideLocalTypeContexts`): the
 rigid type variables of enclosing functions it depends on, in source order.
 A declaration's parts are its annotation, its methods' annotations and
@@ -6402,9 +6402,9 @@ enclosing a recorded reference to a type with a context contextual from the
 shallowest of its variables, and records the binding that owns each context
 variable of a nominal declaration (`local_type_context_owners`).
 
-Checked publication reads the arguments as they are. A nominal use of such a
+Checked output reads the arguments as they are. A nominal use of such a
 declaration lists, after its own arguments, its context arguments, and its
-canonical key includes them; the published `CheckedNominalDeclaration` takes
+type identity key includes them; the resulting `CheckedNominalDeclaration` takes
 the same variables as formals after its declared ones (`context_len` of
 them). The declaration's backing names those variables directly, so binding
 the formals to a use's arguments substitutes them like any other formal.
@@ -6432,10 +6432,10 @@ the caller's view to read the evidence (`localMethodValue`,
 procedure's declaration context its types.
 
 Because every application lists the context variables, identity
-enumeration lists them too (`canonical_type_keys`). A method of the type
+enumeration lists them too. A method of the type
 annotated with it (`label : Local -> Str`) has a type whose application
 ranks with the enclosing function's variable, so it generalizes with that
-function and its published type names the variable;
+function and its checked type names the variable;
 its scheme therefore quantifies the variable, and checking and Boxy agree
 that it opens an evidence scope of its own.
 
@@ -11732,12 +11732,12 @@ whose value shape, format, and state equal those of a derivation in its own
 chain (compared as `derivedCodecVarsEql` compares a recursive nominal's
 applications) is that derivation recurring. Its runtime callable is unified
 with the derivation's, so its error row is the derivation's, and it is
-published as a `GeneratedCodecRecurrence` rather than a derivation of its own.
+output as a `GeneratedCodecRecurrence` rather than a derivation of its own.
 A recurrence of a derivation still in progress resolves when that derivation
 finishes; one of a rejected derivation is rejected without a report of its own,
 since the derivation's relation reported why. Every frame's parent precedes it,
 so the chain is finite, and the recurrence ends the walk because it
-instantiates nothing. Checked publication indexes a recurring relation at its
+instantiates nothing. Checked output indexes a recurring relation at its
 derivation (`EvidencePass.buildIndexes`), so the method's evidence names the
 derivation that calls the method, and Monotype specializes the cycle like any
 recursive call.
@@ -23553,7 +23553,7 @@ tag's payload view, a join parameter), so no field read through such a value
 inherits. One bit per value records this: it starts on the values with a
 holder-adding occurrence, follows the container views and every value that
 becomes dead, and each value gains it at most once, so sharing never re-runs
-the per-field propagation. A complete projection read whose root's ownership
+the per-field propagation. A complete aggregate field read whose root's ownership
 place is used after it is such an occurrence, since emission retains the
 projected value right after the read (see the place rule under field takes);
 the analysis reads that decision rather than re-deriving it. Takes are decided

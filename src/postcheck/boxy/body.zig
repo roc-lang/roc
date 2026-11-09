@@ -6662,7 +6662,7 @@ pub const Builder = struct {
         return dictionary;
     }
 
-    /// Complete the reserved node before publishing the dictionary's recipe.
+    /// Complete the reserved node before returning the dictionary's recipe.
     fn completeDeclarationSlot(self: *Builder, declaration: *Declaration, slot: usize, dictionary: Word) void {
         declaration.building[slot] = false;
         if (declaration.dicts[slot]) |pending| switch (dictionary) {
@@ -8566,7 +8566,7 @@ pub const Builder = struct {
     /// captures hold the captured values and this worker's descriptors.
     pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
         // rejectCapturingMethods removes methods that transitively capture
-        // invocation-specific values before the registry publishes a target.
+        // invocation-specific values before the registry records a target.
         // Only that checked proof authorizes immutable capture edges here.
         if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
             const closure = try self.localProcClosureWithCaptures(method, true);
