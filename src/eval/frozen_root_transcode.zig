@@ -405,6 +405,14 @@ fn testRoot(plan: Program.ConstPlanId, idx: layout.Idx) Program.ConstRootPlan {
     return .{ .root_order = 0, .owner = .first, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
 }
 
+fn testContainerPlan(program: *Program.Result, as_list: bool) Allocator.Error!Program.ConstPlanId {
+    const element: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(program.store.allocator, .{ .record = &.{} });
+    const container: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(program.store.allocator, if (as_list) .{ .list = element } else .{ .box = element });
+    return container;
+}
+
 test "frozen root transcode materializes padded zero-sized list and box payloads" {
     const allocator = std.testing.allocator;
     for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
@@ -413,12 +421,8 @@ test "frozen root transcode materializes padded zero-sized list and box payloads
             defer source.deinit();
             var target = try Program.Result.init(allocator, width);
             defer target.deinit();
-            const element: Program.ConstPlanId = @fromBackingInt(0);
-            const container: Program.ConstPlanId = @fromBackingInt(1);
-            for ([_]*Program.Result{ &source, &target }) |program| {
-                try program.const_plans.append(allocator, .{ .record = &.{} });
-                try program.const_plans.append(allocator, if (as_list) .{ .list = element } else .{ .box = element });
-            }
+            const source_plan = try testContainerPlan(&source, as_list);
+            const target_plan = try testContainerPlan(&target, as_list);
             // The record has no semantic fields, but its nominal destination
             // reserves physical padding.
             const padded = try target.layouts.putStructFields(&.{.{ .index = 0, .layout = .u64 }});
@@ -430,14 +434,14 @@ test "frozen root transcode materializes padded zero-sized list and box payloads
                 allocator,
                 &source,
                 try testSlot(&source, source_layout),
-                testRoot(container, source_layout),
+                testRoot(source_plan, source_layout),
                 .{ .ptr = if (as_list) @ptrCast(&list_value) else @ptrCast(&box_value) },
                 .{},
             );
             defer static_data.deinitStaticData(allocator, native);
             try std.testing.expectEqual(@as(usize, 1), native.len);
             try std.testing.expectEqual(@as(usize, 0), native[0].relocations.len);
-            const converted = try transcodeRoot(allocator, &source, testRoot(container, source_layout), native, try testRootSymbol(native), &target, testRoot(container, target_layout), try testSlot(&target, target_layout));
+            const converted = try transcodeRoot(allocator, &source, testRoot(source_plan, source_layout), native, try testRootSymbol(native), &target, testRoot(target_plan, target_layout), try testSlot(&target, target_layout));
             defer static_data.deinitStaticData(allocator, converted);
             try std.testing.expectEqual(@as(usize, 2), converted.len);
             try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
