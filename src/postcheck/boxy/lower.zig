@@ -706,6 +706,8 @@ pub const Program = struct {
     local_procs: std.AutoHashMapUnmanaged(ExprKey, void) = .empty,
     /// Each local procedure by the binder that binds it.
     local_proc_bindings: std.AutoHashMapUnmanaged(BinderKey, checked.LocalProcedureBinding) = .empty,
+    /// Method declarations are immutable callables, unlike ordinary closures.
+    local_method_bindings: std.AutoHashMapUnmanaged(ExprKey, checked.LocalProcedureBinding) = .empty,
     /// `nominalOverrides` of each nominal type asked about.
     nominal_overrides: collections.DenseMapUnmanaged(TypeId, NominalOverrides) = .empty,
     /// `composedInBody` of each type asked about.
@@ -757,8 +759,13 @@ pub const Program = struct {
                 .local_proc => |local| {
                     try program.local_procs.put(allocator, .{ .module = view.index, .expr = local.expr }, {});
                     try program.local_proc_bindings.put(allocator, .{ .module = view.index, .binder = local.binder }, .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope });
+                    const binding: checked.LocalProcedureBinding = .{ .binder = local.binder, .expr = local.expr, .dispatch_scope = local.dispatch_scope };
+                    try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = local.expr }, binding);
                     switch (bodies.exprData(local.expr)) {
-                        .closure => |closure| try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {}),
+                        .closure => |closure| {
+                            try program.local_procs.put(allocator, .{ .module = view.index, .expr = closure.lambda }, {});
+                            try program.local_method_bindings.put(allocator, .{ .module = view.index, .expr = closure.lambda }, binding);
+                        },
                         .numeral, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .lambda, .binop, .unary_minus, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
                     }
                 },
@@ -794,6 +801,11 @@ pub const Program = struct {
     pub fn localProcBinding(self: *Program, module_index: ModuleIndex, binder: BinderId) Allocator.Error!?checked.LocalProcedureBinding {
         try self.indexBodyMetadata(module_index);
         return self.local_proc_bindings.get(.{ .module = module_index, .binder = binder });
+    }
+
+    pub fn localMethodBinding(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?checked.LocalProcedureBinding {
+        try self.indexBodyMetadata(module_index);
+        return self.local_method_bindings.get(.{ .module = module_index, .expr = expr });
     }
 
     pub fn nestedProcSite(self: *Program, module_index: ModuleIndex, expr: ExprId) Allocator.Error!?u32 {
@@ -1190,6 +1202,7 @@ pub const Program = struct {
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
         self.local_proc_bindings.deinit(self.allocator);
+        self.local_method_bindings.deinit(self.allocator);
         self.by_identity.deinit(self.allocator);
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);

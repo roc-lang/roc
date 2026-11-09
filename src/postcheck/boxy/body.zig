@@ -563,6 +563,8 @@ pub const Builder = struct {
     /// The generated codec constructors being composed, innermost last
     /// (`codec.composeConstructor`).
     codec_compositions: std.ArrayList(CodecComposition) = .empty,
+    /// Active immutable callable constructions, reserved before capture edges.
+    static_callables: std.ArrayList(StaticCallable) = .empty,
     /// Expressions whose value is built at a row coercion's destination
     /// type rather than their own (design.md "Row Coercion Primitive"), as
     /// their parents read them: for a row-coerced result, the destination of
@@ -687,6 +689,7 @@ pub const Builder = struct {
         if (self.fold) |*fold| fold.deinit();
         self.entry_locals.deinit(self.allocator);
         self.codec_compositions.deinit(self.allocator);
+        self.static_callables.deinit(self.allocator);
         self.join_points.deinit(self.allocator);
         self.join_infos.deinit(self.allocator);
         self.destination_types.deinit(self.allocator);
@@ -1406,8 +1409,8 @@ pub const Builder = struct {
                 // The local procedure's immortal callable is the override.
                 .local => |local| {
                     if (local.module != self.module) invariant("a local-procedure override's descriptor is composed outside its declaring module");
-                    const closure = (try self.localProcClosureAt(local.binding, local.interface, null, null, &.{}, null)) orelse try self.localProcClosure(local.binding);
-                    self.recipes.setSame(id.?, try self.immortalRecipe(closure));
+                    const word = try self.localProcWord(local.binding, local.interface, null, null, &.{}, null);
+                    self.recipes.setSame(id.?, word.recipe);
                 },
             }
         }
@@ -4850,12 +4853,21 @@ pub const Builder = struct {
         descs: []const Word,
         words: []const Word,
         adapt: ?struct { own_ty: TypeId, use_ty: TypeId } = null,
+        /// Static methods capture only other checked local procedures. Their
+        /// edges are traversed after reserving the callable, never as LIR values.
+        static_scope: ?LocalProcScope = null,
 
         /// The callee's inputs: the descriptors, then the other words.
         /// Caller frees.
         pub fn inputs(self: LocalProcClosure, allocator: Allocator) Allocator.Error![]Word {
             return try std.mem.concat(allocator, Word, &.{ self.descs, self.words });
         }
+    };
+
+    const StaticCallable = struct {
+        closure: LocalProcClosure,
+        inputs: []const Word,
+        recipe: Tables.RecipeId,
     };
 
     /// The function value of local procedure `local` used at the function
@@ -4869,7 +4881,7 @@ pub const Builder = struct {
     /// the variables its type does not relate. `site` owns the evidence and
     /// substitution when a dispatch selects an imported body-local method.
     pub fn localProcInstanceValue(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!LocalId {
-        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site)) orelse return try self.localProcValue(local);
+        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site, false)) orelse return try self.localProcValue(local);
         const inputs = try closure.inputs(self.allocator);
         defer self.allocator.free(inputs);
         const packed_closure = if (try self.allClosed(closure.capture_types))
@@ -4885,29 +4897,52 @@ pub const Builder = struct {
     /// body, which captures no values, as a descriptor's override or a
     /// dictionary holds it. `localProcInstanceValue` gives its arguments.
     pub fn localProcWord(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!Word {
-        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site)) orelse try self.localProcClosure(local);
+        const closure = (try self.localProcClosureAt(local, use_ty, evidence, edge, subst, site, true)) orelse try self.localProcClosureWithCaptures(local, true);
         return .{ .recipe = try self.immortalRecipe(closure) };
     }
 
     /// The immortal callable recipe of `closure`, adapted to its use's type.
     fn immortalRecipe(self: *Builder, closure: LocalProcClosure) Allocator.Error!Tables.RecipeId {
         if (closure.values.len != 0) invariant("an immortal function value captures a value, which methods never do");
-        const callable = switch (try self.composeDictionary(closure.callee, try closure.inputs(self.program.arena.allocator()))) {
-            .recipe => |id| id,
-            .static => invariant("a dictionary is a recipe"),
-        };
-        const adapt = closure.adapt orelse return callable;
-        return switch (try self.adaptDictionary(.{ .recipe = callable }, adapt.own_ty, adapt.use_ty)) {
+        const scope = closure.static_scope orelse invariant("a static callable has no producer capture context");
+        const arena = self.program.arena.allocator();
+        const inputs = try closure.inputs(arena);
+        for (self.static_callables.items) |active| {
+            if (active.closure.callee != closure.callee or active.closure.static_scope.?.declaration != scope.declaration or
+                !std.meta.eql(active.closure.adapt, closure.adapt) or !std.mem.eql(TypeId, active.closure.capture_types, closure.capture_types) or
+                active.inputs.len != inputs.len) continue;
+            const same_inputs = for (active.inputs, inputs) |a, b| {
+                if (!std.meta.eql(a, b)) break false;
+            } else true;
+            if (same_inputs) return active.recipe;
+        }
+        const reserved = try self.recipes.reserve();
+        try self.static_callables.append(self.allocator, .{ .closure = closure, .inputs = inputs, .recipe = reserved });
+        defer _ = self.static_callables.pop();
+        const worker = self.program.worker(closure.callee).*;
+        const has_table = !self.program.perCall(closure.callee) and inputs.len != 0;
+        const captures = try arena.alloc(Word, worker.captures.len + @intFromBool(has_table));
+        for (worker.captures, closure.capture_types, captures[0..worker.captures.len]) |capture, ty, *word| {
+            const local = (try self.program.localProcBinding(self.module, capture.pattern)) orelse
+                invariant("an immortal local method captures invocation-specific data rather than a local procedure");
+            const use_ty = try self.program.substitute(self.allocator, ty, scope.bound);
+            word.* = try self.localProcWord(local, use_ty, null, null, &.{}, null);
+        }
+        if (has_table) captures[worker.captures.len] = try self.tableWord(closure.callee, inputs);
+        const callable = try self.recipes.intern(.{ .callable = .{ .entry = closure.callee, .captures = captures } });
+        const result = if (closure.adapt) |adapt| switch (try self.adaptDictionary(.{ .recipe = callable }, adapt.own_ty, adapt.use_ty)) {
             .recipe => |id| id,
             .static => invariant("an adapted recipe became static"),
-        };
+        } else callable;
+        self.recipes.setSame(reserved, result);
+        return reserved;
     }
 
     /// `localProcInstanceValue`'s closure for a generalized local procedure
     /// whose calls pass its own scheme's instantiation, instantiated at the
     /// use; null for any other local procedure, whose function value is the
     /// one its declaration bound (`localProcClosure`).
-    fn localProcClosureAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView) Allocator.Error!?LocalProcClosure {
+    fn localProcClosureAt(self: *Builder, local: checked.LocalProcedureBinding, use_ty: TypeId, evidence: ?[]const static_dispatch.CheckedEvidence, edge: ?checked.LiteralEdge, subst: []const checked.CheckedTypeId, site: ?*const types.ModuleView, comptime static_captures: bool) Allocator.Error!?LocalProcClosure {
         const arena = self.program.arena.allocator();
         const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
@@ -4966,10 +5001,12 @@ pub const Builder = struct {
         try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
         scheme.per_call = false;
         const callee = try self.program.lambdaWorker(scope_worker, lambda_expr, per_call_worker.captures, per_call_worker.capture_types, generic_fn, scheme);
-        const values = try arena.alloc(LocalId, per_call_worker.captures.len);
-        const declared = self.declared_captures.get(lambda_expr);
-        for (per_call_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
+        const values = try arena.alloc(LocalId, if (static_captures) 0 else per_call_worker.captures.len);
+        if (!static_captures) {
+            const declared = self.declared_captures.get(lambda_expr);
+            for (per_call_worker.captures, values, 0..) |capture, *value, index| {
+                value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
+            }
         }
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
@@ -5020,6 +5057,7 @@ pub const Builder = struct {
             .descs = descs,
             .words = words,
             .adapt = .{ .own_ty = procedure_ty, .use_ty = use_ty },
+            .static_scope = if (static_captures) scope else null,
         };
     }
 
@@ -5361,6 +5399,10 @@ pub const Builder = struct {
     /// checker makes visible wherever the procedure is, and the scope it was
     /// declared in, whose descriptors and dictionaries this body holds.
     fn localProcClosure(self: *Builder, local: checked.LocalProcedureBinding) Allocator.Error!LocalProcClosure {
+        return try self.localProcClosureWithCaptures(local, false);
+    }
+
+    fn localProcClosureWithCaptures(self: *Builder, local: checked.LocalProcedureBinding, comptime static_captures: bool) Allocator.Error!LocalProcClosure {
         const lambda_expr = switch (self.bodies().exprData(local.expr)) {
             .lambda => local.expr,
             .closure => |closure| closure.lambda,
@@ -5369,10 +5411,12 @@ pub const Builder = struct {
         const scope = try self.localProcWorker(local, try self.localProcDeclaration(lambda_expr));
         const target = scope.worker;
         const target_worker = self.program.worker(target).*;
-        const values = try self.program.arena.allocator().alloc(LocalId, target_worker.captures.len);
-        const declared = self.declared_captures.get(target_worker.key.lambda.expr);
-        for (target_worker.captures, values, 0..) |capture, *value, index| {
-            value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
+        const values = try self.program.arena.allocator().alloc(LocalId, if (static_captures) 0 else target_worker.captures.len);
+        if (!static_captures) {
+            const declared = self.declared_captures.get(target_worker.key.lambda.expr);
+            for (target_worker.captures, values, 0..) |capture, *value, index| {
+                value.* = try self.localProcCaptureValue(capture, if (declared) |captured| captured[index] else null, scope.declaration);
+            }
         }
         const descs = scope.descs;
         const dicts = try std.mem.concat(self.program.arena.allocator(), Word, &.{ scope.dicts, scope.literals });
@@ -5382,6 +5426,7 @@ pub const Builder = struct {
             .capture_types = target_worker.capture_types,
             .descs = descs,
             .words = dicts,
+            .static_scope = if (static_captures) scope else null,
         };
     }
 
@@ -8520,6 +8565,13 @@ pub const Builder = struct {
     /// A function value: an erased callable of the lambda's worker, whose
     /// captures hold the captured values and this worker's descriptors.
     pub fn lowerClosure(self: *Builder, expr_id: ExprId, lambda_expr: ExprId, captures: []const checked.CheckedCapture) Allocator.Error!void {
+        // rejectCapturingMethods removes methods that transitively capture
+        // invocation-specific values before the registry publishes a target.
+        // Only that checked proof authorizes immutable capture edges here.
+        if (try self.program.localMethodBinding(self.module, lambda_expr)) |method| {
+            const closure = try self.localProcClosureWithCaptures(method, true);
+            return try self.pushValue(try self.materialize(.{ .recipe = try self.immortalRecipe(closure) }));
+        }
         // A generalized local procedure's type is converted with its own
         // scheme's variables in scope.
         const own: ?lower.LocalScheme = if (try self.program.localScope(self.module, lambda_expr)) |scope_id|

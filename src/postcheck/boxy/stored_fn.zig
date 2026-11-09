@@ -942,43 +942,6 @@ pub fn retain(allocator: Allocator, program: *Program) Allocator.Error!*Retained
     return retained;
 }
 
-/// How a stored function's recipe says it is restored.
-const Rebuild = enum(u8) {
-    /// From its stored captures.
-    none,
-    /// A dictionary composed again from its types alone.
-    from_types,
-    /// A generated codec constructor composed again in its declaring body's
-    /// declaration context (`Retained.DeclarationCycle`), whose other
-    /// dictionaries and literal arguments are its stored captures.
-    from_declaration,
-};
-
-/// Where each capture of a worker of `shape` is in its capture record at
-/// `capture`: a closed record's order is values, then words; a dynamic
-/// record's is its own descriptor and capacity, words, then values.
-fn captureOffsets(program: *Program, allocator: Allocator, shape: CaptureShape, capture: [*]u8) Allocator.Error![]u32 {
-    const word_count = shape.descs + shape.dicts;
-    const offsets = try allocator.alloc(u32, shape.values.len + word_count);
-    errdefer allocator.free(offsets);
-    if (!try allClosed(program, shape.values)) {
-        const leading = body.Builder.capture_record_leading_words;
-        const record_desc: *const TypeDesc = @ptrCast(@alignCast(readWord(capture)));
-        for (0..word_count) |index| offsets[shape.values.len + index] = record_desc.fieldOffset(@intCast(leading + index));
-        for (0..shape.values.len) |index| offsets[index] = record_desc.fieldOffset(@intCast(leading + word_count + index));
-    } else if (offsets.len != 0) {
-        const record = try closedRecordLayout(program, shape);
-        if (record != .zst) {
-            const layouts = &program.result.layouts;
-            const struct_idx = layouts.getLayout(record).getStruct().idx;
-            for (offsets, 0..) |*offset, index| offset.* = layouts.getStructFieldOffsetByOriginalIndex(struct_idx, @intCast(index));
-        } else {
-            @memset(offsets, 0);
-        }
-    }
-    return offsets;
-}
-
 fn readWord(ptr: [*]const u8) *const anyopaque {
     return @ptrFromInt(std.mem.readInt(usize, ptr[0..@sizeOf(usize)], @import("builtin").cpu.arch.endian()));
 }

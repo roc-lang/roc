@@ -6321,6 +6321,14 @@ stage meets a method that needs values of its declaration's frame: Boxy calls a
 local procedure a dispatch selects directly as its nested worker, and treats a
 method selection with runtime captures as an invariant failure.
 
+The checked method registry also determines how a local method declaration
+becomes a value. Its captures of other local procedures are immutable callable
+graph edges, reserved before following a recursive edge, rather than reads of
+declaration-order-dependent runtime binders. The graph retains its declaration
+instance, instantiated type inputs, and callable representation. This rule
+does not apply to ordinary closures, whose invocation-specific values remain
+runtime captures even when their code is identical.
+
 ### Body-Local Type Context
 
 A type declared in a function body can depend on the type variables of the
@@ -11735,9 +11743,8 @@ Under `.boxy` the cycle is a dictionary that captures itself: the constructor
 captures its format's local procedures, and the method's own scheme
 dictionary is that constructor. A constructor requested again while it is
 being composed (`Builder.beginCodecComposition`) is a back edge: the request
-takes a null word, every composition that captures it is noted, and once the
-constructor is composed each of those captures is filled with it through
-`dict_patch`, adapted to the type the back edge requested.
+names the constructor's reserved recipe, adapted to the requested type.
+Completing that recipe connects the cycle before any runtime value is emitted.
 
 ### Derived Parser Required-Field Error Composition
 
@@ -15052,25 +15059,20 @@ and the checker keeps those instances finite. Static dictionaries reserve every
 callable before filling any, so a capture relocates to its target like a
 recursive descriptor's, and a type table's recipes that lead back to one
 another are evaluated as one group the same way.
-A stored function value's types are closed, so a dictionary that captures
-itself is stored as its target and types alone and built again as static data
-on restore, which keeps the constant graph acyclic.
+A stored function's capture graph records these cycles explicitly. Restoring
+it reserves its nodes before connecting their edges; it never rediscovers
+dictionaries from types or emits runtime composition.
 
 A declaration context's dictionaries include the one being built, so a local
 procedure's value built from it can capture the dictionary that captures it:
 a generated codec constructor captures its format's local methods, which
 capture the callee's dictionaries, the codec among them. Each slot of the
 context is built on its first read; a procedure reading a slot still being
-built captures a null word there, and `dict_patch` fills that capture word of
-the procedure's immortal composition once the slot is built. A stored
-constructor in such a cycle is stored as its worker and types plus the
-declaration context: the declaring procedure, its types, which of its
-dictionary slots lead back to the constructor, and its other dictionaries and
-literal arguments as stored captures. Restoring it composes the constructor
-again in that context and fills those slots with it, adapted to their
-parameters. A stored dictionary built from parts is restored in the entry
-chain with everything it captures, its function values immortal compositions,
-as a live one is composed.
+built captures its reserved recipe. The completed graph retains the actual
+callee instance's descriptors, dictionaries, literal arguments and local
+procedure captures. The same graph is serialized for stored constructors,
+including mutually recursive captures, rather than replacing a declaration
+context with the caller's frame or reconstructing it during restoration.
 
 Compiler-derived structural evidence (equality, hashing, inspection) is a
 callable over the dispatcher's descriptor: the dictionary for `[a.is_eq]` with
@@ -24691,8 +24693,7 @@ the bytes handed to Roc, so reallocation reads the old length from the header
 and deallocation is free; the host keeps no per-pointer table, whose cost would
 grow with the allocations a root has ever held rather than with the ones it
 holds. Host events and failure state stay root-local until deterministic
-replay. The root-local arenas and the program's composition state
-(`InProcessState`) draw their memory from the finalizer's allocator, which
+replay. The root-local arenas draw their memory from the finalizer's allocator, which
 need not be thread-safe, through one lock the program owns, so roots running
 at once on different threads never reach that allocator concurrently.
 

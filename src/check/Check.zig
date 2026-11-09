@@ -5692,6 +5692,7 @@ fn withdrawLocalTypeEscapeConsequences(
             .dispatcher_does_not_impl_method => |failure| failure.local_type_escape,
             .type_does_not_support_equality,
             .type_does_not_support_map,
+            .local_value_method,
             .undetermined_codec_type,
             .unresolved_dispatcher,
             .recursive_dispatch,

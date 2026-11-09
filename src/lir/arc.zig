@@ -1090,7 +1090,7 @@ fn installOwnedBindingOverrides(
     var binding_override_changed = true;
     while (binding_override_changed) {
         binding_override_changed = false;
-        for (domain.frame_locals) |local| {
+        for (domain.resource_locals) |local| {
             if (owned_binding_override.contains(local)) continue;
             const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
             if (owned_binding_override.contains(root)) {
