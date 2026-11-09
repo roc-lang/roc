@@ -3749,6 +3749,11 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
         for (view.view.root_requests.compile_time_requests) |request| {
             if (request.compile_time_root) |root| marks.*[@backingInt(root)] = true;
         }
+        // A root whose type needs its use context has no request, and every
+        // read of it calls its entry procedure at the use's instantiation.
+        for (view.view.compile_time_roots.roots, marks.*) |root, *mark| {
+            if (root.request_eligibility == .ineligible) mark.* = true;
+        }
     }
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;

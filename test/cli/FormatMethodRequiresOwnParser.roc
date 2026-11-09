@@ -9,7 +9,7 @@ Fmt := [Default].{
 	rename_field : Fmt, Str -> Str
 	rename_field = |_, name| name
 
-	parse_record_start : Fmt, s -> Try([Counted({ len : U64, rest : s }), Uncounted(s)], [Bad])
+	parse_record_start : Fmt, s -> Try([Counted({ len : U64, rest : s }), Uncounted(s)], [Bad, MissingRequiredField(Str)])
 	parse_record_start = |_, state| Ok(Uncounted(state))
 
 	parse_record_field : Fmt,
@@ -22,14 +22,14 @@ Fmt := [Default].{
 			Continue(s),
 			Done(s),
 		],
-		[Bad],
+		[Bad, MissingRequiredField(Str)],
 	)
 	parse_record_field = |_, _, state| Ok(Done(state))
 
-	parse_record_after_field : Fmt, s -> Try([Continue(s), Done(s)], [Bad])
+	parse_record_after_field : Fmt, s -> Try([Continue(s), Done(s)], [Bad, MissingRequiredField(Str)])
 	parse_record_after_field = |_, state| Ok(Done(state))
 
-	skip_record_field : Fmt, s -> Try(s, [Bad])
+	skip_record_field : Fmt, s -> Try(s, [Bad, MissingRequiredField(Str)])
 	skip_record_field = |_, state| Ok(state)
 
 	parse_str : Fmt, s -> Try({ value : Str, rest : s }, [Bad, MissingRequiredField(Str)])
@@ -40,8 +40,11 @@ Fmt := [Default].{
 		Ok({ value: "", rest: parsed.rest })
 	}
 
-	invalid_value : Fmt, s -> [Bad]
+	invalid_value : Fmt, s -> [Bad, MissingRequiredField(Str)]
 	invalid_value = |_, _| Bad
+
+	missing_field : Fmt, Str -> [Bad, MissingRequiredField(Str)]
+	missing_field = |_, name| MissingRequiredField(name)
 }
 
 # The same format declared in a function body, whose string method names the
@@ -52,7 +55,7 @@ make_parser = |_x| {
 		rename_field : LocalFmt, Str -> Str
 		rename_field = |_, name| name
 
-		parse_record_start : LocalFmt, s -> Try([Counted({ len : U64, rest : s }), Uncounted(s)], [Bad])
+		parse_record_start : LocalFmt, s -> Try([Counted({ len : U64, rest : s }), Uncounted(s)], [Bad, MissingRequiredField(Str)])
 		parse_record_start = |_, state| Ok(Uncounted(state))
 
 		parse_record_field : LocalFmt,
@@ -65,14 +68,14 @@ make_parser = |_x| {
 				Continue(s),
 				Done(s),
 			],
-			[Bad],
+			[Bad, MissingRequiredField(Str)],
 		)
 		parse_record_field = |_, _, state| Ok(Done(state))
 
-		parse_record_after_field : LocalFmt, s -> Try([Continue(s), Done(s)], [Bad])
+		parse_record_after_field : LocalFmt, s -> Try([Continue(s), Done(s)], [Bad, MissingRequiredField(Str)])
 		parse_record_after_field = |_, state| Ok(Done(state))
 
-		skip_record_field : LocalFmt, s -> Try(s, [Bad])
+		skip_record_field : LocalFmt, s -> Try(s, [Bad, MissingRequiredField(Str)])
 		skip_record_field = |_, state| Ok(state)
 
 		parse_str : LocalFmt, s -> Try({ value : Str, rest : s }, [Bad, MissingRequiredField(Str)])
@@ -86,8 +89,11 @@ make_parser = |_x| {
 			Ok({ value: "", rest: parsed.rest })
 		}
 
-		invalid_value : LocalFmt, s -> [Bad]
+		invalid_value : LocalFmt, s -> [Bad, MissingRequiredField(Str)]
 		invalid_value = |_, _| Bad
+
+		missing_field : LocalFmt, Str -> [Bad, MissingRequiredField(Str)]
+		missing_field = |_, name| MissingRequiredField(name)
 	}
 	parser_of : value -> (Rec -> Try({ value : value, rest : Rec }, [Bad, MissingRequiredField(Str)]))
 		where [value.parser_for : LocalFmt -> (Rec -> Try({ value : value, rest : Rec }, [Bad, MissingRequiredField(Str)]))]

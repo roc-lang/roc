@@ -1759,7 +1759,7 @@ pub const MonoLlvmCodeGen = struct {
         // Standalone in-process objects have no separately linked readonly
         // object. Declare the whole image first so cyclic data references
         // and procedure bodies resolve through the same symbol map.
-        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null)
+        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null and !self.embed_static_data)
             try self.declareStaticDataDefinitions()
         else
             &.{};
