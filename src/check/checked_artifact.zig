@@ -1134,7 +1134,6 @@ pub const RootRequestTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
-        bodies: CheckedBodies,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_values: *const TopLevelValueTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -1201,11 +1200,11 @@ pub const RootRequestTable = struct {
             }
         }
 
+        var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.len);
+        defer forwarding_roots.deinit(allocator);
         for (compile_time_roots.roots) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) {
-                continue;
-            }
+            if (forwarding_roots.isSet(@backingInt(root.id))) continue;
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -2157,9 +2156,8 @@ fn compileTimeRootHasRootRequest(
     return false;
 }
 
-/// An exact checked procedure lookup already carries the callable identity
-/// that compile-time evaluation would rediscover. Keep its callable binding
-/// pending for runtime demand instead of scheduling an evaluator wrapper.
+/// A checked procedure lookup is a forwarding candidate. Publication still
+/// proves that its target is directly callable rather than a computed value.
 fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -11365,6 +11363,16 @@ pub const CallableEvalTemplateTable = struct {
 
     pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
         return .{ .templates = self.templates.items };
+    }
+
+    /// Only proven forwards may omit evaluation; a lookup can also name a
+    /// computed callable whose value must be produced before runtime lowering.
+    fn forwardingRoots(self: *const CallableEvalTemplateTable, allocator: Allocator, root_count: usize) Allocator.Error!std.DynamicBitSetUnmanaged {
+        var roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, root_count);
+        for (self.templates.items) |template| {
+            if (template.forwarded_lookup != null) roots.set(@backingInt(template.root));
+        }
+        return roots;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -22972,12 +22980,14 @@ pub fn pairCheckedPlatform(
         .checked_error => {},
     };
     var roots = std.ArrayList(RootRequest).empty;
+    var forwarding_roots = try result.callable_eval_templates.forwardingRoots(session, result.compile_time_roots.roots.len);
+    defer forwarding_roots.deinit(session);
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null and
-            compileTimeCallableRootIsProcedureReference(result.bodies(), &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
+            forwarding_roots.isSet(@backingInt(request.compile_time_root.?))) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
@@ -34542,7 +34552,6 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &resolved_value_refs,
         &top_level_values,
         &top_level_procedure_bindings,
