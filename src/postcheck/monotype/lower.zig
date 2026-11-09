@@ -12768,7 +12768,7 @@ const Builder = struct {
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
-            // Strings already have canonical literal lowering, including
+            // Strings already have literal lowering, including
             // readonly backing for long literals. A separate datum obscures
             // constants and changes code between evaluation and restoration.
             .str,
@@ -12782,7 +12782,7 @@ const Builder = struct {
             .record,
             => return true,
             // Nullary tags, including Bool, carry only a known discriminant.
-            // Keep that fact in executable IR rather than hiding it behind a
+            // Keep the discriminant in Monotype rather than hiding it behind a
             // static-data read that defeats branch folding and range proofs.
             .tag => |tag| return tag.payloads.len != 0,
             .nominal => |nominal| {

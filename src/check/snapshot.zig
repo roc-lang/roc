@@ -1523,7 +1523,7 @@ test "diagnostic snapshot rendering options belong to each capture" {
     try std.testing.expectEqualStrings(expected_shown, try snapshots.formatType(shown));
 }
 
-fn diagnosticAllocationBytes(requirement_count: usize) !usize {
+fn diagnosticAllocationBytes(requirement_count: usize) (Allocator.Error || error{ WriteFailed, TestExpectedEqual })!usize {
     const gpa = std.testing.allocator;
     var store = try TypesStore.initCapacity(gpa, 128, 8);
     defer store.deinit();
