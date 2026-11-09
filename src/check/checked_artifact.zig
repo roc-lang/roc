@@ -22929,6 +22929,22 @@ pub fn pairCheckedPlatform(
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, value.checked_type, &type_memo),
         .checked_error => {},
     };
+    // Binding the requirements can make a callable binding an exact procedure
+    // alias, such as `main_for_host! = main!`. The pairing records that
+    // forwarding by the same rule as publication with resolved imports,
+    // leaving the unpaired platform's templates as they are.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var roots = std.ArrayList(RootRequest).empty;
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
