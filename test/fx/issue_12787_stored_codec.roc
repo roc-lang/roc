@@ -2,8 +2,8 @@ app [main!] { pf: platform "./platform/main.roc" }
 
 import pf.Stdout
 
-# A format whose fallible methods leave their error rows open, so each derived
-# codec's own row is `[Negative]` or `[Zero]` and every use may widen it.
+# Parsing uses the format-owned `[Negative]` error. Ordinary callers add
+# Reset/Skipped after invoking the stored parser without widening its contract.
 Format := [Default].{
     invalid_value : Format, U64 -> [Negative]
     invalid_value = |_, _| Negative
@@ -30,8 +30,7 @@ Wide : [Negative, Reset(Str), Skipped(U64)]
 
 WideEnc : [Zero, Reset(Str), Skipped(U64)]
 
-# The error rows of these two stay open, so a use of either chooses its row
-# after the derivation's row is settled.
+# Each use checks its own deferred codec relation against the format.
 any_parser = |_| {
     Shape : Pair
     Shape.parser_for(Format.Default)
@@ -57,7 +56,7 @@ encoder_of = |_| {
 }
 
 # Top-level functions, whose value compile-time evaluation stores.
-stored_parse : U64 -> Try({ value : Pair, rest : U64 }, Wide)
+stored_parse : U64 -> Try({ value : Pair, rest : U64 }, [Negative])
 stored_parse = parser_of((0, 0))
 
 stored_encode : U64, U64 -> Try(U64, WideEnc)
@@ -67,7 +66,7 @@ stored_encode = encoder_of(0)
 # module whichever strategy evaluated it.
 Config : {
     label : Str,
-    parse : U64 -> Try({ value : Pair, rest : U64 }, Wide),
+    parse : U64 -> Try({ value : Pair, rest : U64 }, [Negative]),
     encode : U64, U64 -> Try(U64, WideEnc),
 }
 
@@ -77,14 +76,15 @@ closed_config = { label: "closed", parse: parser_of((0, 0)), encode: encoder_of(
 open_config : Config
 open_config = { label: "open", parse: any_parser({}), encode: any_encoder({}) }
 
-parse_or_reset : (U64 -> Try({ value : Pair, rest : U64 }, Wide)), U64 -> Try({ value : Pair, rest : U64 }, Wide)
+parse_or_reset : (U64 -> Try({ value : Pair, rest : U64 }, [Negative])), U64 -> Try({ value : Pair, rest : U64 }, Wide)
 parse_or_reset = |parse, state| {
     if state == 100 {
         Err(Reset("parse reset: a string long enough to live on the heap"))
     } else if state == 200 {
         Err(Skipped(state))
     } else {
-        parse(state)
+        parsed = parse(state)?
+        Ok(parsed)
     }
 }
 

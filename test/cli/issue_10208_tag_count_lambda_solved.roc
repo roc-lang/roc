@@ -1,9 +1,6 @@
 main! : List(Str) => Try({}, [Exit(I8)])
 main! = |_| {
-	match read_and_handle_message({}) {
-		Ok({}) => Ok({}),
-		Err(_) => Err(Exit(1))
-	}
+	read_and_handle_message({}).map_err(|_| Exit(1))
 }
 
 Message : [
