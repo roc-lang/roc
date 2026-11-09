@@ -26,7 +26,7 @@ parse_headers : Str -> Try(
 		wildcard_optional : Try(Str, [Missing]),
 		x_auth_token : Try(Str, [Missing]),
 	},
-	[BadHeader, MissingRequiredField(Str)],
+	[BadHeader, MissingHeader(Str)],
 )
 parse_headers = Encoding.HttpHeader.parser_for()
 
@@ -45,7 +45,7 @@ main! = |headers| {
 			wildcard_optional : Try(Str, _),
 			x_auth_token : Try(Str, [Missing]),
 		},
-		[BadHeader, MissingRequiredField(Str)],
+		[BadHeader, MissingHeader(Str)],
 	)
 	decoded_result = parse_headers(headers)
 
@@ -87,8 +87,8 @@ main! = |headers| {
 				+ x_auth_token_length
 				+ route_bonus
 		}
-		Err(MissingRequiredField(_)) => 999999
 		Err(BadHeader) => 999999
+		Err(MissingHeader(_)) => 999999
 	}
 }
 

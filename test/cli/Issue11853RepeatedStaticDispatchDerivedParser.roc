@@ -6,6 +6,9 @@ Problem : [Bad, MissingRequiredField(Str)]
 State : { names : List(Str), values : List(I64), next : U64 }
 
 Enc :: [Default].{
+	missing_field : Enc, Str -> Problem
+	missing_field = |_, name| MissingRequiredField(name)
+
 	rename_field : Enc, Str -> Str
 	rename_field = |_, name| name
 

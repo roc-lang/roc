@@ -7,7 +7,7 @@ Api := [].{
 
 	Failure : [Timeout]
 
-	created : Str, (error -> U16) -> Api.Endpoint(request, answer, error) where [error.Json.Parseable([InvalidJson(Str), ..errs])]
+	created : Str, (error -> U16) -> Api.Endpoint(request, answer, error) where [error.Json.Parseable([InvalidJson(Str)])]
 	created = |path, status| {
 		path,
 		status,

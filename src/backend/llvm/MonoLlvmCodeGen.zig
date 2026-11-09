@@ -5074,7 +5074,7 @@ pub const MonoLlvmCodeGen = struct {
     /// An empty pending cell in this frame.
     fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const word_size = self.targetWordSize();
-        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pendingByteSize(word_size), LlvmBuilder.Alignment.fromByteUnits(builtins.native_callable.pendingAlignment(word_size)), "pending_cell");
         try self.storePointer(cell, try self.nullPtr());
         return cell;
     }
@@ -9321,8 +9321,8 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
     }
 
-    /// Records the readonly object's exports so relocation-free value slots
-    /// can be defined as constants in this module.
+    /// Records frozen exports for standalone emission, or constant folding
+    /// from the separate readonly object of a linked program.
     pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Allocator.Error!void {
         self.static_data_exports = exports;
         self.static_data_export_rows.clearRetainingCapacity();
@@ -15302,6 +15302,70 @@ test "embedded frozen data declares cycles offsets and callable edges at both wi
         try std.testing.expect(std.mem.find(u8, printed.written(), "external global") == null);
         try std.testing.expect(std.mem.find(u8, printed.written(), "unused-proc-spelling") == null);
         try std.testing.expect(std.mem.find(u8, printed.written(), "unused-helper-spelling") == null);
+    }
+}
+
+test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .body = body,
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
+    defer codegen.deinit();
+    codegen.layout_store = &layouts;
+    codegen.embed_static_data = true;
+    const exports = [_]lir.Program.StaticDataExport{
+        .{
+            .symbol_name = "first",
+            .bytes = &(@as([16]u8, @splat(0))),
+            .symbol_offset = 8,
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 8, .target_symbol_name = "second" }},
+        },
+        .{
+            .symbol_name = "second",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "first" }},
+        },
+        .{
+            .symbol_name = "callable",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
+        },
+    };
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("standalone_static_data");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+    try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
+    try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
+    for (builder.variables.items[0..exports.len], exports, 0..) |variable, data_export, index| {
+        try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
+        try std.testing.expectEqual(.constant, variable.mutability);
+        try std.testing.expect(variable.init != .no_init);
+        const variable_id: LlvmBuilder.Variable.Index = @fromBackingInt(@intCast(index));
+        const expected = try builder.gepConst(.normal, .i8, variable_id.toConst(&builder), null, &.{try builder.intConst(.i64, data_export.symbol_offset)});
+        try std.testing.expectEqual(expected, codegen.static_data_symbols.get(data_export.symbol_name).?);
     }
 }
 

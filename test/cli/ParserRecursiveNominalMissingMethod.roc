@@ -3,6 +3,9 @@ ParserRecursiveNominalMissingMethod :: [].{}
 Tree := [Leaf(Str), Node(Tree)].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -43,9 +46,9 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parse : State -> Try(a, [FormatError, ..errs])
+parse : State -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -54,5 +57,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ tree : Tree }, [FormatError, MissingRequiredField(Str)])
+main : Try({ tree : Tree }, [FormatError])
 main = parse(State.Present("leaf"))
