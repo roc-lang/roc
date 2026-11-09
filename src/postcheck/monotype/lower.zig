@@ -16028,6 +16028,7 @@ const Builder = struct {
         fn_ctx: *BodyContext,
         store_view: ModuleView,
         fn_view: ModuleView,
+        fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         static_data_const_locator: ?checked.ConstLocator,
         at_graph_nodes: bool,
@@ -16049,13 +16050,19 @@ const Builder = struct {
             // value witness. Its stored callable representation can carry
             // rows joined by Lambda Solved; those rows are not the checked
             // producer contract at which its body must be instantiated.
-            const node: ?NodeId = if (at_graph_nodes)
-                try fn_ctx.relateCheckedNodeToProducedValue(
-                    try fn_ctx.instNode(checkedBinderType(fn_view, binder)),
-                    try fn_ctx.graph.importMonoIndependent(lowered_ty),
-                )
-            else
-                null;
+            const node: ?NodeId = if (at_graph_nodes) blk: {
+                const checked_node = try fn_ctx.instNode(checkedBinderType(fn_view, binder));
+                const stored_node = try fn_ctx.graph.importMonoIndependent(lowered_ty);
+                // A capture's nominal arguments can fix owner variables absent
+                // from the restored function's own signature. Transfer that
+                // producer substitution without equating its callable rows.
+                try constrainDeferredTemplateTypeArguments(fn_ctx.graph, checked_node, stored_node);
+                break :blk try fn_ctx.reuseStoredCaptureWitness(
+                    .{ .graph = fn_ctx.graph, .module = store_view.key.bytes, .function = fn_id, .binder = binder },
+                    try fn_ctx.instNode(fn_value.source_fn_ty),
+                    try fn_ctx.relateCheckedNodeToProducedValue(checked_node, stored_node),
+                );
+            } else null;
             const cell = if (node) |capture_node| DraftTypeCell.fromGraphNode(capture_node) else try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), cell, binder);
             fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
@@ -16263,7 +16270,7 @@ const Builder = struct {
         const lambda_expr_id = checkedLambdaExprIdForConstFn(fn_view, fn_value.fn_def);
         const lambda_expr = checkedExpr(fn_view, lambda_expr_id);
         for (fn_value.captures) |capture| _ = constCaptureBinder(capture.id);
-        var bound_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, static_data_const_locator, false);
+        var bound_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_id, fn_value, static_data_const_locator, false);
         defer self.releaseConstSourceCaptures(&fn_ctx, &bound_captures);
         const captures = bound_captures.items;
         const template = try self.constFnTemplateToMono(fn_value, ty, true);
@@ -16360,7 +16367,7 @@ const Builder = struct {
         defer fn_ctx.deinit();
         fn_ctx.current_fn_key = restoredConstFnContextKey(store_view.key, fn_id, fn_value.source_fn_key);
 
-        var source_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_value, static_data_const_locator, false);
+        var source_captures = try self.bindConstSourceCaptures(&fn_ctx, store_view, fn_view, fn_id, fn_value, static_data_const_locator, false);
         defer self.releaseConstSourceCaptures(&fn_ctx, &source_captures);
 
         const expr = checkedExpr(fn_view, ExprSite.own(fn_view, runtime.expr));
@@ -19137,6 +19144,23 @@ const CachedCodecContractInstance = struct {
     method_call_slots: []const CodecMethodCallSlot,
 };
 
+/// A stored closure owns its capture environment independently of the site
+/// restoring it. Distinct stored closures and binders must never share guards.
+const StoredCaptureWitnessKey = struct {
+    graph: *InstGraph,
+    module: [32]u8,
+    function: checked.ConstFnId,
+    binder: BinderId,
+};
+
+/// Retain live nodes, not provisional type snapshots: a later request compares
+/// the current complete instantiation and capture contract before sharing.
+const StoredCaptureWitness = struct {
+    request: NodeId,
+    witness: NodeId,
+    previous: ?u32,
+};
+
 const BodyDraftStore = struct {
     allocator: Allocator,
     /// Generated-codec contracts this draft's graph instantiated without
@@ -19169,6 +19193,8 @@ const BodyDraftStore = struct {
     active_const_node_binding_indices: std.AutoHashMap(ActiveConstNodeAddress, u32),
     materialized_const_nodes: std.ArrayList(MaterializedConstNode),
     materialized_const_node_indices: std.AutoHashMap(MaterializedConstNodeAddress, u32),
+    stored_capture_witnesses: std.ArrayListUnmanaged(StoredCaptureWitness) = .empty,
+    stored_capture_witness_indices: std.AutoHashMapUnmanaged(StoredCaptureWitnessKey, u32) = .empty,
     active_const_bindings: std.ArrayList(ActiveConstBinding),
     deferred_const_uses: std.ArrayList(DraftDeferredConstUse),
     deferred_structural_eqs: std.ArrayList(DraftDeferredStructuralEq),
@@ -19604,6 +19630,8 @@ const BodyDraftStore = struct {
         self.active_const_node_binding_indices.deinit();
         self.materialized_const_nodes.deinit(self.allocator);
         self.materialized_const_node_indices.deinit();
+        self.stored_capture_witnesses.deinit(self.allocator);
+        self.stored_capture_witness_indices.deinit(self.allocator);
         self.active_const_bindings.deinit(self.allocator);
         self.checked_string_literals.deinit();
         self.string_bytes.deinit(self.allocator);
@@ -20418,6 +20446,8 @@ const BodyDraftStore = struct {
         self.active_const_node_binding_indices.clearRetainingCapacity();
         self.materialized_const_nodes.clearRetainingCapacity();
         self.materialized_const_node_indices.clearRetainingCapacity();
+        self.stored_capture_witnesses.clearRetainingCapacity();
+        self.stored_capture_witness_indices.clearRetainingCapacity();
         self.active_const_bindings.clearRetainingCapacity();
 
         self.runtime_value_demands.clearRetainingCapacity();
@@ -20446,7 +20476,9 @@ const BodyDraftStore = struct {
 
     fn assertGraphStateDiscarded(self: *const BodyDraftStore) void {
         self.assertTypeCellsSealed();
-        if (self.deferred_const_uses.items.len != 0 or
+        if (self.stored_capture_witnesses.items.len != 0 or
+            self.stored_capture_witness_indices.count() != 0 or
+            self.deferred_const_uses.items.len != 0 or
             self.deferred_structural_eqs.items.len != 0 or
             self.deferred_structural_serializations.items.len != 0 or
             self.deferred_stored_codec_restores.items.len != 0 or
@@ -47978,6 +48010,46 @@ const BodyContext = struct {
         self.owner_fn_node = try self.activeNodeFromType(try self.lowerConstCaptureType(store_view, owner_fn_ty));
     }
 
+    /// A repeated restore of one stored closure at one complete contract must
+    /// reuse its capture guards, or a recursive constant read creates another
+    /// specialization of the same body indefinitely. Only exact live classes
+    /// or fully resolved equal types authorize sharing; open instantiations
+    /// remain independent. The stored function identity owns the environment.
+    fn reuseStoredCaptureWitness(
+        self: *BodyContext,
+        key: StoredCaptureWitnessKey,
+        request: NodeId,
+        witness: NodeId,
+    ) Allocator.Error!NodeId {
+        var cursor = self.draft.stored_capture_witness_indices.get(key);
+        while (cursor) |index| {
+            const existing = self.draft.stored_capture_witnesses.items[index];
+            cursor = existing.previous;
+            if (!try self.sameStoredCaptureContract(existing.request, request)) continue;
+            if (!try self.sameStoredCaptureContract(existing.witness, witness)) continue;
+            try relateRequestComponent(self.graph, existing.witness, witness);
+            return existing.witness;
+        }
+        const index: u32 = @intCast(self.draft.stored_capture_witnesses.items.len);
+        try self.draft.stored_capture_witnesses.append(self.allocator, .{
+            .request = request,
+            .witness = witness,
+            .previous = self.draft.stored_capture_witness_indices.get(key),
+        });
+        try self.draft.stored_capture_witness_indices.put(self.allocator, key, index);
+        return witness;
+    }
+
+    fn sameStoredCaptureContract(self: *BodyContext, left: NodeId, right: NodeId) Allocator.Error!bool {
+        if (self.graph.sameClass(left, right)) return true;
+        if (!try self.graph.typeIsResolved(left) or !try self.graph.typeIsResolved(right)) return false;
+        return try self.typeStore().typeEql(
+            self.nameStore(),
+            try self.activeTypeFromNode(left),
+            try self.activeTypeFromNode(right),
+        );
+    }
+
     fn lowerConstCaptureType(
         self: *BodyContext,
         store_view: ModuleView,
@@ -48348,6 +48420,7 @@ const BodyContext = struct {
         _ = self.builder.moduleForDigest(names.procTemplateModuleDigest(checked_template)).templates.get(checked_template.template);
         if (fn_value.captures.len != 0) return try self.restoreCapturingConstFn(
             store_view,
+            fn_id,
             fn_value,
             switch (request) {
                 .sealed => |ty| (try self.builder.restoredConstFnTemplateToMono(store_view, fn_id, fn_value, ty, false)).fn_def,
@@ -48455,6 +48528,7 @@ const BodyContext = struct {
     fn restoreCapturingConstFn(
         self: *BodyContext,
         store_view: ModuleView,
+        fn_id: checked.ConstFnId,
         fn_value: check.ConstStore.ConstFn,
         fn_def: Ast.FnDef,
         request: ConstFnRequest,
@@ -48491,6 +48565,7 @@ const BodyContext = struct {
             &fn_ctx,
             store_view,
             fn_view,
+            fn_id,
             fn_value,
             static_data_const_locator,
             switch (request) {
@@ -48816,6 +48891,7 @@ const BodyContext = struct {
                 &fn_ctx,
                 store_view,
                 fn_view,
+                fn_id,
                 fn_value,
                 static_data_const_locator,
                 false,
@@ -73419,6 +73495,81 @@ test "produced witness relation visits shared container pairs once" {
     const witness = try fixture.ctx.relateCheckedNodeToProducedValue(request, produced);
     try std.testing.expectEqual(produced, witness);
     try std.testing.expect(fixture.diagnostics.completion_queries <= 24);
+}
+
+test "stored capture witnesses preserve producer and instantiation identity" {
+    var fixture: CompletionAnalysisFixture = undefined;
+    try fixture.init(std.testing.allocator);
+    defer fixture.deinit();
+    var draft = BodyDraftStore.init(std.testing.allocator);
+    defer draft.deinit();
+    fixture.ctx.draft = &draft;
+    const graph = fixture.graph;
+    const ctx = &fixture.ctx;
+    const str = try graph.newNode(.{ .primitive = .str });
+    const number = try graph.newNode(.{ .primitive = .u64 });
+    const format_error = try fixture.name_store.internTagLabel("FormatError");
+    const trailing_input = try fixture.name_store.internTagLabel("TrailingInput");
+    const Make = struct {
+        fn row(g: *InstGraph, labels: []const names.TagNameId) Allocator.Error!NodeId {
+            const tags = try g.arena().alloc(InstTag, labels.len);
+            for (tags, labels) |*tag, name| tag.* = .{ .name = name, .checked_name = name, .payloads = &.{} };
+            return try g.newNode(.{ .tag_union = .{ .tags = tags, .ext = try g.newNode(.empty_tag_union) } });
+        }
+
+        fn function(g: *InstGraph, arg: NodeId, ret: NodeId) Allocator.Error!NodeId {
+            return try g.newNode(.{ .func = .{ .args = try g.arena().dupe(NodeId, &.{arg}), .ret = ret } });
+        }
+    };
+    const request = try Make.function(graph, str, number);
+    const witness = try Make.row(graph, &.{format_error});
+    const key: StoredCaptureWitnessKey = .{
+        .graph = graph,
+        .module = @splat(1),
+        .function = @fromBackingInt(1),
+        .binder = @fromBackingInt(1),
+    };
+    try std.testing.expectEqual(witness, try ctx.reuseStoredCaptureWitness(key, request, witness));
+    const repeated = try Make.row(graph, &.{format_error});
+    try std.testing.expectEqual(witness, try ctx.reuseStoredCaptureWitness(
+        key,
+        try Make.function(graph, str, number),
+        repeated,
+    ));
+    try std.testing.expect(graph.sameClass(witness, repeated));
+
+    // Equal signatures do not merge independently stored environments or
+    // different slots of one environment.
+    for (0..3) |difference| {
+        var distinct = key;
+        switch (difference) {
+            0 => distinct.function = @fromBackingInt(2),
+            1 => distinct.binder = @fromBackingInt(2),
+            2 => distinct.module = @splat(2),
+            else => unreachable,
+        }
+        const other = try Make.row(graph, &.{format_error});
+        try std.testing.expectEqual(other, try ctx.reuseStoredCaptureWitness(distinct, request, other));
+        try std.testing.expect(!graph.sameClass(witness, other));
+    }
+
+    const other_request = try Make.function(graph, number, number);
+    const other_instantiation = try Make.row(graph, &.{format_error});
+    try std.testing.expectEqual(other_instantiation, try ctx.reuseStoredCaptureWitness(key, other_request, other_instantiation));
+    try std.testing.expect(!graph.sameClass(witness, other_instantiation));
+    const wider = try Make.row(graph, &.{ format_error, trailing_input });
+    try std.testing.expectEqual(wider, try ctx.reuseStoredCaptureWitness(key, request, wider));
+    try std.testing.expect(!graph.sameClass(witness, wider));
+
+    // Open instances are not approximated by their eventual default or shape.
+    const open_a = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    const open_b = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
+    try std.testing.expectEqual(open_a, try ctx.reuseStoredCaptureWitness(key, request, open_a));
+    try std.testing.expectEqual(open_b, try ctx.reuseStoredCaptureWitness(key, request, open_b));
+    try std.testing.expect(!graph.sameClass(open_a, open_b));
+    try graph.unify(open_a, try Make.row(graph, &.{format_error}));
+    try std.testing.expectEqual(open_a, try ctx.reuseStoredCaptureWitness(key, request, try Make.row(graph, &.{format_error})));
+    try std.testing.expect(!graph.sameClass(open_a, open_b));
 }
 
 test "module identity index retains first current view and rejects absent owners" {

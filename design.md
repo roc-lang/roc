@@ -24475,6 +24475,14 @@ as a constant root does. A stored callable signature can include Lambda Solved
 row joins; those consumer rows do not replace the checked producer contract
 when its body is lowered again.
 
+Stored type-constructor arguments first constrain owner variables that may be
+absent from the restored function's signature, without replacing callable result
+rows. Within a draft, repeated restoration of one stored closure and capture at
+the same complete request and witness contract shares its graph guard. The key
+includes the module, stored function and binder; independent open instances do
+not share by structural shape. Recursive specialization reuse therefore does
+not conflate closure environments or error layouts.
+
 Two explicit rules establish the set:
 
 - Lifting decides the declared captures. A source lambda declares its free
