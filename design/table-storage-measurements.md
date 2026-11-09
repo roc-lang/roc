@@ -36,6 +36,116 @@ numbers medians of nine. Cache files are disposable; raw counters, commands,
 binary hashes, diagnostics and host settings remain in the checkout's ignored
 `.tmp/storage-measure` directory.
 
+### Quiet-machine three-way comparison
+
+The compact-index sweep's noisy-host roc-pg runs were roughly
+instruction-neutral with about 1.5% higher median peak RSS. This is provisional
+evidence, not a rejection criterion or a wall-time result. A meaningful
+wall-time improvement can justify a modest RSS increase; evaluate speed and
+memory together rather than requiring every metric to improve. An excessive
+memory increase still needs separate consideration.
+
+When the machine is quiet, compare these three variants:
+
+| Variant | Representation and backing | Saved artifact in `.tmp/storage-measure` |
+| --- | --- | --- |
+| Baseline | Before the first compact-index sweep | `pre-sweep-fixed-roc` |
+| Recycling | Compact indices; allocator-backed, explicitly filled columns | `compact-sweep-filled-roc` |
+| Non-recycling | Same compact indices; fresh sparse mappings above the existing small-table threshold | `compact-sweep-first-roc` |
+
+The backing comparison changes only the two selected/promoted callable-binding
+columns and the method declaration-statement column. Both compact variants
+retain the same other conversions and added callable-template index; comparing
+either with baseline measures the batch, not encoding alone.
+
+Saved baseline SHA-256:
+`847366e0368a66317f4a44aef4ea2d5fd705b503339420f52af72162ba44cae5`.
+Saved non-recycling SHA-256:
+`e3c1981a24a23f09f38836f8bfd6f23dffa045a43b72158e5d3b45bb9c0f36e5`.
+Saved recycling SHA-256:
+`e746edf187ba4f5260c98e473fa17a831119faec619d7e1b8e91634e2d9fe0f7`.
+The backing-policy source variants are saved as `sweep1-filled-check.zig` and
+`sweep1-sparse-check.zig`. The recycling native build passed with
+`zig build roc -Doptimize=ReleaseFast -j1 --summary failures`.
+The broader default install target failed in echo-WASM on `HostSplice`;
+native build success does not imply that target passes.
+
+Preparation produced uniformly stripped copies of the three saved binaries.
+Every runtime-allocated ELF section was verified unchanged by stripping;
+the originals remain intact. Original and stripped hashes are recorded
+together. This removes the debug-metadata difference between saved artifacts
+without changing their executable code.
+
+Use the same Zig 0.17.1 ReleaseFast configuration, corpus inputs, commands,
+worker counts, affinity, memory limit, and host policy across all variants.
+Rotate execution order across repeated three-way rounds, with independent
+compiler caches and equivalent cold, warm, and post-edit workloads. Report
+wall-time distributions alongside peak RSS, instructions, task-clock, and
+page faults, and verify equivalent diagnostics and outputs. Record host
+load; defer wall-time conclusions if contention returns. Do not choose a
+backing policy from the current noisy-host results alone.
+
+The first coordinated window covers roc-pg and randomized-spa `check`, with
+specialization enabled and disabled, across all six permutations of variant
+order. Each case has a fresh compiler cache followed by three warm runs.
+This is not the full build/test/post-edit matrix. Start only after the other
+thread explicitly confirms quiet/ready, and release the window explicitly
+after all measurements finish or the run is abandoned.
+
+#### Coordinated results, 2026-11-09
+
+The first window completed all 288 invocations. The other thread independently
+verified quiet/ready before execution and resumed work only after the window
+was explicitly released. CPU and memory pressure were zero before the run;
+minor desktop activity remained. High reported I/O wait was traced to two
+interruptibly sleeping Ghostty `io_cqring_wait` threads on CPUs 10 and 16:
+their CPU ticks were unchanged, block-I/O delay was zero, and physical disks
+had essentially no traffic or queued requests. This is a recorded environment
+caveat, not evidence that those CPUs were doing competing work.
+
+Cold compiler-cache wall time, median [minimum, maximum] seconds across six
+balanced rounds:
+
+| Workload | Baseline | Recycling | Non-recycling |
+| --- | ---: | ---: | ---: |
+| roc-pg, specialized | 8.215 [8.190, 8.240] | 8.220 [8.170, 8.290] | 8.150 [8.130, 8.180] |
+| roc-pg, Boxy | 2.460 [2.440, 2.480] | 2.450 [2.440, 2.460] | 2.480 [2.450, 2.480] |
+| randomized-spa, specialized | 0.705 [0.690, 0.740] | 0.695 [0.690, 0.730] | 0.715 [0.690, 0.750] |
+| randomized-spa, Boxy | 1.105 [1.090, 1.130] | 1.115 [1.100, 1.130] | 1.115 [1.100, 1.150] |
+
+Cold peak RSS medians in MiB, with change relative to baseline:
+
+| Workload | Baseline | Recycling | Non-recycling |
+| --- | ---: | ---: | ---: |
+| roc-pg, specialized | 3515.63 | 3524.29 (+0.25%) | 3526.73 (+0.32%) |
+| roc-pg, Boxy | 780.59 | 783.18 (+0.33%) | 785.03 (+0.57%) |
+| randomized-spa, specialized | 425.18 | 425.25 (+0.02%) | 426.60 (+0.33%) |
+| randomized-spa, Boxy | 516.86 | 518.76 (+0.37%) | 521.33 (+0.87%) |
+
+Recycling's cold instruction-count changes were -0.085%, -0.329%, -0.652%,
+and -0.034%, respectively. Non-recycling's were -0.011%, +0.004%, -0.018%,
+and +0.276%. Warm wall-time medians across 18 samples per cell were identical
+across variants: 0.350, 0.040, 0.300, and 0.040 seconds respectively. The
+external timer reports only hundredths of a second, so these equal medians
+do not establish equality at finer resolution.
+
+The modest memory increases are not a reason to reject either variant.
+Non-recycling improved specialized roc-pg wall time by about 0.79%; its six
+samples were all faster than the six baseline samples. Other cold results
+have overlapping ranges and mixed directions. There is no demonstrated
+across-workload wall-time winner from this check-only window. Keep the
+variants available for the remaining build/test/post-edit comparisons rather
+than selecting a universal backing policy from instruction counts alone.
+
+All expected exit codes and diagnostic comparisons passed. Comparison ignores
+only the duration in the CLI's `No errors found in ...` success line; raw output
+is retained. An initial attempt stopped on that variable duration, and none
+of its measurements are included above. The completed run is saved in the
+attached worktree at `.tmp/storage-quiet/results-20261109-020529`, including
+the full counter/distribution summary and binary-hash manifest. Environment
+samples are in `.tmp/storage-quiet/environment`. "Cold" means a fresh compiler
+cache, not a flushed OS page cache.
+
 ## Phased results before the main merge
 
 These binaries used Zig 0.17.0. Rows are separate adjacent-phase comparisons,

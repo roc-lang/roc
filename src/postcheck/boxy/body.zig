@@ -1622,17 +1622,9 @@ pub const Builder = struct {
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
                 const forwards_procedure = if (root.kind == .callable_binding) alias: {
-                    const pattern = root.pattern orelse invariant("a callable binding root has no binding pattern");
-                    const value = self.view.view.top_level_values.lookupByPattern(pattern) orelse
-                        invariant("a callable binding root has no top-level value");
-                    const binding = switch (value.value) {
-                        .procedure_binding => |binding| self.view.view.top_level_procedure_bindings.get(binding),
-                        .const_ref => invariant("a callable binding root names a data constant"),
-                    };
-                    break :alias switch (binding.body) {
-                        .callable_eval_template => |id| self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != null,
-                        .direct_template, .checked_error => false,
-                    };
+                    const binding = self.view.view.callable_eval_templates.lookupByRoot(root.id) orelse
+                        invariant("a callable binding root has no callable template");
+                    break :alias binding.forwarded_lookup != null;
                 } else false;
                 switch (root.request_eligibility) {
                     .pending => invariant("an entry wrapper's checked request eligibility is pending"),

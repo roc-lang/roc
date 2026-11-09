@@ -10160,7 +10160,6 @@ const TestImportViewTables = struct {
     exported_procedure_bindings: ExportedProcedureBindingTable = .{},
     exported_const_templates: ExportedConstTemplateTable = .{},
     provided_exports: ProvidedExportTable = .{},
-    top_level_values: TopLevelValueTable = .{},
     top_level_procedure_bindings: TopLevelProcedureBindingTable = .{},
     platform_required_declarations: PlatformRequiredDeclarationTable = .{},
     platform_required_bindings: PlatformRequiredBindingTable = .{},
@@ -10225,7 +10224,6 @@ const TestImportViewTables = struct {
             .exported_procedure_bindings = self.exported_procedure_bindings.view(),
             .exported_const_templates = self.exported_const_templates.view(),
             .provided_exports = &self.provided_exports,
-            .top_level_values = &self.top_level_values,
             .top_level_procedure_bindings = &self.top_level_procedure_bindings,
             .platform_required_declarations = &self.platform_required_declarations,
             .platform_required_bindings = &self.platform_required_bindings,
@@ -11299,14 +11297,25 @@ pub const CallableEvalTemplate = struct {
 /// Public `CallableEvalTemplateTableView` declaration.
 pub const CallableEvalTemplateTableView = struct {
     templates: []const CallableEvalTemplate = &.{},
+    by_root: []const OptionalId(CallableEvalTemplateId) = &.{},
+
+    /// The producer-declared callable binding for a compile-time root.
+    pub fn lookupByRoot(self: CallableEvalTemplateTableView, root: ComptimeRootId) ?CallableEvalTemplate {
+        const index = @backingInt(root);
+        if (index >= self.by_root.len) return null;
+        const id = self.by_root[index].get() orelse return null;
+        return self.templates[@backingInt(id)];
+    }
 };
 
 /// Public `CallableEvalTemplateTable` declaration.
 pub const CallableEvalTemplateTable = struct {
     templates: std.ArrayList(CallableEvalTemplate) = .empty,
+    by_root: std.ArrayList(OptionalId(CallableEvalTemplateId)) = .empty,
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CallableEvalTemplate) = .{},
+        by_root: SerializedSlice(OptionalId(CallableEvalTemplateId)) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CallableEvalTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -11321,8 +11330,16 @@ pub const CallableEvalTemplateTable = struct {
         source_scheme: CheckedTypeSchemeId,
         checked_fn_root: CheckedTypeId,
     ) Allocator.Error!CallableEvalTemplateId {
-        const id: CallableEvalTemplateId = @fromBackingInt(@intCast(@as(u32, @intCast(self.templates.items.len))));
-        try self.templates.append(allocator, .{
+        if (self.templates.items.len >= std.math.maxInt(u32)) return error.OutOfMemory;
+        const root_len = std.math.add(usize, @backingInt(root), 1) catch return error.OutOfMemory;
+        if (root_len <= self.by_root.items.len) std.debug.assert(self.by_root.items[root_len - 1] == .none);
+        // Preflight both columns before changing either logical length.
+        try self.templates.ensureUnusedCapacity(allocator, 1);
+        try self.by_root.ensureTotalCapacity(allocator, root_len);
+        if (root_len > self.by_root.items.len)
+            self.by_root.appendNTimesAssumeCapacity(.none, root_len - self.by_root.items.len);
+        const id: CallableEvalTemplateId = @fromBackingInt(@intCast(self.templates.items.len));
+        self.templates.appendAssumeCapacity(.{
             .id = id,
             .module_idx = module_idx,
             .pattern = pattern,
@@ -11330,6 +11347,7 @@ pub const CallableEvalTemplateTable = struct {
             .source_scheme = source_scheme,
             .checked_fn_root = checked_fn_root,
         });
+        self.by_root.items[@backingInt(root)] = .some(id);
         return id;
     }
 
@@ -11338,11 +11356,47 @@ pub const CallableEvalTemplateTable = struct {
     }
 
     pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
-        return .{ .templates = self.templates.items };
+        return .{ .templates = self.templates.items, .by_root = self.by_root.items };
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
 };
+
+test "callable root index preserves zero IDs holes and serialized lookup" {
+    const allocator = std.testing.allocator;
+    var templates: CallableEvalTemplateTable = .{};
+    defer templates.deinit(allocator);
+    for ([_]u32{ 0, 3, 1 }, 0..) |raw, expected| {
+        const root: ComptimeRootId = @fromBackingInt(raw);
+        const id = try templates.append(allocator, 0, @fromBackingInt(raw), root, @fromBackingInt(0), @fromBackingInt(0));
+        try std.testing.expectEqual(@as(u32, @intCast(expected)), @backingInt(id));
+        try std.testing.expectEqual(id, templates.view().lookupByRoot(root).?.id);
+    }
+    try std.testing.expect(templates.view().lookupByRoot(@fromBackingInt(2)) == null);
+    try std.testing.expect(templates.view().lookupByRoot(@fromBackingInt(4)) == null);
+    const serialized = try artifact_serialize.roundTripForTest(allocator, CallableEvalTemplateTable, &templates);
+    defer allocator.free(serialized.buffer);
+    for ([_]u32{ 0, 3, 1 }) |raw| {
+        const root: ComptimeRootId = @fromBackingInt(raw);
+        try std.testing.expectEqual(templates.view().lookupByRoot(root).?.id, serialized.loaded.view().lookupByRoot(root).?.id);
+    }
+    try std.testing.expect(serialized.loaded.view().lookupByRoot(@fromBackingInt(2)) == null);
+}
+
+fn exerciseCallableRootIndexAllocation(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
+    var templates: CallableEvalTemplateTable = .{};
+    defer templates.deinit(allocator);
+    for (0..20) |i| {
+        const raw: u32 = @intCast(i * 2);
+        const root: ComptimeRootId = @fromBackingInt(raw);
+        const id = try templates.append(allocator, 0, @fromBackingInt(raw), root, @fromBackingInt(0), @fromBackingInt(0));
+        try std.testing.expectEqual(id, templates.view().lookupByRoot(root).?.id);
+    }
+}
+
+test "callable root index releases both columns on allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, exerciseCallableRootIndexAllocation, .{});
+}
 
 /// Record every callable-eval binding that is an exact procedure alias of a
 /// directly callable procedure. Its root is a lookup that resolves to such a
@@ -11392,9 +11446,9 @@ fn publishCallableEvalForwarding(
 /// only connects source lookups to those identities while resolved refs are
 /// being published.
 const SelectedHoistedCallableTable = struct {
-    by_pattern: []?TopLevelProcedureBindingRef = &.{},
+    by_pattern: collections.OptionalIndexColumn(TopLevelProcedureBindingRef) = .{},
     /// Procedure bindings of promoted local functions, by binding pattern.
-    promoted_by_pattern: []?TopLevelProcedureBindingRef = &.{},
+    promoted_by_pattern: collections.OptionalIndexColumn(TopLevelProcedureBindingRef) = .{},
 
     fn fromRoots(
         allocator: Allocator,
@@ -11405,12 +11459,10 @@ const SelectedHoistedCallableTable = struct {
         checked_type_publication: *const CheckedTypePublication,
         promoted_templates: []const PromotedProcedureTemplateEntry,
     ) Allocator.Error!SelectedHoistedCallableTable {
-        const by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, module.nodeCount());
-        errdefer allocator.free(by_pattern);
-        @memset(by_pattern, null);
-        const promoted_by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, module.nodeCount());
-        errdefer allocator.free(promoted_by_pattern);
-        @memset(promoted_by_pattern, null);
+        var by_pattern = try collections.OptionalIndexColumn(TopLevelProcedureBindingRef).initFilled(allocator, module.nodeCount());
+        errdefer by_pattern.deinit(allocator);
+        var promoted_by_pattern = try collections.OptionalIndexColumn(TopLevelProcedureBindingRef).initFilled(allocator, module.nodeCount());
+        errdefer promoted_by_pattern.deinit(allocator);
 
         for (promoted_templates) |promoted| {
             const checked_pattern = promoted.pattern;
@@ -11420,9 +11472,9 @@ const SelectedHoistedCallableTable = struct {
                 .{ .artifact = promoted.template.artifact, .proc_base = promoted.template.proc_base },
                 promoted.template,
             );
-            const slot = &promoted_by_pattern[@backingInt(checked_pattern)];
-            if (slot.* != null) checkedArtifactInvariant("promoted local procedure was published more than once", .{});
-            slot.* = binding;
+            const slot = @backingInt(checked_pattern);
+            if (promoted_by_pattern.isPresent(slot)) checkedArtifactInvariant("promoted local procedure was published more than once", .{});
+            promoted_by_pattern.set(slot, binding);
         }
 
         for (roots.roots) |root| {
@@ -11453,11 +11505,11 @@ const SelectedHoistedCallableTable = struct {
                 source_scheme,
                 callable_template,
             );
-            const slot = &by_pattern[@backingInt(checked_pattern)];
-            if (slot.* != null) {
+            const slot = @backingInt(checked_pattern);
+            if (by_pattern.isPresent(slot)) {
                 checkedArtifactInvariant("selected callable pattern was published more than once", .{});
             }
-            slot.* = binding;
+            by_pattern.set(slot, binding);
         }
 
         return .{ .by_pattern = by_pattern, .promoted_by_pattern = promoted_by_pattern };
@@ -11465,21 +11517,21 @@ const SelectedHoistedCallableTable = struct {
 
     fn lookupByPattern(self: *const SelectedHoistedCallableTable, pattern: CIR.Pattern.Idx) ?TopLevelProcedureBindingRef {
         const raw = @backingInt(pattern);
-        if (raw >= self.by_pattern.len) return null;
-        return self.by_pattern[raw];
+        if (raw >= self.by_pattern.len()) return null;
+        return self.by_pattern.get(raw);
     }
 
     /// The procedure binding of the promoted local function a binding pattern
     /// declares.
     fn lookupPromotedByPattern(self: *const SelectedHoistedCallableTable, pattern: CIR.Pattern.Idx) ?TopLevelProcedureBindingRef {
         const raw = @backingInt(pattern);
-        if (raw >= self.promoted_by_pattern.len) return null;
-        return self.promoted_by_pattern[raw];
+        if (raw >= self.promoted_by_pattern.len()) return null;
+        return self.promoted_by_pattern.get(raw);
     }
 
     fn deinit(self: *SelectedHoistedCallableTable, allocator: Allocator) void {
-        allocator.free(self.by_pattern);
-        allocator.free(self.promoted_by_pattern);
+        self.by_pattern.deinit(allocator);
+        self.promoted_by_pattern.deinit(allocator);
         self.* = .{};
     }
 };
@@ -27021,13 +27073,13 @@ pub const HoistedConstTable = struct {
     entries: []HoistedConstEntry = &.{},
     by_expr: []HoistedConstByExprEntry = &.{},
     by_pattern: []HoistedConstByPatternEntry = &.{},
-    by_root: []?HoistedConstId = &.{},
+    by_root: []OptionalId(HoistedConstId) = &.{},
 
     pub const Serialized = extern struct {
         entries: SerializedSlice(HoistedConstEntry) = .{},
         by_expr: SerializedSlice(HoistedConstByExprEntry) = .{},
         by_pattern: SerializedSlice(HoistedConstByPatternEntry) = .{},
-        by_root: SerializedSlice(?HoistedConstId) = .{},
+        by_root: SerializedSlice(OptionalId(HoistedConstId)) = .{},
 
         const Serde = artifact_serialize.SliceStoreSerde(HoistedConstTable, @This());
         pub const serialize = Serde.serialize;
@@ -27052,9 +27104,9 @@ pub const HoistedConstTable = struct {
         var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
         errdefer by_pattern.deinit(allocator);
 
-        const by_root = try allocator.alloc(?HoistedConstId, roots.roots.len);
+        const by_root = try allocator.alloc(OptionalId(HoistedConstId), roots.roots.len);
         errdefer allocator.free(by_root);
-        @memset(by_root, null);
+        @memset(by_root, .none);
 
         for (roots.roots) |root| {
             if (root.kind != .hoisted_constant) continue;
@@ -27106,7 +27158,7 @@ pub const HoistedConstTable = struct {
                     .entry = id,
                 });
             }
-            by_root[@backingInt(root.id)] = id;
+            by_root[@backingInt(root.id)] = .some(id);
         }
 
         std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
@@ -27163,7 +27215,7 @@ pub const HoistedConstTable = struct {
     pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
         const idx = @backingInt(root);
         if (idx >= self.by_root.len) return null;
-        const entry_id = self.by_root[idx] orelse return null;
+        const entry_id = self.by_root[idx].get() orelse return null;
         return self.entries[@backingInt(entry_id)];
     }
 
@@ -27188,11 +27240,11 @@ pub const CheckedConstBody = struct {
 /// Public `CheckedConstBodyTable` declaration.
 pub const CheckedConstBodyTable = struct {
     bodies: []CheckedConstBody = &.{},
-    by_root: []?CheckedConstBodyRef = &.{},
+    by_root: []OptionalId(CheckedConstBodyRef) = &.{},
 
     pub const Serialized = extern struct {
         bodies: SerializedSlice(CheckedConstBody) = .{},
-        by_root: SerializedSlice(?CheckedConstBodyRef) = .{},
+        by_root: SerializedSlice(OptionalId(CheckedConstBodyRef)) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedConstBodyTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -27205,9 +27257,9 @@ pub const CheckedConstBodyTable = struct {
         var bodies = std.ArrayList(CheckedConstBody).empty;
         errdefer bodies.deinit(allocator);
 
-        const by_root = try allocator.alloc(?CheckedConstBodyRef, roots.roots.len);
+        const by_root = try allocator.alloc(OptionalId(CheckedConstBodyRef), roots.roots.len);
         errdefer allocator.free(by_root);
-        @memset(by_root, null);
+        @memset(by_root, .none);
 
         for (roots.roots) |root| {
             if (!compileTimeRootHasConstBody(root.kind)) continue;
@@ -27218,7 +27270,7 @@ pub const CheckedConstBodyTable = struct {
                 .body_expr = root.rootExpr(),
                 .checked_type = root.checked_type,
             });
-            by_root[@backingInt(root.id)] = id;
+            by_root[@backingInt(root.id)] = .some(id);
         }
 
         return .{
@@ -27230,7 +27282,7 @@ pub const CheckedConstBodyTable = struct {
     pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootId) ?CheckedConstBodyRef {
         const idx = @backingInt(root);
         if (idx >= self.by_root.len) return null;
-        return self.by_root[idx];
+        return self.by_root[idx].get();
     }
 
     pub fn get(self: *const CheckedConstBodyTable, id: CheckedConstBodyRef) CheckedConstBody {
@@ -30520,7 +30572,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 223);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 224);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -32428,7 +32480,6 @@ pub const ImportedModuleView = struct {
     exported_procedure_bindings: ExportedProcedureBindingView,
     exported_const_templates: ExportedConstTemplateView,
     provided_exports: *const ProvidedExportTable,
-    top_level_values: *const TopLevelValueTable,
     top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
     platform_required_declarations: *const PlatformRequiredDeclarationTable,
     platform_required_bindings: *const PlatformRequiredBindingTable,
@@ -32493,7 +32544,6 @@ pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
         .exported_procedure_bindings = artifact.exported_procedure_bindings.view(),
         .exported_const_templates = artifact.exported_const_templates.view(),
         .provided_exports = &artifact.provided_exports,
-        .top_level_values = &artifact.top_level_values,
         .top_level_procedure_bindings = &artifact.top_level_procedure_bindings,
         .platform_required_declarations = &artifact.platform_required_declarations,
         .platform_required_bindings = &artifact.platform_required_bindings,
@@ -33821,10 +33871,10 @@ const MethodBindingTargets = struct {
     relation_modules: []const ImportedModuleView,
     /// The declaring statement of each local declaration's pattern, built
     /// on the first method that reaches an unpromoted local procedure.
-    decl_statements: ?[]?CIR.Statement.Idx = null,
+    decl_statements: ?collections.OptionalIndexColumn(CIR.Statement.Idx) = null,
 
     fn deinit(self: *MethodBindingTargets) void {
-        if (self.decl_statements) |statements| self.allocator.free(statements);
+        if (self.decl_statements) |*statements| statements.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -33979,7 +34029,7 @@ const MethodBindingTargets = struct {
     /// The target of an unpromoted local procedure a method's chain of local
     /// bindings reaches, declared at its own statement.
     fn localProcedureTarget(self: *MethodBindingTargets, local: LocalProcedureBinding) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
-        const statement = (try self.declStatements())[@backingInt(local.binder)] orelse
+        const statement = (try self.declStatements()).get(@backingInt(local.binder)) orelse
             checkedArtifactInvariant("a local procedure binding had no declaring statement", .{});
         if (!self.module_index.reachesPattern(local.binder)) return null;
         if (!self.module_index.reachesStatement(statement)) return null;
@@ -33993,21 +34043,20 @@ const MethodBindingTargets = struct {
         } };
     }
 
-    fn declStatements(self: *MethodBindingTargets) Allocator.Error![]?CIR.Statement.Idx {
-        if (self.decl_statements) |statements| return statements;
+    fn declStatements(self: *MethodBindingTargets) Allocator.Error!collections.OptionalIndexColumn(CIR.Statement.Idx).View {
+        if (self.decl_statements) |*statements| return statements.view();
         const node_count = self.module.nodeCount();
-        const statements = try self.allocator.alloc(?CIR.Statement.Idx, node_count);
-        @memset(statements, null);
+        var statements = try collections.OptionalIndexColumn(CIR.Statement.Idx).initFilled(self.allocator, node_count);
         var raw_node: u32 = 0;
         while (raw_node < node_count) : (raw_node += 1) {
             if (self.module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
             const statement_data = self.module.getStatement(statement);
             if (std.meta.activeTag(statement_data) != .s_decl) continue;
-            statements[@backingInt(statement_data.s_decl.pattern)] = statement;
+            statements.set(@backingInt(statement_data.s_decl.pattern), statement);
         }
         self.decl_statements = statements;
-        return statements;
+        return statements.view();
     }
 };
 
@@ -35789,7 +35838,6 @@ fn testVisibilityImportedView(
         .exported_procedure_bindings = undefined,
         .exported_const_templates = undefined,
         .provided_exports = undefined,
-        .top_level_values = undefined,
         .top_level_procedure_bindings = undefined,
         .platform_required_declarations = undefined,
         .platform_required_bindings = undefined,
@@ -36418,8 +36466,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x61, 0x55, 0x27, 0xC1, 0x3A, 0x4B, 0x3E, 0x8B, 0x2D, 0x14, 0x98, 0x64, 0x49, 0x71, 0x0A, 0x99,
-        0x6F, 0x1E, 0xF2, 0xCB, 0x90, 0xCE, 0x3B, 0x80, 0xBE, 0xD8, 0x04, 0xA8, 0xDE, 0x82, 0x0A, 0x73,
+        0xD8, 0x0B, 0x6F, 0xEF, 0x34, 0x14, 0x82, 0x3C, 0x61, 0x83, 0x29, 0xF2, 0x5C, 0x15, 0xFE, 0x60,
+        0x07, 0x35, 0xA2, 0xC8, 0x85, 0x17, 0x6E, 0x0D, 0x84, 0xD0, 0x04, 0x8D, 0x2A, 0x68, 0x3D, 0x3C,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

@@ -1497,9 +1497,9 @@ pub const Store = struct {
         defer self.allocator.free(order);
         // The class each classified offset joined: a durable id, or the
         // speculative id of the class's first classified member.
-        const classes = try temp.alloc(?TypeId, suffix_len);
-        @memset(classes, null);
-        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
+        var classes = try collections.OptionalIndexColumn(TypeId).initFilled(temp, suffix_len);
+        defer classes.deinit(temp);
+        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes.view() };
 
         for (order) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
@@ -1523,10 +1523,10 @@ pub const Store = struct {
                         const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
                         std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
                     }
-                    class = classes[earlier];
+                    class = classes.get(earlier);
                 }
             }
-            classes[offset] = class orelse candidate;
+            classes.set(offset, class orelse candidate);
         }
 
         // Each speculative class is represented by its lowest offset, and
@@ -1534,7 +1534,7 @@ pub const Store = struct {
         var class_representatives = collections.DenseMap(TypeId, TypeId).init(temp);
         for (0..suffix_len) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
-            const class = classes[offset].?;
+            const class = classes.get(offset).?;
             if (@backingInt(class) < mark_.types_len) {
                 interned_original[offset] = class;
                 continue;
@@ -3479,14 +3479,14 @@ pub const TypeMatchMode = enum {
 /// whose equality is already decided.
 const SuffixClasses = struct {
     start: u32,
-    classes: []const ?TypeId,
+    classes: collections.OptionalIndexColumn(TypeId).View,
 
     fn resolve(self: SuffixClasses, ty: TypeId) TypeId {
         const index = @backingInt(ty);
         if (index < self.start) return ty;
         const offset = index - self.start;
-        if (offset >= self.classes.len) return ty;
-        return self.classes[offset] orelse ty;
+        if (offset >= self.classes.len()) return ty;
+        return self.classes.get(offset) orelse ty;
     }
 };
 

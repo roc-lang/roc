@@ -14,6 +14,7 @@
 const std = @import("std");
 const storage_work = @import("storage_work.zig");
 const zeroed_pages = @import("zeroed_pages.zig");
+const optional_id = @import("optional_id.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -30,12 +31,7 @@ pub fn ZeroSentinelIndexColumn(comptime Idx: type) type {
 }
 
 fn IndexColumn(comptime Idx: type, comptime reserved_zero: bool) type {
-    comptime {
-        const info = @typeInfo(Idx);
-        if (info != .@"enum" or info.@"enum".tag_type != u32) {
-            @compileError("OptionalIndexColumn stores typed u32 index enums, not " ++ @typeName(Idx));
-        }
-    }
+    const Encoded = if (reserved_zero) optional_id.ZeroSentinelId(Idx) else optional_id.OptionalId(Idx);
     return struct {
         const Self = @This();
 
@@ -53,13 +49,11 @@ fn IndexColumn(comptime Idx: type, comptime reserved_zero: bool) type {
             return .{ .words = words };
         }
 
-        /// A column of `entry_count` absent entries on fresh zero pages, with
-        /// no fill.
-        pub fn initSparse(entry_count: usize) Allocator.Error!Self {
-            const bytes = std.math.mul(usize, entry_count, @sizeOf(u32)) catch return error.OutOfMemory;
-            const pages = try zeroed_pages.map(bytes, .sparse);
-            const words: [*]u32 = @ptrCast(pages.bytes.ptr);
-            return .{ .words = words[0..entry_count], .pages = pages };
+        /// Absent entries on fresh pages for large sparse domains; small
+        /// domains use the shared recycled-allocation-and-fill policy.
+        pub fn initSparse(gpa: Allocator, entry_count: usize) Allocator.Error!Self {
+            const backing = try zeroed_pages.SparseSlice(u32).init(gpa, entry_count);
+            return .{ .words = backing.items, .pages = backing.pages };
         }
 
         /// Free the column.
@@ -93,9 +87,7 @@ fn IndexColumn(comptime Idx: type, comptime reserved_zero: bool) type {
 
             /// The optional index at one entry.
             pub inline fn get(self: View, i: usize) ?Idx {
-                const word = self.words[i];
-                if (word == 0) return null;
-                return @fromBackingInt(if (reserved_zero) word else word - 1);
+                return @as(Encoded, @fromBackingInt(self.words[i])).get();
             }
         };
 
@@ -111,10 +103,7 @@ fn IndexColumn(comptime Idx: type, comptime reserved_zero: bool) type {
 
         /// Store `idx` at entry `i`.
         pub inline fn set(self: *Self, i: usize, idx: Idx) void {
-            const raw: u32 = @backingInt(idx);
-            std.debug.assert(raw < std.math.maxInt(u32));
-            if (reserved_zero) std.debug.assert(raw != 0);
-            self.words[i] = if (reserved_zero) raw else raw + 1;
+            self.words[i] = @backingInt(Encoded.some(idx));
         }
 
         /// Make entry `i` absent.
@@ -179,7 +168,7 @@ test "resizing a filled column adds absent entries" {
 test "a sparse column reads absent without a fill" {
     const filled_before = storage_work.get(.bytes_filled);
     const mapped_before = storage_work.get(.mappings);
-    var column = try OptionalIndexColumn(TestIdx).initSparse(1 << 20);
+    var column = try OptionalIndexColumn(TestIdx).initSparse(testing.allocator, 1 << 20);
     defer column.deinit(testing.allocator);
     try testing.expectEqual(@as(?TestIdx, null), column.get(0));
     try testing.expectEqual(@as(?TestIdx, null), column.get((1 << 20) - 1));
@@ -200,4 +189,15 @@ test "reserved-zero columns store real physical indices without encoding" {
     try testing.expect(column.get(1) == null);
     column.clear(0);
     try testing.expect(column.get(0) == null);
+}
+
+test "small sparse columns use filled recycled storage" {
+    const mappings = storage_work.get(.mappings);
+    var column = try OptionalIndexColumn(TestIdx).initSparse(testing.allocator, 4);
+    defer column.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 0), column.pages.bytes.len);
+    try testing.expectEqual(mappings, storage_work.get(.mappings));
+    for (0..column.len()) |i| try testing.expect(column.get(i) == null);
+    column.set(0, .first);
+    try testing.expectEqual(@as(?TestIdx, .first), column.get(0));
 }

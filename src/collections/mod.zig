@@ -66,6 +66,10 @@ pub const zeroed_pages = @import("zeroed_pages.zig");
 pub const WriteFirstSlice = @import("WriteFirstSlice.zig").WriteFirstSlice;
 /// Optional typed indices in four bytes per entry.
 pub const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndexColumn;
+/// The same compact optional-ID encoding in a persisted POD value.
+pub const OptionalId = @import("optional_id.zig").OptionalId;
+/// Compact optional values for a private one-based ID domain.
+pub const ZeroSentinelId = @import("optional_id.zig").ZeroSentinelId;
 /// Optional physical indices for stores that leave slot zero unused.
 pub const ZeroSentinelIndexColumn = @import("OptionalIndexColumn.zig").ZeroSentinelIndexColumn;
 /// Reset-many scratch keyed by epoch stamps.
@@ -153,6 +157,7 @@ test "collections tests" {
     std.testing.refAllDecls(@import("scc.zig"));
     std.testing.refAllDecls(@import("csr.zig"));
     std.testing.refAllDecls(@import("storage_work.zig"));
+    std.testing.refAllDecls(@import("optional_id.zig"));
     std.testing.refAllDecls(@import("zeroed_pages.zig"));
     std.testing.refAllDecls(@import("WriteFirstSlice.zig"));
     std.testing.refAllDecls(@import("OptionalIndexColumn.zig"));
