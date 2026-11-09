@@ -259,35 +259,26 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
 
 /// Check a platform-owned type module using the production hosted transform.
 pub fn initHosted(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
-    return initConfigured(module_name, source, &.{}, .sealed, true);
+    return initConfigured(module_name, source, &.{}, true, .sealed);
 }
 
 /// `init` leaving the module's type store open (see `StoreAfterCheck`).
 pub fn initOpen(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
-    return initLeaving(module_name, source, &.{}, .open);
+    return initConfigured(module_name, source, &.{}, false, .open);
 }
 
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
-    return initLeaving(module_name, source, explicit_root_names, .sealed);
-}
-
-fn initLeaving(
-    module_name: []const u8,
-    source: []const u8,
-    explicit_root_names: []const []const u8,
-    comptime store_after_check: StoreAfterCheck,
-) TestEnvError!TestEnv {
-    return initConfigured(module_name, source, explicit_root_names, store_after_check, false);
+    return initConfigured(module_name, source, explicit_root_names, false, .sealed);
 }
 
 fn initConfigured(
     module_name: []const u8,
     source: []const u8,
     explicit_root_names: []const []const u8,
-    comptime store_after_check: StoreAfterCheck,
     hosted: bool,
+    comptime store_after_check: StoreAfterCheck,
 ) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
@@ -489,7 +480,7 @@ fn initExprLeaving(module_name: []const u8, comptime source_expr: []const u8, co
     source[source_wrapper.len] = ' ';
     std.mem.copyForwards(u8, source[source_wrapper.len + 1 ..], source_expr);
 
-    var test_env = try TestEnv.initLeaving(module_name, source, &.{}, store_after_check);
+    var test_env = try TestEnv.initConfigured(module_name, source, &.{}, false, store_after_check);
     test_env.owned_source = source;
     return test_env;
 }
