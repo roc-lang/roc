@@ -290,12 +290,21 @@ const ModuleOwners = struct {
     literal_failures: ?*LiteralRootFailures = null,
 
     /// The report destinations of source owned by one lowering module.
+    /// Every report made through them is a literal's, which the program's
+    /// literal roots decide again in every compilation, so each marks its
+    /// store's `unreproducible_reports`.
     const ReportTargets = struct {
         owners: *const ModuleOwners,
         next: ?u32,
         unfinalized: ?ReportDestination,
 
         fn nextTarget(self: *ReportTargets) ?ReportDestination {
+            const target = self.take() orelse return null;
+            if (target.problem_store) |store| store.unreproducible_reports = true;
+            return target;
+        }
+
+        fn take(self: *ReportTargets) ?ReportDestination {
             if (self.unfinalized) |target| {
                 self.unfinalized = null;
                 return target;
@@ -4718,6 +4727,9 @@ fn reportEmbeddedFailure(
         return .reported;
     } else return .none;
     const store = maybe_problem_store orelse return .reported_elsewhere;
+    // The literal root's failure is decided again by every compilation that
+    // makes the root, not by this module alone.
+    store.unreproducible_reports = true;
     const site = comptimeFailureSiteFromLoc(module, &lir_result.store, root_region, embedded.region, embedded.loc);
     if (embedded.kind) |kind| {
         if (literalRejectionReported(store, kind, site.region)) return .reported;
@@ -6952,6 +6964,7 @@ fn appendCompileTimeExhaustivenessProblem(
             finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
         };
         const owning_root: ?checked.ComptimeRootId = if (site_owner == root_owner) root.id else null;
+        if (site_owner != root_owner) problem_store.unreproducible_reports = true;
         if (!comptimeSiteMayResolvePending(owner.module, owning_root, checked_site)) {
             const site_record = owner.module.exhaustiveness_sites.get(checked_site);
             if (!site_record.requires_pairing) switch (site_record.policy) {
@@ -7147,6 +7160,9 @@ const ComptimeFailureSite = struct {
     /// materialized per specialization).
     foreign: ?struct {
         module_name: []const u8,
+        /// Whether `module_name` is the declaring module's package-qualified
+        /// name, which is workspace information.
+        qualified: bool,
         line: u32,
         column: u32,
     },
@@ -7191,6 +7207,7 @@ fn comptimeFailureSiteFrom(
         false;
     return .{ .region = root_region, .foreign = .{
         .module_name = if (bare_name_collides) file.qualified_name else file.name,
+        .qualified = bare_name_collides,
         .line = loc.line,
         .column = loc.column,
     } };
@@ -7221,6 +7238,7 @@ fn comptimeFailureOrigin(
     site: ComptimeFailureSite,
 ) Allocator.Error!?check.problem.types.ComptimeOrigin {
     const foreign = site.foreign orelse return null;
+    if (foreign.qualified) problem_store.unreproducible_reports = true;
     return .{
         .module_name = try problem_store.putExtraString(foreign.module_name),
         .line = foreign.line,

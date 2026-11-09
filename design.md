@@ -2016,9 +2016,9 @@ belongs to no checked module, so nothing retains its failure between
 compilations except the checked results that embed it: a checked root that
 stops at a literal root's value guard, or reaches a rejected literal inline,
 reports that failure in its own module, naming the literal as the failure's
-origin, which keeps that module from being cached clean while its result holds
-the failure. A failed literal root that no checked root embeds is reported at
-its literal once finalization is done. A module whose finalization completed in
+origin, which keeps that module's checked entry from being written while its
+result holds the failure. A failed literal root that no checked root embeds is
+reported at its literal once finalization is done. A module whose finalization completed in
 an earlier compilation receives such a report through the coordinator's report
 destination for it, without its cached result changing; a literal in the
 builtin module, which belongs to no package, is rendered against the builtin
@@ -2294,12 +2294,17 @@ and its demanded pending roots evaluate against the same checked module data
 through the same declared root functions an uncached compilation uses.
 Afterwards every requested root still pending is `unevaluated` again, and the
 module is written to the checked module cache again only when this
-compilation evaluated a root it lacked. A module is cached only when checking
-and evaluation add no reports beyond those present before checked-cache lookup.
-Earlier parsing and canonicalization reports are reproduced before that lookup,
-so they do not prevent reuse and are not emitted again by the checked module data.
-An entry therefore never holds a new checking or evaluation diagnostic that a
-later compilation's evaluation could contradict.
+compilation evaluated a root it lacked. A checked entry holds the reports its
+module's checking and evaluation produced ("Cache Boundary"), and a reopened
+module continues from them: its evaluation starts from the entry's problems,
+already reported, with the imports and display names a cold evaluation renders
+with, so the reports it adds and the entry it writes again are those of one
+uninterrupted evaluation. An entry holds evaluation reports only when no
+requested root is unevaluated under any specialization strategy, so no later
+compilation reopens it and adds evaluation reports after stored ones in an order
+one evaluation would not produce. Earlier parsing and canonicalization reports
+are reproduced by their own caches before checked-cache lookup and are not part
+of the checked entry.
 
 Every command reports the compile-time failures of every root, including
 those a cache entry left unevaluated.
@@ -2367,7 +2372,8 @@ the environment, checking metadata and finalized CheckedModule once to one priva
 file, then closes and atomically installs it. It never stages an environment
 for later rereading or copying. Failed writes leave only private staging data.
 One finalized snapshot is retained, not an implementation history. Only
-entries whose checking and evaluation add no diagnostics are stored. No
+entries whose checking and evaluation reports satisfy the replay contract
+("Cache Boundary") are stored. No
 source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation
 certificate is persisted under a source placement.
@@ -4255,21 +4261,21 @@ literal-values file and no discovery manifest.
 
 A checked entry holds exactly the live data of the checked module ("The Live
 Checked Module"): the serialized `ModuleEnv` including the sealed solver
-store, the inference output, and the evaluation output. Derived data (type-content
+store, the inference output, and the evaluation output, together with the
+reports the module's checking and evaluation produced. Derived data (type-content
 type keys, evidence, synthesized templates, demand vectors, layouts) are never
 cached; after a hit, each is recomputed on its first demand through its slot
 ("On-Demand Analyses And Write-Once Slots"). An entry is written only when a
 cache is enabled; a `--no-cache` build serializes nothing.
 
 A platform/app pairing entry is keyed by the content hashes of the platform's
-and the app's checked entries. It holds only the pairing's evaluation output:
-the completed app-dependent evaluation results and their recorded debug
-observations. It never holds bodies, types, templates, source environments or a
-live checker continuation, because a pairing rewrites none of those. Only a
-completed pairing without new checking or evaluation diagnostics may be
-cached; already-replayed earlier-stage reports do not prevent caching. A hit
-consumes its stored outcomes and replays its recorded debug observations without
-evaluation.
+and the app's checked entries. It holds the pairing-owned changed columns,
+completed app-dependent evaluation results, recorded debug observations,
+and reports. Unchanged checked columns and source environments remain owned
+by the platform; the entry contains no live checker continuation. Only a completed pairing may be
+cached, under the same report rule as a checked module below. A hit consumes
+its stored outcomes, reports its stored reports and replays its recorded debug
+observations without evaluation.
 The canonicalized module cache is a separate, non-checked boundary; the rules
 below bind the checked module and pairing caches.
 Checked module cache entries are trusted compiler-produced data, not adversarial
@@ -4285,13 +4291,34 @@ hoisted roots, reconstructs checked data or walks expressions to prove cached
 output complete. Correctness belongs to the producer; invalidation belongs to
 the source/import key and explicit format versions.
 
-The coordinator captures each module's report count immediately before checked
-cache lookup, after parsing and canonicalization reports have been appended.
-Checking (including the deferred import drain) and evaluation only append to
-that same report list. `BuildEnv` moves those reports into its output sink only
-after finalization or when aborting. The cache write requires that the count
-has not changed, that evaluation has completed and, for a reopened cache
-entry, that this compilation completed roots the entry lacked. The write
+Checking records its problems in the checker's problem store and evaluation
+appends its own to the same store. An entry stores them as `CheckedReports`:
+every problem with the store's strings, the count of checking's, the snapshots
+and regions checking's problems render with (copied out of the checker before
+it is released), and the checker's import display names. A hit reports, after
+parsing and canonicalization reports and before anything else is appended,
+the diagnostics import resolution recorded on the env beyond canonicalization's,
+then checking's problems and evaluation's, rendered by the same report
+builders a miss uses against the current filename, source, imports and
+platform. A warm build therefore prints the same reports in the same order, with
+the same exit code, as a cold one. A module with type errors is checked,
+evaluated, stored and reused like any other module: its errors are reports, its
+roots that reach code checking rejected are failed roots, and its importers
+check against the same artifact whether it was loaded or checked. `BuildEnv`
+moves the reports into its output sink only after finalization or when
+aborting.
+
+Some evaluation problems are ones an entry cannot reproduce: a literal's
+rejection or a literal root's failure, which the program's literal roots decide
+again in every compilation; an empirical exhaustiveness failure another
+module's root reached; and a failure located in another module that is named by
+that module's package-qualified name, which is workspace information rather
+than part of the entry's identity. Evaluation marks the problem store it
+reports such a problem to (`problem.Store.unreproducible_reports`).
+The cache write requires that evaluation has completed, that the store has no
+such problem, that an entry with evaluation reports has no requested root
+unevaluated under any strategy, and, for a reopened cache entry, that this
+compilation completed roots the entry lacked. The write
 serializes the live `ModuleEnv` with its sealed solver store, which stays
 alive for every consumer of the module either way; serializing never releases
 or replaces it. A failed write is an ordinary cache-write failure: the
