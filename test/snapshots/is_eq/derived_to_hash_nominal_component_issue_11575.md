@@ -226,7 +226,7 @@ y = Dict.empty().insert(k, 99)
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "frob") (constraint-fn-var 344)
+								(e-dispatch-call (method "frob") (constraint-fn-var 347)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "v"))))
@@ -269,7 +269,7 @@ y = Dict.empty().insert(k, 99)
 	(d-let
 		(p-assign (ident "y"))
 		(e-runtime-error (tag "erroneous_value_expr")
-			(e-call (constraint-fn-var 391)
+			(e-call (constraint-fn-var 394)
 				(e-lookup-external
 					(builtin)))
 			(e-lookup-local

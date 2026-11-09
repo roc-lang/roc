@@ -1,6 +1,9 @@
 ParserMissingRenameFieldMethod :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
 	parse_str = |_, state|
 		match state {
@@ -38,9 +41,9 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parse : State -> Try(a, [FormatError, ..errs])
+parse : State -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -49,5 +52,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ foo : Str }, [FormatError, MissingRequiredField(Str)])
+main : Try({ foo : Str }, [FormatError])
 main = parse(State.Present("abc"))

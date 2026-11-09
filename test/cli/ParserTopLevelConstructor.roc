@@ -1,6 +1,9 @@
 ParserTopLevelConstructor :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name|
 		if Str.is_eq(name, "foo_bar") {
@@ -76,7 +79,7 @@ find_field = |fields, name| {
 
 Shape : { foo_bar : Str }
 
-parse_shape : State -> Try({ value : { foo_bar : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_shape : State -> Try({ value : { foo_bar : Str }, rest : State }, [FormatError])
 parse_shape = Shape.parser_for(Format.Default)
 
 expect {
