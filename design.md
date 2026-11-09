@@ -2305,6 +2305,11 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+An ineligible callable root remains an instantiation template: its pending
+payload is not a promise of a stored value. Boxy instantiates its declared
+wrapper at each use's type arguments, including open result rows. An eligible
+pending root instead requires its compile-time producer; runtime lowering
+must never compute that missing value.
 Within each immutable root-output batch, concreteness and reachable
 callable-slot queries reuse completed graph proofs. Concreteness keys include
 whether a node is a value type or a nominal declaration's backing template:
@@ -5351,7 +5356,9 @@ from the bound app procedure kind using the checked output rule;
 callable-evaluation bindings remain indirect unless they are exact procedure
 aliases, which forward (see "Procedure Aliases"). Exact procedure aliases whose
 required bindings are known through the pairing use the checked forwarding
-rule and require no compile-time evaluator. Completed independent roots are
+rule and require no compile-time evaluator. The pairing outputs and caches
+these forwarding proofs; it cannot borrow proofs made before the requirements
+were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
@@ -5382,6 +5389,13 @@ id) for resolution. The locator is valid for exactly as long as the entry that
 stores it, because that entry's content hash covers the referenced module.
 Resolving a type from its key alone (bump, glue) builds the owning module's
 key index on first demand, through the module's index slot.
+
+Within one module, representative type ids preserve variable identity and otherwise
+select the lowest source id, then the lowest synthesized id, with the same
+key. Each settled type remembers that answer atomically, so repeated lowering
+queries do not repeat key-index lookups. Pending synthesized graphs never
+record an answer. These process-local memos are not serialized and pairing
+stores own their synthesized memos independently.
 
 Type digests, type content keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
@@ -5488,14 +5502,14 @@ Generic allocator storage is not assumed to be zero. No bulk initialization,
 debug poisoning, slot destruction scan, huge-page advice or custom fault handler
 touches the mapping. Compile-time checks require the empty slot state to be
 encoded as zero and the atomic state representation to remain compatible.
-A slot's result is read only after its claimant writes it and publishes done.
+A slot's result is read only after its claimant writes it and stores `done` with release ordering.
 The identity array and key computation remain unchanged.
 
 Compiler-WASM selects a different storage backend at compile time: a directory
-of fixed 64-slot heap pages, each explicitly initialized before publication.
+of fixed 64-slot heap pages, each explicitly initialized before readers can access it.
 WASM linear memory and its recycling allocator do not provide independent,
 releasable OS mappings. Unsupported native hosts require an explicit backend.
-An allocation failure never changes backends. Storage publication completes
+An allocation failure never changes backends. Storage initialization completes
 before the request claims a key or locks the shared writer. Directory, page
 and key claims have distinct kinds where present. Slot addresses never move,
 and their owner releases storage only after all readers finish. Native mapping
@@ -5506,7 +5520,7 @@ from reserved virtual key bytes. Neither measures resident RAM. It counts
 successful key computations under the existing writer lock, incrementing only
 after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
-before its slot publishes; quiescent counts equal completed keys. No key
+before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
 
 There is no scheduling edge between modules. A module's analyses are never
@@ -10372,7 +10386,10 @@ converts instead (Sealed Result Rows); the checker is the same for both.
 **Where joins come from.** Every place a value's rows flow into another's:
 a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
-function's `Try` result. These are edges between types, not between rows:
+function's `Try` result. Generated `try_sequence` and `try_record_sequence`
+forward the input error payload to either their shared error continuation or
+their own result's error payload; both forms carry the same row-join edge.
+These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
@@ -14151,6 +14168,8 @@ of the component's type; for a list, box, recursion box, or nominal type the
 names block of its item, payload, or backing. A type with no record field
 or tag in its reach has none (null). Blocks are built by descriptor key, each
 reserved before its components', so a recursive type's block reaches itself.
+Filling follows an explicit worklist, so deep types consume heap storage rather
+than native stack frames.
 
 Only code that reflects over a type reads a names block: `dyn_inspect`
 (`Str.inspect`, `dbg`, and the rendered value of a failed `expect`'s `Err`)
@@ -14411,7 +14430,7 @@ for the cases listed:
   for every other size.
 - `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
   zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
-- `dyn_field_addr` with an immediate semantic index follows nominal `child`
+- `dyn_field_addr` with an immediate source-field index follows nominal `child`
   links to the record, reads the field's memory slot from that index's
   `entries` row, and adds that field's `offset` to the base. A field whose
   descriptor is a recursion box, and an index held in a `field_index` table
@@ -14695,9 +14714,12 @@ descriptor, its second word the capture capacity of the allocation holding it
 (the record's size when the callable is first packed; an allocation repacked
 in place keeps its capacity), and the callable's `on_drop` is the shared
 runtime drop that reads the first word. When every capture is of closed type,
-the capture record has a static layout and `on_drop` is the per-worker helper
-the backend generates for that layout. Zero-capture functions are static,
-immortal callables. The `out_desc` slot of the erased-callable ABI is always
+the capture record has a static layout and `on_drop` names that layout's helper
+only when it contains refcounted data. The callback is optional, not a
+requirement of every exposed callable handle. Immortal static recipe wrappers
+need no callback: their descriptor and callable words own no runtime units,
+and decrementing a static allocation never invokes final-drop logic.
+Zero-capture functions are static, immortal callables. The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
@@ -15371,7 +15393,7 @@ read. The module's remaining roots then restore the stored values.
 
 The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
 `.lss` evaluator fills, because a recipe means nothing to Monotype. Each producer
-publishes its own function representation without replacing the other's. A
+stores its own function representation without replacing the other's. A
 Boxy-first root leaves the LSS payload `.unevaluated`; an LSS-first root keeps
 its completed payload when Boxy adds its capture graph. The constant writer
 records whether the LSS root's materialization plan contains functions,
@@ -15382,12 +15404,12 @@ representation is pending even when the other strategy has completed its value.
 Coordinator object eligibility, evaluation selection and Boxy reads use this
 same view. Pending reads use the existing compile-time root slots; runtime
 lowering never reconstructs another strategy's callable captures. Non-function
-values remain shared. Publishing another representation replaces that root's
+values remain shared. Storing another representation replaces that root's
 previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before
 serialization, since its consumers cannot reopen it. A platform pairing keeps
 the declared requests for inherited values still missing either representation;
-semantic completion alone does not remove their producers from the schedule.
+completion by one strategy alone does not remove their producers from the schedule.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization
@@ -17607,7 +17629,9 @@ its final `alias_target`, and a callable-eval template carries its
 `forwarded_lookup` when the lookup reaches a directly callable procedure (an
 ordinary template, a hosted procedure, or another forwarding alias, to a fixed
 point). An alias of a function-valued constant is not a forward; calling it
-calls the evaluated value.
+calls the evaluated value. Root-request output and platform pairing omit
+evaluation only for this explicit forwarding proof, not for the lookup's
+procedure-reference shape: a computed callable alias still needs its value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
@@ -20968,10 +20992,11 @@ callee can return with a call pending, and on each deferred call:
 - `none`: nothing can be pending after the statement.
 - `handed_up`: this procedure returns the value unchanged to a caller that
   makes the pending call, and until then the statement's target holds no
-  value. Only reference-count statements and jumps into a join body may
-  separate the call from the return; a pending call owns its closure and
-  every argument, so running those statements first releases nothing it
-  reads.
+  value. Only reference-count statements, residual-release field reads
+  explicitly marked `arc_dismantle`, and jumps into a join body may separate
+  the call from the return. The field reads neither dismantle, read, nor
+  overwrite the pending result. A pending call owns its closure and every
+  argument, so running that cleanup first releases nothing it reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary

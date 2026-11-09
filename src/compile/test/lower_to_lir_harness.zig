@@ -115,6 +115,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     lir.CheckedPipeline.LowerResourceError ||
+    @import("static_data").MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -1202,6 +1203,7 @@ fn lowerAppPathToLir(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = opts.specialization_strategy;
 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
@@ -1329,6 +1331,16 @@ fn lowerAppPathToLir(
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
+    if (inspect_lowered != null) {
+        // Executing a lowered program requires the same static-data
+        // materialization that a linked program receives.
+        const exports = try @import("static_data").buildStaticDataForWidth(gpa, .{
+            .root = lower_modules.root,
+            .imports = lower_modules.imports,
+        }, &lowered, opts.target_usize, .{});
+        if (lowered.frozen_static_data) |*previous| previous.deinit();
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
 
     if (dump) |writer| {
         const store = &lowered.lir_result.store;
