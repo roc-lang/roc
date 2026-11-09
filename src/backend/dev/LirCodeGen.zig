@@ -14531,7 +14531,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// runtime makes the calls left in it.
         fn emitOwnPendingCell(self: *Self, invocation: ?i32) Allocator.Error!void {
             const word = @sizeOf(u64);
-            const cell = self.codegen.allocStackSlot(builtins.native_callable.pending_words * word);
+            const cell = self.codegen.allocStackSlot(builtins.native_callable.pendingByteSize(word));
             const slot = self.codegen.allocStackSlot(word);
             const reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(reg, 0);

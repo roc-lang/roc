@@ -5141,7 +5141,7 @@ pub const MonoLlvmCodeGen = struct {
     /// An empty pending cell in this frame.
     fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const word_size = self.targetWordSize();
-        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pendingByteSize(word_size), LlvmBuilder.Alignment.fromByteUnits(builtins.native_callable.pendingAlignment(word_size)), "pending_cell");
         for (0..builtins.native_callable.zeroed_words) |i| {
             try self.storePointer(try self.offsetPtr(cell, @intCast(i * word_size)), try self.nullPtr());
         }

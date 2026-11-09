@@ -52,8 +52,27 @@ pub const Pending = extern struct {
     inline_args: [inline_args_words]usize = undefined,
 };
 
-/// The words of a `Pending`, for backends reserving one in a frame.
-pub const pending_words = @sizeOf(Pending) / @sizeOf(usize);
+// Every field before inline_args is a pointer-sized word or array of words.
+// Derive their count from the ABI declaration, not from the whole cell size.
+const pending_header_words = @offsetOf(Pending, "inline_args") / @sizeOf(usize);
+
+/// Target-width storage for a `Pending`: its header and its explicitly
+/// word-sized inline packet. Backends initialize `zeroed_words` leading words.
+pub fn pendingByteSize(word_size: u32) u32 {
+    return std.mem.alignForward(u32, (pending_header_words + inline_args_words) * word_size, pendingAlignment(word_size));
+}
+
+/// The pending header requires target-word alignment; inline bytes require no more.
+pub fn pendingAlignment(word_size: u32) u32 {
+    std.debug.assert(word_size == 4 or word_size == 8);
+    return word_size;
+}
+
+comptime {
+    std.debug.assert(@offsetOf(Pending, "inline_args") % @sizeOf(usize) == 0);
+    std.debug.assert(@sizeOf(Pending) == pendingByteSize(@sizeOf(usize)));
+    std.debug.assert(@alignOf(Pending) == pendingAlignment(@sizeOf(usize)));
+}
 
 /// The leading words of a `Pending` a backend zeroes when it reserves one:
 /// `callable` and `spare`. The rest is written before it is read.
@@ -376,6 +395,14 @@ const TestCalls = struct {
     }
 };
 
+test "pending cell storage preserves its header and inline words at each target width" {
+    try std.testing.expectEqual(@as(u32, 104), pendingByteSize(4));
+    try std.testing.expectEqual(@as(u32, 208), pendingByteSize(8));
+    try std.testing.expectEqual(@as(u32, 4), pendingAlignment(4));
+    try std.testing.expectEqual(@as(u32, 8), pendingAlignment(8));
+    try std.testing.expectEqual(@sizeOf(Pending), pendingByteSize(@sizeOf(usize)));
+}
+
 test "native callable trampoline preserves arguments and releases every deferred closure" {
     var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
     defer env.deinit();
@@ -523,6 +550,8 @@ test "threads driving deferred calls at once keep their chains apart" {
 }
 
 const PacketTest = struct {
+    const max_bytes = inline_args_bytes + 65;
+
     fn read(ops: *erased.RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, reuse: ?[*]u8, out: usize) callconv(.c) void {
         if (reuse) |owned| erased.decref(owned, ops);
         const bytes = args.?;
@@ -532,13 +561,13 @@ const PacketTest = struct {
         // the current packet AFTER deferral catches aliasing of active and
         // pending storage, even when both packets fit inline.
         if (len > 1) {
-            var next: [97]u8 = undefined;
-            const next_len: usize = if (len == 97) 33 else if (len == 33) 32 else if (len == 32) 31 else 1;
+            var next: [max_bytes]u8 = undefined;
+            const next_len: usize = if (len == max_bytes) inline_args_bytes + 1 else if (len == inline_args_bytes + 1) inline_args_bytes else if (len == inline_args_bytes) inline_args_bytes - 1 else 1;
             @memset(next[0..next_len], @intCast(next_len));
             const closure = erased.allocate(@ptrCast(&read), &TestCalls.drop, 0, ops);
             deferCall(pending, @ptrCast(&read), closure, &next, next_len, false);
         }
-        if (len == 33) {
+        if (len == inline_args_bytes + 1) {
             var nested: [8]u8 = undefined;
             call(@ptrCast(&TestCalls.writesOutput), &nested, null, null, null);
             if (std.mem.readInt(u64, &nested, .little) != 7) {
@@ -561,9 +590,9 @@ test "native callable packets preserve active bytes across inline and heap trans
     defer env.deinit();
     const saved = host.enter(env.getOps(), null);
     defer host.leave(saved);
-    for ([_]usize{ 1, 31, 32, 33, 97 }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
+    for ([_]usize{ 1, inline_args_bytes - 1, inline_args_bytes, inline_args_bytes + 1, PacketTest.max_bytes }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
         var cell: Pending = .{};
-        var source: [97]u8 = undefined;
+        var source: [PacketTest.max_bytes]u8 = undefined;
         @memset(source[0..len], @intCast(len));
         const closure = erased.allocate(@ptrCast(&PacketTest.read), &TestCalls.drop, 0, env.getOps());
         const before = env.getAllocationCount();

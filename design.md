@@ -454,6 +454,9 @@ frozen address relocation when embedding a constant root. Private allocations
 retain hidden visibility and do not become host exports. A combined code/data
 object keeps local binding for private allocations because those references
 remain inside that object.
+Zero-sized definitions still belong to a defined section, even when it has no
+payload bytes; omitting that section must not turn a definition into an external
+declaration.
 
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
@@ -21822,8 +21825,9 @@ becomes the cell's spare, which the next large block is copied to when it fits
 (otherwise the spare is replaced by a block of the larger size), so a chain of
 large-argument calls holds two blocks however long it runs: the one the
 running call reads and the one it leaves pending. Every drive frees the spare
-when its chain ends. Backends size the cell from `native_callable.pending_words`
-and zero its first `native_callable.zeroed_words` words (the pending callable
+when its chain ends. Backends use `native_callable.pendingByteSize` and
+`pendingAlignment` at the target word width, and zero the first
+`native_callable.zeroed_words` words (the pending callable
 and the spare) when they reserve it; the runtime writes everything else before
 reading it.
 
@@ -21877,7 +21881,10 @@ function, and `returns_pending` becomes a query of the pending record
 followed by a return. Pending state belongs exclusively to the waiter's
 frame, including its argument packet. Packets of at most 32 bytes occupy
 inline byte storage in the cell; larger packets occupy an exact-sized host
-allocation. The driver copies an inline packet into separate 16-byte-aligned
+allocation. Backends obtain the cell's target-width byte size and alignment
+from `native_callable`; the header and the sixteen-word inline packet follow
+the target's pointer width, including the spare-block ownership fields.
+The driver copies an inline packet into separate 16-byte-aligned
 invocation storage before calling, so a subsequent deferral cannot overwrite
 arguments the active callee still reads. Heap packets remain owned by that
 invocation until it returns. Storage selection uses the explicit packet byte
