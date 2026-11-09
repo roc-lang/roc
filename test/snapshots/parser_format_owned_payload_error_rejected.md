@@ -74,7 +74,7 @@ PARSER ERROR TYPE MISMATCH - parser_format_owned_payload_error_rejected.md:27:10
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,LowerIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,OpBar,OpenCurly,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,Comma,OpenCurly,
 LowerIdent,OpColon,StringStart,StringPart,StringEnd,Comma,
@@ -120,7 +120,14 @@ EndOfFile,
 						(ty (name "Format"))
 						(ty-apply
 							(ty (name "Encoding.ParseTagUnionSpec"))
-							(ty-var (raw "a")))
+							(ty-var (raw "a"))
+							(ty (name "Format"))
+							(ty (name "Str"))
+							(ty-tag-union
+								(tags
+									(ty-apply
+										(ty (name "Syntax"))
+										(ty (name "Str"))))))
 						(ty (name "Str"))
 						(ty-apply
 							(ty (name "Try"))
@@ -278,7 +285,7 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 Format := {}.{
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, Str, [Syntax(Str)]), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
 	parse_tag_union = |encoding, spec, state| {
 		result = Encoding.ParseTagUnionSpec.parse(
 			spec,
@@ -326,7 +333,7 @@ expect {
 			(e-block
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 547)
+					(e-call (constraint-fn-var 564)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -404,7 +411,7 @@ expect {
 															(p-assign (ident "#interp_0"))
 															(e-lookup-local
 																(p-assign (ident "message"))))
-														(e-interpolation (constraint-fn-var 583) (dispatcher-var 78)
+														(e-interpolation (constraint-fn-var 600) (dispatcher-var 83)
 															(first
 																(e-literal (string "caught ")))
 															(parts
@@ -415,7 +422,12 @@ expect {
 			(ty-fn (effectful false)
 				(ty-lookup (name "Format") (local))
 				(ty-apply (name "Encoding.ParseTagUnionSpec") (builtin)
-					(ty-rigid-var (name "a")))
+					(ty-rigid-var (name "a"))
+					(ty-lookup (name "Format") (local))
+					(ty-lookup (name "Str") (builtin))
+					(ty-tag-union
+						(ty-tag-name (name "Syntax")
+							(ty-lookup (name "Str") (builtin)))))
 				(ty-lookup (name "Str") (builtin))
 				(ty-apply (name "Try") (builtin)
 					(ty-record
@@ -476,7 +488,7 @@ expect {
 			(e-match
 				(match
 					(cond
-						(e-call (constraint-fn-var 660)
+						(e-call (constraint-fn-var 676)
 							(e-lookup-local
 								(p-assign (ident "parse")))
 							(e-string
@@ -504,7 +516,7 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Format, Encoding.ParseTagUnionSpec(a), Str -> Try({ rest: Str, value: a }, [Syntax(Str)])"))
+		(patt (type "Format, Encoding.ParseTagUnionSpec(a, Format, Str, [Syntax(Str)]), Str -> Try({ rest: Str, value: a }, [Syntax(Str)])"))
 		(patt (type "Format -> (Str -> Try({ rest: Str, value: Payload }, [PayloadError(Str)]))")))
 	(type_decls
 		(nominal (type "Format")
@@ -514,6 +526,6 @@ expect {
 		(alias (type "Shape")
 			(ty-header (name "Shape"))))
 	(expressions
-		(expr (type "Format, Encoding.ParseTagUnionSpec(a), Str -> Try({ rest: Str, value: a }, [Syntax(Str)])"))
+		(expr (type "Format, Encoding.ParseTagUnionSpec(a, Format, Str, [Syntax(Str)]), Str -> Try({ rest: Str, value: a }, [Syntax(Str)])"))
 		(expr (type "Format -> (Str -> Try({ rest: Str, value: Payload }, [PayloadError(Str)]))"))))
 ~~~
