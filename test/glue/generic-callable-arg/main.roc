@@ -10,10 +10,10 @@ platform "glue-generic-callable-arg"
 import Shapes
 
 handler : {} -> Shapes.Handler(U64)
-handler = |_| H(|_| {})
+handler = |_| H(Box.box(|_| {}))
 
 stepper : {} -> Box(U64 -> Shapes.Step)
 stepper = |_| Box.box(|n| if n == 0 Done else Emit(n))
 
 adder : {} -> Box(Shapes.Adder)
-adder = |_| Box.box(Shapes.Adder.(|x| x + 1))
+adder = |_| Box.box(Shapes.Adder.(Box.box(|x| x + 1)))

@@ -18705,9 +18705,9 @@ fn customGlueUnresolvedByValueErrors(io: std.Io, allocator: Allocator, env: *con
 
 fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A platform whose provided entrypoint returns an opaque nominal record
-    // holding a function-typed field. Layout selection stores such a record
-    // behind a compiler-owned box (the recursive-slot storage for closures
-    // that capture the record), so the host receives a pointer to a payload
+    // holding a directly boxed function field. Its compiler-owned record
+    // allocation does not exempt that field from the direct-boxing rule.
+    // The host receives a pointer to a payload
     // struct whose only field is an erased callable. Glue describes exactly
     // that committed layout.
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
@@ -18810,9 +18810,9 @@ fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const Ca
     // committed layouts (`Box(U64 -> Step)`) carries them, so its argument
     // and result types are emitted for the host to fill its buffers. One
     // inside a generic nominal whose argument mentions the type parameter
-    // (`Handler(a) := [H({ y : a } -> {})]`) is opaque, since the compiler has
+    // (`Handler(a) := [H(Box({ y : a } -> {}))]`) is opaque, since the compiler has
     // no standalone layout for the instantiated argument. `Box` of a nominal
-    // whose backing is a function stays a box cell, exactly as the compiler
+    // whose backing is a boxed function stays a separate box cell, exactly as the compiler
     // committed it.
     return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
         .zig = &.{

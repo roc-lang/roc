@@ -1464,13 +1464,13 @@ const StaticInitializerMachine = struct {
         const source = switch (step.target) {
             .allocation => |id| blk: {
                 if (step.addend != 0) staticDataInvariant("a sequence step must name an allocation's payload");
-                break :blk &self.allocations.items[@backingInt(id)].payload;
+                break :blk self.allocations.items[@backingInt(id)].payload;
             },
             .frozen_symbol => |id| blk: {
                 const symbol = self.lowered.frozen_static_data.?.exports[@backingInt(id)];
                 const start = symbol.symbol_offset + @as(usize, @intCast(step.addend));
                 if (start > symbol.bytes.len) staticDataInvariant("a frozen sequence step exceeds its allocation");
-                break :blk try self.readFrozenRange(id, target_layout, start, symbol.bytes.len - start);
+                break :blk (try self.readFrozenRange(id, target_layout, start, symbol.bytes.len - start)).*;
             },
             .procedure, .rc_helper => staticDataInvariant("a sequence step must be an erased allocation"),
         };

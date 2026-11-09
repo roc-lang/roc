@@ -713,6 +713,7 @@ pub const Evaluation = struct {
                 .desc => |desc| {
                     try static_descs_file.appendKeyWord(allocator, key, @backingInt(if (desc.substitute_inputs) try program.substitute(allocator, desc.ty, bound) else desc.ty));
                     // The variables' scopes are part of the descriptor.
+                    try static_descs_file.appendKeyWord(allocator, key, if (desc.substitute_inputs) self.desc_count else 0);
                     if (desc.substitute_inputs) {
                         for (self.inputs[0..self.desc_count]) |input| try static_descs_file.appendCaptureWordKey(allocator, key, input);
                     }

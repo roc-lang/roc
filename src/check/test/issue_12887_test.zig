@@ -79,6 +79,22 @@ test "issue 12887: host boundary requires direct boxing at every occurrence" {
     }
 }
 
+test "issue 12887: rejected growing nominals do not expand at the boundary" {
+    var env = try TestEnv.init("Test",
+        \\platform ""
+        \\    requires {} {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\Growing(a) := [Stop, Next(Box(a), List(Growing(List(a))))]
+        \\entry : Growing(U64) -> U64
+        \\entry = |_x| 0
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Invalid Recursive Type");
+}
+
 test "issue 12887: nominal parameters retain their actual boxing position" {
     const cases = [_]struct { ty: []const u8, valid: bool }{
         .{ .ty = "Safe(U64 -> U64)", .valid = true },
@@ -90,6 +106,8 @@ test "issue 12887: nominal parameters retain their actual boxing position" {
         .{ .ty = "Safe(Iter(U8))", .valid = true },
         .{ .ty = "Tree(Box(U64 -> U64))", .valid = true },
         .{ .ty = "Tree(U64 -> U64)", .valid = false },
+        .{ .ty = "Later(U64)", .valid = false },
+        .{ .ty = "LaterSafe(U64)", .valid = true },
         .{ .ty = "Alias", .valid = true },
         .{ .ty = "{ a : Box(U64 -> U64), b : U64 -> U64 }", .valid = false },
     };
@@ -106,6 +124,8 @@ test "issue 12887: nominal parameters retain their actual boxing position" {
             \\Opaque(a) :: {{ value : a }}
             \\IteratorWrapper := {{ items : Iter(U8) }}
             \\Tree(a) := [Leaf(a), Branch(List(Tree(a)))]
+            \\Later(a) := [Done, More(Box(a), List(Later(List(U64 -> U64))))]
+            \\LaterSafe(a) := [Done, More(Box(a), List(LaterSafe(Box(U64 -> U64))))]
             \\Alias : Box(Iter(U8))
             \\
             \\entry : ({s}) -> U64

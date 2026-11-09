@@ -714,14 +714,9 @@ fn buildGluePlugin(
         codegen.emit_debug_info = opt == .dev;
         defer codegen.deinit();
 
-        var helpers = std.ArrayList(layout.RcHelperKey).empty;
-        defer helpers.deinit(gpa);
-        for (lowered.frozen_static_data.?.exports) |data_export| {
-            for (data_export.relocations) |relocation| {
-                if (relocation.rc_helper) |helper| try helpers.append(gpa, helper);
-            }
-        }
-        codegen.static_data_rc_helpers = helpers.items;
+        const helpers = try compile.static_data_exports.collectRequiredRcHelpers(gpa, lowered.frozen_static_data.?.exports);
+        defer gpa.free(helpers);
+        codegen.static_data_rc_helpers = helpers;
         codegen.setStaticDataExports(lowered.frozen_static_data.?.exports) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.CompilationFailed, error.UnsupportedLowLevel => return error.CompilationFailed,
