@@ -91,6 +91,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -156,11 +157,18 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         function_unit: ?[32]u8 = null,
         exports_unrelated: bool,
     };
+    var completed = false;
     for ([_]Case{
         .{ .compile_time = true, .exports_unrelated = false },
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
     }) |case| {
+        // Runtime producers consume completed roots, unlike the evaluator
+        // consumer above whose pending roots are the subject of the test.
+        if (!case.compile_time and !completed) {
+            try coord.finishCheckedProgram(.executable_artifacts);
+            completed = true;
+        }
         // Restored checked modules have their CIR and published tables, but
         // fresh analysis slots. Preparation must not demand every visible
         // module's bodies; this unit emits only Library's workers.

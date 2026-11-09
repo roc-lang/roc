@@ -3986,6 +3986,7 @@ test "Boxy error reachability Program owns one lazy memo and releases it before 
     const allocator = std.testing.allocator;
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(allocator);
+    checked_types.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
     const bad = try checked_types.appendSyntheticPayloadRoot(allocator, .err);
     const root = try checked_types.appendSyntheticPayloadRoot(allocator, .{ .tuple = try allocator.dupe(checked.CheckedTypeId, &.{bad}) });
     var view: checked.ImportedModuleView = undefined;

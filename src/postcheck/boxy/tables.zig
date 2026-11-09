@@ -590,12 +590,12 @@ pub const Evaluation = struct {
             slot.* = describedType(input);
             try self.appendScope(&entries, input);
         }
-        const closed = try program.substitute(self.allocator, ty, bound);
-        if (!program.store.isClosed(closed)) invariant("a table's descriptor recipe is open at its instantiation");
+        const closed = try program.substituteRepresentation(self.allocator, ty, bound);
+        if (!try program.converter().representationClosed(closed)) invariant("a table's descriptor recipe is open at its instantiation");
         for (scoped) |override| {
             var methods: [3]?StaticDescs.CaptureWord = .{ null, null, null };
             for (&methods, override.methods) |*method, maybe| method.* = if (maybe) |operand| self.operandWord(operand) else null;
-            try mergeEntry(self.allocator, &entries, .{ .nominal = try program.substitute(self.allocator, override.nominal, bound), .methods = methods });
+            try mergeEntry(self.allocator, &entries, .{ .nominal = try program.substituteRepresentation(self.allocator, override.nominal, bound), .methods = methods });
         }
         const scope = try program.static_descs.restrictScope(try program.static_descs.internScope(entries.items), closed);
         if (scope == .none) return .{ .desc = closed };
