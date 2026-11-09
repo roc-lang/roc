@@ -865,9 +865,9 @@ const Analysis = struct {
         const first = fields.slotBase(field_idx);
         return .{
             .first = view_base + first,
-            // Erased products explicitly map physical fields to ownership
-            // slots. Scalar/prefix fields have an empty range, not the next
-            // resource field's first slot.
+            // Explicit products can give scalar fields no ownership slots.
+            // Their source-authored range, not the target's standalone
+            // layout count, determines which stored units the read observes.
             .count = if (fields.shape != null)
                 fields.slotBase(field_idx + 1) - first
             else
