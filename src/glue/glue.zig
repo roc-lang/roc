@@ -706,16 +706,6 @@ fn buildGluePlugin(
     var bitcode = generate: {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
-        const static_procs = try compile.static_data_exports.collectReferencedProcs(gpa, lowered.frozen_static_data.?.exports);
-        defer gpa.free(static_procs);
-        codegen.static_data_procs = static_procs;
-        const static_helpers = try compile.static_data_exports.collectRequiredRcHelpers(gpa, lowered.frozen_static_data.?.exports);
-        defer gpa.free(static_helpers);
-        codegen.static_data_rc_helpers = static_helpers;
-        codegen.setStaticDataExports(lowered.frozen_static_data.?.exports) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.CompilationFailed, error.UnsupportedLowLevel => return error.CompilationFailed,
-        };
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;

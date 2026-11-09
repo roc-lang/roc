@@ -5255,7 +5255,7 @@ pub const ReportBuilder = struct {
 
         try D.renderSlice(&.{D.bytes("Its type is:")}, self, &report);
         try report.document.addLineBreaks(2);
-        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.def_snapshot)));
+        try report.document.addCodeBlock(try report.addOwnedString(try self.getFormattedString(data.def_snapshot)));
         try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{

@@ -381,7 +381,6 @@ const StaticInitializerMachine = struct {
                         break :blk value;
                     },
                     .callable => |callable| try self.freezeCallable(callable.proc, if (values.len == 0) null else values[0], callable.on_drop, definition.layout_idx),
-                    .callable => |function| try self.freezeCallable(function.proc, if (values.len == 0) null else values[0], function.on_drop, definition.layout_idx),
                     .boxed_sequence => |offset| try self.freezeSequence(values[0], offset, definition.layout_idx),
                     .product, .list, .box, .tag => try self.assembleStored(definition.layout_idx, switch (parts.kind) {
                         .product => .product,

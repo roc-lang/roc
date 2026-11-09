@@ -4980,6 +4980,7 @@ fn reportForeignLiteralRejection(
         false;
     const failure_site: ComptimeFailureSite = .{ .region = root_region, .foreign = .{
         .module_name = if (bare_name_collides) literal_env.qualifiedModuleName() else literal_env.module_name,
+        .qualified = bare_name_collides,
         .line = info.start_line_idx + 1,
         .column = info.start_col_idx + 1,
     } };
