@@ -1113,7 +1113,10 @@ fn evaluateBoxyRoots(
     const artifacts = try allocator.alloc(*checked.CheckedModuleArtifact, modules.len);
     defer allocator.free(artifacts);
     for (modules, artifacts) |entry, *artifact| artifact.* = entry.module;
-    var graph = try checked_root_graph.build(allocator, artifacts, pending.items);
+    var graph = if (phase == .before_solved)
+        try checked_root_graph.buildForBoxySelection(allocator, artifacts, lowering_modules, pending.items)
+    else
+        try checked_root_graph.build(allocator, artifacts, pending.items);
     defer graph.deinit(allocator);
     const chosen = try allocator.alloc(bool, pending.items.len);
     defer allocator.free(chosen);
@@ -1122,9 +1125,9 @@ fn evaluateBoxyRoots(
         // value or its evaluation reads a value of one that does, directly
         // or through other roots.
         .before_solved => {
-            for (pending.items, chosen) |root, *flag| {
-                flag.* = artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
-                    !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root);
+            for (pending.items, chosen, graph.unavailable_boxy_reads) |root, *flag, unavailable| {
+                flag.* = !unavailable and (artifacts[root.module].compile_time_roots.root(root.root).kind == .literal_argument or
+                    !try checked_root_graph.rootHoldsFunction(allocator, artifacts, lowering_modules, root));
             }
             var changed = true;
             while (changed) {

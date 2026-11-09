@@ -15879,6 +15879,14 @@ outcome and discarded.
 
 #### Compile-Time Evaluation Under `.lss`
 
+A pending root's routing follows its reachable checked references through every
+visible module, including cached imports. Visibility does not grant permission
+to finalize an imported root. A completed value available only to LSS blocks
+its readers from the pre-Solved Boxy batch; it is not a ready Boxy dependency
+merely because it is absent from that batch's pending roots. Direct template
+dependency and readiness summaries are decoded once per batch and shared by
+the roots that reach them, including through recursive calls.
+
 A `.lss` compilation (`finalizeProgram`) hands the `.boxy` evaluator every
 pending root that neither holds a function value nor reads, directly or
 through other roots, the value of a root that does; a literal argument root
