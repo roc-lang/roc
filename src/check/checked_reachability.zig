@@ -132,9 +132,11 @@ const TestGraph = struct {
     edges: []const []const u8,
     positive: []const bool,
     visits: usize = 0,
+    edges_listed: usize = 0,
     fn visit(self: *TestGraph, children: anytype, key: u8) Allocator.Error!?bool {
         self.visits += 1;
         if (self.positive[key]) return true;
+        self.edges_listed += self.edges[key].len;
         try children.addSlice(self.edges[key]);
         return null;
     }
@@ -150,6 +152,7 @@ test "checked reachability commits recursive components together" {
     try std.testing.expect(try walk.visit(1));
     try std.testing.expect(try walk.visit(2));
     try std.testing.expectEqual(@as(usize, 3), graph.visits);
+    try std.testing.expectEqual(@as(usize, 3), graph.edges_listed);
 }
 
 test "checked reachability negative cycles and shared diamonds expand once" {
@@ -158,6 +161,7 @@ test "checked reachability negative cycles and shared diamonds expand once" {
     defer walk.deinit();
     for (0..graph.edges.len) |id| try std.testing.expect(!try walk.visit(@intCast(id)));
     try std.testing.expectEqual(graph.edges.len, graph.visits);
+    try std.testing.expectEqual(@as(usize, 7), graph.edges_listed);
 }
 
 test "checked reachability positive witnesses need no unrelated expansion" {
@@ -229,4 +233,5 @@ test "checked reachability shared DAG work is bounded by unique nodes" {
     defer walk.deinit();
     for (0..64) |id| try std.testing.expect(!try walk.visit(@intCast(id)));
     try std.testing.expectEqual(@as(usize, 64), graph.visits);
+    try std.testing.expectEqual(@as(usize, 126), graph.edges_listed);
 }
