@@ -56629,8 +56629,8 @@ fn beginParseMethodCheck(self: *Self, inputs: DerivedCodecInputs, check: ParseMe
         .key => |key_var| try self.beginParseKeyMethod(inputs, key_var),
         .str_key => try self.beginParseKeyMethod(inputs, try self.freshStr(inputs.env, inputs.region)),
         .skip_record_field => try self.beginSkipRecordFieldMethod(inputs),
-        .invalid_value => try self.beginParseErrorMethod(inputs, "invalid_value"),
-        .missing_field => try self.beginParseErrorMethod(inputs, "missing_field"),
+        .invalid_value => try self.beginParseErrorMethod(inputs, .invalid_value),
+        .missing_field => try self.beginParseErrorMethod(inputs, .missing_field),
     };
 }
 
@@ -57389,19 +57389,22 @@ fn constrainDerivedParserErrorEquality(
 fn beginParseErrorMethod(
     self: *Self,
     inputs: DerivedCodecInputs,
-    comptime method_text: []const u8,
+    comptime kind: enum { missing_field, invalid_value },
 ) Allocator.Error!ParseMethodBegin {
     const encoding_var = inputs.encoding_var;
     const env = inputs.env;
     const region = inputs.region;
-    const method_name = try self.protocolMethodName(method_text);
+    const method_name = try self.protocolMethodName(@tagName(kind));
     if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, inputs.constraint, env, inputs.failure_expr) };
     };
-    const argument_var = if (comptime std.mem.eql(u8, method_text, "missing_field")) try self.freshStr(env, region) else inputs.state_var;
+    const argument_var = switch (kind) {
+        .missing_field => try self.freshStr(env, region),
+        .invalid_value => inputs.state_var,
+    };
     const child_err_var = try self.fresh(env, region);
     const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, argument_var }, child_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
