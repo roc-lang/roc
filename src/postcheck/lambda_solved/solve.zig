@@ -1467,13 +1467,13 @@ const Solver = struct {
                     const content = try self.shapeContent(self.inferredExpr(input));
                     if (content != .tag_union) Common.invariant("try sequence input was not a Try tag union");
                     var ok_ty: ?Type.TypeVarId = null;
-                    var err_ty: ?Type.TypeVarId = null;
+                    var err_tag: ?Type.Tag = null;
                     for (0..content.tag_union.count()) |index| {
                         const tag = self.program.types.tagItem(content.tag_union, index);
                         const name = self.lifted.names.tagLabelText(tag.name);
                         if (std.mem.eql(u8, name, "Ok") or std.mem.eql(u8, name, "Err")) {
                             if (tag.payloads.count() != 1) Common.invariant("try sequence tag had unexpected payload arity");
-                            if (std.mem.eql(u8, name, "Ok")) ok_ty = self.program.types.spanItem(tag.payloads, 0) else err_ty = self.program.types.spanItem(tag.payloads, 0);
+                            if (std.mem.eql(u8, name, "Ok")) ok_ty = self.program.types.spanItem(tag.payloads, 0) else err_tag = tag;
                         }
                     }
                     const ok = ok_ty orelse Common.invariant("try sequence input had no Ok tag");
@@ -1485,10 +1485,19 @@ const Solver = struct {
                         try self.unify(self.localTy(seq.value_local), try self.recordField(ok, seq.value_field));
                         try self.unify(self.localTy(seq.rest_local), try self.recordField(ok, seq.rest_field));
                     }
+                    const error_tag = err_tag orelse Common.invariant("try sequence input had no Err tag");
+                    const error_ty = self.program.types.spanItem(error_tag.payloads, 0);
                     if (target) |id| {
                         const params = self.activeJoinPoint(id).params;
                         if (params.count() != 1) Common.invariant("try sequence error target did not have one parameter");
-                        try self.unify(self.program.types.spanItem(params, 0), err_ty orelse Common.invariant("try sequence input had no Err tag"));
+                        try self.unify(self.program.types.spanItem(params, 0), error_ty);
+                    } else {
+                        // Inline propagation forwards this payload into the
+                        // result just as a shared error continuation does.
+                        // Later row joins must change both representations.
+                        const output_payloads = try self.tagPayloadsSpanFor(expected, error_tag.name, expr.ty);
+                        if (output_payloads.count() != 1) Common.invariant("try sequence result Err tag had unexpected payload arity");
+                        try self.unify(self.program.types.spanItem(output_payloads, 0), error_ty);
                     }
                     const body = if (expr.data == .try_sequence) expr.data.try_sequence.ok_body else expr.data.try_record_sequence.ok_body;
                     return .{ .expr = .{ .id = body, .expected = expected } };
@@ -6980,6 +6989,79 @@ test "lambda solved compact record updates relate only unchanged field represent
     const solved_update = solver.inferredExpr(update);
     try std.testing.expectEqual(try solver.recordField(solved_base, a), try solver.recordField(solved_update, a));
     try std.testing.expect((try solver.recordField(solved_base, b)) != (try solver.recordField(solved_update, b)));
+}
+
+test "lambda solved Try sequences join forwarded error payloads with their result" {
+    const allocator = std.testing.allocator;
+    for ([_]bool{ false, true }) |record_sequence| {
+        for ([_]bool{ false, true }) |empty_error| {
+            var lifted = emptyLiftedProgramForTest(allocator);
+            var lifted_owned = true;
+            errdefer if (lifted_owned) lifted.deinit();
+            const ok = try lifted.names.internTagLabel("Ok");
+            const err = try lifted.names.internTagLabel("Err");
+            const format_error = try lifted.names.internTagLabel("FormatError");
+            const trailing_input = try lifted.names.internTagLabel("TrailingInput");
+            const value_field = try lifted.names.internRecordFieldLabel("value");
+            const rest_field = try lifted.names.internRecordFieldLabel("rest");
+            const number = try lifted.types.add(.{ .primitive = .u64 });
+            const success = if (record_sequence)
+                try lifted.types.add(.{ .record = try lifted.types.addRecordFields(&lifted.names, &.{
+                    .{ .name = value_field, .ty = number, .default = null },
+                    .{ .name = rest_field, .ty = number, .default = null },
+                }) })
+            else
+                number;
+            const errors = try lifted.types.add(.{ .tag_union = if (empty_error) .empty() else try lifted.types.addTags(&.{
+                .{ .name = format_error, .checked_name = format_error, .payloads = .empty() },
+            }) });
+            const wider_errors = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+                .{ .name = format_error, .checked_name = format_error, .payloads = .empty() },
+                .{ .name = trailing_input, .checked_name = trailing_input, .payloads = .empty() },
+            }) });
+            const narrow_try = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+                .{ .name = err, .checked_name = err, .payloads = try lifted.types.addSpan(&.{errors}) },
+                .{ .name = ok, .checked_name = ok, .payloads = try lifted.types.addSpan(&.{success}) },
+            }) });
+            const wide_try = try lifted.types.add(.{ .tag_union = try lifted.types.addTags(&.{
+                .{ .name = err, .checked_name = err, .payloads = try lifted.types.addSpan(&.{wider_errors}) },
+                .{ .name = ok, .checked_name = ok, .payloads = try lifted.types.addSpan(&.{success}) },
+            }) });
+            var symbols: Common.SymbolGen = .{};
+            const value_local = try lifted.addLocal(symbols.fresh(), if (record_sequence) number else success);
+            const rest_local = try lifted.addLocal(symbols.fresh(), number);
+            // Only type flow is under test; no execution reads these values.
+            const input = try lifted.addExpr(.{ .ty = narrow_try, .data = .uninitialized });
+            const ok_body = try lifted.addExpr(.{ .ty = narrow_try, .data = .uninitialized });
+            const sequence = try lifted.addExpr(.{ .ty = narrow_try, .data = if (record_sequence)
+                .{ .try_record_sequence = .{
+                    .try_expr = input,
+                    .value_local = value_local,
+                    .rest_local = rest_local,
+                    .value_field = value_field,
+                    .rest_field = rest_field,
+                    .ok_body = ok_body,
+                } }
+            else
+                .{ .try_sequence = .{ .try_expr = input, .ok_local = value_local, .ok_body = ok_body } } });
+            const widened = try lifted.addExpr(.{ .ty = wide_try, .data = .{ .row_widen = .{ .value = sequence } } });
+            _ = try lifted.addFn(.{ .symbol = symbols.fresh(), .args = .empty(), .captures = .empty(), .body = .{ .roc = widened }, .ret = wide_try });
+            var program = Ast.Program.init(allocator, lifted);
+            lifted_owned = false;
+            lifted = undefined;
+            defer program.deinit();
+            var solver = try Solver.init(allocator, &program);
+            defer solver.deinit();
+            solver.setRowJoined(try findRowJoinedTypes(allocator, &program));
+            try solver.solve();
+            const input_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(input), err, narrow_try);
+            const output_payloads = try solver.tagPayloadsSpanFor(solver.inferredExpr(sequence), err, narrow_try);
+            const input_error = program.types.spanItem(input_payloads, 0);
+            const output_error = program.types.spanItem(output_payloads, 0);
+            try std.testing.expectEqual(program.types.root(output_error), program.types.root(input_error));
+            try std.testing.expectEqual(@as(usize, 2), (try solver.shapeContent(input_error)).tag_union.count());
+        }
+    }
 }
 
 test "lambda solved return boundaries join rows and propagate callable payloads" {

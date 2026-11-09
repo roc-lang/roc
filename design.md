@@ -10380,7 +10380,10 @@ converts instead (Sealed Result Rows); the checker is the same for both.
 **Where joins come from.** Every place a value's rows flow into another's:
 a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
-function's `Try` result. These are edges between types, not between rows:
+function's `Try` result. Generated `try_sequence` and `try_record_sequence`
+forward the input error payload to either their shared error continuation or
+their own result's error payload; both forms carry the same row-join edge.
+These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
