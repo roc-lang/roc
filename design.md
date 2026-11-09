@@ -14222,7 +14222,10 @@ names block of its item, payload, or backing. A type with no record field
 or tag in its reach has none (null). Blocks are built by descriptor key, each
 reserved before its components', so a recursive type's block reaches itself.
 Filling follows an explicit worklist, so deep types consume heap storage rather
-than native stack frames.
+than native stack frames. Label reachability reuses the shared demand-driven
+SCC analysis: every reached type is expanded once, and a negative answer is
+stored only after its complete component has no path to a label. Building
+nested unnamed wrappers therefore does not repeatedly traverse their suffixes.
 
 Only code that reflects over a type reads a names block: `dyn_inspect`
 (`Str.inspect`, `dbg`, and the rendered value of a failed `expect`'s `Err`)

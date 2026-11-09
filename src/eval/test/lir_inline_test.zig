@@ -13590,8 +13590,9 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
-    // Pin the complete graph, including its explicit static-data candidates,
-    // while the worker and miss counts below continue to gate helper sharing.
+    // Each of the two restored Values keeps its source static-data candidate,
+    // active-binding reservation, and deferred-use reservation. These six
+    // graph slots do not add helper workers; the counts above and below pin sharing.
     try std.testing.expectEqual(@as(usize, 212), stats.expressions);
     try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
@@ -14297,6 +14298,7 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const args = result.store.getLocalSpan(pass_spec.args);
         try std.testing.expectEqual(@as(usize, 2), args.len);
         try std.testing.expect(result.store.getLocal(GuardedList.at(args, 0)).dyn != null);
+        try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
         try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }
     {
