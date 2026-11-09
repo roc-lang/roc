@@ -2075,7 +2075,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.var_descs.len);
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2209,7 +2209,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.var_descs.len);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);

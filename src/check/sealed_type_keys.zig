@@ -31,6 +31,7 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Var = types.Var;
 const TypeKeyInfo = canonical_type_keys.TypeKeyInfo;
+const CheckedTypeId = @import("checked_ids.zig").CheckedTypeId;
 
 const KeySlot = collections.OnceSlot(TypeKeyInfo, .sealed_type_key);
 // This is a host storage choice, fixed at compilation. An OS allocation
@@ -181,6 +182,28 @@ const HeapKeyPages = struct {
 };
 const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
 
+/// A canonical id memo using atomics supported by every compiler host.
+/// The extra bit distinguishes an empty slot from the largest valid id;
+/// all other ids need only the word load.
+pub const CanonicalIdSlot = struct {
+    value: std.atomic.Value(u32) = .init(std.math.maxInt(u32)),
+    largest_ready: std.atomic.Value(bool) = .init(false),
+
+    pub fn get(self: *const CanonicalIdSlot) ?CheckedTypeId {
+        const raw = self.value.load(.acquire);
+        if (raw == std.math.maxInt(u32) and !self.largest_ready.load(.acquire)) return null;
+        return @fromBackingInt(raw);
+    }
+
+    /// Concurrent publishers must publish the same immutable answer.
+    pub fn put(self: *CanonicalIdSlot, id: CheckedTypeId) void {
+        const raw = @backingInt(id);
+        if (raw == std.math.maxInt(u32)) {
+            self.largest_ready.store(true, .release);
+        } else self.value.store(raw, .release);
+    }
+};
+
 /// The key slots of one module's sealed source types.
 pub const SealedTypeKeys = struct {
     allocator: Allocator,
@@ -198,6 +221,8 @@ pub const SealedTypeKeys = struct {
     /// Per variable: 0 while unknown, else 1 + whether a walk found the
     /// variable reaches an identity variable.
     identity: []std.atomic.Value(u8),
+    /// Canonical ids of settled source types, recorded on first request.
+    canonical: []CanonicalIdSlot,
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
@@ -205,8 +230,11 @@ pub const SealedTypeKeys = struct {
         const keys = try allocator.create(SealedTypeKeys);
         errdefer allocator.destroy(keys);
         const identity = try allocator.alloc(std.atomic.Value(u8), @intCast(env.types.len()));
+        errdefer allocator.free(identity);
         @memset(identity, .init(0));
-        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity };
+        const canonical_ids = try allocator.alloc(CanonicalIdSlot, identity.len);
+        @memset(canonical_ids, .{});
+        keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity, .canonical = canonical_ids };
         return keys;
     }
 
@@ -219,6 +247,7 @@ pub const SealedTypeKeys = struct {
         }
         if (self.writer) |*writer| writer.deinit();
         allocator.free(self.identity);
+        allocator.free(self.canonical);
         allocator.destroy(self);
     }
 
@@ -309,6 +338,16 @@ pub const SealedTypeKeys = struct {
         self.identity[index].store(if (value) 2 else 1, .release);
     }
 
+    /// The previously recorded canonical id of a settled source type.
+    pub fn knownCanonical(self: *const SealedTypeKeys, var_: Var) ?CheckedTypeId {
+        return self.canonical[@backingInt(var_)].get();
+    }
+
+    /// Record the canonical id selected from the immutable source key index.
+    pub fn recordCanonical(self: *SealedTypeKeys, var_: Var, id: CheckedTypeId) void {
+        self.canonical[@backingInt(var_)].put(id);
+    }
+
     /// The lowest reached checked representative of `view`'s store whose key
     /// is `key`, if any.
     pub fn varForKey(self: *SealedTypeKeys, view: sealed_type_view.SealedTypeView, key: canonical.CanonicalTypeKey) Allocator.Error!?Var {
@@ -340,6 +379,16 @@ pub const SealedTypeKeys = struct {
         }
     };
 };
+
+test "canonical id slots distinguish unknown from every boundary id" {
+    for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) }) |raw| {
+        var slot: CanonicalIdSlot = .{};
+        try std.testing.expect(slot.get() == null);
+        const id: CheckedTypeId = @fromBackingInt(raw);
+        slot.put(id);
+        try std.testing.expectEqual(id, slot.get().?);
+    }
+}
 
 /// Real solver-assigned representatives spanning full pages and a partial
 /// final page. The redirect is reached but must not become an index entry.

@@ -1575,6 +1575,8 @@ const BoxyObjects = struct {
     /// Snapshot units before worker preparation. The program's emitted imports
     /// subsequently select which snapshots actually become compiler-only units.
     fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
+        // Freestanding evaluation has no native unit-image loader.
+        if (comptime is_freestanding) return null;
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
         const objects = (try objectSet(context, module)) orelse return null;
@@ -7937,6 +7939,7 @@ const AppRootIdentity = struct {
     platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
     direct_required_call_count: usize,
+    forwarded_callable_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -8104,6 +8107,10 @@ fn compileAppRootIdentityExpecting(
             direct_required_call_count += 1;
         }
     }
+    var forwarded_callable_count: usize = 0;
+    for (root.callable_eval_templates.templates.items) |template| {
+        if (template.forwarded_lookup != null) forwarded_callable_count += 1;
+    }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
         .compile_time_debug_count = root.compile_time_debug.entries.len,
@@ -8115,6 +8122,7 @@ fn compileAppRootIdentityExpecting(
         .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
         .direct_required_call_count = direct_required_call_count,
+        .forwarded_callable_count = forwarded_callable_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
         .stderr_bytes = stderr_bytes,
@@ -8818,11 +8826,13 @@ test "issue 11389 required procedure aliases forward without compile-time evalua
     defer allocator.free(app);
     var unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
     defer unpaired.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), unpaired.forwarded_callable_count);
     for (0..2) |_| {
         var paired = try compileAppRootIdentityForMode(allocator, cache, app, .executable_artifacts);
         defer paired.deinit(allocator);
         try std.testing.expect(paired.platform_root_publish_count == 0);
         try std.testing.expect(paired.compile_time_request_count == 0);
+        try std.testing.expectEqual(@as(usize, 1), paired.forwarded_callable_count);
     }
 }
 
@@ -10362,7 +10372,7 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
         const key = facts.storage_key orelse continue;
         const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
         defer allocator.free(from_lifted);
-        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, peer.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);
         try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
         shared_entries += 1;

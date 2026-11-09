@@ -79,6 +79,7 @@ pub fn deinit(self: *Self) void {
     gpa.destroy(self);
 }
 
+/// Maps a captured node to its private presentation variable.
 pub fn nodeVar(self: *const Self, idx: Idx) Var {
     return self.nodes[@backingInt(idx) - self.start];
 }
@@ -178,6 +179,7 @@ fn tag(self: *Self, snapshots: *const snapshot.Store, captured: snapshot.Snapsho
     return .{ .name = captured.name, .args = try self.store.appendVars(args) };
 }
 
+/// Renders a tag using its capture's naming scope and returns owned text.
 pub fn formatTag(self: *Self, snapshots: *const snapshot.Store, captured: snapshot.SnapshotTag, root: Idx) Allocator.Error![]const u8 {
     const native = try self.tag(snapshots, captured);
     const text = self.writer.writeTagGet(native, self.nodeVar(root)) catch return error.OutOfMemory;

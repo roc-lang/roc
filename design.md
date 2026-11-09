@@ -5351,7 +5351,9 @@ from the bound app procedure kind using the checked output rule;
 callable-evaluation bindings remain indirect unless they are exact procedure
 aliases, which forward (see "Procedure Aliases"). Exact procedure aliases whose
 required bindings are known through the pairing use the checked forwarding
-rule and require no compile-time evaluator. Completed independent roots are
+rule and require no compile-time evaluator. The pairing publishes and caches
+these forwarding proofs; it cannot borrow proofs made before the requirements
+were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
@@ -5382,6 +5384,13 @@ id) for resolution. The locator is valid for exactly as long as the entry that
 stores it, because that entry's content hash covers the referenced module.
 Resolving a type from its key alone (bump, glue) builds the owning module's
 key index on first demand, through the module's index slot.
+
+Within one module, canonical type ids preserve variable identity and otherwise
+select the lowest source id, then the lowest synthesized id, with the same
+key. Each settled type remembers that answer atomically, so repeated lowering
+queries do not repeat key-index lookups. Pending synthesized graphs never
+record an answer. These process-local memos are not serialized and pairing
+stores own their synthesized memos independently.
 
 Type digests, type content keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
@@ -5670,12 +5679,12 @@ platform requirement type supplies the solved interface, not the scheme's
 evidence identity. Once the binding's scheme is complete, checking records a
 source-free invocation with the ordinary scheme-use substitution and validates
 all of its copied requirements. The solved requirement and its identity slots
-name that instance. Publication consumes the invocation's evidence. An attached
+name that instance. Checked output consumes the invocation's evidence. An attached
 codec parameter has a variable receiver, so its scheme has no uninstantiated
 root contract: a literal default is not a checked codec derivation. This rule
 also covers unused and aliased procedures, not just platform-bound definitions.
 Explicit composite codec requirements retain their private-validation verdict.
-This is one use, not a second body check or a publication-time
+This is one use, not a second body check or an output-time
 codec derivation. A monomorphic invocation with no evidence needs no record.
 The pairing's root-request analysis validates a direct
 procedure's root vector against the app template's parameter count. Monotype

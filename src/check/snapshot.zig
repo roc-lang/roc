@@ -413,7 +413,7 @@ pub const Store = struct {
         self.scratch_static_dispatch_constraints.deinit();
     }
 
-    /// Best-effort convenience for diagnostic clients that allow a placeholder.
+    /// Returns null on allocation failure for diagnostic clients that allow a placeholder.
     /// Clients which propagate allocation failure use `formatType`.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
         return @constCast(self).formatType(idx) catch null;
@@ -563,7 +563,7 @@ pub const Store = struct {
             self.seen_vars.clearRetainingCapacity();
         }
 
-        if (!try self.requestVar(store, type_writer, var_, .pos)) {
+        if (!try self.requestVar(store, var_, .pos)) {
             while (self.frames.items.len > frames_base) {
                 const top = &self.frames.items[self.frames.items.len - 1];
                 // A step either suspends after requesting exactly one child
@@ -571,13 +571,13 @@ pub const Store = struct {
                 // without requesting anything—so popping on finish always
                 // removes the frame the step ran for.
                 const finished = switch (top.*) {
-                    .identity => |*frame| try self.stepIdentity(store, type_writer, frame),
-                    .alias => |*frame| try self.stepAlias(store, type_writer, frame),
-                    .tuple => |*frame| try self.stepTuple(store, type_writer, frame),
-                    .nominal => |*frame| try self.stepNominal(store, type_writer, frame),
-                    .func => |*frame| try self.stepFunc(store, type_writer, frame),
-                    .record => |*frame| try self.stepRecord(store, type_writer, frame),
-                    .tag_union => |*frame| try self.stepTagUnion(store, type_writer, frame),
+                    .identity => |*frame| try self.stepIdentity(store, frame),
+                    .alias => |*frame| try self.stepAlias(store, frame),
+                    .tuple => |*frame| try self.stepTuple(store, frame),
+                    .nominal => |*frame| try self.stepNominal(store, frame),
+                    .func => |*frame| try self.stepFunc(store, frame),
+                    .record => |*frame| try self.stepRecord(store, frame),
+                    .tag_union => |*frame| try self.stepTagUnion(store, frame),
                 };
                 if (finished) {
                     self.frames.items.len -= 1;
@@ -596,7 +596,7 @@ pub const Store = struct {
     /// its content immediately (contents with no children) or push the frame
     /// that will record it. Returns true when the result index is already on
     /// the value stack; false when a frame was pushed.
-    fn requestVar(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, polarity: types.Polarity) std.mem.Allocator.Error!bool {
+    fn requestVar(self: *Self, store: *const TypesStore, var_: types.Var, polarity: types.Polarity) std.mem.Allocator.Error!bool {
         if (@import("builtin").is_test) self.test_capture_steps += 1;
         const resolved = store.resolveVar(var_);
         if (self.captured_nodes.get(.{ .var_ = resolved.var_, .polarity = polarity })) |idx| {
@@ -636,12 +636,12 @@ pub const Store = struct {
         };
         switch (resolved.desc.content) {
             .err => {
-                try self.finishFrame(type_writer, fill, SnapshotContent.err);
+                try self.finishFrame(fill, SnapshotContent.err);
                 return true;
             },
             .flex => |flex| {
                 if (flex.constraints.len() == 0) {
-                    try self.finishFrame(type_writer, fill, SnapshotContent{ .flex = SnapshotFlex{
+                    try self.finishFrame(fill, SnapshotContent{ .flex = SnapshotFlex{
                         .name = flex.name,
                         .var_ = resolved.var_,
                         .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
@@ -659,7 +659,7 @@ pub const Store = struct {
             },
             .rigid => |rigid| {
                 if (rigid.constraints.len() == 0) {
-                    try self.finishFrame(type_writer, fill, SnapshotContent{ .rigid = SnapshotRigid{
+                    try self.finishFrame(fill, SnapshotContent{ .rigid = SnapshotRigid{
                         .name = rigid.name,
                         .constraints = try self.static_dispatch_constraints.appendSlice(self.gpa, &.{}),
                     } });
@@ -687,16 +687,16 @@ pub const Store = struct {
             // Presence facts are represented on their owning record field in
             // snapshots, never as standalone reportable types.
             .field_presence => {
-                try self.finishFrame(type_writer, fill, SnapshotContent.err);
+                try self.finishFrame(fill, SnapshotContent.err);
                 return true;
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_record => {
-                    try self.finishFrame(type_writer, fill, SnapshotContent{ .structure = SnapshotFlatType.empty_record });
+                    try self.finishFrame(fill, SnapshotContent{ .structure = SnapshotFlatType.empty_record });
                     return true;
                 },
                 .empty_tag_union => {
-                    try self.finishFrame(type_writer, fill, SnapshotContent{ .structure = SnapshotFlatType.empty_tag_union });
+                    try self.finishFrame(fill, SnapshotContent{ .structure = SnapshotFlatType.empty_tag_union });
                     return true;
                 },
                 .tuple => |tuple| {
@@ -725,7 +725,7 @@ pub const Store = struct {
                             frame.backing = decl.backing;
                             frame.stage = .await_backing;
                             try self.frames.append(self.gpa, .{ .nominal = frame });
-                            _ = try self.requestVar(store, type_writer, decl.backing, polarity);
+                            _ = try self.requestVar(store, decl.backing, polarity);
                             return false;
                         }
                     }
@@ -786,11 +786,9 @@ pub const Store = struct {
     /// happens while traversing the solver graph.
     fn finishFrame(
         self: *Self,
-        type_writer: *TypeWriter,
         fill: SnapshotFill,
         content: SnapshotContent,
     ) std.mem.Allocator.Error!void {
-        _ = type_writer;
         const snapshot_idx = try self.appendContent(content, fill.resolved_var, fill.polarity);
         if (content == .structure and content.structure == .tag_union) {
             var tags = content.structure.tag_union.tags.iterIndices();
@@ -806,7 +804,7 @@ pub const Store = struct {
         try self.pending_values.append(snapshot_idx);
     }
 
-    fn stepIdentity(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *IdentityFrame) std.mem.Allocator.Error!bool {
+    fn stepIdentity(self: *Self, store: *const TypesStore, frame: *IdentityFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .head => {
@@ -814,7 +812,7 @@ pub const Store = struct {
                         frame.stage = .await_fn;
                         // A method signature is its own annotation root, as
                         // `TypeWriter` writes it in a where clause.
-                        if (!try self.requestVar(store, type_writer, frame.constraints[frame.idx].fn_var, .pos)) return false;
+                        if (!try self.requestVar(store, frame.constraints[frame.idx].fn_var, .pos)) return false;
                         continue;
                     }
                     const range = try self.static_dispatch_constraints.appendSlice(
@@ -833,7 +831,7 @@ pub const Store = struct {
                             .constraints = range,
                         } },
                     };
-                    try self.finishFrame(type_writer, frame.fill, content);
+                    try self.finishFrame(frame.fill, content);
                     return true;
                 },
                 .await_fn => {
@@ -850,12 +848,12 @@ pub const Store = struct {
         }
     }
 
-    fn stepAlias(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *AliasFrame) std.mem.Allocator.Error!bool {
+    fn stepAlias(self: *Self, store: *const TypesStore, frame: *AliasFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .backing => {
                     frame.stage = .await_backing;
-                    if (!try self.requestVar(store, type_writer, frame.backing, frame.fill.polarity)) return false;
+                    if (!try self.requestVar(store, frame.backing, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_backing => {
@@ -869,7 +867,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, frame.args[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const args_range = try self.content_indexes.appendSlice(
@@ -877,7 +875,7 @@ pub const Store = struct {
                         self.scratch_content.sliceFromStart(frame.scratch_top),
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .alias = SnapshotAlias{
+                    try self.finishFrame(frame.fill, SnapshotContent{ .alias = SnapshotAlias{
                         .ident = frame.ident,
                         .origin_module = frame.origin_module,
                         .backing = frame.backing_content,
@@ -894,13 +892,13 @@ pub const Store = struct {
         }
     }
 
-    fn stepTuple(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *TupleFrame) std.mem.Allocator.Error!bool {
+    fn stepTuple(self: *Self, store: *const TypesStore, frame: *TupleFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .elems => {
                     if (frame.idx < frame.elems.len) {
                         frame.stage = .await_elem;
-                        if (!try self.requestVar(store, type_writer, frame.elems[frame.idx], frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, frame.elems[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const elems_range = try self.content_indexes.appendSlice(
@@ -908,7 +906,7 @@ pub const Store = struct {
                         self.scratch_content.sliceFromStart(frame.scratch_top),
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                    try self.finishFrame(frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
                         .tuple = SnapshotTuple{ .elems = elems_range },
                     } });
                     return true;
@@ -922,7 +920,7 @@ pub const Store = struct {
         }
     }
 
-    fn stepNominal(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *NominalFrame) std.mem.Allocator.Error!bool {
+    fn stepNominal(self: *Self, store: *const TypesStore, frame: *NominalFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .await_backing => {
@@ -932,7 +930,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, frame.args[frame.idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const args_range = try self.content_indexes.appendSlice(
@@ -940,7 +938,7 @@ pub const Store = struct {
                         self.scratch_content.sliceFromStart(frame.scratch_top),
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                    try self.finishFrame(frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
                         .nominal_type = SnapshotNominalType{
                             .ident = frame.ident,
                             .vars = args_range,
@@ -958,13 +956,13 @@ pub const Store = struct {
         }
     }
 
-    fn stepFunc(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *FuncFrame) std.mem.Allocator.Error!bool {
+    fn stepFunc(self: *Self, store: *const TypesStore, frame: *FuncFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity.flip())) return false;
+                        if (!try self.requestVar(store, frame.args[frame.idx], frame.fill.polarity.flip())) return false;
                         continue;
                     }
                     // The argument run is committed before the return type is
@@ -975,7 +973,7 @@ pub const Store = struct {
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
                     frame.stage = .await_ret;
-                    if (!try self.requestVar(store, type_writer, frame.ret, frame.fill.polarity)) return false;
+                    if (!try self.requestVar(store, frame.ret, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_arg => {
@@ -991,7 +989,7 @@ pub const Store = struct {
                         .effectful => SnapshotContent{ .structure = SnapshotFlatType{ .fn_effectful = snapshot_func } },
                         .unbound => SnapshotContent{ .structure = SnapshotFlatType{ .fn_unbound = snapshot_func } },
                     };
-                    try self.finishFrame(type_writer, frame.fill, content);
+                    try self.finishFrame(frame.fill, content);
                     return true;
                 },
             }
@@ -1023,14 +1021,14 @@ pub const Store = struct {
         };
     }
 
-    fn stepRecord(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *RecordFrame) std.mem.Allocator.Error!bool {
+    fn stepRecord(self: *Self, store: *const TypesStore, frame: *RecordFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .fields => {
                     if (frame.idx < frame.source_fields.count) {
                         frame.stage = .await_field;
                         const field = sourceRecordField(store, frame.source_fields, frame.idx);
-                        if (!try self.requestVar(store, type_writer, field.presence.typeVar(), frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, field.presence.typeVar(), frame.fill.polarity)) return false;
                         continue;
                     }
                     // The field run is committed before the extension is
@@ -1041,7 +1039,7 @@ pub const Store = struct {
                     );
                     self.scratch_record_fields.clearFrom(frame.scratch_top);
                     frame.stage = .await_ext;
-                    if (!try self.requestVar(store, type_writer, frame.ext, frame.fill.polarity)) return false;
+                    if (!try self.requestVar(store, frame.ext, frame.fill.polarity)) return false;
                     continue;
                 },
                 .await_field => {
@@ -1056,7 +1054,7 @@ pub const Store = struct {
                 },
                 .await_ext => {
                     const deep_ext = self.pending_values.pop().?;
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                    try self.finishFrame(frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
                         .record = SnapshotRecord{ .fields = frame.fields_range, .ext = deep_ext },
                     } });
                     return true;
@@ -1065,7 +1063,7 @@ pub const Store = struct {
         }
     }
 
-    fn stepTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, frame: *TagUnionFrame) std.mem.Allocator.Error!bool {
+    fn stepTagUnion(self: *Self, store: *const TypesStore, frame: *TagUnionFrame) std.mem.Allocator.Error!bool {
         while (true) {
             switch (frame.stage) {
                 .tag_head => {
@@ -1077,7 +1075,7 @@ pub const Store = struct {
                         self.scratch_tags.clearFrom(frame.tags_scratch_top);
                         frame.tags_range = tags_range;
                         frame.stage = .await_ext;
-                        if (!try self.requestVar(store, type_writer, frame.ext, frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, frame.ext, frame.fill.polarity)) return false;
                         continue;
                     }
                     frame.content_scratch_top = self.scratch_content.top();
@@ -1091,7 +1089,7 @@ pub const Store = struct {
                     const tag_args_slice = store.sliceVars(tag.args);
                     if (frame.arg_idx < tag_args_slice.len) {
                         frame.stage = .await_tag_arg;
-                        if (!try self.requestVar(store, type_writer, tag_args_slice[frame.arg_idx], frame.fill.polarity)) return false;
+                        if (!try self.requestVar(store, tag_args_slice[frame.arg_idx], frame.fill.polarity)) return false;
                         continue;
                     }
                     const tag_args_range = try self.content_indexes.appendSlice(
@@ -1115,7 +1113,7 @@ pub const Store = struct {
                 },
                 .await_ext => {
                     const deep_ext = self.pending_values.pop().?;
-                    try self.finishFrame(type_writer, frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
+                    try self.finishFrame(frame.fill, SnapshotContent{ .structure = SnapshotFlatType{
                         .tag_union = SnapshotTagUnion{ .tags = frame.tags_range, .ext = deep_ext },
                     } });
                     return true;
@@ -1513,14 +1511,19 @@ test "diagnostic snapshot rendering options belong to each capture" {
     defer snapshots.deinit();
 
     writer.omit_literal_conversion_constraints = true;
+    const expected_omitted = try gpa.dupe(u8, try writer.writeGet(receiver, .wrap));
+    defer gpa.free(expected_omitted);
     const omitted = try snapshots.snapshotVarForError(&store, &writer, receiver);
     writer.omit_literal_conversion_constraints = false;
+    const expected_shown = try gpa.dupe(u8, try writer.writeGet(receiver, .wrap));
+    defer gpa.free(expected_shown);
     const shown = try snapshots.snapshotVarForError(&store, &writer, receiver);
-    try std.testing.expect(std.mem.find(u8, try snapshots.formatType(omitted), "from_quote") == null);
-    try std.testing.expect(std.mem.find(u8, try snapshots.formatType(shown), "from_quote") != null);
+    try std.testing.expect(expected_shown.len > expected_omitted.len);
+    try std.testing.expectEqualStrings(expected_omitted, try snapshots.formatType(omitted));
+    try std.testing.expectEqualStrings(expected_shown, try snapshots.formatType(shown));
 }
 
-fn diagnosticAllocationBytes(requirement_count: usize) (Allocator.Error || error{TestUnexpectedResult})!usize {
+fn diagnosticAllocationBytes(requirement_count: usize) !usize {
     const gpa = std.testing.allocator;
     var store = try TypesStore.initCapacity(gpa, 128, 8);
     defer store.deinit();
@@ -1542,13 +1545,15 @@ fn diagnosticAllocationBytes(requirement_count: usize) (Allocator.Error || error
     } });
     var writer = try TypeWriter.initFromParts(gpa, &store, &idents, null);
     defer writer.deinit();
+    const expected = try gpa.dupe(u8, try writer.writeGet(receiver, .wrap));
+    defer gpa.free(expected);
     var measured = std.testing.FailingAllocator.init(gpa, .{});
     var snapshots = try Store.initCapacity(measured.allocator(), 16);
     defer snapshots.deinit();
     const before = measured.allocated_bytes;
     const captured = try snapshots.snapshotVarForError(&store, &writer, receiver);
     const text = try snapshots.formatType(captured);
-    try std.testing.expect(std.mem.find(u8, text, ".get") != null);
+    try std.testing.expectEqualStrings(expected, text);
     return measured.allocated_bytes - before;
 }
 
