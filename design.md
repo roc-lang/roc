@@ -2364,7 +2364,8 @@ the environment, checking metadata and finalized CheckedModule once to one priva
 file, then closes and atomically installs it. It never stages an environment
 for later rereading or copying. Failed writes leave only private staging data.
 One finalized snapshot is retained, not an implementation history. Only
-entries whose checking and evaluation add no diagnostics are stored. No
+entries whose checking and evaluation reports satisfy the replay contract
+("Cache Boundary") are stored. No
 source-location pointer selects an older module
 for transplantation, and no per-program literal bundle or root-validation
 certificate is persisted under a source placement.

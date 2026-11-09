@@ -11564,6 +11564,21 @@ fn expectWarmCheckedHitReproducesReports(
     try std.testing.expectEqualStrings(cold.reports, uncached.reports);
     try std.testing.expectEqual(cold.has_errors, warm.has_errors);
     try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, warm.artifact_keys);
+
+    // Cache identity excludes source placement, but report filenames must
+    // come from the current workspace rather than the cached producer.
+    try writeImporterFixture(&tmp_dir, "relocated", helper_source);
+    const relocated_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "relocated/app/main.roc", allocator);
+    defer allocator.free(relocated_path);
+    var relocated = try compileAppFactsFinishingWithErrors(allocator, cache_dir, relocated_path);
+    defer relocated.deinit(allocator);
+    var relocated_uncached = try compileAppFactsFinishingWithErrors(allocator, null, relocated_path);
+    defer relocated_uncached.deinit(allocator);
+    try std.testing.expectEqual(@as(u32, 0), relocated.build.modules_compiled);
+    try std.testing.expectEqual(@as(u64, 0), relocated.cache.misses);
+    try std.testing.expectEqualStrings(relocated_uncached.reports, relocated.reports);
+    try std.testing.expectEqual(has_errors, relocated.has_errors);
+    try std.testing.expectEqualSlices([32]u8, cold.artifact_keys, relocated.artifact_keys);
 }
 
 test "checked module cache hit reproduces a checking warning" {
@@ -11601,6 +11616,19 @@ test "checked module cache hit reproduces a compile-time evaluation failure" {
         \\    }
         \\}
     , "the helper message is unavailable", true);
+}
+
+test "checked module cache hit preserves checking and evaluation report order" {
+    try expectWarmCheckedHitReproducesReports("ordered_reports",
+        \\Helper := {}.{
+        \\    bad : Str
+        \\    bad = Str.concat("bad ", 42)
+        \\    message : Str
+        \\    message = {
+        \\        crash "failure after checking"
+        \\    }
+        \\}
+    , "failure after checking", true);
 }
 
 test "Coordinator basic initialization" {
