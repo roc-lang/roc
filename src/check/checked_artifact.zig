@@ -24828,6 +24828,20 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
 }
 
+/// Whether a value of `nominal` is a callable whose interface the nominal's
+/// methods hide from any signature mentioning it: a nominal over a callable
+/// payload, or a `ParseTagUnionSpec`, whose `parse` method quantifies the
+/// encoding, state, and error types its callable was built at. A worker
+/// receiving one cannot seal a variable that callable may involve (design.md
+/// "Sealed Result Rows").
+fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
+    return switch (nominal.representation) {
+        .local_box_payload_capability, .imported_box_payload_capability => true,
+        .builtin => |builtin_nominal| builtinRuntimeEncoding(builtin_nominal) == .parse_tag_union_spec,
+        .local_declaration, .imported_declaration, .opaque_without_backing => false,
+    };
+}
+
 /// Compute every sealed scheme-variable slot of one template together. A type
 /// can occur on both a coercible result path and an externally involved path;
 /// the visited key therefore includes the traversal mode.
@@ -24902,10 +24916,7 @@ const SealedSchemeSlots = struct {
             switch (step.mode) {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
-                        .nominal => |nominal| switch (nominal.representation) {
-                            .local_box_payload_capability, .imported_box_payload_capability => return,
-                            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
-                        },
+                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return,
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                     };
                     try self.pushChildren(payload, step.mode);
@@ -25037,10 +25048,9 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         };
     }
 
-    /// Whether any argument of the function type `fn_root` holds a nominal
-    /// over a callable payload (`local_box_payload_capability`,
-    /// `imported_box_payload_capability`): a function value whose
-    /// interface the signature does not show.
+    /// Whether any argument of the function type `fn_root` holds a callable
+    /// whose interface the signature does not show
+    /// (`nominalHidesCallableInterface`).
     fn argumentsHoldCallablePayload(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId) Allocator.Error!bool {
         const signature = self.function(fn_root) orelse return true;
         const allocator = self.allocator;
@@ -25051,10 +25061,7 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
             if ((try self.seen.getOrPut(allocator, ty)).found_existing) continue;
             const payload = self.types.payload(ty);
             switch (payload) {
-                .nominal => |nominal| switch (nominal.representation) {
-                    .local_box_payload_capability, .imported_box_payload_capability => return true,
-                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
-                },
+                .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return true,
                 .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
             try self.pushChildren(payload);
