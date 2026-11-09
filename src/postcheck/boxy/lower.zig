@@ -3274,10 +3274,10 @@ pub const Program = struct {
                 for (target.literal_scopes) |scope| count += @intCast(scope.len);
                 break :blk count;
             },
-            .adapter, .codec => @intCast(target.scheme_vars.len),
+            .adapter, .codec, .default => @intCast(target.scheme_vars.len),
             .method_entry => |entry_target| self.inputCount(entry_target),
             .structural, .structural_map => target.structural_descs,
-            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
+            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
         };
     }
 
@@ -3293,10 +3293,10 @@ pub const Program = struct {
     pub fn descCount(self: *Program, id: WorkerId) u32 {
         const target = self.worker(id).*;
         return switch (target.key) {
-            .template, .lambda, .adapter, .codec => @intCast(target.scheme_vars.len),
+            .template, .lambda, .adapter, .codec, .default => @intCast(target.scheme_vars.len),
             .method_entry => |entry_target| self.descCount(entry_target),
             .structural, .structural_map => target.structural_descs,
-            .default, .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
+            .literal_thunk, .root_slot, .root, .static_data, .crash_dictionary, .convert, .callable_eval_entry => 0,
         };
     }
 };
