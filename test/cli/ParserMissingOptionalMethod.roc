@@ -1,6 +1,9 @@
 ParserMissingOptionalMethod :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -33,9 +36,9 @@ Format := [Default].{
 
 State := [Done]
 
-parse : State -> Try(a, [FormatError, ..errs])
+parse : State -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -44,5 +47,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ foo : Try(Str, [Absent]) }, [FormatError, MissingRequiredField(Str)])
+main : Try({ foo : Try(Str, [Absent]) }, [FormatError])
 main = parse(Done)

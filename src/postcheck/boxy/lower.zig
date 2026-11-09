@@ -790,8 +790,6 @@ pub const Program = struct {
     composed_in_body: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// The nested procedure site of each lambda and closure expression.
     sites_by_expr: std.AutoHashMapUnmanaged(ExprKey, u32) = .empty,
-    /// Modules by their stable identity hash.
-    by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The default a record construction that omits a field materializes.
     omitted_defaults: std.AutoHashMapUnmanaged(OmittedField, checked.CheckedFieldDefault) = .empty,
     /// The generated codec families and their workers.
@@ -1049,6 +1047,11 @@ pub const Program = struct {
                     hasher.update(&try self.typeContent(field.ty));
                     hasher.update(&[_]u8{@backingInt(field.kind)});
                     hashWord(&hasher, field.slot_variable);
+                    hasher.update(&[_]u8{@intFromBool(field.default != null)});
+                    if (field.default) |default| {
+                        hasher.update(&self.modules.get(default.module).view.module_identity.stable_hash);
+                        hashWord(&hasher, default.expr_node);
+                    }
                 }
                 try self.hashOptionalType(&hasher, record.ext);
                 if (record.declared) |declared| {
@@ -1256,7 +1259,6 @@ pub const Program = struct {
         self.allocator.free(self.body_indexed);
         self.local_scopes.deinit(self.allocator);
         self.local_procs.deinit(self.allocator);
-        self.by_identity.deinit(self.allocator);
         self.sites_by_expr.deinit(self.allocator);
         self.nominal_overrides.deinit(self.allocator);
         self.composed_in_body.deinit(self.allocator);
@@ -2012,7 +2014,9 @@ pub const Program = struct {
                             if (field.slot_variable >= bound.len) invariant("a substituted field kind names a variable past its bindings");
                             try fields.append(allocator, self.store.instantiatedField(field.name, ty, bound[field.slot_variable]));
                         } else {
-                            try fields.append(allocator, .{ .name = field.name, .ty = ty, .kind = field.kind });
+                            var substituted = field;
+                            substituted.ty = ty;
+                            try fields.append(allocator, substituted);
                         }
                     }
                     var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
@@ -3486,7 +3490,6 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     @memset(program.body_indexed, false);
     base.dev_diagnostics.countTestWork(.boxy_body_index_available_modules, program.modules.views.items.len);
     for (program.modules.views.items) |view| {
-        try program.by_identity.put(allocator, view.view.module_identity.stable_hash, view.index);
         try program.by_module_idx.put(allocator, view.view.module_identity.module_idx, view.index);
         for (view.view.exported_procedure_bindings.bindings) |*binding| {
             try program.exported_bindings.put(allocator, .{ .module = view.index, .def = binding.binding.def, .pattern = binding.binding.pattern }, binding);
@@ -3979,6 +3982,45 @@ test "a generated worker's identity is its content, whatever lowering reaches it
     // Workers of different content have different identities.
     for (identities[0], 0..) |identity, index| {
         for (identities[0][index + 1 ..]) |other| try std.testing.expect(!std.meta.eql(identity, other));
+    }
+}
+
+test "Boxy field default identity survives substitution and stable type digests" {
+    const allocator = std.testing.allocator;
+    var digests: [2][3][32]u8 = undefined;
+    for (0..2) |round| {
+        var program: Program = undefined;
+        program.allocator = allocator;
+        program.store = types.Store.init(allocator);
+        defer program.store.deinit();
+        program.modules = .{ .allocator = allocator };
+        defer program.modules.deinit();
+        program.type_contents = .empty;
+        defer program.type_contents.deinit(allocator);
+        for (0..2) |index| {
+            var view: checked.ImportedModuleView = undefined;
+            view.key = .{ .bytes = @splat(@intCast(if (round == 0) index + 1 else 2 - index)) };
+            view.module_identity.stable_hash = view.key.bytes;
+            _ = try program.modules.add(view);
+        }
+        const store = &program.store;
+        const name = try store.internName("count");
+        const variable = try store.variable(0);
+        const number = try store.primitive(.u8);
+        var fields = [_]types.Field{.{ .name = name, .ty = variable, .kind = .inline_slot }};
+        for (0..3) |variant| {
+            fields[0].default = if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) };
+            const generic = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+            const concrete = try program.substitute(allocator, generic, &.{number});
+            const field = store.fieldSpan(store.get(concrete).record.fields)[0];
+            try std.testing.expectEqual(number, field.ty);
+            try std.testing.expectEqual(fields[0].default, field.default);
+            digests[round][variant] = try program.typeContent(concrete);
+        }
+    }
+    for (digests[0], digests[1]) |first, second| try std.testing.expectEqual(first, second);
+    for (digests[0], 0..) |first, index| {
+        for (digests[0][index + 1 ..]) |second| try std.testing.expect(!std.mem.eql(u8, &first, &second));
     }
 }
 

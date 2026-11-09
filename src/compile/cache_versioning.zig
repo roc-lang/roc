@@ -38,11 +38,11 @@ pub const Entry = enum {
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 17 stores Boxy callable capture
-/// graphs, including descriptor scopes, and names an integer list worker of
-/// a stored function's recipe by its item type. Platform-pairing entries
-/// share it.
-const checked_envelope_version: u32 = 17;
+/// reflected in layout fingerprints. Version 18 combines field-default identities
+/// in Boxy stored-function types with integer list worker item-type bindings.
+/// It rejects both incompatible version 17 recipe formats. Platform-pairing
+/// entries share it.
+const checked_envelope_version: u32 = 18;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.

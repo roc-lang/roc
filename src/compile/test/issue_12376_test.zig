@@ -5,6 +5,7 @@
 //! repro for https://github.com/roc-lang/roc/issues/12376
 
 const std = @import("std");
+const base = @import("base");
 const harness = @import("lower_to_lir_harness.zig");
 
 test "issue 12376: derived parser for a tag union with direct and nested imported opaque payloads lowers to LIR" {
@@ -60,7 +61,10 @@ test "issue 12376: derived parser for a tag union with direct and nested importe
 
     const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", std.testing.allocator);
     defer std.testing.allocator.free(path);
-    try harness.expectAppPathLowersToLir(path);
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = strategy, .target_usize = .u32 });
+        try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = strategy, .target_usize = .u64 });
+    }
 }
 
 test "issue 12376: derived parser for a tag union with an empty record payload lowers to LIR" {
@@ -96,5 +100,8 @@ test "issue 12376: derived parser for a tag union with an empty record payload l
 
     const path = try dir.dir.realPathFileAlloc(std.testing.io, "main.roc", std.testing.allocator);
     defer std.testing.allocator.free(path);
-    try harness.expectAppPathLowersToLir(path);
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = strategy, .target_usize = .u32 });
+        try harness.expectAppPathLowersToLirWithOptions(path, .{ .specialization_strategy = strategy, .target_usize = .u64 });
+    }
 }
