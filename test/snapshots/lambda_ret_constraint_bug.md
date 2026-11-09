@@ -80,7 +80,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "n")))
-			(e-dispatch-call (method "times") (constraint-fn-var 252)
+			(e-dispatch-call (method "times") (constraint-fn-var 255)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "n"))))
@@ -96,7 +96,7 @@ NO CHANGE
 			(args
 				(p-underscore)
 				(p-underscore))
-			(e-call (constraint-fn-var 265)
+			(e-call (constraint-fn-var 268)
 				(e-lookup-local
 					(p-assign (ident "helper")))
 				(e-num (value "5"))))

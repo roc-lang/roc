@@ -14,9 +14,6 @@ summarize = |json| {
 			"${byline}: ${U64.to_str(article.views)} views, tags: ${tag_text}"
 		}
 
-		Err(MissingRequiredField(field)) =>
-			"missing required field: ${field}"
-
 		Err(InvalidJson(message)) =>
 			"invalid JSON: ${message}"
 		}
@@ -24,6 +21,6 @@ summarize = |json| {
 
 expect {
 	summarize(valid_json) == "Pattern Matching by Mira: 1420 views, tags: roc, json"
-		and summarize(missing_author_json) == "missing required field: author"
+		and summarize(missing_author_json) == "invalid JSON: Missing field: author"
 			and summarize(broken_json) == "invalid JSON: Invalid JSON"
 }

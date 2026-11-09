@@ -107,14 +107,14 @@ check_json_parse_allocs! = |input| {
 	doc = Str.concat("{\"s\":\"", Str.concat(two, "\",\"a\":7}"))
 
 	decode_before = Host.alloc_count!()
-	decoded : Try({ s : Str, a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	decoded : Try({ s : Str, a : U64 }, [InvalidJson(Str)])
 	decoded = Json.parse(doc)
 	decode_allocs = Host.alloc_count!() - decode_before
 	expect decode_allocs == 0
 	expect decoded == Ok({ s: two, a: 7 })
 
 	skip_before = Host.alloc_count!()
-	skipped : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	skipped : Try({ a : U64 }, [InvalidJson(Str)])
 	skipped = Json.parse(doc)
 	skip_allocs = Host.alloc_count!() - skip_before
 	expect skip_allocs == 0
@@ -123,7 +123,7 @@ check_json_parse_allocs! = |input| {
 	# a skipped numeric field: scalar validation must not allocate either
 	num_doc = Str.concat("{\"z\":", Str.concat(Str.repeat("7", 1 + Str.count_utf8_bytes(input) % 3), ",\"a\":1}"))
 	skip_num_before = Host.alloc_count!()
-	skipped_num : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	skipped_num : Try({ a : U64 }, [InvalidJson(Str)])
 	skipped_num = Json.parse(num_doc)
 	skip_num_allocs = Host.alloc_count!() - skip_num_before
 	expect skip_num_allocs == 0

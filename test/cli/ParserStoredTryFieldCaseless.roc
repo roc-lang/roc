@@ -1,6 +1,9 @@
 ParserStoredTryFieldCaseless :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| underscores_to_dashes(name)
 
@@ -76,7 +79,7 @@ State := [
 
 Shape : { foo : Str }
 
-parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
 parse_shape = Shape.parser_for(Format.Default)
 
 expect {
@@ -102,7 +105,7 @@ parse_http_shape : State -> Try(
 		},
 		rest : State,
 	},
-	[FormatError, MissingRequiredField(Str)],
+	[FormatError],
 )
 parse_http_shape = HttpShape.parser_for(Format.Default)
 

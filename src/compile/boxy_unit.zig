@@ -789,7 +789,7 @@ test "Boxy object restoration transfers owned metadata and survives allocation f
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testRestoredMetadata, .{});
 }
 
-fn testRestoredMetadata(gpa: Allocator) !void {
+fn testRestoredMetadata(gpa: Allocator) (object_cache.DecodeError || error{TestExpectedEqual})!void {
     const built = restored: {
         const bytes = try object_cache.encode(gpa, .{
             .exports = &.{.{

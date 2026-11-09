@@ -10,9 +10,9 @@ good = "{\"a\":{\"A\":3},\"n\":4}"
 
 no_field = "{\"a\":{\"B\":\"text\"}}"
 
-Closed : [InvalidJson(Str), MissingRequiredField(Str)]
+Closed : [InvalidJson(Str)]
 
-Widened : [InvalidJson(Str), MissingRequiredField(Str), Rejected(Str), Retry(U64)]
+Widened : [InvalidJson(Str), Rejected(Str), Retry(U64)]
 
 parse_closed : Str -> Try(Model, Closed)
 parse_closed = |json| Json.parse(json)
@@ -28,7 +28,7 @@ parse_widened = |json| {
     }
 }
 
-parse_open : Str -> Try(Model, [InvalidJson(Str), MissingRequiredField(Str), ..others])
+parse_open : Str -> Try(Model, [InvalidJson(Str), ..others])
 parse_open = |json| Json.parse(json)
 
 parse_generic = |json| Json.parse(json)
@@ -66,7 +66,7 @@ encode_question = |doc| {
     Ok(Str.count_utf8_bytes(encoded))
 }
 
-QuestionParse : [Aardvark(Str, Str, U64), InvalidJson(Str), MissingRequiredField(Str), Zebra]
+QuestionParse : [Aardvark(Str, Str, U64), InvalidJson(Str), Zebra]
 
 QuestionEncode : [Aardvark(Str, Str, U64), Infinity, NaN, NegativeInfinity, Zebra]
 
@@ -142,8 +142,7 @@ show_closed = |result| {
     match result {
         Ok({ a: A(value), n }) => "ok A ${value.to_str()} ${n.to_str()}"
         Ok({ a: B(text), n }) => "ok B ${text} ${n.to_str()}"
-        Err(InvalidJson(_)) => "invalid json"
-        Err(MissingRequiredField(name)) => "missing ${name}"
+        Err(InvalidJson(message)) => message
     }
 }
 
@@ -152,8 +151,7 @@ show_widened = |result| {
     match result {
         Ok({ a: A(value), n }) => "ok A ${value.to_str()} ${n.to_str()}"
         Ok({ a: B(text), n }) => "ok B ${text} ${n.to_str()}"
-        Err(InvalidJson(_)) => "invalid json"
-        Err(MissingRequiredField(name)) => "missing ${name}"
+        Err(InvalidJson(message)) => message
         Err(Rejected(reason)) => reason
         Err(Retry(count)) => "retry ${count.to_str()}"
     }
@@ -186,8 +184,7 @@ show_question_parse = |result| {
     match result {
         Ok(n) => "ok ${n.to_str()}"
         Err(Aardvark(first, second, count)) => "aardvark ${first} ${second} ${count.to_str()}"
-        Err(InvalidJson(_)) => "invalid json"
-        Err(MissingRequiredField(name)) => "missing ${name}"
+        Err(InvalidJson(message)) => message
         Err(Zebra) => "zebra"
     }
 }
