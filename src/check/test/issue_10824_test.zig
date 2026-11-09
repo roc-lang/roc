@@ -15,7 +15,7 @@ test "issue 10824: inferred encoder record row closes at quiescence" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertDefType("encode_count", "Str -> Try(Str, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try test_env.assertDefType("encode_count", "Str -> Try(Str, [InvalidJson(Str)])");
 }
 
 test "issue 10824: derived encoder rejects an inferred open record parameter" {

@@ -90,7 +90,7 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "n")))
-				(e-call (constraint-fn-var 247)
+				(e-call (constraint-fn-var 250)
 					(e-lookup-external
 						(builtin))
 					(e-string
@@ -100,7 +100,7 @@ EndOfFile,
 		(e-if
 			(if-branches
 				(if-branch
-					(e-call (constraint-fn-var 256)
+					(e-call (constraint-fn-var 259)
 						(e-lookup-local
 							(p-assign (ident "contains")))
 						(e-string

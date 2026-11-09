@@ -10,7 +10,8 @@ Email := [Email(Str)].{
 			if Str.contains(parsed.value, "@") {
 				Ok({ value: Email.Email(parsed.value), rest: parsed.rest })
 			} else {
-				Err(InvalidEmail(parsed.value))
+				# Domain validation uses the format's error, preserving the bad value.
+				Err(InvalidJson("Invalid email: ${parsed.value}"))
 			}
 		}
 	}
@@ -27,7 +28,7 @@ expect summarize("{\"name\":\"Ann\",\"email\":\"ann@example.com\",\"num_stars\":
 
 expect {
 	match summarize("{\"name\":\"Ann\",\"email\":\"not an email\",\"num_stars\":3}") {
-		Err(InvalidEmail(raw)) => raw == "not an email"
+		Err(InvalidJson(message)) => message == "Invalid email: not an email"
 		_ => False
 	}
 }
@@ -41,7 +42,7 @@ expect {
 
 expect {
 	match summarize("{\"name\":\"Ann\",\"num_stars\":3}") {
-		Err(MissingRequiredField(field)) => field == "email"
+		Err(InvalidJson(message)) => message == "Missing field: email"
 		_ => False
 	}
 }

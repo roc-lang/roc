@@ -55,14 +55,14 @@ nullable_source = "{\"required_nullable\":null,\"optional_nullable\":null}"
 
 auto_nominal_round_trips : Str -> Bool
 auto_nominal_round_trips = |json| {
-	first_result : Try(AutoToken, [InvalidJson(Str), MissingRequiredField(Str)])
+	first_result : Try(AutoToken, [InvalidJson(Str)])
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
 			encoded1 = Json.to_str(first)
 
-			second_result : Try(AutoToken, [InvalidJson(Str), MissingRequiredField(Str)])
+			second_result : Try(AutoToken, [InvalidJson(Str)])
 			second_result = Json.parse(encoded1)
 
 			match second_result {
@@ -94,14 +94,14 @@ expect {
 
 round_trips : Str -> Bool
 round_trips = |json| {
-	first_result : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+	first_result : Try(Shape, [InvalidJson(Str)])
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
 			encoded1 = Json.to_str(first)
 
-			second_result : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+			second_result : Try(Shape, [InvalidJson(Str)])
 			second_result = Json.parse(encoded1)
 
 			match second_result {
@@ -118,14 +118,14 @@ round_trips = |json| {
 
 nullable_round_trips : Str -> Bool
 nullable_round_trips = |json| {
-	first_result : Try(NullableShape, [InvalidJson(Str), MissingRequiredField(Str)])
+	first_result : Try(NullableShape, [InvalidJson(Str)])
 	first_result = Json.parse(json)
 
 	match first_result {
 		Ok(first) => {
 			encoded1 = Json.to_str(first)
 
-			second_result : Try(NullableShape, [InvalidJson(Str), MissingRequiredField(Str)])
+			second_result : Try(NullableShape, [InvalidJson(Str)])
 			second_result = Json.parse(encoded1)
 
 			match second_result {
