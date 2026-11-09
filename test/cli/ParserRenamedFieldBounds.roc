@@ -1,6 +1,9 @@
 ParserRenamedFieldBounds :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name|
 		if Str.is_eq(name, "long_name") {
@@ -112,9 +115,9 @@ find_any_field = |fields, name| {
 	}
 }
 
-parse : Str -> Try(a, [FormatError, ..errs])
+parse : Str -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -124,14 +127,14 @@ parse = |input| {
 }
 
 expect {
-	result : Try({ long_name : Str }, [FormatError, MissingRequiredField(Str)])
+	result : Try({ long_name : Str }, [FormatError])
 	result = parse("bounded")
 
 	result == Ok({ long_name: "bounded" })
 }
 
 expect {
-	result : Try({ foo : Try(Str, [Missing]), long_name : Str }, [FormatError, MissingRequiredField(Str)])
+	result : Try({ foo : Try(Str, [Missing]), long_name : Str }, [FormatError])
 	result = parse("bounded")
 
 	result == Ok({ foo: Err(Missing), long_name: "bounded" })

@@ -5,6 +5,19 @@
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
+test "unary not resolves to the actual builtin Bool.not definition" {
+    var test_env = try TestEnv.init("Test", "result = !True");
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const call = test_env.module_env.store.getExpr(try test_env.defExpr("result")).e_call;
+    const lookup = test_env.module_env.store.getExpr(call.func).e_lookup_associated_resolved;
+    const builtin = test_env.builtin_module.env;
+    const definition = builtin.store.getDef(lookup.target_def_idx);
+    const binding = builtin.store.getPattern(definition.pattern).assign;
+    try std.testing.expectEqualStrings("Builtin.Bool.not", builtin.getIdentText(binding.ident));
+    try std.testing.expectEqual(@backingInt(lookup.target_def_idx), lookup.target_node_idx);
+}
+
 fn expectOneShadowWarningAndNoTypeProblems(src: []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();

@@ -155,7 +155,7 @@ const Builder = struct {
         try self.jobs.append(self.graph.allocator, .{ .source_plan = sp, .source_layout = sl, .plan = tp, .layout_idx = tl, .source = src, .dest = dest, .source_storage = ss, .storage = ts });
     }
     fn boxed(self: *Builder, job: Job, sp: Program.ConstPlanId, sl: layout.Idx, tp: Program.ConstPlanId, tl: layout.Idx) Allocator.Error!void {
-        const src = try self.pointer(job.source);
+        const src = if (self.sourceSize(sl) == 0) job.source else try self.pointer(job.source);
         const allocation = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = 1, .kind = .value }, self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), null);
         try self.graph.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
@@ -210,7 +210,7 @@ const Builder = struct {
             .named => unreachable, // Explicit nominal wrappers were consumed above.
             .box => |element| switch (physical.tag) {
                 .box_of_zst => try self.graph.writeWord(job.dest, 0),
-                .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
+                .box => try self.boxed(job, source_plan.box, if (source_physical.tag == .box_of_zst) .zst else source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
                 .hole => invariant("a demand hole reached a frozen root"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .dynamic => invariant("invalid box layout"),
@@ -282,9 +282,12 @@ const Builder = struct {
         try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (count == 0 or physical.tag == .list_of_zst) return;
-        const sl = self.source_program.layouts.getLayout(job.source_layout).getIdx();
+        const source_physical = self.source_program.layouts.getLayout(job.source_layout);
+        const sl: layout.Idx = if (source_physical.tag == .list_of_zst) .zst else source_physical.getIdx();
         const tl = physical.getIdx();
-        const src = try self.pointer(job.source);
+        // Zero-sized source elements have no allocation. Their destination
+        // may still need storage for a nominal's declared padding.
+        const src = if (self.sourceSize(sl) == 0) job.source else try self.pointer(job.source);
         const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, std.math.mul(usize, count, self.graph.size(tl)) catch return error.OutOfMemory, self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
         try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.graph.size(tl)), .value, .value);
@@ -435,6 +438,55 @@ fn testRootSymbol(exports: []const static_data.StaticDataExport) error{TestUnexp
 // These graph-only tests do not read request provenance or solved return types.
 fn testRoot(plan: Program.ConstPlanId, idx: layout.Idx) Program.ConstRootPlan {
     return .{ .root_order = 0, .owner = .first, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
+}
+
+fn testContainerPlan(program: *Program.Result, as_list: bool) Allocator.Error!Program.ConstPlanId {
+    const element: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(program.store.allocator, .{ .record = &.{} });
+    const container: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(program.store.allocator, if (as_list) .{ .list = element } else .{ .box = element });
+    return container;
+}
+
+test "frozen root transcode materializes padded zero-sized list and box payloads" {
+    const allocator = std.testing.allocator;
+    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
+        for ([_]bool{ false, true }) |as_list| {
+            var source = try Program.Result.init(allocator, base.target.TargetUsize.native);
+            defer source.deinit();
+            var target = try Program.Result.init(allocator, width);
+            defer target.deinit();
+            const source_plan = try testContainerPlan(&source, as_list);
+            const target_plan = try testContainerPlan(&target, as_list);
+            // The record has no semantic fields, but its nominal destination
+            // reserves physical padding.
+            const padded = try target.layouts.putStructFields(&.{.{ .index = 0, .layout = .u64 }});
+            const source_layout = try source.layouts.insertLayout(if (as_list) layout.Layout.listOfZst() else layout.Layout.boxOfZst());
+            const target_layout = if (as_list) try target.layouts.insertList(padded) else try target.layouts.insertBox(padded);
+            var list_value = builtins.list.RocList{ .bytes = null, .length = 3, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(3) };
+            var box_value: usize = 0;
+            const native = try @import("native_root_export.zig").freezeRoot(
+                allocator,
+                &source,
+                try testSlot(&source, source_layout),
+                testRoot(source_plan, source_layout),
+                .{ .ptr = if (as_list) @ptrCast(&list_value) else @ptrCast(&box_value) },
+                .{},
+            );
+            defer static_data.deinitStaticData(allocator, native);
+            try std.testing.expectEqual(@as(usize, 1), native.len);
+            try std.testing.expectEqual(@as(usize, 0), native[0].relocations.len);
+            const converted = try transcodeRoot(allocator, &source, testRoot(source_plan, source_layout), native, try testRootSymbol(native), &target, testRoot(target_plan, target_layout), try testSlot(&target, target_layout));
+            defer static_data.deinitStaticData(allocator, converted);
+            try std.testing.expectEqual(@as(usize, 2), converted.len);
+            try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
+            const pointer = converted[0].relocations[0];
+            const allocation = converted[@backingInt(pointer.target.data_symbol)];
+            const offset = allocation.symbol_offset + @as(usize, @intCast(pointer.addend));
+            const count: usize = if (as_list) 3 else 1;
+            for (allocation.bytes[offset..][0 .. count * 8]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
+        }
+    }
 }
 
 test "frozen root transcode preserves shared list strings across pointer widths" {

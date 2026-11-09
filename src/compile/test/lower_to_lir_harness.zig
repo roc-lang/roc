@@ -117,6 +117,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     static_materialization.MaterializationError ||
     lir.CheckedPipeline.LowerResourceError ||
+    @import("static_data").MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -1340,6 +1341,16 @@ fn lowerAppPathToLir(
         lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
     }
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
+    if (inspect_lowered != null) {
+        // Executing a lowered program requires the same static-data
+        // materialization that a linked program receives.
+        const exports = try @import("static_data").buildStaticDataForWidth(gpa, .{
+            .root = lower_modules.root,
+            .imports = lower_modules.imports,
+        }, &lowered, opts.target_usize, .{});
+        if (lowered.frozen_static_data) |*previous| previous.deinit();
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
 
     if (dump) |writer| {
         const store = &lowered.lir_result.store;

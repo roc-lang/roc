@@ -1622,10 +1622,17 @@ pub const Builder = struct {
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
                 // Unit producers also supply factories for CTFE, and contextual
-                // constants retain factory bodies. A whole runtime program
-                // instead promises a completed value for context-free roots.
+                // constants retain factory bodies. Polymorphic constants are
+                // explicit evaluation templates, instantiated at their runtime
+                // read rather than CTFE roots. A whole runtime program instead
+                // promises a completed value for context-free roots.
                 if (self.program.moduleUnit() == null and !self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
-                    invariant("a runtime entry wrapper has no completed Boxy value");
+                    // Exact aliases also compute their already-proven
+                    // procedure reference without an evaluator.
+                    const forwards = for (self.view.view.callable_eval_templates.templates) |alias| {
+                        if (alias.root == wrapper.root) break alias.forwarded_lookup != null;
+                    } else false;
+                    if (!forwards) invariant("a runtime entry wrapper has no completed Boxy value");
                 }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
@@ -2065,7 +2072,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.var_descs.len);
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2199,7 +2206,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.var_descs.len);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
@@ -2479,12 +2486,14 @@ pub const Builder = struct {
     /// The value of the `??` default `default`: its declaring module's
     /// default expression, evaluated now.
     pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
-        const origin_module = default.origin() orelse invariant("a field default has no declaring module");
-        const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
-            invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+        return self.fieldDefaultValue(self.program.modules.fieldDefault(self.module, default));
+    }
+
+    /// Materialize a default whose declaring module is already program-owned.
+    pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault) Allocator.Error!LocalId {
+        const expr = self.program.module(default.module).bodies().defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
+        const worker = try self.program.defaultWorker(default.module, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
         return target;
@@ -2958,17 +2967,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payloadFor(.boxy)) {
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
                     .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
-                    .unevaluated, .runtime => {
+                    .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -5409,7 +5421,7 @@ pub const Builder = struct {
                 // worker evaluating that default, which has no scheme and no
                 // dictionaries of its own.
                 const owner_worker = if (nested.default_root) |identity| blk: {
-                    const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
+                    const declaring = self.program.modules.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
                     const declaring_view = self.program.module(declaring);
                     const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
                     break :blk switch (default_site.owner) {
@@ -7104,7 +7116,7 @@ pub const Builder = struct {
                     if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
                     if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
-                    const declaring = self.program.by_identity.get(identity) orelse
+                    const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
                     const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
                     const view = self.program.module(declaring);

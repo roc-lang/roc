@@ -21,8 +21,7 @@ pub fn load(gpa: Allocator, object_bytes: []const u8) LoadError!Image {
     return Image.load(gpa, object_bytes, .{ .resolve = resolveHostSymbol });
 }
 
-/// Resolve this compiler's runtime symbols when a caller also supplies data.
-pub fn resolveHostSymbol(_: ?*anyopaque, name: []const u8) ?usize {
+fn resolveHostSymbol(_: ?*anyopaque, name: []const u8) ?usize {
     if (builtins.in_process_host.Symbol.fromName(name)) |symbol| return symbol.address();
     if (boxyRuntimeSymbol(name)) |address| return address;
     return builtins.native_runtime_libcalls.resolve(name);
