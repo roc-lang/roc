@@ -14,79 +14,23 @@ const Measurement = struct {
     releases: usize = 0,
 };
 
-fn measureLiteralList(literal_count: usize) TestError!Measurement {
-    const gpa = std.testing.allocator;
-    const io = std.testing.io;
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.writeFile(io, .{
-        .sub_path = "T.roc",
-        .data =
-        \\T :: List(U8).{
-        \\    from_quote : Str -> Try(T, [BadQuotedBytes(Str)])
-        \\    from_quote = |s| Ok(T.(Str.to_utf8(s)))
-        \\}
-        ,
-    });
-    var source: std.ArrayList(u8) = .empty;
-    defer source.deinit(gpa);
-    try source.appendSlice(gpa, "module [words]\n\nimport T\n\nwords : List(T)\nwords = [\n");
-    for (0..literal_count) |index| try source.print(gpa, "    \"w{d}\",\n", .{index});
-    try source.appendSlice(gpa, "]\n");
-    try tmp.dir.writeFile(io, .{ .sub_path = "Repro.roc", .data = source.items });
-    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(cwd);
-    const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
-    defer gpa.free(path);
+/// Counts the reachable statements of each `.boxy` compile-time program as
+/// it is lowered, excluding abandoned rewrite nodes. This measures the
+/// actual compile-time program without depending on CPU scheduling, target
+/// instruction selection, or the compiler's optimization level.
+const ProgramMeasure = struct {
+    measurement: Measurement = .{},
 
-    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
-    defer build.deinit();
-    try build.build(path);
-    const coord = build.coordinator.?;
-    try std.testing.expect(!coord.hasUserErrors());
-    const session = &coord.program_session.?;
-    const artifact = artifact: {
-        var packages = coord.packages.iterator();
-        while (packages.next()) |package| {
-            for (package.value_ptr.*.modules.items) |*module| {
-                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedArtifact().?;
-            }
-        }
-        return error.TestUnexpectedResult;
-    };
-    var constants: usize = 0;
-    for (artifact.compile_time_roots.roots) |root| {
-        if (root.kind != .constant) continue;
-        constants += 1;
-        try std.testing.expect(root.payload == .const_node);
-        const value = artifact.const_store.get(root.payload.const_node);
-        try std.testing.expect(value == .list and value.list == .nodes);
-        try std.testing.expectEqual(literal_count, value.list.nodes.len);
-        for (value.list.nodes, 0..) |node, index| {
-            const word = artifact.const_store.get(node);
-            try std.testing.expect(word == .nominal);
-            const bytes = artifact.const_store.get(word.nominal.backing);
-            try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
-            const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
-            defer gpa.free(expected);
-            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.packed_bytes.bytes));
-        }
-    }
-    try std.testing.expectEqual(@as(usize, 1), constants);
-
-    // Count reachable emitted LIR, excluding abandoned rewrite nodes. This
-    // measures the actual CTFE program without depending on CPU scheduling,
-    // target instruction selection, or the compiler's optimization level.
-    var result: Measurement = .{};
-    for (session.completed.?.stages.items) |program| {
-        const store = &program.lir_result.store;
+    fn observe(raw: *anyopaque, result: *const lir.Program.Result) std.mem.Allocator.Error!void {
+        const self: *ProgramMeasure = @ptrCast(@alignCast(raw));
+        const store = &result.store;
         for (store.getProcSpecs()) |proc| {
             var walk = try lir.BodyClone.ReachableStmts.init(store, proc.body orelse continue);
             defer walk.deinit();
             while (try walk.next()) |stmt| {
-                result.statements += 1;
+                self.measurement.statements += 1;
                 switch (store.getCFStmtImmediate(stmt).*) {
-                    .decref, .decref_if_initialized, .free => result.releases += 1,
+                    .decref, .decref_if_initialized, .free => self.measurement.releases += 1,
                     .init_uninitialized,
                     .assign_ref,
                     .assign_literal,
@@ -120,7 +64,73 @@ fn measureLiteralList(literal_count: usize) TestError!Measurement {
             }
         }
     }
-    return result;
+};
+
+fn measureLiteralList(literal_count: usize) TestError!Measurement {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{
+        .sub_path = "T.roc",
+        .data =
+        \\T :: List(U8).{
+        \\    from_quote : Str -> Try(T, [BadQuotedBytes(Str)])
+        \\    from_quote = |s| Ok(T.(Str.to_utf8(s)))
+        \\}
+        ,
+    });
+    var source: std.ArrayList(u8) = .empty;
+    defer source.deinit(gpa);
+    try source.appendSlice(gpa, "module [words]\n\nimport T\n\nwords : List(T)\nwords = [\n");
+    for (0..literal_count) |index| try source.print(gpa, "    \"w{d}\",\n", .{index});
+    try source.appendSlice(gpa, "]\n");
+    try tmp.dir.writeFile(io, .{ .sub_path = "Repro.roc", .data = source.items });
+    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const path = try tmp.dir.realPathFileAlloc(io, "Repro.roc", gpa);
+    defer gpa.free(path);
+
+    var build = try compile_build.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+    defer build.deinit();
+    var measure: ProgramMeasure = .{};
+    build.boxy_program_observer = .{ .context = &measure, .observe = ProgramMeasure.observe };
+    try build.build(path);
+    const coord = build.coordinator.?;
+    try std.testing.expect(!coord.hasUserErrors());
+    const artifact = artifact: {
+        var packages = coord.packages.iterator();
+        while (packages.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*module| {
+                if (std.mem.eql(u8, module.name, "Repro")) break :artifact module.checkedArtifact().?;
+            }
+        }
+        return error.TestUnexpectedResult;
+    };
+    var constants: usize = 0;
+    for (artifact.compile_time_roots.roots) |root| {
+        if (root.kind != .constant) continue;
+        constants += 1;
+        try std.testing.expect(root.payload == .const_node);
+        const value = artifact.const_store.get(root.payload.const_node);
+        try std.testing.expect(value == .list and value.list == .nodes);
+        try std.testing.expectEqual(literal_count, value.list.nodes.len);
+        for (value.list.nodes, 0..) |node, index| {
+            const word = artifact.const_store.get(node);
+            try std.testing.expect(word == .nominal);
+            const bytes = artifact.const_store.get(word.nominal.backing);
+            try std.testing.expect(bytes == .list and bytes.list == .packed_bytes);
+            const expected = try std.fmt.allocPrint(gpa, "w{d}", .{index});
+            defer gpa.free(expected);
+            try std.testing.expectEqualStrings(expected, artifact.const_store.blobData(bytes.list.packed_bytes.bytes));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), constants);
+
+    // The constant reads no function value, so the `.boxy` evaluator
+    // completes it (design.md "Compile-Time Evaluation Under `.lss`").
+    try std.testing.expect(measure.measurement.statements != 0);
+    return measure.measurement;
 }
 
 test "issue 11666: compile-time from_quote list LIR grows linearly" {

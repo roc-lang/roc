@@ -294,7 +294,20 @@ pub fn runBorrowed(
     try lowerer.keepReachedErasedMembers();
     try lowerer.writeRuntimeSchemas();
     lowerer.result.finishExpectSites();
+    verifyNoCaptureFreePacks(&lowerer.result.store);
     return lowerer.finish();
+}
+
+/// Every capture-free erased callable is a read of its static callable
+/// (`Lowerer.staticCallableRead`); none is packed at runtime.
+fn verifyNoCaptureFreePacks(store: *const LirStore) void {
+    if (builtin.mode != .debug) return;
+    for (store.getCFStmts()) |stmt| {
+        if (stmt != .assign_packed_erased_fn) continue;
+        if (store.stmtRow(stmt.assign_packed_erased_fn.data).capture == null) {
+            Common.invariant("a capture-free erased callable was packed at runtime instead of read from static data");
+        }
+    }
 }
 
 /// Whether this consumer runs a test: whether a root it lowers carries
@@ -909,6 +922,9 @@ const Lowerer = struct {
     const_mono_type_map: collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId),
     callable_source_fn_map: collections.DenseMap(Type.TypeId, SolvedType.TypeVarId),
     static_initializer_map: std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId),
+    /// The static-data slot holding each capture-free erased callable, by
+    /// its procedure: one slot per procedure in the program.
+    static_callable_map: collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId),
     comptime_value_map: std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId),
     /// Whether a root-slot read at one type takes its root's slot value
     /// as stored, per (root type, read type) pair.
@@ -1282,6 +1298,7 @@ const Lowerer = struct {
             .const_mono_type_map = collections.DenseMap(MonoType.TypeId, const_store.ConstTypeId).init(allocator),
             .callable_source_fn_map = collections.DenseMap(Type.TypeId, SolvedType.TypeVarId).init(allocator),
             .static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(allocator),
+            .static_callable_map = collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
             .static_initializer_queue = .empty,
@@ -1417,6 +1434,7 @@ const Lowerer = struct {
         self.deinitPackedPlans();
         self.static_initializer_queue.deinit(self.allocator);
         self.static_initializer_map.deinit();
+        self.static_callable_map.deinit();
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_representations.deinit(self.allocator);
@@ -1559,6 +1577,7 @@ const Lowerer = struct {
         self.packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(self.allocator);
         self.packed_literals = std.AutoHashMap(PackedLiteralKey, LIR.ListLiteral).init(self.allocator);
         self.static_initializer_map = std.AutoHashMap(StaticInitializerRequest, LIR.StaticDataId).init(self.allocator);
+        self.static_callable_map = collections.DenseMap(LIR.LirProcSpecId, LIR.StaticDataId).init(self.allocator);
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_representations = .empty;
@@ -2597,7 +2616,13 @@ const Lowerer = struct {
                     for (0..variants.len) |index| {
                         const variant = GuardedList.at(variants, index);
                         try self.add(.{ .proc = variant.target });
-                        if (variant.capture_ty) |capture_ty| try self.add(.{ .ty = capture_ty });
+                        if (variant.capture_ty) |capture_ty| {
+                            try self.add(.{ .ty = capture_ty });
+                        } else if (content == .erased_fn) {
+                            // A worker reads a capture-free member's static
+                            // callable; only the coordinator adds static data.
+                            _ = try l.staticCallableSlot(try l.procPlaceholder(variant.target), try l.layoutOfType(ty));
+                        }
                     }
                     if (l.callable_source_fn_map.get(ty)) |source| {
                         const func = l.solved.types.rootContent(source).func;
@@ -8029,8 +8054,12 @@ const Lowerer = struct {
         if (self.captureSpan(captures).len != capture_operands.len) {
             Common.invariant("erased callable capture operand count differed from lifted function captures");
         }
-        const capture = if (capture_ty) |ty| try self.addTemp(ty) else null;
-        const capture_layout = if (capture) |local| self.result.store.getLocal(local).layout_idx else null;
+        const ty = capture_ty orelse {
+            if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
+            return .{ .ret = try self.staticCallableRead(where.source(), target, fn_id, next) };
+        };
+        const capture = try self.addTemp(ty);
+        const capture_layout = self.result.store.getLocal(capture).layout_idx;
         const reuse = try self.erasedCallableReuseForPack(target, capture_layout);
         const assign = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
@@ -8043,9 +8072,56 @@ const Lowerer = struct {
             }),
             .next = next,
         } }, where.source());
-        if (capture_ty) |ty| return .{ .tail = try self.captureRecordTask(where, capture.?, captures, capture_operands, ty, assign) };
-        if (capture_operands.len != 0) Common.invariant("erased callable without capture payload carried capture operands");
-        return .{ .ret = assign };
+        return .{ .tail = try self.captureRecordTask(where, capture, captures, capture_operands, ty, assign) };
+    }
+
+    /// Read the capture-free erased callable of `fn_id` into `target`: static,
+    /// immortal data, never a fresh allocation (design.md "Function Values").
+    fn staticCallableRead(
+        self: *Lowerer,
+        origin: LIR.StmtOrigin,
+        target: LIR.LocalId,
+        fn_id: Type.FnId,
+        next: LIR.CFStmtId,
+    ) Common.LowerError!LIR.CFStmtId {
+        const slot = try self.staticCallableSlot(try self.markReachableFn(fn_id), self.result.store.getLocal(target).layout_idx);
+        return try self.result.store.addCFStmt(.{ .assign_literal = .{
+            .target = target,
+            .value = .{ .static_data = .{ .id = slot } },
+            .next = next,
+        } }, origin);
+    }
+
+    /// The static-data slot holding the capture-free erased callable of
+    /// `proc`, at erased-callable layout `layout_idx`. Every read of one
+    /// procedure's callable in the program shares one slot.
+    fn staticCallableSlot(self: *Lowerer, proc: LIR.LirProcSpecId, layout_idx: layout.Idx) Common.LowerError!LIR.StaticDataId {
+        if (self.worker_callback) {
+            const slot = self.static_callable_map.get(proc) orelse
+                self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared static callable");
+            if (builtin.mode == .debug and self.result.static_data_values.items[@backingInt(slot)].layout_idx != layout_idx) {
+                Common.invariant("a static callable was read at a layout other than its slot's");
+            }
+            return slot;
+        }
+        const gop = try self.static_callable_map.getOrPut(proc);
+        if (gop.found_existing) {
+            if (builtin.mode == .debug and self.result.static_data_values.items[@backingInt(gop.value_ptr.*)].layout_idx != layout_idx) {
+                Common.invariant("a static callable was read at a layout other than its slot's");
+            }
+            return gop.value_ptr.*;
+        }
+        if (builtin.mode == .debug and self.result.layouts.getLayout(layout_idx).tag != .erased_callable) {
+            Common.invariant("a static callable's slot was not of erased-callable layout");
+        }
+        const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
+        try self.result.static_data_values.append(self.allocator, .{
+            .initializer = null,
+            .layout_idx = layout_idx,
+            .callable = proc,
+        });
+        gop.value_ptr.* = slot;
+        return slot;
     }
 
     /// A chain building the capture record `target` from its capture
@@ -13474,17 +13550,7 @@ const Lowerer = struct {
             },
             .callable_to_erased => {
                 if (task.target_variant.capture_ty == null and task.source_variant.capture_ty == null) {
-                    return .{ .ret = try self.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
-                        .target = target,
-                        .data = try self.result.store.addStmtRow(LIR.PackedErasedFnData, .{
-                            .proc = try self.markReachableFn(task.target_variant.target),
-                            .capture = null,
-                            .capture_layout = null,
-                            .on_drop = .none,
-                            .reuse = try self.erasedCallableReuseForPack(target, null),
-                        }),
-                        .next = next,
-                    } }, where.glue()) };
+                    return .{ .ret = try self.staticCallableRead(where.glue(), target, task.target_variant.target, next) };
                 }
                 const target_capture_ty = task.target_variant.capture_ty orelse
                     Common.invariant("callable-to-erased boundary target variant dropped a capture payload");

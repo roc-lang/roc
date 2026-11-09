@@ -126,6 +126,7 @@ const LiteralDefaulted = problem_mod.LiteralDefaulted;
 
 // Generic errors
 const VarWithSnapshot = problem_mod.VarWithSnapshot;
+const LocalTypeEscape = problem_mod.LocalTypeEscape;
 const RowLabelConflict = problem_mod.types.RowLabelConflict;
 
 // Context types for precise error reporting
@@ -1067,6 +1068,9 @@ pub const ReportBuilder = struct {
             },
             .anonymous_recursion => |data| {
                 return self.buildAnonymousRecursionReport(data);
+            },
+            .local_type_escape => |data| {
+                return self.buildLocalTypeEscapeReport(data);
             },
             .row_label_conflict => |data| {
                 return self.buildRowLabelConflictReport(data);
@@ -5258,6 +5262,103 @@ pub const ReportBuilder = struct {
             D.bytes("If you need a recursive data structure, define a nominal type using"),
             D.bytes(":=").withAnnotation(.inline_code),
             D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
+
+        return report;
+    }
+
+    fn buildLocalTypeEscapeReport(self: *Self, data: LocalTypeEscape) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Local Type Escapes", "", .runtime_error);
+        errdefer report.deinit();
+        const subject: D = if (data.def_name) |def_name| D.ident(def_name).withAnnotation(.inline_code) else D.bytes("this definition");
+        if (data.owner_name) |owner_name| {
+            try D.renderSliceInto(&.{
+                D.bytes("The type of"),
+                subject,
+                D.bytes("uses"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("a type that depends on the type variable"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes("of"),
+                D.ident(owner_name).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The type of"),
+                subject,
+                D.bytes("uses"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("a type that depends on the type variable"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report, &report.headline);
+        }
+
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{D.bytes("Its type is:")}, self, &report);
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.def_snapshot)));
+        try report.document.addLineBreaks(2);
+
+        try D.renderSlice(&.{
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("is declared here:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try self.addSourceRegionOf(&report.document, data.type_region, .dimmed);
+        try report.document.addLineBreak();
+
+        if (data.owner_name) |owner_name| {
+            try D.renderSlice(&.{
+                D.bytes("Because"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes("depends on"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes("from"),
+                D.ident(owner_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("each use of"),
+                D.ident(owner_name).withAnnotation(.inline_code),
+                D.bytes("at a different"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes("gives it a different type, so it can't be used outside"),
+                D.ident(owner_name).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Because"),
+                D.ident(data.type_name).withAnnotation(.inline_code),
+                D.bytes("depends on"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("it can't be used outside the function that introduces"),
+                D.ident(data.var_name).withAnnotation(.inline_code),
+                D.bytes(".").withNoPrecedingSpace(),
+            }, self, &report);
+        }
+        try report.document.addLineBreaks(2);
+
+        const parameterized = blk: {
+            const text = try std.fmt.allocPrint(self.gpa, "{s}({s})", .{ self.can_ir.getIdentText(data.type_name), self.can_ir.getIdentText(data.var_name) });
+            defer self.gpa.free(text);
+            break :blk try report.addOwnedString(text);
+        };
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Declare"),
+            D.ident(data.type_name).withAnnotation(.inline_code),
+            D.bytes("at the top level with a type parameter, like"),
+            D.bytes(parameterized).withAnnotation(.inline_code),
+            D.bytes(",").withNoPrecedingSpace(),
+            D.bytes("so each use says which"),
+            D.ident(data.var_name).withAnnotation(.inline_code),
+            D.bytes("it means."),
         }, self, &report);
 
         return report;

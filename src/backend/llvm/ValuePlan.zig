@@ -237,6 +237,7 @@ pub fn lowLevelAccess(op: LowLevel) OpAccess {
         .str_static_small_word_eq,
         .str_static_small_word_caseless_eq,
         .str_concat,
+        .str_append,
         .str_contains,
         .str_trim,
         .str_trim_start,

@@ -397,6 +397,12 @@ const StaticInitializerMachine = struct {
             self.static_roots[raw] = root;
             return root;
         }
+        if (value.callable) |procedure| {
+            const allocation = try self.erasedCallableAllocation(value.layout_idx, procedure, 0);
+            const root = try self.pointerValue(value.layout_idx, allocation.id, 0);
+            self.static_roots[raw] = root;
+            return root;
+        }
         if (self.frozen_roots[raw]) |symbol| {
             const root = try self.readFrozenValue(symbol, self.lowered.lir_result.static_data_values.items[raw].layout_idx);
             self.static_roots[raw] = root;
@@ -462,14 +468,10 @@ const StaticInitializerMachine = struct {
     /// input holds.
     fn constStoreOf(self: *const StaticInitializerMachine, module: Checked.ModuleId) *const Checked.ConstStore {
         const root = self.modules.root orelse staticDataInvariant("stored static data had no root checked module");
-        if (std.mem.eql(u8, &root.module.key.bytes, &module.bytes)) return &root.module.const_store;
-        for (root.relation_modules) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
-        }
-        for (self.modules.imports) |view| {
-            if (std.mem.eql(u8, &view.key.bytes, &module.bytes)) return view.const_store;
-        }
-        staticDataInvariant("stored static data named a checked module outside the lowering input");
+        const program: lir.CheckedPipeline.CheckedModuleSet = .{ .root = root, .imports = self.modules.imports };
+        const view = program.moduleByKey(module) orelse
+            staticDataInvariant("stored static data named a checked module outside the lowering input");
+        return view.const_store;
     }
 
     /// The value of a stored list frozen at `value_layout`
@@ -1062,6 +1064,8 @@ const StaticInitializerMachine = struct {
         }
     }
 
+    const NewAllocation = struct { id: SymbolicAllocationId, payload: *SymbolicValue };
+
     fn addAllocation(
         self: *StaticInitializerMachine,
         payload_layout: layout.Idx,
@@ -1069,7 +1073,7 @@ const StaticInitializerMachine = struct {
         alignment: u32,
         contains_refcounted: bool,
         list_element_count: ?usize,
-    ) Allocator.Error!struct { id: SymbolicAllocationId, payload: *SymbolicValue } {
+    ) Allocator.Error!NewAllocation {
         const payload = try self.allocator().create(SymbolicValue);
         const bytes = try self.allocator().alloc(u8, payload_size);
         @memset(bytes, 0);
@@ -1468,6 +1472,40 @@ const StaticInitializerMachine = struct {
         }
         if (capture) |value| try self.copyInto(allocation.payload, capture_offset, value, @intCast(capture_size));
         return try self.pointerValue(target_layout, allocation.id, 0);
+    }
+
+    /// Where an erased callable's capture bytes start in its payload.
+    fn erasedCaptureOffset(self: *const StaticInitializerMachine) u32 {
+        return builtins.erased_callable.capture_offset + self.lowered.lir_result.erased_capture_prefix;
+    }
+
+    /// The allocation of an erased callable of `procedure` with `capture_size`
+    /// capture bytes: its function pointer written, its `on_drop` and capture
+    /// bytes left zeroed.
+    fn erasedCallableAllocation(
+        self: *StaticInitializerMachine,
+        target_layout: layout.Idx,
+        procedure: lir.LIR.LirProcSpecId,
+        capture_size: usize,
+    ) Allocator.Error!NewAllocation {
+        // The program's erased callables reserve its capture prefix before
+        // their captures, as the code packing one does; the prefix stays
+        // zeroed, since a static value is never dropped and nothing reads it.
+        const prefix: u32 = self.lowered.lir_result.erased_capture_prefix;
+        const allocation = try self.addAllocation(
+            target_layout,
+            builtins.erased_callable.payloadSize(prefix + capture_size),
+            builtins.erased_callable.payload_alignment,
+            builtins.erased_callable.allocation_has_refcounted_children,
+            null,
+        );
+        try allocation.payload.relocations.append(self.allocator(), .{
+            .offset = 0,
+            .target = .{ .procedure = procedure },
+            .kind = .function_pointer,
+            .callable_capture_offset = self.erasedCaptureOffset(),
+        });
+        return allocation;
     }
 };
 

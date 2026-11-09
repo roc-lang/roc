@@ -6,6 +6,63 @@ const lir = @import("lir");
 const layout = @import("layout");
 const harness = @import("lower_to_lir_harness.zig");
 
+test "boxy deferred packets pin native and wasm32 inline boundaries" {
+    inline for (.{ .{ 15, "U16", "to_u16_wrap", 60 }, .{ 16, "U16", "to_u16_wrap", 64 }, .{ 17, "U16", "to_u16_wrap", 68 }, .{ 15, "U32", "to_u32_wrap", 120 }, .{ 16, "U32", "to_u32_wrap", 128 }, .{ 17, "U32", "to_u32_wrap", 136 } }) |case| {
+        const tuples = comptime blk: {
+            var ty: []const u8 = "(";
+            var value: []const u8 = "(";
+            var different: []const u8 = "(";
+            for (0..case[0]) |index| {
+                const separator = if (index == 0) "" else ", ";
+                ty = ty ++ separator ++ case[1];
+                value = value ++ separator ++ "value";
+                different = different ++ separator ++ if (index + 1 == case[0]) "value.plus_wrap(1)" else "value";
+            }
+            break :blk .{ .ty = ty ++ ")", .value = value ++ ")", .different = different ++ ")" };
+        };
+        const source = "Packet : " ++ tuples.ty ++ "\n" ++
+            "equal : Packet, Packet -> Bool\nequal = |a, b| a == b\n" ++
+            "forward : Box((Packet, Packet -> Bool)), Packet, Packet -> Bool\n" ++
+            "forward = |boxed, a, b| Box.unbox(boxed)(a, b)\n" ++
+            "main! = |args| {\nvalue = args.len()." ++ case[2] ++ "()\n" ++
+            "boxed = Box.box(equal)\na = " ++ tuples.value ++ "\nb = " ++ tuples.different ++ "\n" ++
+            "echo!(Str.inspect((forward(boxed, a, a), forward(boxed, a, b))))\nOk({})\n}";
+        for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
+            try harness.expectLirInspectionWithOptions(source, .{ .specialization_strategy = .boxy, .proc_debug_names = true, .target_usize = width }, struct {
+                fn inspectPacket(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+                    var found = false;
+                    for (store.getProcSpecs(), 0..) |proc, index| {
+                        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
+                        if (!std.mem.eql(u8, name, "forward") and !std.mem.endsWith(u8, name, ".forward")) continue;
+                        var pending: std.ArrayList(lir.LIR.CFStmtId) = .empty;
+                        defer pending.deinit(std.testing.allocator);
+                        var seen = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
+                        defer seen.deinit();
+                        try pending.append(std.testing.allocator, proc.body.?);
+                        while (pending.pop()) |id| {
+                            if ((try seen.getOrPut(id)).found_existing) continue;
+                            const stmt = store.getCFStmt(id);
+                            if (stmt == .dyn) {
+                                const op = store.stmtRow(stmt.dyn.data);
+                                if (op == .call_erased) {
+                                    try std.testing.expect(op.call_erased.deferred);
+                                    const args = op.call_erased.args orelse return error.TestUnexpectedResult;
+                                    try std.testing.expect(store.localDyn(args) == null);
+                                    const args_layout = layouts.getLayout(store.getLocal(args).layout_idx);
+                                    try std.testing.expectEqual(@as(usize, case[3]), @as(usize, layouts.layoutSize(args_layout)));
+                                    found = true;
+                                }
+                            }
+                            try lir.BodyClone.appendSuccessors(store, &pending, id, std.testing.allocator);
+                        }
+                    }
+                    try std.testing.expect(found);
+                }
+            }.inspectPacket);
+        }
+    }
+}
+
 test "boxy declared primitives lower directly at closed and open call sites" {
     for ([_]@import("base").target.TargetUsize{ .u32, .u64 }) |width| {
         try harness.expectLirInspectionWithOptions(

@@ -375,6 +375,8 @@ const Pass = struct {
             if (parts.kind == .callable) try self.markProc(parts.kind.callable);
         } else if (self.result.static_data_values.items[index].stored) |stored| {
             try self.markConstPlan(stored.plan);
+        } else if (self.result.static_data_values.items[index].callable) |procedure| {
+            try self.markProc(procedure);
         } else if (self.frozen != null) {
             // A program lowered after some compile-time values completed
             // evaluates the rest itself.
@@ -560,6 +562,7 @@ const Pass = struct {
         for (self.result.static_data_values.items, 0..) |*value, index| {
             if (!self.reachable_static_data[index]) continue;
             if (value.initializer) |initializer| value.initializer = self.remapProc(initializer);
+            if (value.callable) |procedure| value.callable = self.remapProc(procedure);
             if (value.representation_of) |*source| source.slot = self.remapStaticData(source.slot);
             if (value.parts) |*parts| {
                 if (self.static_data_exports[index] != null) {
@@ -810,6 +813,12 @@ const Pass = struct {
                 self.verifyProcRef(initializer, proc_count);
                 if (!self.store.getProcSpecImmediate(initializer).is_static_initializer) {
                     reachableProcInvariant("internal static initializer was marked as a runtime proc");
+                }
+            }
+            if (value.callable) |procedure| {
+                self.verifyProcRef(procedure, proc_count);
+                if (self.store.getProcSpecImmediate(procedure).is_static_initializer) {
+                    reachableProcInvariant("a static callable named a static initializer");
                 }
             }
         }
