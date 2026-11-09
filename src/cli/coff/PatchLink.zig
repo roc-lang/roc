@@ -336,7 +336,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     }
     const section_count = numberSections(sections.items, kept_host_sections);
     for (debug_host_index, debug_index) |host_index, out_index| {
-        if (host_index) |index| host_number[index] = sections.items[out_index orelse unreachable].number; // a host debug section is kept with its contents
+        if (host_index) |index| {
+            const kept_index = out_index orelse unreachable; // a host debug section is kept with its contents
+            host_number[index] = sections.items[kept_index].number;
+        }
     }
     const headers_needed: u64 = exe.section_headers_offset + @as(u64, section_count) * section_header_size;
     // When the header page cannot hold the headers, the host's section
