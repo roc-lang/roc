@@ -13302,22 +13302,40 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        var found_packed = false;
-        for (result.store.getCFStmts()) |stmt| {
-            if (stmt == .assign_literal and stmt.assign_literal.value == .bytes_literal) {
-                if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
-            }
-        }
-        try std.testing.expect(found_packed);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
+            // The top-level list is now a frozen value, not a bytes_literal
+            // instruction. Pin the two packed, padded Pair elements themselves
+            // before checking that runtime copy-on-write leaves them unchanged.
+            var found_packed = false;
+            for (result.static_data_values.items, 0..) |slot, slot_index| {
+                const slot_layout = result.layouts.getLayout(slot.layout_idx);
+                if (slot_layout.tag != .list) continue;
+                const element = result.layouts.getListInfo(slot_layout);
+                if (element.elem_layout.tag != .struct_) continue;
+                const struct_idx = element.elem_layout.getStruct().idx;
+                if (result.layouts.getStructData(struct_idx).fields.count != 2) continue;
+                if (result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0) != .u8 or
+                    result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1) != .u64) continue;
+                const address = static_data.data.?.addresses[slot_index];
+                const list = (eval.Value{ .ptr = @ptrFromInt(address) }).read(@import("builtins").list.RocList);
+                try std.testing.expectEqual(@as(usize, 2), list.length);
+                try std.testing.expectEqual(@as(u32, 16), element.elem_size);
+                const a_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+                const z_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+                try std.testing.expect(a_offset < element.elem_size and z_offset + @sizeOf(u64) <= element.elem_size);
+                try std.testing.expect(a_offset < z_offset or a_offset >= z_offset + @sizeOf(u64));
+                for (0..list.length) |index| {
+                    const pair = eval.Value{ .ptr = list.bytes.? + index * element.elem_size };
+                    try std.testing.expectEqual(@as(u8, 3), pair.offset(a_offset).read(u8));
+                    try std.testing.expectEqual(@as(u64, 42), pair.offset(z_offset).read(u64));
+                }
+                found_packed = true;
+            }
+            try std.testing.expect(found_packed);
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
             var interpreter = try eval.Interpreter.init(
@@ -13328,10 +13346,7 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             var index: u64 = 1;
             const evaluated = try interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
