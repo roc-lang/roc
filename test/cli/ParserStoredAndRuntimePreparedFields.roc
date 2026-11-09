@@ -1,6 +1,9 @@
 ParserStoredAndRuntimePreparedFields :: [].{}
 
 Format := [Identity, Kebab].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |format, name|
 		match format {
@@ -113,21 +116,21 @@ find_field = |fields, name| {
 	}
 }
 
-parse_stored_kebab : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_stored_kebab : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError])
 parse_stored_kebab = {
 	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	Shape.parser_for(Format.Kebab)
 }
 
-parse_stored_identity : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_stored_identity : State -> Try({ value : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }, rest : State }, [FormatError])
 parse_stored_identity = {
 	Shape : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	Shape.parser_for(Format.Identity)
 }
 
-parse_with_format : Format, State -> Try(a, [FormatError, ..errs])
+parse_with_format : Format, State -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse_with_format = |format, input| {
 	Parsed : a
@@ -136,7 +139,7 @@ parse_with_format = |format, input| {
 	Ok(parsed.value)
 }
 
-parse_runtime : Format, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError, MissingRequiredField(Str)])
+parse_runtime : Format, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError])
 parse_runtime = |format, input| {
 	parsed : { foo_bar : Str, maybe_token : Try(Str, [Missing]) }
 	parsed = parse_with_format(format, input)?
@@ -144,7 +147,7 @@ parse_runtime = |format, input| {
 	Ok(parsed)
 }
 
-parse_runtime_from_flag : Bool, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError, MissingRequiredField(Str)])
+parse_runtime_from_flag : Bool, State -> Try({ foo_bar : Str, maybe_token : Try(Str, [Missing]) }, [FormatError])
 parse_runtime_from_flag = |use_kebab, input| {
 	format = if use_kebab {
 		Format.Kebab

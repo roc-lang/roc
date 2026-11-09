@@ -2483,12 +2483,14 @@ pub const Builder = struct {
     /// The value of the `??` default `default`: its declaring module's
     /// default expression, evaluated now.
     pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
-        const origin_module = default.origin() orelse invariant("a field default has no declaring module");
-        const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
-            invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+        return self.fieldDefaultValue(self.program.modules.fieldDefault(self.module, default));
+    }
+
+    /// Materialize a default whose declaring module is already program-owned.
+    pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault) Allocator.Error!LocalId {
+        const expr = self.program.module(default.module).bodies().defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
+        const worker = try self.program.defaultWorker(default.module, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
         return target;
@@ -5411,7 +5413,7 @@ pub const Builder = struct {
                 // worker evaluating that default, which has no scheme and no
                 // dictionaries of its own.
                 const owner_worker = if (nested.default_root) |identity| blk: {
-                    const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
+                    const declaring = self.program.modules.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
                     const declaring_view = self.program.module(declaring);
                     const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
                     break :blk switch (default_site.owner) {
@@ -7106,7 +7108,7 @@ pub const Builder = struct {
                     if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
                     if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
-                    const declaring = self.program.by_identity.get(identity) orelse
+                    const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
                     const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
                     const view = self.program.module(declaring);

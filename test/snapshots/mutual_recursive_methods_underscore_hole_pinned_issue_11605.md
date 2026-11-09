@@ -229,7 +229,7 @@ run = |sql| {
 					(if-branch
 						(e-method-eq (negated "false")
 							(lhs
-								(e-call (constraint-fn-var 414)
+								(e-call (constraint-fn-var 417)
 									(e-lookup-external
 										(builtin))
 									(e-lookup-local
@@ -238,13 +238,13 @@ run = |sql| {
 								(e-num (value "0"))))
 						(e-tag (name "Ok")
 							(args
-								(e-dispatch-call (method "to_str") (constraint-fn-var 432)
+								(e-dispatch-call (method "to_str") (constraint-fn-var 435)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))
 									(args))))))
 				(if-else
-					(e-call (constraint-fn-var 446)
+					(e-call (constraint-fn-var 449)
 						(e-lookup-local
 							(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.second")))
 						(e-lookup-local
@@ -283,12 +283,12 @@ run = |sql| {
 					(p-assign (ident "pinned"))
 					(e-lookup-local
 						(p-assign (ident "items"))))
-				(e-call (constraint-fn-var 486)
+				(e-call (constraint-fn-var 489)
 					(e-lookup-local
 						(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 					(e-lookup-local
 						(p-assign (ident "client")))
-					(e-call (constraint-fn-var 485)
+					(e-call (constraint-fn-var 488)
 						(e-lookup-external
 							(builtin))
 						(e-lookup-local
@@ -332,7 +332,7 @@ run = |sql| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 525)
+								(e-call (constraint-fn-var 528)
 									(e-lookup-local
 										(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_issue_11605.Client.first")))
 									(e-lookup-local
