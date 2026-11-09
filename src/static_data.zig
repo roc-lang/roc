@@ -2493,7 +2493,8 @@ test "completed value parts encode shared nested lists and callables at both tar
         try std.testing.expectEqual(proc, captured.relocations.items[0].target.procedure);
         try std.testing.expectEqual(on_drop.rc_helper, captured.relocations.items[1].target.rc_helper);
         try std.testing.expectEqual(@as(u32, width.size()), captured.relocations.items[1].offset);
-        try std.testing.expectEqual(builtins.erased_callable.captureOffset(width.size()), captured.relocations.items[2].offset);
+        try std.testing.expectEqual(@as(u32, 2 * width.size()), captured.relocations.items[2].offset);
+        try std.testing.expectEqual(builtins.erased_callable.captureOffset(width.size()), captured.relocations.items[3].offset);
         try std.testing.expectEqual(callable, try machine.evaluateStatic(callable_id));
         try std.testing.expectEqual(@as(usize, 3), machine.allocations.items.len);
     }

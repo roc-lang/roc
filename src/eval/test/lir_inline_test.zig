@@ -709,8 +709,6 @@ fn runLoweredWithHostEvents(
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
-    var static_data = try FrozenStaticData.init(allocator, lowered);
-    defer static_data.deinit();
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
     var static_data = try FrozenStaticData.init(allocator, lowered);
@@ -13319,7 +13317,7 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        var found_packed = false;
+        var found_packed_value = false;
         // Verify the product itself, not an incidental descriptor byte string:
         // descriptors may live in the static image rather than inline literals.
         for (result.store.getLocals()) |local| {
@@ -13331,7 +13329,7 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
             const second = info.fields.get(1).layout;
             if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) {
                 try std.testing.expectEqual(@as(u32, 16), info.size());
-                found_packed = true;
+                found_packed_value = true;
             }
         }
         // Boxy can publish the packed node directly as readonly data rather
@@ -13340,9 +13338,9 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
             const stored = definition.stored orelse continue;
             if (!stored.module.eql(lowered.resources.checked_artifact.key.digest())) continue;
             const value = lowered.resources.checked_artifact.const_store.get(stored.node);
-            if (value == .list and value.list == .packed_bytes and value.list.packed_bytes.len == 2) found_packed = true;
+            if (value == .list and value.list == .packed_bytes and value.list.packed_bytes.len == 2) found_packed_value = true;
         }
-        try std.testing.expect(found_packed);
+        try std.testing.expect(found_packed_value);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
@@ -14128,8 +14126,6 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
     const allocator = peak_allocator.allocator();
     {
         const result = &lowered.lir_result;
-        var static_data = try FrozenStaticData.init(allocator, lowered);
-        defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         var static_data = try FrozenStaticData.init(allocator, lowered);
