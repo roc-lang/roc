@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 13;
+pub const format_version: u32 = 17;
 
 const magic = "RBXO";
 
@@ -125,6 +125,9 @@ pub const ExportRecord = struct {
     rc_ret_unique: bool,
     may_leave_pending: bool,
     rc_ret_conditions: []const u32,
+    /// The worker's encoded needs list, for a worker that takes a type
+    /// table (`LirProgram.Result.boxy_table_needs`); empty otherwise.
+    table_needs: []const u8 = &.{},
 };
 
 /// One inline `expect` a test unit counts, at the unit-local site id that
@@ -172,6 +175,8 @@ pub const Entry = struct {
     /// Module names are semantic; module identities bind locations to the
     /// current compilation's source environments, independent of checkout.
     code_locations: []const u8 = &.{},
+    /// Only compiler-only function-value units carry this table.
+    function_metadata: []const u8 = &.{},
     /// The module's unit image: a `UnitImage` for a target whose
     /// `boxy_unit.imageKind` is native, a `WasmUnitImage` for a wasm
     /// target, and empty for any other target.
@@ -184,6 +189,9 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     errdefer bytes.deinit(allocator);
     try bytes.appendSlice(allocator, magic);
     try appendU32(&bytes, allocator, format_version);
+    // Completeness admission reads this length from the already-loaded bytes.
+    const length_at = bytes.items.len;
+    try appendU64(&bytes, allocator, 0);
     try appendU32(&bytes, allocator, @intCast(entry.exports.len));
     for (entry.exports) |record| {
         try bytes.appendSlice(allocator, &record.identity);
@@ -196,6 +204,8 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
         try bytes.append(allocator, @intFromBool(record.may_leave_pending));
         try appendU32(&bytes, allocator, @intCast(record.rc_ret_conditions.len));
         for (record.rc_ret_conditions) |word| try appendU32(&bytes, allocator, word);
+        try appendU32(&bytes, allocator, @intCast(record.table_needs.len));
+        try bytes.appendSlice(allocator, record.table_needs);
     }
     for ([_][]const []const u8{ entry.hosted_symbols, entry.link_root_symbols, entry.app_export_symbols }) |symbols| {
         try appendU32(&bytes, allocator, @intCast(symbols.len));
@@ -222,17 +232,30 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     try bytes.appendSlice(allocator, entry.pieces);
     try appendU64(&bytes, allocator, entry.code_locations.len);
     try bytes.appendSlice(allocator, entry.code_locations);
+    try appendU64(&bytes, allocator, entry.function_metadata.len);
+    try bytes.appendSlice(allocator, entry.function_metadata);
     try appendU64(&bytes, allocator, entry.image.len);
     if (entry.image.len != 0) {
         try bytes.appendNTimes(allocator, 0, std.mem.alignForward(usize, bytes.items.len, image_alignment) - bytes.items.len);
         try bytes.appendSlice(allocator, entry.image);
     }
+    std.mem.writeInt(u64, bytes.items[length_at..][0..8], @intCast(bytes.items.len), .little);
     return try bytes.toOwnedSlice(allocator);
+}
+
+/// A compiler-only variant of precisely the ordinary unit's declared inputs.
+/// Its ABI differs only in explicit descriptor-origin observations; no runtime
+/// object or final executable uses this variant.
+pub fn functionUnitKey(ordinary: Key) Key {
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc-boxy-function-unit-v2");
+    hasher.update(&ordinary.bytes);
+    return .{ .bytes = hasher.finalResult() };
 }
 
 /// The bytes of an export record with no return conditions: its identity,
 /// four 64-bit masks, three flags, and its condition count.
-const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + @sizeOf(u32);
+const min_export_record_size = 32 + 4 * @sizeOf(u64) + 3 + 2 * @sizeOf(u32);
 
 /// The bytes of an expect-site or test-root record: a digest and two words.
 const table_record_size = 32 + 2 * @sizeOf(u32);
@@ -252,11 +275,14 @@ pub fn decode(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     errdefer allocator.free(pieces);
     const code_locations = try allocator.dupe(u8, view.code_locations);
     errdefer allocator.free(code_locations);
+    const function_metadata = try allocator.dupe(u8, view.function_metadata);
+    errdefer allocator.free(function_metadata);
     const image = try allocator.alignedAlloc(u8, .@"16", view.image.len);
     @memcpy(image, view.image);
     var entry = view;
     entry.pieces = pieces;
     entry.code_locations = code_locations;
+    entry.function_metadata = function_metadata;
     entry.image = image;
     return entry;
 }
@@ -269,12 +295,16 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const found_magic = try reader.take(magic.len);
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
+    if (try reader.word64() != bytes.len) return error.InvalidEntry;
     const export_count = try reader.word32();
     if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
     const exports = try allocator.alloc(ExportRecord, export_count);
     errdefer allocator.free(exports);
     var decoded_exports: usize = 0;
-    errdefer for (exports[0..decoded_exports]) |record| allocator.free(record.rc_ret_conditions);
+    errdefer for (exports[0..decoded_exports]) |record| {
+        allocator.free(record.rc_ret_conditions);
+        allocator.free(record.table_needs);
+    };
     for (exports) |*record| {
         const identity = try reader.take(32);
         record.* = .{
@@ -293,7 +323,10 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         const conditions = try allocator.alloc(u32, condition_count);
         errdefer allocator.free(conditions);
         for (conditions) |*word| word.* = try reader.word32();
+        const needs_len = try reader.word32();
+        const needs = try allocator.dupe(u8, try reader.take(needs_len));
         record.rc_ret_conditions = conditions;
+        record.table_needs = needs;
         decoded_exports += 1;
     }
     const hosted_symbols = try decodeSymbols(allocator, &reader);
@@ -331,6 +364,9 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     const code_locations_len = try reader.word64();
     if (code_locations_len > std.math.maxInt(usize)) return error.InvalidEntry;
     const code_locations = try reader.take(@intCast(code_locations_len));
+    const metadata_len = try reader.word64();
+    if (metadata_len > std.math.maxInt(usize)) return error.InvalidEntry;
+    const function_metadata = try reader.take(@intCast(metadata_len));
     const image_len = try reader.word64();
     if (image_len > std.math.maxInt(usize)) return error.InvalidEntry;
     if (image_len != 0) _ = try reader.take(std.mem.alignForward(usize, reader.at, image_alignment) - reader.at);
@@ -346,6 +382,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
         .test_roots = test_roots,
         .pieces = pieces,
         .code_locations = code_locations,
+        .function_metadata = function_metadata,
         .image = image,
     };
 }
@@ -374,6 +411,7 @@ fn freeSymbols(allocator: Allocator, symbols: []const []const u8) void {
 pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
     allocator.free(entry.pieces);
     allocator.free(entry.code_locations);
+    allocator.free(entry.function_metadata);
     const image: []align(16) const u8 = @alignCast(entry.image);
     allocator.free(image);
     deinitEntryView(allocator, entry);
@@ -381,7 +419,10 @@ pub fn deinitEntry(allocator: Allocator, entry: Entry) void {
 
 /// Free an entry `decodeView` returned, leaving the bytes it borrows.
 pub fn deinitEntryView(allocator: Allocator, entry: Entry) void {
-    for (entry.exports) |record| allocator.free(record.rc_ret_conditions);
+    for (entry.exports) |record| {
+        allocator.free(record.rc_ret_conditions);
+        allocator.free(record.table_needs);
+    }
     allocator.free(entry.exports);
     freeSymbols(allocator, entry.hosted_symbols);
     freeSymbols(allocator, entry.link_root_symbols);
@@ -511,6 +552,7 @@ test "a Boxy object entry round-trips through its bytes" {
         .expect_sites = &.{ .{ .module = @splat(4), .region_start = 10, .region_end = 30 }, .{ .module = @splat(5), .region_start = 2, .region_end = 3 } },
         .test_roots = &.{.{ .module = @splat(4), .root_index = 1, .symbol = 17 }},
         .pieces = "not really pieces",
+        .function_metadata = "portable function descriptions",
         .code_locations = "where the code came from",
         .image = "an image",
     };
@@ -526,6 +568,7 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualDeep(entry.expect_sites, decoded.expect_sites);
     try std.testing.expectEqualDeep(entry.test_roots, decoded.test_roots);
     try std.testing.expectEqualStrings(entry.pieces, decoded.pieces);
+    try std.testing.expectEqualStrings(entry.function_metadata, decoded.function_metadata);
     try std.testing.expectEqualStrings(entry.code_locations, decoded.code_locations);
     try std.testing.expectEqualStrings(entry.image, decoded.image);
     try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
@@ -536,6 +579,22 @@ test "a Boxy object entry round-trips through its bytes" {
     defer allocator.free(altered);
     altered[0] = 'X';
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
+
+    // Needs lists round-trip with the rest of their export record.
+    const needs_entry: Entry = .{
+        .exports = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }},
+        .hosted_symbols = &.{},
+        .pieces = "",
+    };
+    const needs_bytes = try encode(allocator, needs_entry);
+    defer allocator.free(needs_bytes);
+    const needs_decoded = try decode(allocator, needs_bytes);
+    defer deinitEntry(allocator, needs_decoded);
+    try std.testing.expectEqualDeep(needs_entry.exports, needs_decoded.exports);
+
+    // A size mismatch is rejected without reading or hashing the payload.
+    std.mem.writeInt(u64, needs_bytes[8..16], @intCast(needs_bytes.len + 1), .little);
+    try std.testing.expectError(error.InvalidEntry, decode(allocator, needs_bytes));
 }
 
 test "a hosted bindings digest is a function of the bindings in order" {
@@ -558,11 +617,19 @@ test "a count larger than the bytes behind it is a miss, not an allocation" {
     const gpa = std.testing.allocator;
     const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .pieces = "pieces" });
     defer gpa.free(encoded);
-    const count_offset = magic.len + @sizeOf(u32);
+    const count_offset = magic.len + @sizeOf(u32) + @sizeOf(u64);
     for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {
         const damaged = try gpa.dupe(u8, encoded);
         defer gpa.free(damaged);
         std.mem.writeInt(u32, damaged[offset..][0..4], std.math.maxInt(u32), .little);
         try std.testing.expectError(error.InvalidEntry, decode(gpa, damaged));
     }
+}
+
+test "function unit variants preserve content addressing and separate ordinary objects" {
+    const first = Key{ .bytes = @splat(3) };
+    const second = Key{ .bytes = @splat(4) };
+    try std.testing.expectEqual(functionUnitKey(first), functionUnitKey(first));
+    try std.testing.expect(!std.mem.eql(u8, &first.bytes, &functionUnitKey(first).bytes));
+    try std.testing.expect(!std.mem.eql(u8, &functionUnitKey(first).bytes, &functionUnitKey(second).bytes));
 }

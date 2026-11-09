@@ -924,7 +924,7 @@ test "a restored list of boxed capturing closures that read their own constant i
     , expectRestoredSelfReadingClosuresStatic);
 }
 
-test "an empty compile-time list rebuilds with the capacity it was evaluated with" {
+test "an empty compile-time list reads immutable data without a capacity request" {
     _ = try lowerEchoApp(
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
@@ -936,15 +936,14 @@ test "an empty compile-time list rebuilds with the capacity it was evaluated wit
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 64);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
 }
 
-test "a compile-time record of an empty list and a scalar lowers as its constructor" {
+test "a compile-time record of an empty list and a scalar reads immutable data" {
     // The record is read whole: a field projection of a completed record
     // is its own compile-time root, evaluated from the frozen record,
     // whose empty list carries no capacity.
@@ -961,18 +960,16 @@ test "a compile-time record of an empty list and a scalar lowers as its construc
         \\}
     , struct {
         fn inspect(result: *lir.Program.Result) HoistedConstantsTestError!usize {
-            try std.testing.expectEqual(@as(usize, 0), result.static_data_values.items.len);
-            try expectLowLevelPresent(result, .list_with_capacity);
-            try expectIntLiteralPresent(result, 8);
+            try std.testing.expect(result.static_data_values.items.len > 0);
+            try expectLowLevelAbsent(result, .list_with_capacity);
             return 0;
         }
     }.inspect);
 }
 
 test "an empty list with capacity in a record frozen into static data is the empty list" {
-    // The record's initializer restores the list as `list_with_capacity(4)`.
-    // Static data is never appended to in place, so it freezes as the empty
-    // list rather than as a pointer into the readonly image.
+    // The completed empty list has no backing allocation or runtime capacity
+    // request, including when stored inside a record.
     const gpa = std.testing.allocator;
 
     var tmp_dir = std.testing.tmpDir(.{});
@@ -1048,7 +1045,7 @@ test "an empty list with capacity in a record frozen into static data is the emp
         .{ .target_usize = base.target.TargetUsize.u64 },
     );
     defer lowered.deinit();
-    try expectLowLevelPresent(&lowered.lir_result, .list_with_capacity);
+    try expectLowLevelAbsent(&lowered.lir_result, .list_with_capacity);
 
     const exports = try static_data_exports.buildStaticData(
         gpa,
@@ -1067,7 +1064,6 @@ test "an empty list with capacity in a record frozen into static data is the emp
     const layouts = &lowered.lir_result.layouts;
     var frozen_lists: usize = 0;
     for (lowered.lir_result.static_data_values.items, 0..) |value, index| {
-        if (value.initializer == null) continue;
         const record = layouts.getLayout(value.layout_idx);
         if (record.tag != .struct_) continue;
         const struct_idx = record.getStruct().idx;
@@ -1169,29 +1165,10 @@ fn reachableStatementCount(result: *lir.Program.Result) HoistedConstantsTestErro
     return statement_count;
 }
 
-fn expectLowLevelPresent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return;
-    }
-    return error.StaticDataLiteralNotFound;
-}
-
 fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel) HoistedConstantsTestError!void {
     for (result.store.getCFStmts()) |stmt| {
         if (stmt == .assign_low_level and stmt.assign_low_level.op == op) return error.UnexpectedLowLevel;
     }
-}
-
-fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) HoistedConstantsTestError!void {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt != .assign_literal) continue;
-        switch (stmt.assign_literal.value) {
-            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return,
-            .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
-        }
-    }
-    return error.StaticDataLiteralNotFound;
 }
 
 test "callable binding with alias annotation is const-evaluated" {

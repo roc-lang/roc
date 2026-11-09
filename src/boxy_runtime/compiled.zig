@@ -1,14 +1,14 @@
 //! The descriptor operations compiled code performs through the runtime
-//! rather than inline: component addresses found by name or through a
-//! nominal's backing, value construction, dictionaries, and the list
-//! operations a `.boxy` generic body emits with an element descriptor
-//! (design.md "Dynamic Values In LIR", "Dictionaries"). `exports.zig` exposes
-//! each as a `roc_desc_*` C entry point.
+//! rather than inline: component addresses by index or through a nominal's
+//! backing, value construction, representation adaptation by coercion plan,
+//! and the list operations a `.boxy` generic body emits with an element
+//! descriptor (design.md "Dynamic Values In LIR"). Every field and variant
+//! is reached by a position the compiler computed; nothing here looks one up
+//! by name. `exports.zig` exposes each as a `roc_desc_*` C entry point.
 
 const std = @import("std");
 const builtins = @import("builtins");
 const desc_mod = @import("desc.zig");
-const compose = @import("compose.zig");
 const walk = @import("walk.zig");
 
 const RocOps = builtins.host_abi.RocOps;
@@ -19,11 +19,10 @@ const utils = builtins.utils;
 const erased_callable = builtins.erased_callable;
 
 const TypeDesc = desc_mod.TypeDesc;
-const Name = desc_mod.Name;
-const Field = desc_mod.Field;
 const Variant = desc_mod.Variant;
+const AdaptPlan = desc_mod.AdaptPlan;
 
-const invariant = compose.invariant;
+const invariant = walk.invariant;
 
 /// A nominal shares its backing's layout; field and tag lookups read the
 /// backing's entries.
@@ -39,28 +38,10 @@ fn recordOf(desc: *const TypeDesc, ops: *RocOps) *const TypeDesc {
     return record;
 }
 
-fn variantNamed(desc: *const TypeDesc, name: *const Name, ops: *RocOps) struct { union_desc: *const TypeDesc, variant: *const Variant } {
+fn unionOf(desc: *const TypeDesc, ops: *RocOps) *const TypeDesc {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a tag of a descriptor that is not a tag union");
-    const variants = union_desc.variants();
-    if (comptime @import("builtin").mode == .debug) {
-        for (variants, 0..) |variant, index| {
-            if (index == 0) continue;
-            std.debug.assert(std.mem.order(u8, variants[index - 1].name.text(), variant.name.text()) == .lt);
-        }
-    }
-    var low: usize = 0;
-    var high = variants.len;
-    while (low < high) {
-        const mid = low + (high - low) / 2;
-        const variant = &variants[mid];
-        switch (std.mem.order(u8, name.text(), variant.name.text())) {
-            .lt => high = mid,
-            .gt => low = mid + 1,
-            .eq => return .{ .union_desc = union_desc, .variant = variant },
-        }
-    }
-    invariant(ops, "a tag that is not in its union's descriptor");
+    return union_desc;
 }
 
 /// The offset of argument `index` of `variant` within its union's bytes.
@@ -86,7 +67,7 @@ pub fn componentAddr(desc: *const TypeDesc, slot: [*]u8) [*]u8 {
 /// boxing it when the slot is a recursive type's box.
 fn writeComponent(desc: *const TypeDesc, slot: [*]u8, src: [*]const u8, ops: *RocOps) void {
     if (desc.kind == .recursive_box) return buildBox(desc.child.?, @ptrCast(@alignCast(slot)), src, ops);
-    @memcpy(slot[0..desc.size], src[0..desc.size]);
+    walk.copyBytes(slot, src, desc.size);
 }
 
 fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) void {
@@ -97,7 +78,7 @@ fn writeDiscriminant(desc: *const TypeDesc, bytes: [*]u8, discriminant: u32) voi
         2 => std.mem.writeInt(u16, at[0..2], @intCast(discriminant), .little),
         4 => std.mem.writeInt(u32, at[0..4], discriminant, .little),
         8 => std.mem.writeInt(u64, at[0..8], discriminant, .little),
-        else => unreachable, // composition and the compiler only produce 0, 1, 2, 4, or 8
+        else => unreachable, // the compiler only produces 0, 1, 2, 4, or 8
     }
 }
 
@@ -111,16 +92,6 @@ pub fn fieldAddr(desc: *const TypeDesc, base: [*]u8, field_index: u32, ops: *Roc
     return componentAddr(field.desc, base + field.offset);
 }
 
-/// The address of the field named `name` of the record at `base`.
-pub fn fieldAddrNamed(desc: *const TypeDesc, base: [*]u8, name: *const Name, ops: *RocOps) [*]u8 {
-    const record = recordOf(desc, ops);
-    for (record.fields()) |*field| {
-        const field_name = field.name orelse continue;
-        if (field_name.eql(name)) return componentAddr(field.desc, base + field.offset);
-    }
-    invariant(ops, "a field name that is not in its record's descriptor");
-}
-
 /// The discriminant of the tag union value at `base`.
 pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u32 {
     const union_desc = backing(desc);
@@ -128,14 +99,9 @@ pub fn tagDiscriminant(desc: *const TypeDesc, base: [*]const u8, ops: *RocOps) u
     return union_desc.readDiscriminant(base);
 }
 
-/// The discriminant of the variant named `name` in `desc`'s union.
-pub fn tagDiscriminantOf(desc: *const TypeDesc, name: *const Name, ops: *RocOps) u32 {
-    return variantNamed(desc, name, ops).variant.discriminant;
-}
-
 /// The address of payload `payload_index` of the value's active variant.
 /// Lowering establishes the variant before projecting its typed payload;
-/// the stored discriminant indexes the same finalized table as name lookup.
+/// the stored discriminant indexes the union's variants.
 pub fn tagPayloadAddr(desc: *const TypeDesc, base: [*]u8, payload_index: u32, ops: *RocOps) [*]u8 {
     const union_desc = backing(desc);
     if (union_desc.kind != .tag_union) invariant(ops, "a payload of a descriptor that is not a tag union");
@@ -153,7 +119,7 @@ pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64)
 /// The payload of a box whose payload `desc` describes. A box of a
 /// zero-sized payload holds no allocation.
 pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
-    // A box of a function is the callable itself (`compose.box`).
+    // A box of a function is the callable itself (design.md "Function Values").
     if (desc.kind == .erased_callable) return @ptrCast(@constCast(box));
     const word = box.* & ~utils.DATA_PTR_TAG_MASK;
     if (desc.size == 0 or word == 0) return walk.zeroSizedPtr();
@@ -186,54 +152,55 @@ pub fn buildRecord(desc: *const TypeDesc, dst: [*]u8, fields: []const [*]const u
 }
 
 /// Build the record `desc` describes at `dst` from the record `base`
-/// (described by `base_desc`): each field named in `names` takes the value
-/// at the corresponding one of `values`, moved in, and every other field
-/// `base`'s field of the same name, shared. `base` is released.
-pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, names: []const *const Name, values: []const [*]const u8, ops: *RocOps) void {
+/// (described by `base_desc`) by the update plan `plan`
+/// (`desc.update_value_flag`): each field the plan gives a value takes that
+/// one of `values`, moved in, and every other field the base's field the
+/// plan names, shared. `base` is released.
+pub fn updateRecord(base_desc: *const TypeDesc, base: [*]u8, desc: *const TypeDesc, dst: [*]u8, plan: [*]const u32, values: []const [*]const u8, ops: *RocOps) void {
     const record = recordOf(desc, ops);
-    const base_record = recordOf(base_desc, ops);
+    const base_fields = recordOf(base_desc, ops).fields();
     var end: u32 = 0;
-    for (record.fields()) |*field| {
+    for (record.fields(), 0..) |*field, slot| {
         if (field.is_padding != 0) continue;
         if (end != field.offset) @memset(dst[end..field.offset], 0);
         end = field.offset + field.desc.size;
-        const name = field.name orelse invariant(ops, "an updated record has an unnamed field");
-        const updated = for (names, values) |candidate, value| {
-            if (candidate.eql(name)) break value;
-        } else null;
-        if (updated) |value| {
-            writeComponent(field.desc, dst + field.offset, value, ops);
+        const entry = plan[slot];
+        if (entry & desc_mod.update_value_flag != 0) {
+            const position = entry & ~desc_mod.update_value_flag;
+            if (position >= values.len) invariant(ops, "an update plan names a value past the update's values");
+            writeComponent(field.desc, dst + field.offset, values[position], ops);
             continue;
         }
-        const source = for (base_record.fields()) |*candidate| {
-            if (candidate.name != null and candidate.name.?.eql(name)) break candidate;
-        } else invariant(ops, "an updated record's field is absent from its base");
-        @memcpy(dst[field.offset..][0..field.desc.size], base[source.offset..][0..field.desc.size]);
+        if (entry >= base_fields.len) invariant(ops, "an update plan names a field past its base's fields");
+        const source = &base_fields[entry];
+        walk.copyBytes(dst + field.offset, base + source.offset, field.desc.size);
         walk.incref(field.desc, dst + field.offset, 1, ops);
     }
     if (end != record.size) @memset(dst[end..record.size], 0);
     walk.decref(base_desc, base, ops);
 }
 
-/// Write the variant named `name` of `desc`'s union to `dst` from its
-/// payloads' bytes.
-pub fn buildTag(desc: *const TypeDesc, name: *const Name, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
-    const found = variantNamed(desc, name, ops);
-    if (payloads.len != found.variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
+/// Write the variant whose discriminant is `discriminant` of `desc`'s union
+/// to `dst` from its payloads' bytes.
+pub fn buildTag(desc: *const TypeDesc, discriminant: u32, dst: [*]u8, payloads: []const [*]const u8, ops: *RocOps) void {
+    const union_desc = unionOf(desc, ops);
+    if (discriminant >= union_desc.count) invariant(ops, "a tag's discriminant is past its union's variants");
+    const variant = &union_desc.variants()[discriminant];
+    if (payloads.len != variant.payload_count) invariant(ops, "a tag built with a different number of arguments than its descriptor has");
     if (payloads.len == 1) {
         // A single payload starts at zero and writeComponent initializes
         // its entire slot, including a recursive box's pointer. Preserve
         // zeroes in the unused payload space, alignment gaps, and tail.
-        const payload = found.variant.payload;
+        const payload = variant.payload;
         writeComponent(payload, dst, payloads[0], ops);
-        @memset(dst[payload.size..found.union_desc.size], 0);
+        @memset(dst[payload.size..union_desc.size], 0);
     } else {
-        @memset(dst[0..found.union_desc.size], 0);
+        @memset(dst[0..union_desc.size], 0);
         for (payloads, 0..) |src, index| {
-            writeComponent(payloadDesc(found.variant, @intCast(index)), dst + payloadOffset(found.variant, @intCast(index)), src, ops);
+            writeComponent(payloadDesc(variant, @intCast(index)), dst + payloadOffset(variant, @intCast(index)), src, ops);
         }
     }
-    writeDiscriminant(found.union_desc, dst, found.variant.discriminant);
+    writeDiscriminant(union_desc, dst, variant.discriminant);
 }
 
 /// Write a list of the given items, which `elem` describes, to `dst`.
@@ -244,14 +211,14 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
     }
     const data = utils.allocateWithRefcount(elem.size * elems.len, elem.alignment, elem.flags.contains_refcounted, ops);
     for (elems, 0..) |src, index| {
-        @memcpy((data + index * elem.size)[0..elem.size], src[0..elem.size]);
+        walk.copyBytes(data + index * elem.size, src, elem.size);
     }
     dst.* = .{ .bytes = data, .length = elems.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elems.len) };
 }
 
 /// Write a box holding the payload `desc` describes to `dst`.
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
-    // A box of a function is the callable itself (`compose.box`), which
+    // A box of a function is the callable itself (design.md "Function Values"), which
     // the box takes over.
     if (desc.kind == .erased_callable) {
         dst.* = @as(*align(1) const usize, @ptrCast(payload)).*;
@@ -262,7 +229,7 @@ pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *
         return;
     }
     const data = utils.allocateWithRefcount(desc.size, desc.alignment, desc.flags.contains_refcounted, ops);
-    @memcpy(data[0..desc.size], payload[0..desc.size]);
+    walk.copyBytes(data, payload, desc.size);
     dst.* = @intFromPtr(data);
 }
 
@@ -282,115 +249,68 @@ pub fn allocSlot(desc: *const TypeDesc, dst: *usize, ops: *RocOps) void {
 pub fn storeSlot(desc: *const TypeDesc, slot: *const usize, value: [*]const u8, dst: *usize) void {
     if (desc.size != 0) {
         const data: [*]u8 = @ptrFromInt(slot.*);
-        @memcpy(data[0..desc.size], value[0..desc.size]);
+        walk.copyBytes(data, value, desc.size);
     }
     dst.* = slot.*;
 }
 
 // Representation adaptation.
 
-/// One value of an adaptation: the source bytes `from` describes, rebuilt at
-/// `dst` as `to` describes.
-const AdaptWork = struct { from: *const TypeDesc, to: *const TypeDesc, src: [*]const u8, dst: [*]u8 };
+/// One value of an adaptation: the source bytes rebuilt at `dst` by `plan`.
+const AdaptWork = struct { plan: *const AdaptPlan, src: [*]const u8, dst: [*]u8 };
 
-/// Rebuild the value `src` (borrowed), which `from` describes, at `dst` as
-/// the owned value `to` describes. The two descriptors describe one type
-/// whose record fields may differ in storage (design.md "Field Kinds"): a
-/// field `from` stores inline and `to` in a presence slot is wrapped
-/// `#Present`, and a presence slot `to` stores inline is unwrapped, which a
-/// `#Missing` slot cannot be. Lists and boxes whose contents change storage
-/// are rebuilt; everything else is copied and retained.
-pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
+/// Rebuild the value `src` (borrowed) at `dst` as an owned value by the
+/// coercion plan `plan` (`desc.AdaptPlan`), which the compiler built for the
+/// pair of descriptors the coercion converts between: record fields move by
+/// offset, variants re-tag by discriminant, and presence slots wrap or
+/// unwrap, a `#Missing` slot crashing where its destination requires the
+/// field. Lists and boxes whose contents change storage are rebuilt;
+/// everything else is copied and retained.
+pub fn adapt(plan: *const AdaptPlan, dst: [*]u8, src: [*]const u8, ops: *RocOps) void {
     var stack: walk.Stack(AdaptWork, 16) = undefined;
     stack.init();
     defer stack.deinit(ops);
-    stack.push(.{ .from = from, .to = to, .src = src, .dst = dst }, ops);
+    stack.push(.{ .plan = plan, .src = src, .dst = dst }, ops);
     while (stack.pop()) |work| {
-        const f = work.from;
-        const t = work.to;
-        if (f == t) {
-            @memcpy(work.dst[0..t.size], work.src[0..t.size]);
-            walk.incref(t, work.dst, 1, ops);
-            continue;
-        }
-        if (t.flags.presence_slot and !f.flags.presence_slot) {
-            // Wrap: `#Present` is the slot's second variant.
-            const present = &t.variants()[1];
-            @memset(work.dst[0..t.size], 0);
-            writeDiscriminant(t, work.dst, present.discriminant);
-            stack.push(.{ .from = f, .to = present.payload, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        if (f.flags.presence_slot and !t.flags.presence_slot) {
-            const present = &f.variants()[1];
-            if (f.readDiscriminant(work.src) != present.discriminant) ops.crash("an optional record field that is missing reached a position that requires it");
-            stack.push(.{ .from = present.payload, .to = t, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        // A nominal shares its backing's representation.
-        if (f.kind == .nominal and t.kind != .nominal) {
-            stack.push(.{ .from = f.child.?, .to = t, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        if (t.kind == .nominal and f.kind != .nominal) {
-            stack.push(.{ .from = f, .to = t.child.?, .src = work.src, .dst = work.dst }, ops);
-            continue;
-        }
-        // Bool is the union `[False, True]` with its discriminant for a value,
-        // and a row holding those tags re-tags to and from it by name.
-        if (f.kind == .tag_union and t.kind == .bool) {
-            const source = &f.variants()[f.readDiscriminant(work.src)];
-            work.dst[0] = @intFromBool(std.mem.eql(u8, source.name.text(), "True"));
-            continue;
-        }
-        if (f.kind == .bool and t.kind == .tag_union) {
-            const tag: []const u8 = if (work.src[0] != 0) "True" else "False";
-            const target = for (t.variants()) |*candidate| {
-                if (std.mem.eql(u8, candidate.name.text(), tag)) break candidate;
-            } else invariant(ops, "a re-tagged variant is not in its destination's row");
-            @memset(work.dst[0..t.size], 0);
-            writeDiscriminant(t, work.dst, target.discriminant);
-            continue;
-        }
-        if (f.kind != t.kind) invariant(ops, "adapted descriptors describe different kinds of value");
-        switch (t.kind) {
-            .zst, .scalar, .str, .bool, .erased_callable => {
-                @memcpy(work.dst[0..t.size], work.src[0..t.size]);
+        const node = work.plan;
+        switch (node.kind) {
+            .copy => {
+                const t = node.to.?;
+                walk.copyBytes(work.dst, work.src, t.size);
                 walk.incref(t, work.dst, 1, ops);
             },
-            .nominal => stack.push(.{ .from = f.child.?, .to = t.child.?, .src = work.src, .dst = work.dst }, ops),
-            .record, .tuple => {
+            .wrap => {
+                const t = node.to.?;
                 @memset(work.dst[0..t.size], 0);
-                for (t.fields()) |*to_field| {
-                    if (to_field.is_padding != 0) continue;
-                    // Fields match by name, tuple elements by position.
-                    const from_field: ?*const Field = if (t.kind == .tuple) f.fieldBySemanticIndex(to_field.field_index) else for (f.fields()) |*candidate| {
-                        if (candidate.name != null and candidate.name.?.eql(to_field.name.?)) break candidate;
-                    } else null;
-                    if (from_field) |source| {
-                        stack.push(.{ .from = source.desc, .to = to_field.desc, .src = work.src + source.offset, .dst = work.dst + to_field.offset }, ops);
-                    } else {
-                        // An optional field the source lacks is missing.
-                        if (!to_field.desc.flags.presence_slot) invariant(ops, "an adapted record lacks a field its destination requires");
-                        writeDiscriminant(to_field.desc, work.dst + to_field.offset, to_field.desc.variants()[0].discriminant);
-                    }
-                }
+                writeDiscriminant(t, work.dst, node.discriminant);
+                stack.push(.{ .plan = node.child.?, .src = work.src, .dst = work.dst }, ops);
             },
-            .tag_union => {
-                // The destination's variant is the source's by tag name; a
-                // label a joined row holds at several payload types names
-                // the variant whose payload describes the same values.
-                const source = &f.variants()[f.readDiscriminant(work.src)];
-                const target = targetVariant(t, source, ops);
+            .unwrap => {
+                if (node.from.?.readDiscriminant(work.src) != node.discriminant) ops.crash("an optional record field that is missing reached a position that requires it");
+                stack.push(.{ .plan = node.child.?, .src = work.src, .dst = work.dst }, ops);
+            },
+            .missing => writeDiscriminant(node.to.?, work.dst, node.discriminant),
+            .retag => {
+                const t = node.to.?;
+                const source = node.from.?.readDiscriminant(work.src);
+                if (source >= node.count) invariant(ops, "a re-tagged value's discriminant is past its plan's variants");
+                const target = node.variants()[source];
+                if (target.discriminant == desc_mod.AdaptVariant.absent) invariant(ops, "a re-tagged variant is not in its destination's row");
                 @memset(work.dst[0..t.size], 0);
                 writeDiscriminant(t, work.dst, target.discriminant);
-                if (source.payload_count != 0) stack.push(.{ .from = source.payload, .to = target.payload, .src = work.src, .dst = work.dst }, ops);
+                if (target.plan) |payload| stack.push(.{ .plan = payload, .src = work.src, .dst = work.dst }, ops);
+            },
+            .record => {
+                @memset(work.dst[0..node.to.?.size], 0);
+                for (node.fields()) |field| {
+                    stack.push(.{ .plan = field.plan, .src = work.src + field.from_offset, .dst = work.dst + field.to_offset }, ops);
+                }
             },
             .list => {
                 const source: *const RocList = @ptrCast(@alignCast(work.src));
                 const target: *RocList = @ptrCast(@alignCast(work.dst));
-                const from_elem = f.child.?;
-                const to_elem = t.child.?;
+                const from_elem = node.from.?.child.?;
+                const to_elem = node.to.?.child.?;
                 const len = source.len();
                 if (len == 0 or to_elem.size == 0) {
                     target.* = zstList(len);
@@ -399,11 +319,11 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 const data = utils.allocateWithRefcount(to_elem.size * len, to_elem.alignment, to_elem.flags.contains_refcounted, ops);
                 target.* = .{ .bytes = data, .length = len, .capacity_or_alloc_ptr = RocList.encodeCapacity(len) };
                 for (0..len) |index| {
-                    stack.push(.{ .from = from_elem, .to = to_elem, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
+                    stack.push(.{ .plan = node.child.?, .src = source.bytes.? + index * from_elem.size, .dst = data + index * to_elem.size }, ops);
                 }
             },
-            .box, .recursive_box => {
-                const payload_to = t.child.?;
+            .box => {
+                const payload_to = node.to.?.child.?;
                 const target: *usize = @ptrCast(@alignCast(work.dst));
                 if (payload_to.size == 0) {
                     target.* = 0;
@@ -412,98 +332,16 @@ pub fn adapt(from: *const TypeDesc, to: *const TypeDesc, dst: [*]u8, src: [*]con
                 const word = @as(*const usize, @ptrCast(@alignCast(work.src))).* & ~utils.DATA_PTR_TAG_MASK;
                 const data = utils.allocateWithRefcount(payload_to.size, payload_to.alignment, payload_to.flags.contains_refcounted, ops);
                 target.* = @intFromPtr(data);
-                stack.push(.{ .from = f.child.?, .to = payload_to, .src = @ptrFromInt(word), .dst = data }, ops);
+                stack.push(.{ .plan = node.child.?, .src = @ptrFromInt(word), .dst = data }, ops);
             },
+            .mismatch => invariant(ops, "adapted descriptors describe different kinds of value"),
         }
     }
 }
 
-/// The variant of the tag union `to` a value of variant `source` is
-/// re-tagged as: the one with its name and payload count, which a row names
-/// once (design.md "Row Joins", "One label, two payload types").
-fn targetVariant(to: *const TypeDesc, source: *const Variant, ops: *RocOps) *const Variant {
-    var found: ?*const Variant = null;
-    for (to.variants()) |*candidate| {
-        if (!candidate.name.eql(source.name) or candidate.payload_count != source.payload_count) continue;
-        if (found != null) invariant(ops, "a re-tagged variant matches two destination variants");
-        found = candidate;
-    }
-    return found orelse invariant(ops, "a re-tagged variant is not in its destination's row");
-}
-
-// Dictionaries.
-
-/// A platform's dictionary callables and dictionary records, interned by
-/// constructor and operand words. Both are immortal.
-var dictionary_cache: compose.Cache = .{};
-
-const dict_compose_tag: u64 = 1;
-const dict_record_tag: u64 = 2;
-
 /// Bytes before a static callable's payload: alignment padding, then the
 /// refcount word immediately before the payload.
 pub const static_callable_header: usize = erased_callable.capture_alignment;
-
-/// An immortal erased callable whose function is `callable_fn` (a worker's
-/// erased-record entry) and whose capture bytes are `capture_prefix` zero
-/// bytes followed by `captures`, one word each, interned by function,
-/// prefix, and captures.
-pub fn dictCompose(callable_fn: erased_callable.CallableFnPtr, capture_prefix: u32, captures: []const usize, immortal_ops: *RocOps) [*]u8 {
-    var key_buffer: [16]u64 = undefined;
-    var scratch: ?[*]u64 = null;
-    const key_len = 3 + captures.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
-    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_compose_tag;
-    key[1] = @intFromPtr(callable_fn);
-    key[2] = capture_prefix;
-    for (captures, key[3..]) |capture, *word| word.* = capture;
-    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@constCast(existing));
-
-    const capture_size = capture_prefix + captures.len * @sizeOf(usize);
-    const payload_size = erased_callable.payloadSize(capture_size);
-    const bytes: [*]u8 = compose.immortalBytes(immortal_ops, static_callable_header + payload_size, erased_callable.payload_alignment);
-    const data = bytes + static_callable_header;
-    @as(*isize, @ptrCast(@alignCast(data - @sizeOf(isize)))).* = utils.REFCOUNT_STATIC_DATA;
-    erased_callable.payloadPtr(data).* = .{ .callable_fn_ptr = callable_fn, .on_drop = null };
-    const capture_bytes = data + erased_callable.capture_offset;
-    @memset(capture_bytes[0..capture_prefix], 0);
-    const words: [*]align(1) usize = @ptrCast(capture_bytes + capture_prefix);
-    for (captures, 0..) |capture, index| words[index] = capture;
-    return @ptrCast(@constCast(dictionaryCache().intern(key, @ptrCast(@alignCast(data)), immortal_ops)));
-}
-
-/// Fill capture word `index` of `dict` (a `dictCompose` result that held a
-/// null word there) with `value`.
-pub fn dictPatch(dict: [*]u8, capture_prefix: u32, index: u32, value: usize) [*]u8 {
-    const words: [*]align(1) usize = @ptrCast(dict + erased_callable.capture_offset + capture_prefix);
-    words[index] = value;
-    return dict;
-}
-
-/// An immortal record of method callables, interned by its callables.
-pub fn dictRecord(methods: []const usize, immortal_ops: *RocOps) [*]const usize {
-    var key_buffer: [16]u64 = undefined;
-    var scratch: ?[*]u64 = null;
-    const key_len = 1 + methods.len;
-    const key: []u64 = if (key_len <= key_buffer.len) key_buffer[0..key_len] else blk: {
-        const words = compose.scratchAlloc(u64, key_len, immortal_ops).ptr;
-        scratch = words;
-        break :blk words[0..key_len];
-    };
-    defer if (scratch) |words| compose.scratchFree(u64, words[0..key_len], immortal_ops);
-    key[0] = dict_record_tag;
-    for (methods, key[1..]) |method, *word| word.* = method;
-    if (dictionaryCache().lookup(key)) |existing| return @ptrCast(@alignCast(existing));
-
-    const record: [*]usize = @ptrCast(@alignCast(compose.immortalBytes(immortal_ops, @max(methods.len, 1) * @sizeOf(usize), @alignOf(usize))));
-    @memcpy(record[0..methods.len], methods);
-    return @ptrCast(@alignCast(dictionaryCache().intern(key, @ptrCast(@alignCast(record)), immortal_ops)));
-}
 
 // List operations through an element descriptor.
 
@@ -620,12 +458,12 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .get_unsafe, .map_extract_unsafe => {
             if (e.width == 0 or a.bytes == null) return;
             const at = a.bytes.? + @as(usize, @intCast(req.n[0])) * e.width;
-            @memcpy(req.out[0..e.width], at[0..e.width]);
+            walk.copyBytes(req.out, at, e.width);
         },
         .append_unsafe => writeList(req.out, if (e.width == 0)
             zstList(a.len() + 1)
         else
-            list.listAppendUnsafe(a, req.element, e.width, &list.copy_fallback)),
+            list.listAppendUnsafe(a, req.element, e.width, &walk.elemCopy)),
         .concat => {
             const b = req.list2.?.*;
             writeList(req.out, if (e.width == 0)
@@ -668,18 +506,18 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .prepend => writeList(req.out, if (e.width == 0)
             zstList(a.len() + 1)
         else
-            list.listPrepend(a, e.alignment, req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listPrepend(a, e.alignment, req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .swap => writeList(req.out, if (e.width == 0)
             zstList(a.len())
         else
-            list.listSwap(a, e.alignment, e.width, req.n[0], req.n[1], e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listSwap(a, e.alignment, e.width, req.n[0], req.n[1], e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
         .map_can_reuse => req.out[0] = @intFromBool(list.listMapCanReuse(a, ops)),
         .item_size_at_most => req.out[0] = @intFromBool(e.width <= req.n[0]),
         .map_cast_unsafe => writeList(req.out, a),
         .map_write_unsafe => {
             if (e.width != 0) {
                 const at = a.bytes.? + @as(usize, @intCast(req.n[0])) * e.width;
-                @memcpy(at[0..e.width], req.element.?[0..e.width]);
+                walk.copyBytes(at, req.element.?, e.width);
             }
             writeList(req.out, a);
         },
@@ -729,25 +567,18 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
                 value_out = req.out_value.?;
             }
             writeList(list_out, if (m0 == .InPlace)
-                list.listReplaceInPlace(a, req.n[0], req.element, e.width, value_out, &list.copy_fallback)
+                list.listReplaceInPlace(a, req.n[0], req.element, e.width, value_out, &walk.elemCopy)
             else
-                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, value_out, &list.copy_fallback, ops));
+                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, value_out, &walk.elemCopy, ops));
         },
         .set, .set_in_place_unsafe => {
             if (e.width == 0) {
                 writeList(req.out, zstList(a.len()));
                 return;
             }
-            // The displaced element is released here: `set` does not return it.
-            var old_buffer: walk.ArgsBuffer = .{};
-            defer old_buffer.deinit(ops);
-            const old = old_buffer.get(e.width, ops);
-            const result = if (req.op == .set_in_place_unsafe or m0 == .InPlace)
-                list.listReplaceInPlace(a, req.n[0], req.element, e.width, old, &list.copy_fallback)
-            else
-                list.listReplace(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, old, &list.copy_fallback, ops);
-            if (e.rc) walk.decref(req.elem, old, ops);
-            writeList(req.out, result);
+            // `set` does not return the displaced element; `listSet` releases it.
+            const set_mode: UpdateMode = if (req.op == .set_in_place_unsafe) .InPlace else m0;
+            writeList(req.out, list.listSet(a, e.alignment, req.n[0], req.element, e.width, e.rc, e.context, e.inc, e.context, e.dec, set_mode, &walk.elemCopy, ops));
         },
         .with_capacity => writeList(req.out, if (e.width == 0)
             zstList(0)
@@ -768,182 +599,6 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
         .reverse => writeList(req.out, if (e.width == 0)
             zstList(a.len())
         else
-            list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &list.copy_fallback, ops)),
+            list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
     }
 }
-
-// Composition state.
-
-/// Where composed descriptors and dictionaries are allocated. They are
-/// immortal to the code composing them. A platform's runtime allocates them
-/// through its host, whose allocations live as long as the process. In the
-/// compiler's process they live as long as the program composing them: its
-/// `InProcessState`, current on the thread while the program's code runs.
-pub fn immortalOps() *RocOps {
-    if (comptime builtins.host_abi.host_role == .platform) return builtins.in_process_host.ops();
-    return &InProcessState.current().ops;
-}
-
-/// The interning table descriptor composition fills: the process's in a
-/// platform build, the current program's in the compiler's process.
-pub fn descriptorCache() *compose.Cache {
-    if (comptime builtins.host_abi.host_role == .platform) return &compose.process_cache;
-    return &InProcessState.current().descriptors;
-}
-
-/// The interning table dictionary composition fills, chosen as
-/// `descriptorCache` is.
-fn dictionaryCache() *compose.Cache {
-    if (comptime builtins.host_abi.host_role == .platform) return &dictionary_cache;
-    return &InProcessState.current().dictionaries;
-}
-
-/// What one program's code composes while it runs in the compiler's own
-/// process: its descriptors, dictionary callables, and dictionary records,
-/// with their interning tables and the memory holding them. The tables key
-/// on addresses in the program's code and static data, which the process
-/// reuses once the program is gone, so the state lives exactly as long as
-/// the program: whoever runs the program creates one, makes it current on
-/// every thread that runs the program's code (`enter`), and destroys it
-/// after the program. Threads running the program's code at once share it.
-/// Record where `desc` came from in the compile-time program composing it
-/// (`LIR.DynOp.desc_note`).
-pub fn noteDesc(desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
-    InProcessState.current().note(desc, ty, vars);
-}
-
-/// The compositions of one compile-time program running in this process.
-pub const InProcessState = struct {
-    allocator: std.mem.Allocator,
-    lock: std.atomic.Mutex = .unlocked,
-    arena: std.heap.ArenaAllocator,
-    /// Composition allocates through these ops: arena memory, with a crash
-    /// delivered to the evaluation entered on the composing thread.
-    ops: RocOps,
-    descriptors: compose.Cache = .{},
-    dictionaries: compose.Cache = .{},
-    /// Where each descriptor a compile-time program noted came from
-    /// (`noteDesc`), by address.
-    origins: std.AutoHashMapUnmanaged(*const TypeDesc, DescOrigin) = .empty,
-
-    threadlocal var current_state: ?*InProcessState = null;
-
-    /// The program type a descriptor describes, and the descriptors of that
-    /// type's variables. Types with one descriptor are the same to the code
-    /// reading it, so the lowest id stands for them all, whichever thread
-    /// noted it first.
-    pub const DescOrigin = struct {
-        ty: u32,
-        vars: []const *const TypeDesc,
-    };
-
-    /// What `enter` displaced; `leave` restores it.
-    pub const Entered = struct {
-        saved: ?*InProcessState,
-    };
-
-    pub fn create(allocator: std.mem.Allocator) std.mem.Allocator.Error!*InProcessState {
-        comptime assertInProcess("create");
-        const self = try allocator.create(InProcessState);
-        self.* = .{
-            .allocator = allocator,
-            .arena = .init(allocator),
-            .ops = .{
-                .env = @ptrCast(self),
-                .roc_alloc = &alloc,
-                .roc_dealloc = &dealloc,
-                .roc_realloc = &realloc,
-                .roc_dbg = &dbg,
-                .roc_expect_failed = &expectFailed,
-                .roc_crashed = &crashed,
-                .hosted_fns = builtins.host_abi.emptyHostedFunctions(),
-            },
-        };
-        return self;
-    }
-
-    fn note(self: *InProcessState, desc: *const TypeDesc, ty: u32, vars: []const *const TypeDesc) void {
-        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
-        defer self.lock.unlock();
-        const entry = self.origins.getOrPut(self.allocator, desc) catch crashOutOfMemory(self);
-        if (entry.found_existing and entry.value_ptr.ty <= ty) return;
-        const owned = self.arena.allocator().dupe(*const TypeDesc, vars) catch crashOutOfMemory(self);
-        entry.value_ptr.* = .{ .ty = ty, .vars = owned };
-    }
-
-    fn crashOutOfMemory(self: *InProcessState) noreturn {
-        self.ops.crash("out of memory recording a descriptor's type");
-    }
-
-    /// Where `desc` came from, when the program noted it.
-    pub fn origin(self: *InProcessState, desc: *const TypeDesc) ?DescOrigin {
-        return self.origins.get(desc);
-    }
-
-    /// Release everything the program composed. Nothing of the program may
-    /// run afterwards.
-    pub fn destroy(self: *InProcessState) void {
-        const allocator = self.allocator;
-        self.origins.deinit(allocator);
-        self.arena.deinit();
-        allocator.destroy(self);
-    }
-
-    /// Make this the state of every composition on this thread until
-    /// `leave`. A program that runs another program nests: the inner one
-    /// enters, runs, and leaves, restoring the outer one.
-    pub fn enter(self: *InProcessState) Entered {
-        comptime assertInProcess("enter");
-        const entered = Entered{ .saved = current_state };
-        current_state = self;
-        return entered;
-    }
-
-    /// Restore what `enter` displaced.
-    pub fn leave(entered: Entered) void {
-        comptime assertInProcess("leave");
-        current_state = entered.saved;
-    }
-
-    fn current() *InProcessState {
-        comptime assertInProcess("current");
-        return current_state orelse invariant(builtins.in_process_host.ops(), "a program composed on a thread that entered no program's composition state");
-    }
-
-    fn assertInProcess(comptime operation: []const u8) void {
-        if (builtins.host_abi.host_role == .platform) {
-            @compileError("InProcessState." ++ operation ++ " touches thread-local storage, which a platform build must never do");
-        }
-    }
-
-    fn fromOps(ops: *RocOps) *InProcessState {
-        return @ptrCast(@alignCast(ops.env));
-    }
-
-    fn alloc(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
-        const self = fromOps(ops);
-        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
-        defer self.lock.unlock();
-        return self.arena.allocator().rawAlloc(length, .fromByteUnits(alignment), @returnAddress()) orelse
-            builtins.in_process_host.ops().crash("out of memory composing a Boxy descriptor");
-    }
-
-    /// Arena memory is released with the state.
-    fn dealloc(_: *RocOps, _: *anyopaque, _: usize) callconv(.c) void {}
-
-    fn realloc(_: *RocOps, _: *anyopaque, _: usize, _: usize) callconv(.c) *anyopaque {
-        invariant(builtins.in_process_host.ops(), "descriptor composition reallocated immortal memory");
-    }
-
-    fn dbg(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().dbg(bytes[0..len]);
-    }
-
-    fn expectFailed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().expectFailed(bytes[0..len]);
-    }
-
-    fn crashed(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        builtins.in_process_host.ops().crash(bytes[0..len]);
-    }
-};

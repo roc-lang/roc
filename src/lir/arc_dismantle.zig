@@ -80,6 +80,67 @@ pub fn encodeProjection(op: LIR.RefOp) ?Projection {
     };
 }
 
+/// A product's checked ownership structure, independent of its byte offsets.
+/// Concrete products use their committed layout; dynamic products use the
+/// field layouts/descriptors explicitly supplied by lowering.
+pub const ProductFields = struct {
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    layout_idx: layout_mod.Idx,
+    shape: ?LIR.ProductShape,
+
+    pub const Field = struct {
+        index: u32,
+        layout: layout_mod.Idx,
+        is_padding: bool = false,
+        desc: ?LIR.LocalId = null,
+    };
+
+    pub fn of(store: *const LirStore, layouts: *const layout_mod.Store, local: LIR.LocalId) ?ProductFields {
+        const value = store.getLocal(local);
+        if (value.product != .none) return .{ .store = store, .layouts = layouts, .layout_idx = value.layout_idx, .shape = store.stmtRow(value.product) };
+        if (layouts.getLayout(value.layout_idx).tag != .struct_) return null;
+        return .{ .store = store, .layouts = layouts, .layout_idx = value.layout_idx, .shape = null };
+    }
+
+    pub fn len(self: ProductFields) u32 {
+        return if (self.shape) |shape| shape.layouts.len else @intCast(self.layouts.getStructInfo(self.layouts.getLayout(self.layout_idx)).fields.len);
+    }
+
+    pub fn at(self: ProductFields, index: u32) Field {
+        if (self.shape) |shape| return .{
+            .index = index,
+            .layout = @fromBackingInt(@intCast(GuardedList.at(self.store.getU32Span(shape.layouts), index))),
+            .desc = GuardedList.at(self.store.getLocalSpan(shape.descriptors), index),
+        };
+        const field = self.layouts.getStructInfo(self.layouts.getLayout(self.layout_idx)).fields.get(index);
+        return .{ .index = field.index, .layout = field.layout, .is_padding = field.is_padding };
+    }
+
+    pub fn slotBase(self: ProductFields, index: u32) u32 {
+        if (self.shape == null) return self.layouts.ownershipSlotBase(self.layout_idx, index);
+        return GuardedList.at(self.store.getU32Span(self.shape.?.slots), index);
+    }
+
+    pub fn slotCount(self: ProductFields) u32 {
+        if (self.shape == null) return self.layouts.ownershipSlotCount(self.layout_idx);
+        return GuardedList.at(self.store.getU32Span(self.shape.?.slots), self.len());
+    }
+
+    pub fn appendRcSlots(self: ProductFields, gpa: Allocator, out: *std.ArrayList(layout_mod.Store.RcSlot)) Allocator.Error!void {
+        if (self.shape == null) return self.layouts.appendRcSlots(gpa, self.layout_idx, 0, out);
+        for (0..self.len()) |i| {
+            const field = self.at(@intCast(i));
+            const physical = self.layouts.getLayout(field.layout);
+            if (!self.layouts.layoutContainsRefcounted(physical)) continue;
+            const first = self.slotBase(field.index);
+            if (physical.tag == .struct_) {
+                try self.layouts.appendRcSlots(gpa, field.layout, first, out);
+            } else try out.append(gpa, .{ .slot = first, .layout = field.layout });
+        }
+    }
+};
+
 fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
@@ -118,6 +179,18 @@ pub fn projectionOwnsAllRc(
     const source_layout = layouts.getLayout(source_layout_idx);
     switch (projection.kind) {
         .field => {
+            if (store.getLocal(source).product != .none) {
+                const fields = ProductFields.of(store, layouts, source).?;
+                var rc_count: u32 = 0;
+                var selected = false;
+                for (0..fields.len()) |i| {
+                    const field = fields.at(@intCast(i));
+                    if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
+                    rc_count += 1;
+                    if (field.index == projection.first and field.layout == target_layout_idx) selected = true;
+                }
+                return selected and rc_count == 1;
+            }
             if (source_layout.tag != .struct_) return false;
             const field_idx = projection.first;
             const field = structFieldBySemanticIndex(layouts, source_layout, field_idx) orelse return false;
@@ -599,15 +672,13 @@ const Analysis = struct {
         const local_index = @backingInt(local);
         if (local_index >= self.rc_local.len) dismantleInvariant("ARC dismantle resource table did not cover local");
         if (!self.rc_local[local_index]) return false;
-        const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        if (local_layout.tag != .struct_) return false;
+        const fields = ProductFields.of(self.store, self.layouts, local) orelse return false;
         if (self.solution.isBorrowed(local) and !self.is_param[local_index] and self.projected_root[local_index] == no_index and self.view_root[local_index] == no_index) return false;
         if (self.solution.isJoinParam(local) and !self.explicit_init_join[local_index]) return false;
         if (self.solution.maybeUninitializedCondition(local) != null) return false;
 
-        const info = self.layouts.getStructInfo(local_layout);
-        for (0..info.fields.len) |i| {
-            const field = info.fields.get(@intCast(i));
+        for (0..fields.len()) |i| {
+            const field = fields.at(@intCast(i));
             if (self.layouts.layoutContainsRefcounted(self.layouts.getLayout(field.layout))) return true;
         }
         return false;
@@ -791,7 +862,7 @@ const Analysis = struct {
     fn readSlots(self: *const Analysis, source: LIR.LocalId, field_idx: u32, target: LIR.LocalId) SlotRange {
         const view_base: u32 = if (self.isView(source)) self.view_base[@backingInt(source)] else 0;
         return .{
-            .first = view_base + self.layouts.ownershipSlotBase(self.store.getLocal(source).layout_idx, field_idx),
+            .first = view_base + ProductFields.of(self.store, self.layouts, source).?.slotBase(field_idx),
             .count = self.layouts.ownershipSlotCount(self.store.getLocal(target).layout_idx),
         };
     }
@@ -2344,15 +2415,15 @@ fn classifyStatement(
         .join => {},
         .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
         .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
-        // A dynamic value is opaque: every operand of a `dyn` statement is a
-        // whole use, so no container it touches dismantles.
+        // Dynamic operations observe/consume whole operand values. Record
+        // those program points, so a later field take can end their lifetime.
         .dyn => |stmt| {
             const Use = struct {
                 analysis: *Analysis,
                 current: LIR.CFStmtId,
 
                 fn visit(self: *const @This(), operand: LIR.LocalId) Error!void {
-                    try self.analysis.useWhole(self.current, operand);
+                    try self.analysis.useWholeAt(operand, self.current);
                 }
             };
             const use: Use = .{ .analysis = analysis, .current = current };
@@ -3822,12 +3893,13 @@ pub fn compute(
                 // release.
                 const local_layout_idx = store.getLocal(local).layout_idx;
                 rc_slots.clearRetainingCapacity();
-                try layouts.appendRcSlots(gpa, local_layout_idx, 0, &rc_slots);
+                const fields = ProductFields.of(store, layouts, local).?;
+                try fields.appendRcSlots(gpa, &rc_slots);
                 // Cut the slots at every read's bounds, and keep the pieces
                 // holding stored units: one mask bit each.
                 bounds.clearRetainingCapacity();
                 try bounds.append(gpa, 0);
-                try bounds.append(gpa, layouts.ownershipSlotCount(local_layout_idx));
+                try bounds.append(gpa, fields.slotCount());
                 for (candidate.reads.items) |read| {
                     try bounds.append(gpa, read.slots.first);
                     try bounds.append(gpa, read.slots.end());

@@ -291,6 +291,36 @@ pub const TypeWriter = struct {
         self.digester.retain = true;
     }
 
+    pub const KeyMemory = struct {
+        engine: type_key_engine.RetainedBytes = .{},
+        adapter_scratch: usize = 0,
+        owned_ranks: usize = 0,
+        nodes: usize = 0,
+        classes: usize = 0,
+        summaries: usize = 0,
+        map_nodes: usize = 0,
+    };
+
+    /// The plain retained key writer used by SealedTypeKeys. Mode-specific
+    /// digesters and inspection are not used by that owner.
+    pub fn retainedKeyMemory(self: *const TypeWriter) KeyMemory {
+        const adapter = &self.digester.adapter;
+        const engine = &self.digester.engine;
+        var result = KeyMemory{
+            .engine = engine.retainedBytes(),
+            .owned_ranks = type_key_engine.listRetainedBytes(adapter.rank_scratch.ranks),
+            .nodes = engine.node_info.count(),
+            .classes = engine.classes.items.len,
+            .summaries = engine.summaries.items.len,
+            .map_nodes = engine.maps.nodes.items.len,
+        };
+        inline for (.{ "fields", "tags", "field_sort_scratch", "tag_sort_scratch" }) |field| {
+            result.adapter_scratch += type_key_engine.listRetainedBytes(@field(adapter, field));
+        }
+        result.adapter_scratch += type_key_engine.stackRetainedBytes(adapter.ext_seen);
+        return result;
+    }
+
     pub fn fromVar(self: *TypeWriter, var_: Var) Allocator.Error!TypeKeyInfo {
         return try self.digester.info(var_);
     }
@@ -2593,4 +2623,29 @@ test "keying every link of a constrained-variable chain takes work linear in its
     // Doubling the chain at most roughly doubles the work; the quadratic
     // walk of every link's whole remaining chain quadrupled it.
     try std.testing.expect(work[1] * 10 <= work[0] * 25);
+}
+
+test "type key retained byte accounting matches a live composed writer" {
+    const gpa = std.testing.allocator;
+    var env = try ModuleEnv.init(gpa, "");
+    defer env.deinit();
+    var store = try TypeStore.initCapacity(gpa, 16, 8);
+    defer store.deinit();
+    const variable = try store.fresh();
+    const cyclic = try store.fresh();
+    try store.setVarContent(cyclic, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ cyclic, variable }) } } });
+    const outer = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ cyclic, variable, cyclic }) } } });
+    const fresh = try fromVarInfo(gpa, &store, &env, outer);
+    var counted = std.testing.FailingAllocator.init(gpa, .{});
+    var writer = TypeWriter.init(counted.allocator(), &store, &env);
+    defer writer.deinit();
+    writer.retainComposedKeys();
+    for ([_]Var{ cyclic, outer, variable, outer }) |root| {
+        _ = try writer.fromVar(root);
+        const work = writer.digester.engine.work;
+        const memory = writer.retainedKeyMemory();
+        try std.testing.expectEqual(counted.allocated_bytes - counted.freed_bytes, memory.engine.persistent() + memory.engine.scratch + memory.adapter_scratch + memory.owned_ranks);
+        try std.testing.expectEqual(work, writer.digester.engine.work);
+    }
+    try std.testing.expectEqualDeep(fresh, try writer.fromVar(outer));
 }

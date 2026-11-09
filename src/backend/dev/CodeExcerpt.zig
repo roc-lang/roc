@@ -140,8 +140,6 @@ pub const DataItem = struct {
     /// can give to a different constant. A pack names such a datum by
     /// content instead; see `ContentNames`.
     program_local_name: bool = false,
-    /// Program-owned zero-initialized state, identified by site rather than content.
-    is_mutable: bool = false,
 };
 
 /// Immutable catalog storage, shared by worker fragments and assembled sets.
@@ -366,7 +364,6 @@ fn copyData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = item.program_local_name,
-        .is_mutable = item.is_mutable,
     };
 }
 
@@ -729,7 +726,6 @@ pub const ContentNames = struct {
                 .symbol_offset = 0,
                 .relocations = relocations,
                 .program_local_name = !data_export.is_exported,
-                .is_mutable = data_export.is_mutable,
             };
         }
         for (items) |item| try self.items.put(allocator, item.name, item);
@@ -739,7 +735,7 @@ pub const ContentNames = struct {
 
     /// Give `item` its content name, when its program named it for itself.
     fn nameItem(self: *ContentNames, item: DataItem) Allocator.Error!void {
-        if (item.is_mutable or !item.program_local_name or self.names.contains(item.name)) return;
+        if (!item.program_local_name or self.names.contains(item.name)) return;
         var hasher = Sha256.init(.{});
         _ = try self.write(&hasher, item);
         const digest = self.digests.get(item.name) orelse unreachable; // a top-level write has no enclosing active item, so it records the item's digest
@@ -844,7 +840,7 @@ pub const ContentNames = struct {
                 previous = .{
                     .name = relocation.name,
                     .code = code,
-                    .target = if (target != null and target.?.program_local_name and !target.?.is_mutable) try self.render(target.?) else null,
+                    .target = if (target != null and target.?.program_local_name) try self.render(target.?) else null,
                 };
             }
             if (previous.?.target) |rendered| {
@@ -1049,7 +1045,6 @@ pub const PreparedData = struct {
                 .symbol_offset = constant.symbol_offset,
                 .relocations = relocations,
                 .program_local_name = !constant.is_exported,
-                .is_mutable = constant.is_mutable,
             };
             try items.put(a, item.name, .{ .item = item });
         }
@@ -1986,7 +1981,6 @@ pub fn renamedData(a: Allocator, item: DataItem, names: *const ContentNames) All
         .symbol_offset = item.symbol_offset,
         .relocations = relocations,
         .program_local_name = false,
-        .is_mutable = item.is_mutable,
     };
 }
 
@@ -3205,29 +3199,6 @@ test "a splice reaches a procedure through references and stable references" {
     const reached = try reachingAbsentFiles(allocator, &lined_set, &.{ true, false });
     defer allocator.free(reached);
     try std.testing.expectEqualSlices(bool, &.{ true, true, true, false }, reached);
-}
-
-test "boxy composition slots keep identity through canonical arrangement and packing" {
-    const a = std.testing.allocator;
-    const zeros = @as([8]u8, @splat(0));
-    const items = [_]DataItem{
-        .{ .name = "site_a", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true, .is_mutable = true },
-        .{ .name = "site_b", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true, .is_mutable = true },
-        .{ .name = "constant", .bytes = &zeros, .alignment = 8, .symbol_offset = 0, .program_local_name = true },
-    };
-    var storage: [1]Excerpt = undefined;
-    var source = testDataSet(&storage, &items);
-    defer source.arena.deinit();
-    var arranged = try arrange(a, &source, &.{});
-    defer arranged.deinit();
-    try std.testing.expectEqual(@as(usize, 3), arranged.data.len);
-    var mutable: usize = 0;
-    for (arranged.set.excerpts[0].data) |item| {
-        if (!item.is_mutable) continue;
-        mutable += 1;
-        try std.testing.expect(std.mem.eql(u8, item.name, "site_a") or std.mem.eql(u8, item.name, "site_b"));
-    }
-    try std.testing.expectEqual(@as(usize, 2), mutable);
 }
 
 test "excerpt catalog sharing survives copying and renaming without changing its source" {

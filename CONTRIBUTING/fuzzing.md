@@ -7,7 +7,7 @@ Roc uses [zig-afl-kit](https://github.com/bhansconnect/zig-afl-kit) for fuzzing,
 ### Ubuntu/Debian
 
 Linux fuzz builds pass Zig's LLVM bitcode to `afl-cc`. Its Clang must be at least
-as new as Zig's LLVM version: the project's Zig 0.17.0 uses LLVM 22. Older
+as new as Zig's LLVM version: the project's Zig 0.17.1 uses LLVM 22. Older
 distribution packages of AFL++ cannot read this bitcode, so build AFL++ against
 LLVM 22 using [apt.llvm.org](https://apt.llvm.org/):
 
@@ -46,7 +46,7 @@ zig cc --version
 afl-cc --version
 ```
 
-The Clang version reported by `afl-cc` must be 22 or newer for Zig 0.17.0. If it
+The Clang version reported by `afl-cc` must be 22 or newer for Zig 0.17.1. If it
 reports an older version, use `command -v afl-cc` to check that your `PATH` selects
 the new installation (by default `/usr/local/bin/afl-cc`). Recheck these versions
 when upgrading Zig.

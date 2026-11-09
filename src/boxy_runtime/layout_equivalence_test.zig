@@ -1,18 +1,18 @@
-//! The descriptor-composition equivalence test (design.md "One
-//! Representation Per Type"): a corpus of closed types is laid out both by
-//! the layout store and by Boxy runtime composition, and the two must agree
+//! The descriptor shape equivalence test (design.md "One Representation Per
+//! Type"): a corpus of closed types is laid out both by the layout store and
+//! by the shape code test descriptors use (`boxy_runtime.test_descs`), and
+//! the two must agree
 //! on size, alignment, sort key, refcounting, field order and offsets,
 //! variant discriminants, discriminant placement and width, and payload
 //! shapes.
 
 const std = @import("std");
 const base = @import("base");
-const builtins = @import("builtins");
 const layout = @import("layout");
 const boxy = @import("boxy_runtime");
 
 const testing = std.testing;
-const compose = boxy.compose;
+const test_descs = boxy.test_descs;
 const TypeDesc = boxy.TypeDesc;
 const Name = boxy.Name;
 const Store = layout.Store;
@@ -42,14 +42,9 @@ const TestError = std.mem.Allocator.Error || error{ TestExpectedEqual, TestUnexp
 
 const Builder = struct {
     store: *Store,
-    test_env: *builtins.utils.TestEnv,
-    cache: *compose.Cache,
+    descs: *test_descs.Builder,
     arena: std.mem.Allocator,
     names: std.StringHashMapUnmanaged(*const Name) = .empty,
-
-    fn ops(self: *Builder) *builtins.host_abi.RocOps {
-        return self.test_env.getOps();
-    }
 
     fn name(self: *Builder, text: []const u8) TestError!*const Name {
         if (self.names.get(text)) |existing| return existing;
@@ -75,38 +70,38 @@ const Builder = struct {
 
     fn desc(self: *Builder, ty: Ty) TestError!*const TypeDesc {
         return switch (ty) {
-            .scalar => |scalar| compose.scalarDesc(scalar),
-            .str => compose.strDesc(),
-            .bool => compose.boolDesc(),
-            .list => |elem| compose.list(self.cache, self.ops(), try self.desc(elem.*)),
-            .box => |payload| compose.box(self.cache, self.ops(), try self.desc(payload.*)),
+            .scalar => |scalar| boxy.desc.scalarDesc(scalar),
+            .str => boxy.desc.strDesc(),
+            .bool => boxy.desc.boolDesc(),
+            .list => |elem| self.descs.list(try self.desc(elem.*)),
+            .box => |payload| self.descs.box(try self.desc(payload.*)),
             .record => |fields| blk: {
-                const inputs = try self.arena.alloc(compose.FieldInput, fields.len);
+                const inputs = try self.arena.alloc(test_descs.FieldInput, fields.len);
                 for (fields, inputs) |field, *input| input.* = .{ .name = try self.name(field.name), .desc = try self.desc(field.ty) };
-                break :blk compose.record(self.cache, self.ops(), inputs);
+                break :blk self.descs.record(inputs);
             },
             .declared => |fields| blk: {
-                const inputs = try self.arena.alloc(compose.DeclaredFieldInput, fields.len);
+                const inputs = try self.arena.alloc(test_descs.DeclaredFieldInput, fields.len);
                 for (fields, inputs) |field, *input| input.* = .{
                     .name = if (field.name) |text| try self.name(text) else null,
                     .desc = try self.desc(field.ty),
-                    .is_padding = @intFromBool(field.name == null),
+                    .is_padding = field.name == null,
                 };
-                break :blk compose.declaredRecord(self.cache, self.ops(), inputs);
+                break :blk self.descs.declaredRecord(inputs);
             },
             .tuple => |elems| blk: {
                 const descs = try self.arena.alloc(*const TypeDesc, elems.len);
                 for (elems, descs) |elem, *slot| slot.* = try self.desc(elem);
-                break :blk compose.tuple(self.cache, self.ops(), descs);
+                break :blk self.descs.tuple(descs);
             },
             .tag_union => |tags| blk: {
-                const inputs = try self.arena.alloc(compose.VariantInput, tags.len);
+                const inputs = try self.arena.alloc(test_descs.VariantInput, tags.len);
                 for (tags, inputs) |tag, *input| {
                     const payloads = try self.arena.alloc(*const TypeDesc, tag.payloads.len);
                     for (tag.payloads, payloads) |payload, *slot| slot.* = try self.desc(payload);
-                    input.* = .{ .name = try self.name(tag.name), .payload_count = @intCast(payloads.len), .payloads = payloads.ptr };
+                    input.* = .{ .name = try self.name(tag.name), .payloads = payloads };
                 }
-                break :blk compose.tagUnion(self.cache, self.ops(), inputs);
+                break :blk self.descs.tagUnion(inputs);
             },
         };
     }
@@ -176,7 +171,7 @@ const Builder = struct {
         };
     }
 
-    /// Require the composed descriptor and the committed layout to describe
+    /// Require the test descriptor and the committed layout to describe
     /// the same memory shape.
     fn expectSame(self: *Builder, d: *const TypeDesc, idx: Idx) TestError!void {
         const l = self.store.getLayout(idx);
@@ -280,15 +275,14 @@ const corpus = [_]Ty{
     .{ .record = &.{ .{ .name = "z", .ty = unit }, .{ .name = "y", .ty = unit_union } } }, .{ .tuple = &.{ unit, sc(.u8), .{ .box = &sc(.u8) }, sc(.u16) } }, .{ .record = &.{ .{ .name = "nested", .ty = nested_record }, .{ .name = "union", .ty = three_union }, .{ .name = "single", .ty = single_union } } },
 };
 
-test "composed descriptors have the layout store's shapes" {
+test "test descriptors have the layout store's shapes" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     var store = try Store.init(testing.allocator, target_usize);
     defer store.deinit();
-    var test_env = builtins.utils.TestEnv.init(testing.allocator);
-    defer test_env.deinit();
-    var cache: compose.Cache = .{};
-    var builder: Builder = .{ .store = &store, .test_env = &test_env, .cache = &cache, .arena = arena_state.allocator() };
+    var descs = test_descs.Builder.init(testing.allocator, .native);
+    defer descs.deinit();
+    var builder: Builder = .{ .store = &store, .descs = &descs, .arena = arena_state.allocator() };
 
     for (corpus) |ty| try builder.expectSame(try builder.desc(ty), try builder.layoutOf(ty));
 }
@@ -299,10 +293,9 @@ test "tag unions of 257 variants widen their discriminant like the store's" {
     const arena = arena_state.allocator();
     var store = try Store.init(testing.allocator, target_usize);
     defer store.deinit();
-    var test_env = builtins.utils.TestEnv.init(testing.allocator);
-    defer test_env.deinit();
-    var cache: compose.Cache = .{};
-    var builder: Builder = .{ .store = &store, .test_env = &test_env, .cache = &cache, .arena = arena };
+    var descs = test_descs.Builder.init(testing.allocator, .native);
+    defer descs.deinit();
+    var builder: Builder = .{ .store = &store, .descs = &descs, .arena = arena };
 
     const tags = try arena.alloc(TagTy, 257);
     for (tags, 0..) |*tag, index| {
