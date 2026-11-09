@@ -1215,6 +1215,7 @@ const Gen = struct {
     /// every tag of `from` with the same payload types.
     fn injectErr(self: *Gen, err: LocalId, from: TypeId, to: TypeId) Allocator.Error!LocalId {
         if (from == to) return err;
+        if (self.fam().kind == .parser) invariant("a checked parser operation changed the format error type");
         const from_structural = try self.b.structuralType(from);
         const tags = try self.b.allocator.dupe(types.Tag, try self.structuralTags(from_structural));
         defer self.b.allocator.free(tags);
@@ -2420,9 +2421,8 @@ const Gen = struct {
         return merged.param;
     }
 
-    /// Build the record from its slots: a required field never parsed fails
-    /// with `MissingRequiredField`, checked for every field before any slot
-    /// is consumed.
+    /// Build the record from its slots, asking the format to report absent
+    /// required fields before any slot is consumed.
     fn finishRecord(
         self: *Gen,
         value_ty: TypeId,
@@ -2440,32 +2440,28 @@ const Gen = struct {
         defer self.b.allocator.free(optional);
         // A defaulted field never parsed takes its default (design.md
         // "Defaulted Fields").
-        const record_ty = try self.b.structuralType(value_ty);
-        const defaults = try self.b.allocator.alloc(?checked.CheckedFieldDefault, fields.len);
-        defer self.b.allocator.free(defaults);
-        for (fields, defaults) |field_info, *default| default.* = program_.store.field_defaults.get(.{ .record = record_ty, .name = field_info.name });
-        for (fields, slots, slot_types, names, optional, defaults) |field_info, slot, slot_ty, name_value, *missing_ok, default| {
+        for (fields, slots, slot_types, names, optional) |field_info, slot, slot_ty, name_value, *missing_ok| {
             missing_ok.* = if (field_info.kind == .inline_slot) try missingTryOk(program_, field_info.ty) else null;
-            if (field_info.kind == .presence_slot or missing_ok.* != null or default != null) continue;
+            if (field_info.kind == .presence_slot or missing_ok.* != null or field_info.default != null) continue;
             const present_hole = try self.branchTag(slot, slot_ty, layouts_mod.missing_label);
-            const missing = try self.tag(err_ty, "MissingRequiredField", &.{name_value});
-            try self.failWith(missing, err_ty, on_err);
+            const missing = try self.callFormat("missing_field", null, &.{ self.encoding, name_value });
+            try self.failWith(missing.value, err_ty, on_err);
             self.b.hole = present_hole;
         }
         const values = try self.b.allocator.alloc(LocalId, fields.len);
         defer self.b.allocator.free(values);
-        for (fields, slots, slot_types, optional, values, defaults) |field_info, slot, slot_ty, missing_ok, *value, default| {
+        for (fields, slots, slot_types, optional, values) |field_info, slot, slot_ty, missing_ok, *value| {
             if (field_info.kind == .presence_slot) {
                 // The slot is the field's own storage.
                 value.* = slot;
                 continue;
             }
-            if (default) |field_default| {
+            if (field_info.default) |field_default| {
                 const merged = try self.merge(field_info.ty);
                 const missing_hole = try self.branchTag(slot, slot_ty, layouts_mod.present_label);
                 try self.jump(merged.id, &.{merged.param}, &.{(try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value});
                 self.b.hole = missing_hole;
-                try self.jump(merged.id, &.{merged.param}, &.{try self.b.defaultValue(field_default)});
+                try self.jump(merged.id, &.{merged.param}, &.{try self.b.fieldDefaultValue(field_default)});
                 self.b.hole = merged.after;
                 value.* = merged.param;
                 continue;

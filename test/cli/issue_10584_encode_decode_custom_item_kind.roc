@@ -19,7 +19,7 @@ ItemKind := [Text, Method].{
 		}
 	}
 
-	parser_for : encoding -> (state -> Try({ value : ItemKind, rest : state }, [TooShort, InvalidJson(Str)]))
+	parser_for : encoding -> (state -> Try({ value : ItemKind, rest : state }, [InvalidJson(Str)]))
 		where [
 			encoding.parse_u32 : encoding, state -> Try({ value : U32, rest : state }, [InvalidJson(Str)]),
 		]
@@ -32,7 +32,8 @@ ItemKind := [Text, Method].{
 				2 => Ok(ItemKind.(Method))
 				_ => Err(TooShort)
 			}
-			Ok({ value: item_kind?, rest: parsed.rest })
+			value = item_kind.map_err(|TooShort| InvalidJson("Unknown item kind"))?
+			Ok({ value, rest: parsed.rest })
 		}
 	}
 }
@@ -49,6 +50,12 @@ decoded_list : Try(List(ItemKind), _)
 decoded_list = Json.parse(encoded_str)
 
 expect decoded_list == Ok(original_list)
+
+expect {
+	invalid : Try(List(ItemKind), [InvalidJson(Str)])
+	invalid = Json.parse("[3]")
+	invalid == Err(InvalidJson("Unknown item kind"))
+}
 
 main! = |_args| {
 	decoded_list?

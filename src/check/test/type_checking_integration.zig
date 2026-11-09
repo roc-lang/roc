@@ -10616,10 +10616,10 @@ test "check type - polarity - derived parser accepts an implicitly open Missing 
     // output position it is implicitly open, and the derived parser closes
     // it back before judging the field.
     const source =
-        \\parse_user : Str -> Try({ name : Str, nick : Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try({ name : Str, nick : Try(Str, [Missing]) }, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - derived encoder closes an implicitly open Missing row" {
@@ -10708,7 +10708,7 @@ test "check type - polarity - derivation leaves a rigid tag-row extension reject
     // Only unbound flex extensions collapse. A named rigid extension may
     // carry tags no parser was checked for, so the derivation stays rejected.
     const source =
-        \\parse_open : Str -> Try([Friendly, ..tags], [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_open : Str -> Try([Friendly, ..tags], [InvalidJson(Str)])
         \\parse_open = |json| Json.parse(json)
     ;
     try checkTypesModule(source, .fail_first, "Missing Method");
@@ -10745,10 +10745,10 @@ test "check type - polarity - derived parser accepts a Missing row reached throu
     const source =
         \\Shape : { name : Str, nick : Try(Str, [Missing]) }
         \\
-        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Missing]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - derived encoder closes a Null row reached through an alias marker" {
@@ -10775,10 +10775,10 @@ test "check type - polarity - derived parser closes a Null row reached through a
     const source =
         \\Shape : { name : Str, nick : Try(Str, [Null]) }
         \\
-        \\parse_user : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\parse_user : Str -> Try(Shape, [InvalidJson(Str)])
         \\parse_user = |s| Json.parse(s)
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Null]) }, [InvalidJson(Str), MissingRequiredField(Str)])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str -> Try({ name: Str, nick: Try(Str, [Null]) }, [InvalidJson(Str)])");
 }
 
 test "check type - polarity - input is inferred as closed" {
