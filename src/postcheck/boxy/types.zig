@@ -622,6 +622,18 @@ pub const Store = struct {
         return self.nodes.items[@backingInt(id)];
     }
 
+    /// Whether this is the compiler-owned Iter or Stream nominal.
+    pub fn isSequence(self: *const Store, id: TypeId) bool {
+        const node = self.get(id);
+        if (node != .nominal) return false;
+        return node.nominal.builtin == .iter or node.nominal.builtin == .stream;
+    }
+
+    /// Direct payloads whose explicit Box is one erased allocation.
+    pub fn isErasedBoxPayload(self: *const Store, id: TypeId) bool {
+        return self.get(id) == .function or self.isSequence(id);
+    }
+
     pub fn isClosed(self: *const Store, id: TypeId) bool {
         return self.closed_flags.items[@backingInt(id)];
     }
@@ -1972,7 +1984,10 @@ fn hasErrorUnmemoized(allocator: Allocator, modules: *const Modules, module: Mod
 
 /// Register a distinct fixture module through the real module-ID producer.
 /// Only identity and checked types are consumed by these reachability tests.
-fn addErrorTestModule(modules: *Modules, store: *const checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
+fn addErrorTestModule(modules: *Modules, store: *checked.CheckedTypeStore) Allocator.Error!ModuleIndex {
+    if (store.synthesized_keys == null) {
+        store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(modules.allocator, std.testing.io, store.roots.items.len));
+    }
     var identity: [32]u8 = @splat(0);
     std.mem.writeInt(u64, identity[0..8], @intCast(modules.views.items.len), .little);
     var view: checked.ImportedModuleView = undefined;
@@ -2050,8 +2065,10 @@ test "Boxy error reachability preserves value-error edges and field-kind semanti
     const a = std.testing.allocator;
     var store = checked.CheckedTypeStore{};
     defer store.deinit(a);
+    store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(a, std.testing.io, 0));
     var canonical_names = names.CanonicalNameStore.init(a);
     defer canonical_names.deinit();
+    store.key_names = &canonical_names;
     const type_name = try canonical_names.internTypeName("Value");
     const origin = try canonical_names.internModuleIdentity(&(@as([32]u8, @splat(1))));
     const label = try canonical_names.internRecordFieldLabel("value");

@@ -809,6 +809,7 @@ const CustomCase = enum {
     glue_recursive_slot_box,
     glue_generic_callable_arg,
     glue_hosted_erased_generic_callback,
+    glue_boxed_sequences,
     glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
@@ -2639,6 +2640,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -6439,6 +6441,7 @@ fn runCustomCase(
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
+        .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -18857,6 +18860,33 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
             "pub fn roc_notify(arg0: RocErasedCallable);",
             "pub struct CallbacksEvent {",
         },
+    });
+}
+
+fn customGlueBoxedSequences(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-sequences/main.roc", .{
+        .zig = &.{
+            "pub extern fn roc_iter(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
+            "pub extern fn roc_stream(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
+            "pub extern fn roc_hold_iter(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub extern fn roc_hold_stream(arg0: RocErasedCallable) callconv(.c) void;",
+            "@\"inner\": RocErasedCallable",
+        },
+        .c = &.{
+            "extern RocErasedCallable roc_iter(RocErasedCallable arg0);",
+            "extern RocErasedCallable roc_stream(RocErasedCallable arg0);",
+            "extern void roc_hold_iter(RocErasedCallable arg0);",
+            "extern void roc_hold_stream(RocErasedCallable arg0);",
+            "RocErasedCallable inner;",
+        },
+        .rust = &.{
+            "pub fn roc_iter(arg0: RocErasedCallable) -> RocErasedCallable;",
+            "pub fn roc_stream(arg0: RocErasedCallable) -> RocErasedCallable;",
+            "pub fn roc_hold_iter(arg0: RocErasedCallable);",
+            "pub fn roc_hold_stream(arg0: RocErasedCallable);",
+            "pub inner: RocErasedCallable",
+        },
+        .absent = &.{ "len_if_known", "IterStep", "StreamStep" },
     });
 }
 

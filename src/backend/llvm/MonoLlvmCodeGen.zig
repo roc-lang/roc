@@ -4462,6 +4462,7 @@ pub const MonoLlvmCodeGen = struct {
                     assign.capture,
                     assign.capture_layout,
                     assign.on_drop,
+                    assign.on_copy,
                     assign.reuse,
                     assign.reuse_unique,
                 );
@@ -5028,7 +5029,7 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_ty = try self.ptrType();
         const closure_ptr = try self.loadPointer(self.slot(closure).ptr);
         const fn_ptr = try self.loadPointer(closure_ptr);
-        const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+        const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
         const reuse_ptr = if (reuse_closure) closure_ptr else builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
@@ -5116,6 +5117,7 @@ pub const MonoLlvmCodeGen = struct {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: lir.LIR.ErasedCallableOnDrop,
+        on_copy: lir.LIR.ErasedCallableOnDrop,
         reuse: ?LocalId,
         reuse_unique: bool,
     ) Error!void {
@@ -5140,6 +5142,13 @@ pub const MonoLlvmCodeGen = struct {
             },
         };
 
+        const on_copy_value = switch (on_copy) {
+            .none => null_ptr,
+            .rc_helper => |key| if (try self.declareRcHelper(key, .atomic)) |helper|
+                helper.toValue(builder)
+            else
+                null_ptr,
+        };
         const data_ptr = if (reuse) |reuse_local| blk: {
             const capture_src = try self.allocEntryBlockSlot(
                 .i8,
@@ -5167,7 +5176,7 @@ pub const MonoLlvmCodeGen = struct {
                 },
             );
         } else blk: {
-            const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
+            const payload_size: u64 = builtins.erased_callable.payloadSizeFor(self.targetWordSize(), capture_size);
             const fresh_ptr = try self.callBuiltin(
                 .allocate_with_refcount,
                 ptr_ty,
@@ -5182,12 +5191,14 @@ pub const MonoLlvmCodeGen = struct {
             try self.storePointer(try self.offsetPtr(fresh_ptr, self.targetWordSize()), on_drop_value);
             if (capture) |capture_local| {
                 if (capture_size > 0) {
-                    const capture_dst = try self.offsetPtr(fresh_ptr, builtins.erased_callable.capture_offset);
+                    const capture_dst = try self.offsetPtr(fresh_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
                     try self.copyBytes(capture_dst, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
             break :blk fresh_ptr;
         };
+        try self.storePointer(try self.offsetPtr(data_ptr, 2 * self.targetWordSize()), on_copy_value);
+        try self.storeRawInt(data_ptr, 3 * self.targetWordSize(), self.ptrSizedIntType(), capture_size, self.targetWordSize());
         try self.storePointer(self.slot(target).ptr, data_ptr);
     }
 
@@ -5335,6 +5346,25 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
+            .boxed_sequence_pack => {
+                const ptr_ty = try self.ptrType();
+                const record = GuardedList.at(arg_locals, 0);
+                const offset = GuardedList.at(arg_locals, 1);
+                const result = try self.callBuiltin(.boxed_sequence_pack, ptr_ty, &.{ ptr_ty, self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{
+                    self.slot(record).ptr,
+                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(record))),
+                    try self.coerceScalar(try self.loadLocalScalar(offset, .u32), self.ptrSizedIntType(), false),
+                });
+                try self.storePointer(self.slot(target).ptr, result);
+            },
+            .boxed_sequence_unpack => {
+                const ptr_ty = try self.ptrType();
+                try self.callBuiltinVoid(.boxed_sequence_unpack, &.{ ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{
+                    self.slot(target).ptr,
+                    try self.loadPointer(self.slot(GuardedList.at(arg_locals, 0)).ptr),
+                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(target))),
+                });
+            },
             .num_plus, .num_minus, .num_times => unreachable, // LIR lowering commits these to typed operations through CheckedArithmetic.lowerOp
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .bool_not => {
@@ -12155,7 +12185,7 @@ pub const MonoLlvmCodeGen = struct {
             .call_erased => |c| {
                 const closure_ptr = try self.loadPointer(try self.bytesAddress(c.closure));
                 const fn_ptr = try self.loadPointer(closure_ptr);
-                const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+                const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
                 const args_ptr = if (c.args) |args| try self.bytesAddress(args) else try self.nullPtr();
                 if (c.deferred) {
                     // The pending call owns the closure reference ARC
@@ -12189,18 +12219,20 @@ pub const MonoLlvmCodeGen = struct {
                 // Generated code reserves no hot-reload header before an
                 // erased callable's captures.
                 if (c.reuse) |reuse| {
-                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty }, &.{
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty, ptr_ty }, &.{
                         worker.toValue(builder),
                         try self.bytesAddress(c.capture),
                         try self.wordValue(reuse),
                         try self.intValue(.i8, @intFromBool(c.reuse_unique)),
                         try self.nullPtr(),
                         try self.nullPtr(),
+                        try self.nullPtr(),
                     }));
                 } else {
-                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
                         worker.toValue(builder),
                         try self.bytesAddress(c.capture),
+                        try self.nullPtr(),
                         try self.nullPtr(),
                         try self.nullPtr(),
                     }));
@@ -12219,6 +12251,7 @@ pub const MonoLlvmCodeGen = struct {
     /// emits maps to.
     fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
         return switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => null,
             .list_capacity => .capacity,
             .list_slack_unique => .slack_unique,
             .list_owned_unique => .owned_unique,
@@ -12266,6 +12299,7 @@ pub const MonoLlvmCodeGen = struct {
         const list_size = RocList.word_count * self.targetWordSize();
 
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
             .list_prefetch => return,
             .list_len => {
                 const len = try self.loadUsize(try self.offsetPtr(try self.bytesAddress(GuardedList.at(all_args, 0)), self.rocListLenOffset()));

@@ -22,6 +22,7 @@
 const std = @import("std");
 const collections = @import("collections");
 const base = @import("base");
+const builtins = @import("builtins");
 const layout = @import("layout");
 const lir_core = @import("lir_core");
 const boxy_runtime = @import("boxy_runtime");
@@ -903,7 +904,7 @@ pub const StaticDescs = struct {
     }
 
     fn staticCallableCaptureOffset(self: *const StaticDescs) u32 {
-        return std.mem.alignForward(u32, 2 * self.ptrSize(), static_callable_header);
+        return builtins.erased_callable.captureOffset(self.ptrSize());
     }
 
     fn staticCallableOf(self: *StaticDescs, owner: u32, index: u32, proc: LIR.LirProcSpecId, words: []const CaptureWord) Allocator.Error!ExportIndex {
@@ -922,6 +923,7 @@ pub const StaticDescs = struct {
         }
         const ptr = self.ptrSize();
         const capture_offset = self.staticCallableCaptureOffset();
+        writeU32(@constCast(self.exports.items[node].bytes), static_callable_header + 3 * ptr, @as(u32, @intCast(words.len)) * ptr);
         var relocation_count: usize = 1;
         for (words) |word| switch (word) {
             .zero => {},
@@ -1087,7 +1089,7 @@ pub const StaticDescs = struct {
             },
             // `Box(function)` is the function's erased callable, with the
             // function as its child so the value still inspects as a box.
-            .box => |payload| if (self.store.get(payload) == .function) {
+            .box => |payload| if (self.store.isErasedBoxPayload(payload)) {
                 kind = .erased_callable;
                 try pointers.append(self.allocator, .{ .offset = desc_layout.of(.child), .target = (try self.reserveDescriptor(.{ .ty = payload, .recursive_box = false })).node });
             } else {
@@ -1129,6 +1131,7 @@ pub const StaticDescs = struct {
                 try self.fillVariants(item.node, &pointers, committed_layout, tags, scope_id);
             },
             .nominal => |nominal| {
+                flags.sequence = self.store.isSequence(ty);
                 if (nominal.builtin == .bool) {
                     kind = .bool;
                     discriminant_size = 1;
@@ -1610,7 +1613,7 @@ pub const StaticDescs = struct {
                 };
                 break :blk .{ .list = try self.componentKey(elem, elem_layout, scope_id) };
             },
-            .box => |payload| if (self.store.get(payload) == .function) .{ .leaf = .erased_callable } else blk: {
+            .box => |payload| if (self.store.isErasedBoxPayload(payload)) .{ .leaf = .erased_callable } else blk: {
                 const payload_layout = switch (committed_layout.tag) {
                     .box => committed_layout.getIdx(),
                     .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .tag_union, .ptr, .hole, .dynamic => try self.layouts.layoutOf(payload),

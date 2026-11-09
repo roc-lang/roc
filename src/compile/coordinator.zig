@@ -13200,7 +13200,7 @@ test "post-check publication store OOM drains accepted writers before returning"
 /// Exercise the real coordinator queues with both workers occupied. Only the
 /// wake queue uses the failing allocator, armed after all fixture setup, so
 /// failure deterministically occurs at notification growth, without sleeps.
-fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Allocator.Error || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (CoordinatorError || Allocator.Error || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
     if (comptime !threads_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const previous_lanes = thread_lanes;

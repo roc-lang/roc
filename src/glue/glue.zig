@@ -30,6 +30,7 @@ const Allocator = std.mem.Allocator;
 const base = @import("base");
 const parse = @import("parse");
 const compile = @import("compile");
+const backend = @import("backend");
 const check = @import("check");
 const can = @import("can");
 const reporting = @import("reporting");
@@ -294,7 +295,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
     if (result_buf.len > 0) @memset(result_buf, 0);
 
-    switch (args.opt) {
+    var execution = switch (args.opt) {
         .dev, .size, .speed => try runGlueSpecPlugin(
             gpa,
             stderr,
@@ -308,7 +309,8 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             args,
             std_io,
         ),
-    }
+    };
+    defer execution.deinit();
     try writeHostEvents(stderr, &runtime_env);
 
     const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
@@ -454,6 +456,16 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
+    const static_data = compile.static_data_exports.buildStaticDataForWidth(gpa, .{
+        .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    }, &lowered, script_target_usize, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.CompilationFailed,
+    };
+    if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+    lowered.frozen_static_data = .{ .allocator = gpa, .exports = static_data };
+
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
@@ -574,6 +586,26 @@ const BuiltGluePlugin = struct {
     }
 };
 
+const GluePluginExecution = struct {
+    image: eval_mod.object_image.Image,
+    data: backend.StaticDataImage,
+
+    fn deinit(self: *GluePluginExecution) void {
+        self.image.deinit();
+        self.data.deinit();
+    }
+};
+
+fn resolveGlueDataSymbol(raw: ?*anyopaque, name: []const u8) ?usize {
+    const data: *const backend.StaticDataImage = @ptrCast(@alignCast(raw.?));
+    return data.symbolAddress(name) orelse eval_mod.object_image.resolveHostSymbol(null, name);
+}
+
+fn resolveGlueFunction(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
+    const image: *const eval_mod.object_image.Image = @ptrCast(@alignCast(raw.?));
+    return image.lookupAddress(relocation.target_symbol_name);
+}
+
 fn runGlueSpecPlugin(
     gpa: Allocator,
     stderr: *std.Io.Writer,
@@ -586,14 +618,23 @@ fn runGlueSpecPlugin(
     executable_identity: [32]u8,
     args: GlueArgs,
     std_io: std.Io,
-) GlueError!void {
+) GlueError!GluePluginExecution {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
     const plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args, std_io);
     defer plugin.deinit(gpa);
-    var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
-    defer lib.deinit();
+    var data = backend.StaticDataImage.init(gpa, lowered.frozen_static_data.?.exports) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.GluePluginUnavailable,
+    };
+    errdefer data.deinit();
+    var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true, &data);
+    errdefer lib.deinit();
+    data.resolveFunctionRelocations(.{ .context = &lib, .resolve = resolveGlueFunction }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.GluePluginUnavailable,
+    };
 
     const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
@@ -624,6 +665,7 @@ fn runGlueSpecPlugin(
             return error.CompilationFailed;
         },
     }
+    return .{ .image = lib, .data = data };
 }
 
 fn getOrBuildGluePlugin(
@@ -672,6 +714,19 @@ fn buildGluePlugin(
         codegen.emit_debug_info = opt == .dev;
         defer codegen.deinit();
 
+        var helpers = std.ArrayList(layout.RcHelperKey).empty;
+        defer helpers.deinit(gpa);
+        for (lowered.frozen_static_data.?.exports) |data_export| {
+            for (data_export.relocations) |relocation| {
+                if (relocation.rc_helper) |helper| try helpers.append(gpa, helper);
+            }
+        }
+        codegen.static_data_rc_helpers = helpers.items;
+        codegen.setStaticDataExports(lowered.frozen_static_data.?.exports) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CompilationFailed, error.UnsupportedLowLevel => return error.CompilationFailed,
+        };
+
         break :generate codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.CompilationFailed,
@@ -701,8 +756,9 @@ fn loadVerifiedGluePlugin(
     plugin: BuiltGluePlugin,
     expected: *const GluePluginStampV1,
     report_errors: bool,
+    data: *backend.StaticDataImage,
 ) GlueError!eval_mod.object_image.Image {
-    var image = eval_mod.object_image.load(gpa, plugin.bytes) catch |err| switch (err) {
+    var image = eval_mod.object_image.Image.load(gpa, plugin.bytes, .{ .context = data, .resolve = resolveGlueDataSymbol }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedObject,
         error.MalformedObject,
@@ -739,6 +795,7 @@ fn verifyGluePluginStamp(image: *const eval_mod.object_image.Image, expected: *c
 fn glueLlvmCompileOptions(opt: GlueOpt) llvm_compile.CompileOptions {
     return .{
         .function_sections = false,
+        .reloc_mode = .PIC,
         .use_module_target_triple = true,
         .optimization = switch (opt) {
             .dev => .O0,
@@ -3042,9 +3099,20 @@ const TypeTable = struct {
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "List") } };
                 },
                 .box => {
-                    if (nominal.args.len >= 1) return .{ .box = .{
-                        .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect),
-                    } };
+                    if (nominal.args.len >= 1) {
+                        var payload = try self.substituteFormal(artifact, nominal.args[0]);
+                        const sequence = while (true) {
+                            switch (checkedTypePayload(payload.artifact, payload.checked_type)) {
+                                .alias => |alias| payload = try self.substituteFormal(payload.artifact, alias.backing),
+                                .nominal => |inner| break inner.builtin == .iter or inner.builtin == .stream,
+                                .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union, .flex, .rigid => break false,
+                            }
+                        };
+                        // The host owns an erased step allocation, not a
+                        // readable iterator record or a callable public API.
+                        if (sequence) return .{ .erased_callable = .{ .signature = null } };
+                        return .{ .box = .{ .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect) } };
+                    }
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "Box") } };
                 },
                 .parse_tag_union_spec,

@@ -246,7 +246,14 @@ const Builder = struct {
                 }
                 invariant("producer callable correspondence absent");
             },
-            .erased_fn => |set_id| try self.erased(job, source_plan.erased_fn, set_id),
+            .erased_fn => |set_id| try self.erased(job, source_plan.erased_fn, set_id, null, null),
+            .boxed_sequence => |sequence| {
+                const source_sequence = source_plan.boxed_sequence;
+                const source_step = self.source_program.const_plans.items[@backingInt(source_sequence.recordPlans(self.source_program.const_plans.items)[1])];
+                const target_step = self.graph.program.const_plans.items[@backingInt(sequence.recordPlans(self.graph.program.const_plans.items)[1])];
+                if (source_step != .erased_fn or target_step != .erased_fn) invariant("boxed sequence transcode lacks erased step plans");
+                try self.erased(job, source_step.erased_fn, target_step.erased_fn, source_sequence, sequence);
+            },
         }
     }
     fn string(self: *Builder, job: Job) Allocator.Error!void {
@@ -328,7 +335,7 @@ const Builder = struct {
             try self.enqueue(s.plan, source.idx, t.plan, target.idx, source.location, target.location, s.storage, t.storage);
         }
     }
-    fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId) Allocator.Error!void {
+    fn erased(self: *Builder, job: Job, source_set: Program.ErasedFnsId, target_set: Program.ErasedFnsId, source_sequence: ?Program.BoxedSequencePlan, sequence: ?Program.BoxedSequencePlan) Allocator.Error!void {
         const src = try self.pointer(job.source);
         const code = try self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
@@ -346,18 +353,46 @@ const Builder = struct {
             // The target program's erased capture prefix stays zeroed: a
             // static value is never dropped, so nothing reads its header.
             const prefix: usize = self.graph.program.erased_capture_prefix;
-            const capture_offset = std.mem.alignForward(usize, 2 * self.graph.word(), builtins.erased_callable.payload_alignment) + prefix;
+            const capture_offset = builtins.erased_callable.captureOffset(@intCast(self.graph.word())) + prefix;
             const capture_size = prefix + self.graph.size(entry.capture_layout);
-            const result = try self.graph.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + capture_size, builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            const payload_size = capture_offset - prefix + capture_size;
+            const state_offset = std.mem.alignForward(usize, payload_size, builtins.erased_callable.capture_alignment);
+            const allocation_size = if (sequence) |seq| state_offset + self.graph.size(seq.view_layout) else payload_size;
+            const result = try self.graph.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, allocation_size, builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry });
             switch (entry.on_drop) {
                 .none => {},
-                .rc_helper => |helper| try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset + self.graph.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
+                .rc_helper => |helper| {
+                    try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset + self.graph.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper });
+                    const copy_helper = layout.RcHelperKey{ .op = .incref, .layout_idx = helper.layout_idx };
+                    try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{ .offset = result.dest.offset + 2 * self.graph.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, copy_helper), .kind = .function_pointer, .rc_helper = copy_helper });
+                },
             }
+            try self.graph.writeWord(result.dest.offsetBy(3 * self.graph.word()), capture_size);
 
             try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
+            if (sequence) |seq| {
+                const from = source_sequence orelse invariant("boxed sequence transcode omitted its source view");
+                const source_layouts = &self.source_program.layouts;
+                const target_layouts = &self.graph.program.layouts;
+                const sr = source_layouts.getLayout(from.view_layout).getStruct().idx;
+                const tr = target_layouts.getLayout(seq.view_layout).getStruct().idx;
+                const source_capture_size = self.readWord(src.offsetBy(3 * self.sourceWord()));
+                const source_state = std.mem.alignForward(usize, builtins.erased_callable.captureOffset(@intCast(self.sourceWord())) + source_capture_size, builtins.erased_callable.capture_alignment);
+                try self.enqueue(
+                    from.recordPlans(self.source_program.const_plans.items)[0],
+                    source_layouts.getStructFieldLayoutByOriginalIndex(sr, 0),
+                    seq.recordPlans(self.graph.program.const_plans.items)[0],
+                    target_layouts.getStructFieldLayoutByOriginalIndex(tr, 0),
+                    src.offsetBy(source_state + source_layouts.getStructFieldOffsetByOriginalIndex(sr, 0)),
+                    result.dest.offsetBy(state_offset + target_layouts.getStructFieldOffsetByOriginalIndex(tr, 0)),
+                    .value,
+                    .value,
+                );
+                try self.graph.relocate(result.dest.offsetBy(state_offset + target_layouts.getStructFieldOffsetByOriginalIndex(tr, 1)), result.dest);
+            }
             return;
         }
         invariant("target erased callable correspondence absent");
@@ -370,7 +405,7 @@ const Builder = struct {
 fn recursionBoxSite(plan: Program.ConstPlan) bool {
     return switch (plan) {
         .tuple, .record, .tag_union, .fn_value => true,
-        .pending, .layout_only, .zst, .scalar, .str, .list, .box, .named, .erased_fn, .boxy_fn => false,
+        .pending, .layout_only, .zst, .scalar, .str, .list, .box, .boxed_sequence, .named, .erased_fn, .boxy_fn => false,
     };
 }
 

@@ -22614,6 +22614,7 @@ pub const PlatformPairing = struct {
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         lowering_visibility: LoweringVisibility.Serialized,
@@ -22655,7 +22656,6 @@ pub const PlatformPairing = struct {
                 "static_dispatch_plans",
                 "nested_proc_sites",
                 "top_level_procedure_bindings",
-                "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
@@ -22702,6 +22702,7 @@ pub const PlatformPairing = struct {
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
             try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
@@ -22762,6 +22763,7 @@ pub const PlatformPairing = struct {
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
             result.lowering_visibility = self.lowering_visibility.deserialize(address);
@@ -22821,6 +22823,21 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
+    // Binding requirements can turn a platform's callable-evaluation binding
+    // into a direct procedure alias. Publish the same forwarding fact as an
+    // ordinary checked module, before choosing calls or retiring its request.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var type_memo = substitutions.substitutionIn(session);
     defer type_memo.deinit();
     var reaches: ?CheckedTypeSet = if (substitutions.formals.len != 0) try result.checked_types.rootsReachingAny(session, substitutions.formals) else null;
@@ -22942,6 +22959,10 @@ pub fn pairCheckedPlatform(
     }
     for (roots.items) |*request| {
         request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        if (request.evaluation_complete) {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            request.evaluation_complete = !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        }
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -22966,8 +22987,7 @@ pub fn pairCheckedPlatform(
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        if (!request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -32429,6 +32449,9 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+    /// Live root requests after checked procedure-alias normalization.
+    /// Retained entry-wrapper templates are not themselves evaluation requests.
+    root_requests: *const RootRequestTable = &no_root_requests,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -32437,6 +32460,7 @@ pub const ImportedModuleView = struct {
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
+const no_root_requests: RootRequestTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -32451,6 +32475,7 @@ const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .
 /// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
+        .root_requests = &artifact.root_requests,
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
         .key = artifact.key,
         .module_env = artifact.moduleEnvConst(),

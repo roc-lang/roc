@@ -632,6 +632,10 @@ pub const LowLevel = enum(u16) {
     /// retains nested payload children, and releases the consumed input.
     box_prepare_update,
     erased_capture_load,
+    /// Pack an erased step and its length hint into one opaque sequence handle.
+    boxed_sequence_pack,
+    /// Unpack a sequence's record while borrowing the owning handle.
+    boxed_sequence_unpack,
 
     // Compiler-internal pointer operations, introduced by the TRMC pass
     // (src/lir/trmc.zig). Never produced by user code or canonicalization.
@@ -1243,6 +1247,8 @@ pub const LowLevel = enum(u16) {
         // closure, not through an explicit refcounted argument, so the
         // result cannot name a lender to borrow from.
         .erased_capture_load = byType(.retainsResult()),
+        .boxed_sequence_pack = byType(.allocatesConsumingArgs(arg_0)),
+        .boxed_sequence_unpack = byType(.retainsResultBorrowingArgs(arg_0)),
 
         .box_alloc_zeroed = byType(.allocates()),
 

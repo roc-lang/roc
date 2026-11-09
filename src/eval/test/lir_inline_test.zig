@@ -8,6 +8,7 @@ const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const postcheck = @import("postcheck");
+const static_materialization = @import("static_data");
 const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
@@ -18,7 +19,7 @@ const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
 
-const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || static_materialization.MaterializationError || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     MissingRootProcedure,
@@ -219,6 +220,15 @@ fn lowerModuleWithOptions(
         },
     );
     errdefer lowered.deinit();
+
+    if (lowered.lir_result.static_data_values.items.len != 0) {
+        const exports = try static_materialization.buildStaticDataForWidth(allocator, .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = import_views,
+        }, &lowered, base.target.TargetUsize.native, .{});
+        if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+        lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
+    }
 
     return .{
         .resources = resources,
@@ -691,6 +701,8 @@ fn runLoweredWithHostEvents(
 
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
+    var static_data = try FrozenStaticData.init(allocator, lowered);
+    defer static_data.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &lowered.lir_result.store,
@@ -700,6 +712,7 @@ fn runLoweredWithHostEvents(
     );
     defer interpreter.deinit();
 
+    static_data.install(&interpreter);
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
 
@@ -1306,9 +1319,8 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
-/// The static data a `.boxy` program froze (its descriptors, dictionaries,
-/// and name table), installed in an interpreter as every real pipeline
-/// installs it; a `.lss` program freezes none.
+/// Install every lowered program's immutable values as the production pipeline
+/// does, including descriptor tables and completed constants in either strategy.
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
@@ -13264,6 +13276,14 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
                 if (stmt.assign_literal.value.bytes_literal.len == 2) found_packed = true;
             }
         }
+        // Boxy can publish the packed node directly as readonly data rather
+        // than execute a literal constructor in a procedure.
+        for (result.static_data_values.items) |definition| {
+            const stored = definition.stored orelse continue;
+            if (!stored.module.eql(lowered.resources.checked_artifact.key.digest())) continue;
+            const value = lowered.resources.checked_artifact.const_store.get(stored.node);
+            if (value == .list and value.list == .packed_bytes and value.list.packed_bytes.len == 2) found_packed = true;
+        }
         try std.testing.expect(found_packed);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
@@ -13538,7 +13558,7 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 210), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 212), stats.expressions);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
@@ -14052,8 +14072,11 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
         const result = &lowered.lir_result;
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
+        var static_data = try FrozenStaticData.init(allocator, lowered);
+        defer static_data.deinit();
         var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
+        static_data.install(&interpreter);
         var n = iterations;
         const evaluated = try interpreter.eval(.{
             .proc_id = try rootProc(lowered),
@@ -14233,10 +14256,9 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // The explicit parameter, the row variable's descriptor, and the
-        // descriptor of `[A, ..r]`, the dynamic composite its parameter and
-        // result share, which its caller prepares.
-        try std.testing.expectEqual(@as(usize, 3), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
+        // The explicit parameter and one hidden type table containing the row
+        // and composite descriptors prepared by its caller.
+        try std.testing.expectEqual(@as(usize, 2), result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args).len);
     }
     {
         const conversions = try procsNamed(allocator, result, "boxy.convert");

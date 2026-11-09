@@ -96,6 +96,16 @@ pub const inline_list_slow_arms_test = TestSpec{
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
     .{
+        .roc_file = "test/fx/host_constant_boxed_sequence.roc",
+        .io_spec = "1>[1, 2, 3]|1>[4, 5]|1>[93]|1>[93]",
+        .description = "Constant boxed iterators and streams survive storage and host round trips (issue #12887)",
+    },
+    .{
+        .roc_file = "test/fx/host_release_boxed_sequence.roc",
+        .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>drops primitive=2 nested_record=0 nested_str=0 recursive_tree=0 tree_child_boxes=0 boxed_capture=0 transition_outer=0 transition_inner=0 transition_nonnull=0",
+        .description = "Host release destroys boxed iterator and stream captures exactly once (issue #12887)",
+    },
+    .{
         .roc_file = "test/fx/host_boxed_sequence_boundary.roc",
         .io_spec = "0<abcdefghijklmnopqrstuvwxyz0123456789|1>iter 36 36|1>stream 36 36",
         .description = "Boxed iterators and streams retain captured state across a shared host round trip (issue #12887)",
