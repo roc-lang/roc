@@ -60,9 +60,9 @@ expect {
 }
 
 expect {
-	result : Try({ field : Try(Str, [Null]) }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ field : Try(Str, [Null]) }, [InvalidJson(Str)])
 	result = Json.parse("{}")
-	result == Err(MissingRequiredField("field"))
+	result == Err(InvalidJson("Missing required field: field"))
 }
 
 expect {

@@ -675,12 +675,18 @@ const MetadataReader = struct {
             .empty_record => {},
             .record => {
                 const fields = try self.word();
-                if (fields > self.remaining() / 13) return error.InvalidMetadata;
+                if (fields > self.remaining() / 14) return error.InvalidMetadata;
                 for (0..fields) |_| {
                     try self.name();
                     try self.typeRef();
                     _ = try self.tag(types.FieldKind);
                     _ = try self.word();
+                    const has_default = try self.byte();
+                    if (has_default > 1) return error.InvalidMetadata;
+                    if (has_default == 1) {
+                        try self.module();
+                        _ = try self.word();
+                    }
                 }
                 try self.ext();
                 const declared = try self.byte();
@@ -1121,6 +1127,11 @@ const Encoder = struct {
                     try self.tableType(field.ty);
                     try self.table.append(self.allocator, @backingInt(field.kind));
                     try self.tableWord(field.slot_variable);
+                    try self.table.append(self.allocator, @intFromBool(field.default != null));
+                    if (field.default) |default| {
+                        try self.tableWord(try self.moduleEntry(default.module));
+                        try self.tableWord(default.expr_node);
+                    }
                 }
                 try self.tableExt(record.ext);
                 try self.table.append(self.allocator, @intFromBool(record.declared != null));
@@ -1429,6 +1440,10 @@ const Decoder = struct {
                     const ty = self.typeOf();
                     const kind: types.FieldKind = @fromBackingInt(@intCast(self.byte()));
                     field.* = .{ .name = field_name, .ty = ty, .kind = kind, .slot_variable = self.word() };
+                    if (self.byte() != 0) {
+                        const module_index = self.module();
+                        field.default = .{ .module = module_index, .expr_node = self.word() };
+                    }
                 }
                 const remainder = self.ext();
                 var declared: ?types.DeclaredOrderInput = null;
@@ -1635,6 +1650,74 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
         try b.recipes.set(word.recipe, recipe_node);
     }
     return .{ .worker = worker, .bound = bound, .inputs = try captureOperands(arena, words, inputs), .capture_descs = try captureOperands(arena, words, capture_descs) };
+}
+
+test "stored type metadata preserves field defaults across module reindexing" {
+    const allocator = std.testing.allocator;
+    var source: Program = undefined;
+    source.allocator = allocator;
+    source.modules = .{ .allocator = allocator };
+    defer source.modules.deinit();
+    source.store = types.Store.init(allocator);
+    defer source.store.deinit();
+    var destination: Program = undefined;
+    destination.allocator = allocator;
+    destination.modules = .{ .allocator = allocator };
+    defer destination.modules.deinit();
+    destination.store = types.Store.init(allocator);
+    defer destination.store.deinit();
+    destination.arena = std.heap.ArenaAllocator.init(allocator);
+    defer destination.arena.deinit();
+    for (0..2) |index| {
+        var view: checked.ImportedModuleView = undefined;
+        view.key = .{ .bytes = @splat(@intCast(index + 1)) };
+        view.module_identity.stable_hash = view.key.bytes;
+        _ = try source.modules.add(view);
+        view.key.bytes = @splat(@intCast(2 - index));
+        view.module_identity.stable_hash = view.key.bytes;
+        _ = try destination.modules.add(view);
+    }
+    const name = try source.store.internName("count");
+    const number = try source.store.primitive(.u8);
+    var fields = [_]types.Field{.{ .name = name, .ty = number, .kind = .inline_slot }};
+    const required = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    fields[0].default = .{ .module = @fromBackingInt(0), .expr_node = 10 };
+    const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
+    var encoder: Encoder = .{ .allocator = allocator, .program = &source };
+    defer encoder.deinit();
+    const root_index = try encoder.tableIndex(root);
+    const bytes = try encoder.finish();
+    defer allocator.free(bytes);
+
+    // Validate exactly the entries the encoder produced, including truncation.
+    var reader: MetadataReader = .{ .bytes = encoder.table.items, .modules = @intCast(encoder.modules.items.len) };
+    for (0..encoder.table_len) |_| {
+        try reader.typeEntry();
+        reader.types += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    for (0..encoder.table.items.len) |len| {
+        var truncated: MetadataReader = .{ .bytes = encoder.table.items[0..len], .modules = 1 };
+        const result: error{InvalidMetadata}!void = blk: {
+            for (0..encoder.table_len) |_| {
+                truncated.typeEntry() catch |err| break :blk err;
+                truncated.types += 1;
+            }
+        };
+        try std.testing.expectError(error.InvalidMetadata, result);
+    }
+
+    var decoder: Decoder = .{ .program = &destination, .bytes = bytes };
+    decoder.readModules();
+    try decoder.readTable();
+    defer allocator.free(decoder.table);
+    const restored = destination.store.span(destination.store.get(decoder.table[root_index]).tuple);
+    try std.testing.expect(restored[0] != restored[1]);
+    try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default);
+    const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.?;
+    try std.testing.expectEqual(@as(types.ModuleIndex, @fromBackingInt(1)), restored_default.module);
+    try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
 }
 
 test "function unit metadata validates List U8 template tag and its single module reference" {

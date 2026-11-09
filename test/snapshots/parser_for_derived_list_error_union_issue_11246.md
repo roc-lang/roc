@@ -1,24 +1,24 @@
 # META
 ~~~ini
-description=A derived list parser composes infallible and fallible format methods (issue 11246)
+description=Derived list parser operations share the format error type (issue 11246)
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
 Parser := {}.{
 	State := { bytes : List(U8) }
-	parse_u8 : Parser, State -> Try({ value : U8, rest : State }, _)
+	parse_u8 : Parser, State -> Try({ value : U8, rest : State }, [UnexpectedByte])
 	parse_u8 = |_, _| { crash "unimplemented" }
-	parse_list_start : Parser, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], _)
+	parse_list_start : Parser, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [UnexpectedByte])
 	parse_list_start = |_, _| { crash "unimplemented" }
-	parse_list_next : Parser, State -> Try([Item(State), Done(State)], _)
+	parse_list_next : Parser, State -> Try([Item(State), Done(State)], [UnexpectedByte])
 	parse_list_next = |_, state| {
 		match state.bytes {
 			[] => Ok(Done(state))
 			_ => Ok(Item(state))
 		}
 	}
-	parse_list_after_item : Parser, State -> Try([Continue(State), Done(State)], _)
+	parse_list_after_item : Parser, State -> Try([Continue(State), Done(State)], [UnexpectedByte])
 	parse_list_after_item = |_, _| { Err(UnexpectedByte) }
 }
 Rvn :: {}.{
@@ -44,18 +44,18 @@ NIL
 ~~~zig
 UpperIdent,OpColonEqual,OpenCurly,CloseCurly,Dot,OpenCurly,
 UpperIdent,OpColonEqual,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,Underscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,Underscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,Underscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,Underscore,Comma,LowerIdent,OpBar,OpenCurly,
 KwMatch,LowerIdent,NoSpaceDotLowerIdent,OpenCurly,
 OpenSquare,CloseSquare,OpFatArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
 Underscore,OpFatArrow,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,CloseRound,
 CloseCurly,
 CloseCurly,
-LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,Underscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,NoSpaceOpenRound,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,Comma,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Comma,OpenSquare,UpperIdent,CloseSquare,CloseRound,
 LowerIdent,OpAssign,OpBar,Underscore,Comma,Underscore,OpBar,OpenCurly,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseCurly,
 CloseCurly,
 UpperIdent,OpDoubleColon,OpenCurly,CloseCurly,Dot,OpenCurly,
@@ -103,7 +103,9 @@ EndOfFile,
 									(ty (name "U8")))
 								(anno-record-field (name "rest")
 									(ty (name "State"))))
-							(_))))
+							(ty-tag-union
+								(tags
+									(ty (name "UnexpectedByte")))))))
 				(s-decl
 					(p-ident (raw "parse_u8"))
 					(e-lambda
@@ -133,7 +135,9 @@ EndOfFile,
 									(ty-apply
 										(ty (name "Uncounted"))
 										(ty (name "State")))))
-							(_))))
+							(ty-tag-union
+								(tags
+									(ty (name "UnexpectedByte")))))))
 				(s-decl
 					(p-ident (raw "parse_list_start"))
 					(e-lambda
@@ -159,7 +163,9 @@ EndOfFile,
 									(ty-apply
 										(ty (name "Done"))
 										(ty (name "State")))))
-							(_))))
+							(ty-tag-union
+								(tags
+									(ty (name "UnexpectedByte")))))))
 				(s-decl
 					(p-ident (raw "parse_list_next"))
 					(e-lambda
@@ -202,7 +208,9 @@ EndOfFile,
 									(ty-apply
 										(ty (name "Done"))
 										(ty (name "State")))))
-							(_))))
+							(ty-tag-union
+								(tags
+									(ty (name "UnexpectedByte")))))))
 				(s-decl
 					(p-ident (raw "parse_list_after_item"))
 					(e-lambda
@@ -294,22 +302,22 @@ EndOfFile,
 ~~~roc
 Parser := {}.{
 	State := { bytes : List(U8) }
-	parse_u8 : Parser, State -> Try({ value : U8, rest : State }, _)
+	parse_u8 : Parser, State -> Try({ value : U8, rest : State }, [UnexpectedByte])
 	parse_u8 = |_, _| {
 		crash "unimplemented"
 	}
-	parse_list_start : Parser, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], _)
+	parse_list_start : Parser, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [UnexpectedByte])
 	parse_list_start = |_, _| {
 		crash "unimplemented"
 	}
-	parse_list_next : Parser, State -> Try([Item(State), Done(State)], _)
+	parse_list_next : Parser, State -> Try([Item(State), Done(State)], [UnexpectedByte])
 	parse_list_next = |_, state| {
 		match state.bytes {
 			[] => Ok(Done(state))
 			_ => Ok(Item(state))
 		}
 	}
-	parse_list_after_item : Parser, State -> Try([Continue(State), Done(State)], _)
+	parse_list_after_item : Parser, State -> Try([Continue(State), Done(State)], [UnexpectedByte])
 	parse_list_after_item = |_, _| {
 		Err(UnexpectedByte)
 	}
@@ -354,7 +362,8 @@ expect {
 							(ty-lookup (name "U8") (builtin)))
 						(field (field "rest")
 							(ty-lookup (name "State") (local))))
-					(ty-underscore)))))
+					(ty-tag-union
+						(ty-tag-name (name "UnexpectedByte")))))))
 	(d-let
 		(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Parser.parse_list_start"))
 		(e-lambda
@@ -380,7 +389,8 @@ expect {
 									(ty-lookup (name "State") (local)))))
 						(ty-tag-name (name "Uncounted")
 							(ty-lookup (name "State") (local))))
-					(ty-underscore)))))
+					(ty-tag-union
+						(ty-tag-name (name "UnexpectedByte")))))))
 	(d-let
 		(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Parser.parse_list_next"))
 		(e-lambda
@@ -431,7 +441,8 @@ expect {
 							(ty-lookup (name "State") (local)))
 						(ty-tag-name (name "Done")
 							(ty-lookup (name "State") (local))))
-					(ty-underscore)))))
+					(ty-tag-union
+						(ty-tag-name (name "UnexpectedByte")))))))
 	(d-let
 		(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Parser.parse_list_after_item"))
 		(e-lambda
@@ -452,7 +463,8 @@ expect {
 							(ty-lookup (name "State") (local)))
 						(ty-tag-name (name "Done")
 							(ty-lookup (name "State") (local))))
-					(ty-underscore)))))
+					(ty-tag-union
+						(ty-tag-name (name "UnexpectedByte")))))))
 	(d-let
 		(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Rvn.parse"))
 		(e-lambda
@@ -463,11 +475,11 @@ expect {
 					(ty-rigid-var (name "a")))
 				(s-let
 					(p-assign (ident "parse_"))
-					(e-type-dispatch-call (method "parser_for") (type-dispatch-stmt 145) (constraint-fn-var 535)
+					(e-type-dispatch-call (method "parser_for") (type-dispatch-stmt 149) (constraint-fn-var 603)
 						(args
 							(e-nominal (nominal "Parser")
 								(e-empty_record)))))
-				(e-call (constraint-fn-var 562)
+				(e-call (constraint-fn-var 630)
 					(e-lookup-local
 						(p-assign (ident "parse_")))
 					(e-nominal (nominal "parser_for_derived_list_error_union_issue_11246.Parser.State")
@@ -528,7 +540,7 @@ expect {
 							(e-match
 								(match
 									(cond
-										(e-call (constraint-fn-var 577)
+										(e-call (constraint-fn-var 645)
 											(e-lookup-local
 												(p-assign (ident "parser_for_derived_list_error_union_issue_11246.Rvn.parse")))
 											(e-empty_list)))
@@ -557,9 +569,9 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, _b)"))
-		(patt (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], _b)"))
-		(patt (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [])"))
+		(patt (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, [UnexpectedByte])"))
+		(patt (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], [UnexpectedByte])"))
+		(patt (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [UnexpectedByte])"))
 		(patt (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte])"))
 		(patt (type "List(U8) -> Try({ rest: Parser.State, value: a }, b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, b))]")))
 	(type_decls
@@ -570,9 +582,9 @@ expect {
 		(nominal (type "Rvn")
 			(ty-header (name "Rvn"))))
 	(expressions
-		(expr (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, _b)"))
-		(expr (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], _b)"))
-		(expr (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [])"))
+		(expr (type "Parser, Parser.State -> Try({ rest: Parser.State, value: U8 }, [UnexpectedByte])"))
+		(expr (type "Parser, Parser.State -> Try([Counted({ len: U64, rest: Parser.State }), Uncounted(Parser.State)], [UnexpectedByte])"))
+		(expr (type "Parser, Parser.State -> Try([Done(Parser.State), Item(Parser.State)], [UnexpectedByte])"))
 		(expr (type "Parser, Parser.State -> Try([Continue(Parser.State), Done(Parser.State)], [UnexpectedByte])"))
 		(expr (type "List(U8) -> Try({ rest: Parser.State, value: a }, b) where [a.parser_for : Parser -> (Parser.State -> Try({ rest: Parser.State, value: a }, b))]"))))
 ~~~

@@ -1,5 +1,4 @@
-# An error row that no annotation bounds gains MissingRequiredField(Str) from
-# the derived parser itself, even when nothing in the program names the tag.
+# Even without an annotation, missing fields use only the format's error.
 ParserMissingFieldOpenRow :: [].{}
 
 expect {
@@ -8,11 +7,11 @@ expect {
 		Ok({ x }) => x == "unused"
 		Err(_) => False
 	}
-	!missing_x and Str.inspect(v) == "Err(MissingRequiredField(\"x\"))"
+	!missing_x and Str.inspect(v) == "Err(InvalidJson(\"Missing required field: x\"))"
 }
 
 expect {
 	v : Try({ x : Str, y : U8 }, _)
 	v = Json.parse("{\"x\":\"a\"}")
-	Str.inspect(v) == "Err(MissingRequiredField(\"y\"))"
+	Str.inspect(v) == "Err(InvalidJson(\"Missing required field: y\"))"
 }

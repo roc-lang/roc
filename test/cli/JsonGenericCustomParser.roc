@@ -38,7 +38,7 @@ expect {
 	parsed : Try({ t : Token }, _)
 	parsed = Json.parse("{}")
 	match parsed {
-		Err(MissingRequiredField(name)) => name == "t"
+		Err(InvalidJson(message)) => message == "Missing required field: t"
 		_ => False
 	}
 }
@@ -62,11 +62,11 @@ Format := {}.{
 		S : state
 		S.read(state)
 	}
-	parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [])
+	parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [ReadFailed(Str)])
 	parse_list_start = |_, state| Ok(Counted({ len: 1, rest: state }))
-	parse_list_next : Format, State -> Try([Item(State), Done(State)], [])
+	parse_list_next : Format, State -> Try([Item(State), Done(State)], [ReadFailed(Str)])
 	parse_list_next = |_, state| Ok(Done(state))
-	parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], [])
+	parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], [ReadFailed(Str)])
 	parse_list_after_item = |_, state| Ok(Done(state))
 }
 

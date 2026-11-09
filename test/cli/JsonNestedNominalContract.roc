@@ -8,39 +8,38 @@ Req := { name : Str }.{
 # A nominal whose parser the compiler derives can be reached BOTH on its own
 # and as a nested shape inside another derived codec. Both reads produce a
 # generated-parser contract for the same shape, encoding, state and error row,
-# so both must record the same callable types: the nested read is validated at
-# the enclosing error row rather than at a private child row.
+# so both must record the same callable types with JSON's format-owned error.
 expect {
-	result : Try(Req, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Req, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok(Req.{ name: "a" })
 }
 
 expect {
-	result : Try([Wrap(Req), Nothing], [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try([Wrap(Req), Nothing], [InvalidJson(Str)])
 	result = Json.parse("{\"Wrap\":{\"name\":\"a\"}}")
 	result == Ok(Wrap(Req.{ name: "a" }))
 }
 
-# The row an annotation names, not the minimal row the shape demands, is the
-# one both reads share—an annotated row wider than the shape's own demands
-# still pairs a standalone read with a nested one.
+# These formerly checked error-row widening. Errors now belong uniformly to
+# the format: missing required fields use the same informative InvalidJson
+# error both standalone and nested, without adding a compiler-owned tag.
 expect {
-	result : Try(Req, [InvalidJson(Str), MissingRequiredField(Str), Unreachable])
-	result = Json.parse("{\"name\":\"a\"}")
-	result == Ok(Req.{ name: "a" })
+	result : Try(Req, [InvalidJson(Str)])
+	result = Json.parse("{}")
+	result == Err(InvalidJson("Missing required field: name"))
 }
 
 expect {
-	result : Try([Wrap(Req), Nothing], [InvalidJson(Str), MissingRequiredField(Str), Unreachable])
-	result = Json.parse("{\"Wrap\":{\"name\":\"a\"}}")
-	result == Ok(Wrap(Req.{ name: "a" }))
+	result : Try([Wrap(Req), Nothing], [InvalidJson(Str)])
+	result = Json.parse("{\"Wrap\":{}}")
+	result == Err(InvalidJson("Missing required field: name"))
 }
 
-# Nesting the same nominal under a DIFFERENT enclosing row is a different
-# contract, and keeps its own generated parser.
+# A different enclosing tag shape keeps its own generated parser while sharing
+# the format's error type.
 expect {
-	result : Try([Only(Req)], [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try([Only(Req)], [InvalidJson(Str)])
 	result = Json.parse("{\"Only\":{\"name\":\"a\"}}")
 	result == Ok(Only(Req.{ name: "a" }))
 }

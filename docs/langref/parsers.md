@@ -13,12 +13,12 @@ This means any format can work with any type, without either one needing to know
 The builtin `Json` module parses JSON into any type that supports it, which is determined by type inference:
 
 ```roc
-parse_user : Str -> Try({ name : Str, age : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+parse_user : Str -> Try({ name : Str, age : U64 }, [InvalidJson(Str)])
 parse_user = |json| Json.parse(json)
 
 parse_user("{\"name\": \"Sam\", \"age\": 30}") # Ok({ name: "Sam", age: 30 })
 
-parse_user("{\"name\": \"Sam\"}") # Err(MissingRequiredField("age"))
+parse_user("{\"name\": \"Sam\"}") # Err(InvalidJson("Missing required field: age"))
 
 parse_user("{\"name\": 5}") # Err(InvalidJson("Invalid JSON"))
 ```
@@ -57,14 +57,14 @@ When a record field might be missing from the input, you can make it an [optiona
 or you can give it a `Try` type whose error is `[Missing]`:
 
 ```roc
-parse_user : Str -> Try({ name : Str, nickname ?: Str, email : Try(Str, [Missing]) }, [InvalidJson(Str), MissingRequiredField(Str)])
+parse_user : Str -> Try({ name : Str, nickname ?: Str, email : Try(Str, [Missing]) }, [InvalidJson(Str)])
 parse_user = |json| Json.parse(json)
 
 parse_user("{\"name\": \"Sam\"}") # Ok({ name: "Sam", nickname: <missing>, email: Err(Missing) })
 ```
 
-Fields which are neither optional nor a `Try` of `[Missing]` are required, and it's an error
-(`MissingRequiredField`) if they're missing from the input.
+Fields which are neither optional, defaulted, nor a `Try` of `[Missing]` are required.
+If they're absent, JSON returns `InvalidJson` with a message naming the missing field.
 
 ### Nominal Types
 
@@ -91,7 +91,7 @@ Building a parser for a type is done once per type, and when it happens in a
 [top-level constant](naming#constants), it happens at [compile time](compile-time). For example:
 
 ```roc
-parse_request : Str -> Try(Request, [InvalidJson(Str), MissingRequiredField(Str)])
+parse_request : Str -> Try(Request, [InvalidJson(Str)])
 parse_request = Json.parser_camel()
 ```
 
@@ -104,7 +104,7 @@ A function which works with any JSON-parseable type can express that requirement
 [where alias](static-dispatch#aliases). Similarly, `Json.Encodable` describes any type which can be encoded as JSON:
 
 ```roc
-from_json : Str -> Try(a, [InvalidJson(Str), ..errs]) where [a.Json.Parseable([InvalidJson(Str), ..errs])]
+from_json : Str -> Try(a, [InvalidJson(Str)]) where [a.Json.Parseable([InvalidJson(Str)])]
 from_json = |src| Json.parse(src)
 
 to_json : a -> Str where [a.Json.Encodable([])]
@@ -123,11 +123,21 @@ For example, besides `Json`, Roc's builtins also include `Encoding.HttpHeader`, 
 into records:
 
 ```roc
-parse_headers : Str -> Try({ content_length : U64, x_auth_token : Try(Str, [Missing]) }, [BadHeader, MissingRequiredField(Str)])
+parse_headers : Str -> Try({ content_length : U64, x_auth_token : Try(Str, [Missing]) }, [BadHeader, MissingHeader(Str)])
 parse_headers = Encoding.HttpHeader.parser_for()
 ```
 
 Formats can be implemented in packages, too, without any changes to the types they parse.
+
+Each format owns its error type. Every parsing operation—including a nested type's custom
+`parser_for`—returns that same error type, so a format can handle or retry failures from any
+part of the value. For JSON, that's `[InvalidJson(Str)]`; a custom parser that validates a
+domain value translates its validation errors into `InvalidJson` explicitly. Returning an
+incompatible error from a nested parser is a compile-time error.
+
+A format that supports required record fields also defines
+`missing_field : encoding, Str -> err`. It receives the missing field's name and constructs
+the format's error. Optional and defaulted fields don't need this method.
 
 ## Performance
 

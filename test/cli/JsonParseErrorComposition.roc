@@ -8,12 +8,12 @@ expect {
 	result.map_err(|InvalidJson(message)| MyError(message)) == Err(MyError("Invalid JSON"))
 }
 
-# A required record field composes the generic parser error into JSON's error row.
+# Required fields use JSON's error type and identify the absent field.
 expect {
-	result : Try({ length : F64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ length : F64 }, [InvalidJson(Str)])
 	result = Json.parse("{}")
 
-	result == Err(MissingRequiredField("length"))
+	result == Err(InvalidJson("Missing required field: length"))
 }
 
 # A record containing only optional parser fields cannot produce that error.
@@ -32,17 +32,16 @@ Token := { raw : Str }.{
 }
 
 expect {
-	result : Try({ token : Token }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ token : Token }, [InvalidJson(Str)])
 	result = Json.parse("{\"token\":\"ok\"}")
 
 	result.is_ok()
 }
 
-## A function whose error row is left to inference gets the required-field
-## error in its own signature, before its callers instantiate it.
+## Inference keeps the same format error for scalar and structural parsing.
 parse_length : Str -> Try({ length : F64 }, _)
 parse_length = |json| Json.parse(json)
 
-expect parse_length("{}") == Err(MissingRequiredField("length"))
+expect parse_length("{}") == Err(InvalidJson("Missing required field: length"))
 
 expect parse_length("{\"length\":2.5}") == Ok({ length: 2.5 })

@@ -13,9 +13,9 @@ Format := [Default].{
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [FormatError, ..errs])
+parse : Str -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a

@@ -16045,7 +16045,17 @@ const Builder = struct {
             if (!capture.id.isCanonical() or !constCaptureFillsSlot(capture)) continue;
             const binder = capture.id.binder();
             const lowered_ty = try fn_ctx.lowerConstCaptureType(store_view, capture.ty);
-            const node: ?NodeId = if (at_graph_nodes) try fn_ctx.graph.importMono(lowered_ty) else null;
+            // Like a stored root, a capture restores through its checked
+            // value witness. Its stored callable representation can carry
+            // rows joined by Lambda Solved; those rows are not the checked
+            // producer contract at which its body must be instantiated.
+            const node: ?NodeId = if (at_graph_nodes)
+                try fn_ctx.relateCheckedNodeToProducedValue(
+                    try fn_ctx.instNode(checkedBinderType(fn_view, binder)),
+                    try fn_ctx.graph.importMonoIndependent(lowered_ty),
+                )
+            else
+                null;
             const cell = if (node) |capture_node| DraftTypeCell.fromGraphNode(capture_node) else try fn_ctx.draftTypeCell(lowered_ty);
             const local = try fn_ctx.addFreshLocalWithBinderCell(self.symbols.fresh(), cell, binder);
             fn_ctx.draft.locals.items[@backingInt(local)].capture_kind = capture.kind;
@@ -22372,11 +22382,6 @@ const TypeInstantiationContext = struct {
     }
 };
 
-const ParserErrorRowKey = struct {
-    source: Type.TypeId,
-    target: Type.TypeId,
-};
-
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
@@ -22529,9 +22534,6 @@ const BodyContext = struct {
     /// once at the boundary; individual call preparation only selects from
     /// these graph-native identities.
     instantiated_codec_calls: std.ArrayList(InstantiatedGeneratedCodecCall) = .empty,
-    /// Sealed rows are immutable. Retain each source-to-target tag mapping once
-    /// per emission context; no solved-graph cache survives a solver mutation.
-    parser_error_rows: std.AutoHashMapUnmanaged(ParserErrorRowKey, []const u32) = .empty,
     active_codec_contract: ?ActiveCodecContract = null,
     codec_contract_expansion_stack: std.ArrayList(CodecContractExpansion) = .empty,
     /// Final structural serialization emission consumes only durable types and
@@ -23341,9 +23343,6 @@ const BodyContext = struct {
 
     fn deinit(self: *BodyContext) void {
         self.destroyNestedRelationBase();
-        var error_rows = self.parser_error_rows.valueIterator();
-        while (error_rows.next()) |row| self.allocator.free(row.*);
-        self.parser_error_rows.deinit(self.allocator);
         if (self.specialization_dispatch_divergence) |*divergence| divergence.deinit(self.allocator);
         if (self.owns_specialization_dispatch_crashes) {
             self.allocator.free(self.specialization_dispatch_crashes.?);
@@ -41368,7 +41367,7 @@ const BodyContext = struct {
                     .captures = try self.methodTargetCaptureSpan(parse_lookup),
                 } },
             });
-            return try self.injectTryErrorRow(result, parse_fn.ret, ret_ty);
+            return self.checkedParserResult(result, parse_fn.ret, ret_ty);
         }
         if (parse_arg_tys.len != 3) Common.invariant("parser target tag-union method had an unexpected arity");
         self.assertSameType(GuardedList.at(parse_arg_tys, 0), encoding_ty, "parser target tag-union encoding type differed from input encoding type");
@@ -41413,7 +41412,7 @@ const BodyContext = struct {
             const ok_body = try self.parseResultOk(ret_ty, value, try self.localExpr(rest_local, state_ty), state_ty);
             return try self.sequenceTryRecord(result, callable_fn.ret, value_local, value_name, rest_local, rest_name, ok_body, ret_ty);
         }
-        return try self.injectTryErrorRow(result, callable_fn.ret, ret_ty);
+        return self.checkedParserResult(result, callable_fn.ret, ret_ty);
     }
 
     /// A format method may return the structural tag union backing the
@@ -41685,6 +41684,7 @@ const BodyContext = struct {
             shape_ty,
             state_ty,
             ret_ty,
+            encoding_expr,
             record_slots,
             renamed_field_locals,
             try self.localExpr(cursor_local, state_ty),
@@ -42274,6 +42274,7 @@ const BodyContext = struct {
         shape_ty: Type.TypeId,
         state_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
         record_slots: ParseRecordSlots,
         renamed_field_locals: []const DraftLocalId,
         rest_expr: DraftExprId,
@@ -42285,6 +42286,7 @@ const BodyContext = struct {
             record_slots,
             shape_ty,
             record_try_ty,
+            encoding_expr,
             renamed_field_locals,
             error_join,
         );
@@ -43977,103 +43979,17 @@ const BodyContext = struct {
                 .args = try self.addExprSpan(&[_]DraftExprId{state_expr}),
             } },
         });
-        return try self.injectTryErrorRow(source_result, source_ret_ty, ret_ty);
+        return self.checkedParserResult(source_result, source_ret_ty, ret_ty);
     }
 
-    fn injectTryErrorRow(
+    fn checkedParserResult(
         self: *BodyContext,
         source_expr: DraftExprId,
         source_try_ty: Type.TypeId,
         target_try_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        if (self.sameType(source_try_ty, target_try_ty)) return source_expr;
-        const source_info = self.tryInfo(source_try_ty);
-        const target_info = self.tryInfo(target_try_ty);
-        self.assertSameType(source_info.ok_ty, target_info.ok_ty, "parser Try error-row injection changed the Ok type");
-        const ok_local = try self.addLocal(self.builder.symbols.fresh(), source_info.ok_ty);
-        return try self.sequenceTryTo(
-            source_expr,
-            source_try_ty,
-            ok_local,
-            try self.tryOk(target_try_ty, try self.localExpr(ok_local, source_info.ok_ty)),
-            target_try_ty,
-            null,
-        );
-    }
-
-    /// Specialization's immutable tag rows are sorted by label. One linear
-    /// merge commits their correspondence, which emission reuses directly.
-    fn parserErrorRowMapping(self: *BodyContext, source: Type.TypeId, target: Type.TypeId) Allocator.Error![]const u32 {
-        const key = ParserErrorRowKey{ .source = source, .target = target };
-        if (self.parser_error_rows.get(key)) |mapping| return mapping;
-        const source_tags = tagUnionTags(self.typeStore(), source);
-        const target_tags = tagUnionTags(self.typeStore(), target);
-        const mapping = try self.allocator.alloc(u32, source_tags.len);
-        errdefer self.allocator.free(mapping);
-        var target_index: usize = 0;
-        for (mapping, 0..) |*entry, source_index| {
-            const source_tag = GuardedList.at(source_tags, source_index);
-            while (target_index < target_tags.len and self.nameStore().tagLabelTextLessThan(GuardedList.at(target_tags, target_index).name, source_tag.name)) : (target_index += 1) {}
-            if (target_index == target_tags.len) Common.invariant("parser error row was not included in target");
-            const target_tag = GuardedList.at(target_tags, target_index);
-            if (source_tag.name != target_tag.name) Common.invariant("parser error row was not included in target");
-            const source_payloads = self.typeStore().span(source_tag.payloads);
-            const target_payloads = self.typeStore().span(target_tag.payloads);
-            if (source_payloads.len != target_payloads.len) Common.invariant("parser error injection changed payload arity");
-            for (0..source_payloads.len) |i| {
-                self.assertSameType(GuardedList.at(source_payloads, i), GuardedList.at(target_payloads, i), "parser error injection changed payload type");
-            }
-            entry.* = @intCast(target_index);
-        }
-        try self.parser_error_rows.put(self.allocator, key, mapping);
-        return mapping;
-    }
-
-    fn injectErrorRow(
-        self: *BodyContext,
-        source_expr: DraftExprId,
-        source_err_ty: Type.TypeId,
-        target_err_ty: Type.TypeId,
-    ) Allocator.Error!DraftExprId {
-        if (self.sameType(source_err_ty, target_err_ty)) return source_expr;
-
-        const mapping = try self.parserErrorRowMapping(source_err_ty, target_err_ty);
-        const source_tags = tagUnionTags(self.typeStore(), source_err_ty);
-        const target_tags = tagUnionTags(self.typeStore(), target_err_ty);
-        if (source_tags.len == 0) Common.invariant("cannot inject an empty parser error row into a different row");
-        const branches = try self.allocator.alloc(DraftBranch, source_tags.len);
-        defer self.allocator.free(branches);
-
-        for (0..source_tags.len) |tag_index| {
-            const source_tag = GuardedList.at(source_tags, tag_index);
-            const target_tag = GuardedList.at(target_tags, mapping[tag_index]);
-            const source_payload_tys = self.typeStore().span(source_tag.payloads);
-
-            const payload_pats = try self.allocator.alloc(DraftPatId, source_payload_tys.len);
-            defer self.allocator.free(payload_pats);
-            const payload_exprs = try self.allocator.alloc(DraftExprId, source_payload_tys.len);
-            defer self.allocator.free(payload_exprs);
-            for (0..source_payload_tys.len) |payload_index| {
-                const source_payload_ty = GuardedList.at(source_payload_tys, payload_index);
-                const local = try self.addLocal(self.builder.symbols.fresh(), source_payload_ty);
-                payload_pats[payload_index] = try self.bindPat(local, source_payload_ty);
-                payload_exprs[payload_index] = try self.localExpr(local, source_payload_ty);
-            }
-
-            const pat = try self.addPat(.{ .ty = source_err_ty, .data = .{ .tag = .{
-                .name = source_tag.name,
-                .payloads = try self.addPatSpan(payload_pats),
-            } } });
-            branches[tag_index] = .{
-                .pat = pat,
-                .body = try self.tagUnionValue(target_err_ty, target_tag, payload_exprs),
-            };
-        }
-
-        return try self.addExpr(.{ .ty = target_err_ty, .data = .{ .match_ = .{
-            .scrutinee = source_expr,
-            .branches = try self.addBranchSpan(branches),
-        } } });
+    ) DraftExprId {
+        self.assertSameType(source_try_ty, target_try_ty, "checked parser result differed from its format contract");
+        return source_expr;
     }
 
     fn parseResultOkType(
@@ -44242,6 +44158,7 @@ const BodyContext = struct {
         record_slots: ParseRecordSlots,
         record_ty: Type.TypeId,
         ret_ty: Type.TypeId,
+        encoding_expr: DraftExprId,
         renamed_field_locals: []const DraftLocalId,
         error_join: DraftExprId,
     ) Allocator.Error!DraftExprId {
@@ -44324,6 +44241,7 @@ const BodyContext = struct {
 
             const renamed_field_ty = try self.localType(renamed_field_locals[field_index]);
             const missing_error = try self.missingRequiredFieldError(
+                encoding_expr,
                 try self.localExpr(renamed_field_locals[field_index], renamed_field_ty),
                 ret_info.err_ty,
             );
@@ -58298,40 +58216,6 @@ const BodyContext = struct {
         } } });
     }
 
-    /// Keep ordinary Try sequencing (including its cold error edge and direct
-    /// record-field binding). The error continuation converts straight into
-    /// the final result; no intermediate widened Try is materialized.
-    fn sequenceParserErrorConversion(
-        self: *BodyContext,
-        sequence: union(enum) { value: DraftTrySequence, record: DraftTryRecordSequence },
-        source_err_ty: Type.TypeId,
-        target_ty: Type.TypeId,
-        err_target: ?DraftExprId,
-    ) Allocator.Error!DraftExprId {
-        const join = try self.reserveGeneratedJoinPoint(target_ty);
-        const err_local = try self.addLocal(self.builder.symbols.fresh(), source_err_ty);
-        const converted = try self.injectErrorRow(try self.localExpr(err_local, source_err_ty), source_err_ty, self.tryInfo(target_ty).err_ty);
-        const body = if (err_target) |target|
-            try self.jumpToGeneratedJoin(target, &.{converted}, &.{}, &.{}, target_ty)
-        else
-            try self.tryErr(target_ty, converted);
-        const data: BodyExprData = switch (sequence) {
-            .value => |value| blk: {
-                var seq = value;
-                seq.err_target = join;
-                break :blk .{ .try_sequence = seq };
-            },
-            .record => |record| blk: {
-                var seq = record;
-                seq.err_target = join;
-                break :blk .{ .try_record_sequence = seq };
-            },
-        };
-        const remainder = try self.addExpr(.{ .ty = target_ty, .data = data });
-        try self.completeGeneratedJoinPoint(join, &.{.{ .local = err_local, .ty = source_err_ty }}, &.{}, body, remainder);
-        return join;
-    }
-
     fn sequenceTry(
         self: *BodyContext,
         try_expr: DraftExprId,
@@ -58367,9 +58251,7 @@ const BodyContext = struct {
             .err_target = err_target,
             .ok_body = ok_body,
         } };
-        if (!self.sameType(info.err_ty, out_info.err_ty)) {
-            return try self.sequenceParserErrorConversion(.{ .value = data.try_sequence }, info.err_ty, out_try_ty, err_target);
-        }
+        self.assertSameType(info.err_ty, out_info.err_ty, "sequenced parser error differed from its format contract");
         return try self.addExpr(.{ .ty = out_try_ty, .data = data });
     }
 
@@ -58478,9 +58360,7 @@ const BodyContext = struct {
             .err_target = err_target,
             .ok_body = ok_body,
         } };
-        if (!self.sameType(info.err_ty, out_info.err_ty)) {
-            return try self.sequenceParserErrorConversion(.{ .record = data.try_record_sequence }, info.err_ty, out_try_ty, err_target);
-        }
+        self.assertSameType(info.err_ty, out_info.err_ty, "sequenced parser record error differed from its format contract");
         return try self.addExpr(.{ .ty = out_try_ty, .data = data });
     }
 
@@ -58679,32 +58559,13 @@ const BodyContext = struct {
         };
     }
 
-    /// Relate the payloads of a declared parser method's errors to the
-    /// enclosing structural parser row without equating the two rows. The
-    /// method result is exact; emission explicitly injects that row into
-    /// the enclosing result, whose additional structural errors remain owned by
-    /// the enclosing parser producer.
+    /// Consume the checker's uniform format-error relation.
     fn relateParserErrorInjection(
         self: *BodyContext,
         source_err: NodeId,
         target_err: NodeId,
     ) Allocator.Error!void {
-        if (self.graph.rootNode(source_err) == self.graph.rootNode(target_err)) return;
-        const source_tags = (try self.graph.tagRowNodes(source_err)).tags;
-        if (source_tags.len == 0) return;
-        const target_tags = (try self.graph.tagRowNodes(target_err)).tags;
-        var target_index: usize = 0;
-        for (source_tags) |source_tag| {
-            while (target_index < target_tags.len and self.nameStore().tagLabelTextLessThan(target_tags[target_index].name, source_tag.name)) : (target_index += 1) {}
-            if (target_index == target_tags.len or target_tags[target_index].name != source_tag.name) Common.invariant("parser error row was not included in the enclosing parser row");
-            const target_tag = target_tags[target_index];
-            if (source_tag.payloads.len != target_tag.payloads.len) {
-                Common.invariant("custom parser error injection changed tag payload arity");
-            }
-            for (source_tag.payloads, target_tag.payloads) |source_payload, target_payload| {
-                try relateRequestComponent(self.graph, source_payload, target_payload);
-            }
-        }
+        try relateRequestComponent(self.graph, source_err, target_err);
     }
 
     fn preparedCodecCallExists(
@@ -60480,6 +60341,25 @@ const BodyContext = struct {
         return true;
     }
 
+    fn prepareParserMissingFieldCodecCall(
+        self: *BodyContext,
+        boundary_expr: DraftExprId,
+        shape_node: NodeId,
+        boundary_callable_node: NodeId,
+    ) Allocator.Error!bool {
+        // The checked contract, not a new shape analysis, owns this demand.
+        if (try self.generatedCodecCall("missing_field", null) == null) return false;
+        const encoding_node, _, const outer_result = try self.parserBoundaryNodes(boundary_callable_node);
+        const exact = try self.requiredGeneratedCodecTarget("missing_field", null);
+        if (self.preparedRequiredCodecCallExists(boundary_expr, .parser, exact)) return false;
+        const target = try self.graph.functionNodes(exact.callable_node);
+        if (target.args.len != 2) Common.invariant("missing_field target did not have two arguments");
+        try relateRequestComponent(self.graph, target.args[0], encoding_node);
+        try relateRequestComponent(self.graph, target.ret, outer_result.err);
+        try self.appendPreparedRequiredCodecCall(boundary_expr, .parser, shape_node, exact);
+        return true;
+    }
+
     fn prepareEncodeNullCodecCall(
         self: *BodyContext,
         boundary_expr: DraftExprId,
@@ -61245,6 +61125,11 @@ const BodyContext = struct {
                     ) or added;
                 }
                 if (kind == .parser) {
+                    added = try self.prepareParserMissingFieldCodecCall(
+                        boundary_expr,
+                        shape_node,
+                        boundary_callable_node,
+                    ) or added;
                     if (fields.len != 0) {
                         added = try self.prepareRenameRecordFieldCodecCall(
                             boundary_expr,
@@ -61460,24 +61345,22 @@ const BodyContext = struct {
 
     fn missingRequiredFieldError(
         self: *BodyContext,
+        encoding_expr: DraftExprId,
         field_name_expr: DraftExprId,
         err_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const str_ty = try self.primitiveType(.str);
         self.assertSameType(try self.exprType(field_name_expr), str_ty, "generated missing required field name was not Str");
-        // The checker adds `MissingRequiredField(Str)` to the error row of every
-        // derived parser that owns a required field, so the checked row always
-        // carries it here.
-        const missing_tag = self.monoTagByTextOptional(err_ty, "MissingRequiredField") orelse
-            Common.invariant("derived parser with a required field had no MissingRequiredField in its checked error row");
-        const payload_tys = self.typeStore().span(missing_tag.payloads);
-        if (payload_tys.len != 1) Common.invariant("MissingRequiredField in parser error row did not carry one payload");
-        self.assertSameType(GuardedList.at(payload_tys, 0), str_ty, "MissingRequiredField in parser error row did not carry a Str payload");
+        const prepared = try self.frozenFormatCodecCall(.parser, "missing_field");
+        const method = functionShape(self.typeStore(), prepared.callable_ty, "missing_field target was not a function");
+        self.assertSameType(method.ret, err_ty, "missing_field returned a different format error");
         return try self.addExpr(.{
             .ty = err_ty,
-            .data = .{ .tag = .{
-                .name = missing_tag.name,
-                .payloads = try self.addExprSpan(&[_]DraftExprId{field_name_expr}),
+            .data = .{ .call_proc = .{
+                .callee = try self.draftProcCalleeForSlot(prepared.callee),
+                .args = try self.addExprSpan(&.{ encoding_expr, field_name_expr }),
+                .captures = try self.methodTargetCaptureSpan(prepared.lookup),
+                .is_cold = true,
             } },
         });
     }

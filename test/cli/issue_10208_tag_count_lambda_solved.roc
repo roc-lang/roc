@@ -11,13 +11,13 @@ Message : [
 	PING,
 ]
 
-decode_message : {} -> Try(Message, Encoding.Json.ParseErr)
+decode_message : {} -> Try(Message, [InvalidJson(Str)])
 decode_message = |_| {
 	s = Json.parse("")?
 	Ok(INFO(s))
 }
 
-read_and_handle_message : {} -> Try({}, [StdoutErr(Str), InvalidJson(Str), MissingRequiredField(Str)])
+read_and_handle_message : {} -> Try({}, [StdoutErr(Str), InvalidJson(Str)])
 read_and_handle_message = |_| {
 	message = decode_message({})?
 	match message {

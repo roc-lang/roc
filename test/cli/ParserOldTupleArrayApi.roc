@@ -5,7 +5,7 @@ ParserOldTupleArrayApi :: [].{}
 ## a list must be rejected rather than silently parsed as an array.
 Format := [Default].{
 	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
-	parse_str = |_| Err(FormatError)
+	parse_str = |_, _| Err(FormatError)
 
 	parse_array_start : Format, State -> Try(State, [FormatError])
 	parse_array_start = |_, state| Ok(state)
@@ -19,9 +19,9 @@ Format := [Default].{
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [FormatError, ..errs])
+parse : Str -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
