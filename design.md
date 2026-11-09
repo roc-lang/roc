@@ -15302,16 +15302,16 @@ descriptor, its second word the capture capacity of the allocation holding it
 (the record's size when the callable is first packed; an allocation repacked
 in place keeps its capacity), and the callable's `on_drop` is the shared
 runtime drop that reads the first word. When every capture is of closed type,
-the capture record has a static layout and `on_drop` is the per-worker helper
-the backend generates for that layout. A callable whose captures are all
-static (none, or only static callables such as dictionaries) is a static,
-immortal callable: `packClosure` reads the program's static dictionary of its
-worker and captures (`StaticDescs.dictionary`), whose node carries the zero
-(static) refcount, so creating, sharing, or dropping it never allocates or
-frees. A compile-time program, which reads its function values' types back
-from what their compositions noted, packs them instead. The `out_desc` slot of
-the erased-callable ABI is always written null: the caller knows the result
-type's descriptor itself.
+the capture record has a static layout and `on_drop` names that layout's helper
+only when it contains refcounted data. The callback is optional, not a
+requirement of every exposed callable handle. Immortal static recipe wrappers
+need no callback: their descriptor and callable words own no runtime units,
+and decrementing a static allocation never invokes final-drop logic.
+A callable whose captures are all recorded constant data, including its type
+table, is immutable data too. Zero-capture functions are therefore static,
+immortal callables under both strategies, rather than allocations at each use.
+The `out_desc` slot of the erased-callable ABI is always
+written null: the caller knows the result type's descriptor itself.
 
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
 or root thunk) takes the erased ABI's reuse argument as its last parameter,
