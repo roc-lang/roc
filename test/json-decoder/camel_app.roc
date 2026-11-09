@@ -7,7 +7,7 @@ parse_camel_record : Str -> Try(
 		pair : [Pair({ first_value : Str, second_value : Str })],
 		user_id : Str,
 	},
-	[InvalidJson(Str), MissingRequiredField(Str)],
+	[InvalidJson(Str)],
 )
 parse_camel_record = Json.parser_camel()
 

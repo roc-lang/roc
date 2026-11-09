@@ -1511,9 +1511,9 @@ test "check - issue 11940 - creating an effectful callback leaves its enclosing 
 test "codec row equality - derived parser error row satisfies equality" {
     const source =
         \\main = || {
-        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\    v = Json.parse("{\"a\":\"x\"}")
-        \\    v == Err(MissingRequiredField("b"))
+        \\    v == Err(InvalidJson("Missing field: b"))
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -1533,9 +1533,9 @@ test "codec row equality - derived encoder settles a hashed dictionary key row" 
 test "codec row equality - expect parser error row satisfies equality" {
     const source =
         \\expect {
-        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\    v = Json.parse("{\"a\":\"x\"}")
-        \\    v == Err(MissingRequiredField("b"))
+        \\    v == Err(InvalidJson("Missing field: b"))
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -1547,9 +1547,9 @@ test "codec row equality - independent expect parser and function error rows" {
     const source =
         \\CodecParts :: [].{}
         \\expect {
-        \\  v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\  v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\  v = Json.parse("{\"a\":\"x\"}")
-        \\  v == Err(MissingRequiredField("b"))
+        \\  v == Err(InvalidJson("Missing field: b"))
         \\}
         \\
         \\run : (Str -> Try(U64, [Bad, ..errs])), Str -> Try(U64, [Bad, ..errs])

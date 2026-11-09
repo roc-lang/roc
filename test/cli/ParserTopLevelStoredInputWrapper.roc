@@ -1,6 +1,9 @@
 ParserTopLevelStoredInputWrapper :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -41,9 +44,9 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-parser_for : () -> (Str -> Try(a, [FormatError, ..errs]))
+parser_for : () -> (Str -> Try(a, [FormatError]))
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parser_for = || {
 	Shape : a
@@ -55,7 +58,7 @@ parser_for = || {
 	}
 }
 
-parse_stored : Str -> Try({ foo : Str }, [FormatError, MissingRequiredField(Str)])
+parse_stored : Str -> Try({ foo : Str }, [FormatError])
 parse_stored = parser_for()
 
 expect {
