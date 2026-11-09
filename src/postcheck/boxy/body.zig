@@ -8723,6 +8723,12 @@ pub const Builder = struct {
         } else &.{};
         const values = try std.mem.concat(self.allocator, LocalId, &.{ captured, words });
         defer self.allocator.free(values);
+        // Producer-authored constant slots prove that this environment has
+        // no invocation-specific data, including the capture-free case.
+        const all_static = for (values) |value| {
+            if (!self.constant_slots.contains(value)) break false;
+        } else true;
+        if (all_static) return try self.staticClosure(callee, captured, capture_types, inputs, false, null);
         const target = try self.closedLocal(try self.erasedLayout());
         var capture: ?LocalId = null;
         var capture_layout: ?layout.Idx = null;
