@@ -2090,6 +2090,8 @@ pub fn generateModule(
     if (proc_specs.len > 0) {
         self.compileAllProcSpecs(proc_specs) catch return error.OutOfMemory;
     }
+    // Frozen callables can name a drop helper that no procedure body calls.
+    try self.compileStaticDataRcHelpers(self.static_data_rc_helpers);
 
     const root_proc = self.store.getProcSpec(root_proc_id);
     if (!root_proc.args.isEmpty()) {
