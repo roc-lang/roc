@@ -16026,7 +16026,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     for (self.cir.provides_entries.items.items) |provides_entry| {
         const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
         try self.checkHostSymbol(symbol_text, &symbols);
-        try self.checkProvidesEntryHostBoundaryRows(provides_entry);
+        try self.checkProvidesEntryHostBoundary(provides_entry);
     }
 
     for (section) |entry| {
@@ -16138,7 +16138,7 @@ fn hostedEntryDisplayName(
         allocator.dupe(u8, func_name);
 }
 
-fn checkProvidesEntryHostBoundaryRows(
+fn checkProvidesEntryHostBoundary(
     self: *Self,
     provides_entry: ModuleEnv.ProvidesEntry,
 ) std.mem.Allocator.Error!void {
