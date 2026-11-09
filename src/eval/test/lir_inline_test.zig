@@ -226,7 +226,7 @@ fn lowerModuleWithOptions(
         allocator,
         .{ .root = check.CheckedArtifact.loweringView(&resources.checked_artifact), .imports = import_views },
         &lowered,
-        base.target.TargetUsize.native,
+        lowered.target_usize,
         .{},
     );
     if (lowered.frozen_static_data) |*frozen| frozen.deinit();
@@ -708,6 +708,8 @@ fn runLoweredWithHostEvents(
     var runtime_env = eval.RuntimeHostEnv.init(allocator);
     defer runtime_env.deinit();
 
+    var static_data = try FrozenStaticData.init(allocator, lowered);
+    defer static_data.deinit();
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
     var static_data = try FrozenStaticData.init(allocator, lowered);
@@ -1328,9 +1330,8 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
-/// The static data a `.boxy` program froze (its descriptors, dictionaries,
-/// and name table), installed in an interpreter as every real pipeline
-/// installs it; a `.lss` program freezes none.
+/// Both strategies execute with the immutable values materialized for their
+/// lowered program, including stored builtin values and Boxy metadata.
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
@@ -14084,6 +14085,8 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
     const allocator = peak_allocator.allocator();
     {
         const result = &lowered.lir_result;
+        var static_data = try FrozenStaticData.init(allocator, lowered);
+        defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
         var static_data = try FrozenStaticData.init(allocator, lowered);

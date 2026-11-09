@@ -15277,13 +15277,14 @@ test "standalone LLVM modules define cyclic frozen data and procedure pointers" 
     defer codegen.builder = null;
     try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
     try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
-    for (builder.variables.items[0..exports.len]) |variable| {
+    for (builder.variables.items[0..exports.len], exports, 0..) |variable, data_export, index| {
         try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
         try std.testing.expectEqual(.constant, variable.mutability);
         try std.testing.expect(variable.init != .no_init);
+        const variable_id: LlvmBuilder.Variable.Index = @fromBackingInt(@intCast(index));
+        const expected = try builder.gepConst(.normal, .i8, variable_id.toConst(&builder), null, &.{try builder.intConst(.i64, data_export.symbol_offset)});
+        try std.testing.expectEqual(expected, codegen.static_data_symbols.get(data_export.symbol_name).?);
     }
-    const expected = try builder.gepConst(.normal, .i8, LlvmBuilder.Variable.Index.toConst(@fromBackingInt(0), &builder), null, &.{try builder.intConst(.i64, 8)});
-    try std.testing.expectEqual(expected, codegen.static_data_symbols.get("first").?);
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
