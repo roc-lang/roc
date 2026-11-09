@@ -14968,7 +14968,7 @@ const llvm_private_runtime_expected_stdout =
     "7999999999999999999972 399999999999999999998 3 400000000000000000001 2 0 7999999999999999999972 500000000000000000001 2e21 2e21 3 3\n" ++
     "1199999999 0 0 6000000005 6000000000 3 3\n" ++
     "9.0 0.6 3\n" ++
-    "3998 1999 2003 2001 8192 1026.5";
+    "3998 1999 2003 2001 8192 134217728 1026.5";
 
 /// The native target this host runs, if the test builds for it.
 fn llvmRuntimeHostTarget() ?[]const u8 {
@@ -17806,7 +17806,7 @@ fn runGlueRuntimeCase(
         };
     }
 
-    // Zig 0.17.0 mislowers a natural C ABI aggregate signature exercised by
+    // Zig 0.17 mislowers a natural C ABI aggregate signature exercised by
     // layout-probe on arm64musl: after five integer arguments occupy x0-x4,
     // Zig passes the 16-byte-aligned Dec aggregate in x5/x6 instead of
     // rounding up to the even pair x6/x7 as AAPCS64 requires. CGlue and
