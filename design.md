@@ -14928,7 +14928,13 @@ and Per-Module Output is the invariant that makes it possible:
   modules, so their keys already cover them. A key names one file.
 - An edit to a module changes its checked entry key and therefore the key of
   every module whose checked entry covers it, so the edited module and its
-  importers rebuild. A compile-time value a module computes by running an
+  importers rebuild. A unit's task computes its key on its lane, once its
+  imports' units are done: the module's own part of its digests (its stored
+  values and public surface, the bulk of the hashing) is hashed there, or
+  earlier by a lane no unit was ready for, and the imports' parts come from
+  the digest table their units recorded into, which the lanes share under a
+  mutex (`boxy_interface.Digests`). Nothing is hashed on the thread that
+  sequences the units. A compile-time value a module computes by running an
   import's code is part of the module's own evaluation output, so an edit that
   changes that value rebuilds the module.
 - NAMES come from the link, not from content. A worker's symbol and a nominal
@@ -26412,7 +26418,15 @@ execution times include the recording overhead and are not benchmark results.
 
 `ROC_TRACE_BOXY_WORK` also separates checked-root graph construction from
 function-containing-root classification when evaluation timings are available.
-These diagnostic durations exclude the trace's per-root printing.
+These diagnostic durations exclude the trace's per-root printing. A build's
+library units print a timeline under it: when each unit was submitted, keyed,
+and restored, built or taken from compile-time evaluation, as milliseconds
+since the units' phase began and as the raw clock reading, which lines up
+with a `perf record -k CLOCK_MONOTONIC` profile. `ROC_TRACE_BOXY_DIGESTS`
+prints each part of every module's interface and object-input digest, so two
+traces show which part an edit changed; it hashes the parts separately,
+which costs more than the digests themselves, so the work trace leaves it
+out.
 
 
 
