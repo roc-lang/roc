@@ -43,10 +43,12 @@ pub const Digests = struct {
     /// the imports' digests.
     prepared: std.AutoHashMapUnmanaged(Key, Prepared) = .empty,
     /// Guards `interfaces`, `exports` and `prepared`, which the units of a
-    /// link read and record from their lanes. `artifacts` and
-    /// `module_names` grow only through `add`, which the thread owning the
-    /// digests calls before any unit runs, so they are read without it.
+    /// link read and record from their lanes.
     mutex: Mutex = .init,
+    /// Guards `artifacts` and `module_names`, which `add` grows on the
+    /// thread owning the digests while units already running read them.
+    /// Taken under `mutex` when both are held, never the other way around.
+    link_mutex: Mutex = .init,
 
     /// A mutex on hosts with threads; a freestanding compiler runs every
     /// unit on its one thread.
@@ -81,6 +83,8 @@ pub const Digests = struct {
 
     /// Add `artifact` to the link; false when it is already there.
     pub fn add(self: *Digests, artifact: *const Artifact) Allocator.Error!bool {
+        self.link_mutex.lockUncancelable(self.io);
+        defer self.link_mutex.unlock(self.io);
         const entry = try self.artifacts.getOrPut(self.gpa, artifact.key.bytes);
         if (entry.found_existing) return false;
         entry.value_ptr.* = artifact;
@@ -88,8 +92,17 @@ pub const Digests = struct {
         return true;
     }
 
-    pub fn nameOf(self: *const Digests, key: Key) [32]u8 {
+    pub fn nameOf(self: *Digests, key: Key) [32]u8 {
+        self.link_mutex.lockUncancelable(self.io);
+        defer self.link_mutex.unlock(self.io);
         return self.module_names.get(key) orelse base.invariant("a module of a link was never added to its digests", .{});
+    }
+
+    /// The module of the link imported under `key`.
+    fn artifactOf(self: *Digests, key: Key) *const Artifact {
+        self.link_mutex.lockUncancelable(self.io);
+        defer self.link_mutex.unlock(self.io);
+        return self.artifacts.get(key) orelse base.invariant("a module of a link imports a module outside it", .{});
     }
 
     pub fn deinit(self: *Digests) void {
@@ -120,7 +133,7 @@ pub const Digests = struct {
     /// Hash the part of `artifact`'s digests that is a function of the
     /// module alone (`Prepared`). Reads only `artifact` and the link's
     /// names, so it runs on any thread while nothing adds to the link.
-    fn prepare(self: *const Digests, artifact: *const Artifact) Allocator.Error!Prepared {
+    fn prepare(self: *Digests, artifact: *const Artifact) Allocator.Error!Prepared {
         var interface = Sha256.init(.{});
         interface.update("roc.boxy.interface.v1");
         interface.update(&self.nameOf(artifact.key.bytes));
@@ -156,7 +169,7 @@ pub const Digests = struct {
         if (self.interfaces.get(artifact.key.bytes)) |known| return known;
         var hasher = (try self.preparedOf(artifact)).interface;
         for (artifact.direct_import_module_keys) |key| {
-            const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
+            const imported = self.artifactOf(key.bytes);
             hasher.update(&try self.interfaceOfLocked(imported));
         }
         const digest = hasher.finalResult();
@@ -191,7 +204,7 @@ pub const Digests = struct {
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
             .imports => for (artifact.direct_import_module_keys) |key| {
-                const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
+                const imported = self.artifactOf(key.bytes);
                 hasher.update(&try self.interfaceOfLocked(imported));
             },
         }
@@ -257,7 +270,7 @@ pub const Digests = struct {
         defer self.mutex.unlock(self.io);
         var hasher = (try self.preparedOf(artifact)).object_input;
         for (artifact.direct_import_module_keys) |key| {
-            const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
+            const imported = self.artifactOf(key.bytes);
             hasher.update(&try self.interfaceOfLocked(imported));
         }
         self.hashImportedExports(&hasher, artifact);
@@ -274,7 +287,7 @@ pub const Digests = struct {
         try self.hashStoredValues(&values, artifact, .every_root);
         var imports = Sha256.init(.{});
         for (artifact.direct_import_module_keys) |key| {
-            const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
+            const imported = self.artifactOf(key.bytes);
             imports.update(&try self.interfaceOfLocked(imported));
         }
         var exports = Sha256.init(.{});
@@ -302,7 +315,7 @@ pub const Digests = struct {
     /// interface (its names, schemes, nominal backings and method bindings),
     /// what checking's commit derives from bodies for callers, the workers
     /// they name, and the stored values they restore.
-    fn hashPublicSurface(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+    fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
         for (artifact.exported_procedure_templates.templates) |exported| {
             self.hashTemplateRef(hasher, artifact, exported.template);
@@ -315,7 +328,7 @@ pub const Digests = struct {
         try self.hashStoredValues(hasher, artifact, .read_by_importers);
     }
 
-    fn hashBindings(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
+    fn hashBindings(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
         for (artifact.exported_procedure_bindings.bindings) |binding| {
             hashTag(hasher, @tagName(std.meta.activeTag(binding.body)));
             switch (binding.body) {
@@ -328,7 +341,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashMethods(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
+    fn hashMethods(self: *Digests, hasher: *Sha256, artifact: *const Artifact) void {
         for (artifact.method_registry.entries) |entry| {
             const target = entry.target orelse {
                 hashTag(hasher, "rejected");
@@ -350,7 +363,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashConsts(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+    fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         const exported_consts = artifact.exported_const_templates.templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
         for (artifact.const_templates.templates.items) |template| switch (template.owner) {
@@ -362,7 +375,7 @@ pub const Digests = struct {
     /// The name of `ref`'s worker, and the hidden parameters a call to it
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
-    fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
+    fn hashTemplateRef(self: *Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
         hasher.update(&self.nameOf(ref.artifact.bytes));
         hasher.update(std.mem.asBytes(&@as(u32, @backingInt(ref.template))));
         if (!std.mem.eql(u8, &ref.artifact.bytes, &artifact.key.bytes)) return;
@@ -378,7 +391,7 @@ pub const Digests = struct {
 
     /// How an importer reads a constant: the value stored for it, or the
     /// entry procedure of one compile-time evaluation did not store.
-    fn hashConstTemplate(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
+    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
         hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
         switch (template.state) {
             .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
@@ -400,7 +413,7 @@ pub const Digests = struct {
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
-    fn hashStoredValues(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
+    fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
         for (artifact.compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
@@ -410,7 +423,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashRootValue(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
+    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
         hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
         switch (root.payload) {
@@ -427,7 +440,7 @@ pub const Digests = struct {
 
 /// How `ConstStore.hashGraph` names what a value refers to outside itself.
 const ValueContext = struct {
-    digests: *const Digests,
+    digests: *Digests,
     artifact: *const Artifact,
 
     pub fn moduleDigest(self: ValueContext, module: check.CheckedArtifact.CheckedModuleDigest) Digest {
