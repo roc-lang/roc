@@ -2964,17 +2964,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payloadFor(.boxy)) {
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
                     .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
-                    .unevaluated, .runtime => {
+                    .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
