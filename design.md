@@ -17619,7 +17619,9 @@ its final `alias_target`, and a callable-eval template carries its
 `forwarded_lookup` when the lookup reaches a directly callable procedure (an
 ordinary template, a hosted procedure, or another forwarding alias, to a fixed
 point). An alias of a function-valued constant is not a forward; calling it
-calls the evaluated value.
+calls the evaluated value. Root-request publication and platform pairing omit
+evaluation only for this explicit forwarding proof, not for the lookup's
+procedure-reference shape: a computed callable alias still needs its value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
