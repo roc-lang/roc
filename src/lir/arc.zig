@@ -1079,7 +1079,9 @@ fn installOwnedBindingOverrides(
             try owned_binding_override.set(carrier);
         }
     }
-    for (domain.frame_locals) |local| {
+    // Dismantling also records scalar and prefix reads, which carry no
+    // ownership unit. Only the resource domain can acquire an override.
+    for (domain.resource_locals) |local| {
         if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
     }
     // A projected container solved borrowed in the unconditional base

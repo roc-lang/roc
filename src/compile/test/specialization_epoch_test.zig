@@ -101,6 +101,8 @@ test "Solved-LIR finite capturing bodies lower deterministically on workers" {
 test "Solved-LIR runtime finite dispatch literals and patterns commit deterministically on workers" {
     // Runtime arguments keep the selected finite closure and string/list
     // patterns alive; constant-only initialization would not exercise admission.
+    // Interpolated input also keeps the byte lists out of static-data-only
+    // lowering, which this worker-admission test does not exercise.
     try harness.expectRuntimeWorkerParallelismDeterministicLir(.{ .app_body =
         \\choose = |flag, offset| if flag {
         \\    |value| value + offset
@@ -114,7 +116,7 @@ test "Solved-LIR runtime finite dispatch literals and patterns commit determinis
         \\        "" => 1.U64
         \\        _ => 2.U64
         \\    }
-        \\    bytes = Str.to_utf8(text)
+        \\    bytes = if count == 0 Str.to_utf8("serial${text}") else Str.to_utf8("parallel${text}")
         \\    first = match bytes {
         \\        [byte, ..] => byte.to_u64()
         \\        [] => 0.U64

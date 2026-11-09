@@ -166,7 +166,9 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         // Runtime producers consume completed roots, unlike the evaluator
         // consumer above whose pending roots are the subject of the test.
         if (!case.compile_time and !completed) {
+            coord.specialization_strategy = .boxy;
             try coord.finishCheckedProgram(.executable_artifacts);
+            try std.testing.expect(!coord.hasUserErrors());
             completed = true;
         }
         // Restored checked modules have their CIR and published tables, but

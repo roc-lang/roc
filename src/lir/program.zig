@@ -356,7 +356,10 @@ pub const StaticDataParts = struct {
         list,
         box,
         tag: u32,
-        callable: LIR.LirProcSpecId,
+        callable: struct {
+            proc: LIR.LirProcSpecId,
+            on_drop: LIR.ErasedCallableOnDrop = .none,
+        },
     },
     children: []LIR.StaticDataId,
 };

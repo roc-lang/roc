@@ -1731,15 +1731,21 @@ pub const Builder = struct {
                 self.own_root = wrapper.root;
                 self.comptime_root_body = root.kind != .literal_argument and root.literalConversionKind() == null;
                 try self.tasks.append(self.allocator, .ret);
-                // Polymorphic constants are explicit evaluation templates,
-                // instantiated at their runtime read rather than CTFE roots.
-                if (!self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
-                    // Exact aliases also compute their already-proven
-                    // procedure reference without an evaluator.
-                    const forwards = for (self.view.view.callable_eval_templates.templates) |alias| {
-                        if (alias.root == wrapper.root) break alias.forwarded_lookup != null;
-                    } else false;
-                    if (!forwards) invariant("a runtime entry wrapper has no completed Boxy value");
+                const forwards = root.kind == .callable_binding and if (root.pattern) |pattern| blk: {
+                    const id = self.program.callable_eval_by_pattern.get(.{ .module = self.module, .pattern = pattern }) orelse break :blk false;
+                    break :blk self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != null;
+                } else false;
+                // A construction whose type needs its use context has no
+                // scheduled evaluator result. Its checked wrapper remains a
+                // generic runtime constructor; requested closed roots must
+                // still be complete.
+                const runtime_constructor = root.request_eligibility == .ineligible;
+                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending and !runtime_constructor and
+                    !forwards)
+                {
+                    invariantFmt("a runtime entry wrapper has no completed Boxy value: module={d} root={d} kind={s} source={any} eligibility={s}", .{
+                        @backingInt(self.module), @backingInt(root.id), @tagName(root.kind), root.source, @tagName(root.request_eligibility),
+                    });
                 }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
@@ -8810,9 +8816,14 @@ pub const Builder = struct {
             if (table) |local| try fields.append(self.allocator, local);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{});
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
         const record = try self.staticPartsLocal(record_layout, .product, fields.items);
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{record});
+        const layouts = &self.program.result.layouts;
+        const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
+            .{ .rc_helper = .{ .op = .host_drop, .layout_idx = record_layout } }
+        else
+            .none;
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it
