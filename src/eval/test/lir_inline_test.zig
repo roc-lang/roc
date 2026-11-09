@@ -712,8 +712,6 @@ fn runLoweredWithHostEvents(
     defer static_data.deinit();
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
-    var static_data = try FrozenStaticData.init(allocator, lowered);
-    defer static_data.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &lowered.lir_result.store,
@@ -14111,8 +14109,6 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
         defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
-        var static_data = try FrozenStaticData.init(allocator, lowered);
-        defer static_data.deinit();
         var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
         static_data.install(&interpreter);

@@ -1202,9 +1202,11 @@ pub const RootRequestTable = struct {
             }
         }
 
+        var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.len);
+        defer forwarding_roots.deinit(allocator);
         for (compile_time_roots.roots) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (forwardedLookupForRoot(root, top_level_values, top_level_procedure_bindings, callable_eval_templates.view()) != null) continue;
+            if (forwarding_roots.isSet(@backingInt(root.id))) continue;
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -2171,26 +2173,6 @@ fn compileTimeRootHasRootRequest(
         if (request.compile_time_root == root.id) return true;
     }
     return false;
-}
-
-/// The explicit forwarding recipe for a top-level callable root, when
-/// publication proved that construction needs no evaluator.
-fn forwardedLookupForRoot(
-    root: CompileTimeRoot,
-    values: *const TopLevelValueTable,
-    bindings: *const TopLevelProcedureBindingTable,
-    callables: CallableEvalTemplateTableView,
-) ?CIR.Expr.Idx {
-    if (root.kind != .callable_binding) return null;
-    const value = values.lookupByPattern(root.pattern orelse return null) orelse return null;
-    const binding = switch (value.value) {
-        .procedure_binding => |id| bindings.get(id),
-        .const_ref => return null,
-    };
-    return switch (binding.body) {
-        .callable_eval_template => |id| callables.templates[@backingInt(id)].forwarded_lookup,
-        .direct_template, .checked_error => null,
-    };
 }
 
 /// A checked lookup that may become an exact procedure alias once its target
@@ -11401,6 +11383,16 @@ pub const CallableEvalTemplateTable = struct {
 
     pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
         return .{ .templates = self.templates.items };
+    }
+
+    /// Only proven forwards may omit evaluation; a lookup can also name a
+    /// computed callable whose value must be produced before runtime lowering.
+    fn forwardingRoots(self: *const CallableEvalTemplateTable, allocator: Allocator, root_count: usize) Allocator.Error!std.DynamicBitSetUnmanaged {
+        var roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, root_count);
+        for (self.templates.items) |template| {
+            if (template.forwarded_lookup != null) roots.set(@backingInt(template.root));
+        }
+        return roots;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -23046,12 +23038,14 @@ pub fn pairCheckedPlatform(
         .checked_error => {},
     };
     var roots = std.ArrayList(RootRequest).empty;
+    var forwarding_roots = try result.callable_eval_templates.forwardingRoots(session, result.compile_time_roots.roots.len);
+    defer forwarding_roots.deinit(session);
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null and
-            forwardedLookupForRoot(result.compile_time_roots.root(request.compile_time_root.?), &result.top_level_values, &result.top_level_procedure_bindings, result.callable_eval_templates.view()) != null) continue;
+            forwarding_roots.isSet(@backingInt(request.compile_time_root.?))) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
