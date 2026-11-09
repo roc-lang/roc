@@ -2571,6 +2571,12 @@ no known value crosses it, still expands completely into `Dict.insert`. A
 procedure on a cycle of direct calls keeps a call however much is expanded,
 so it is never a leaf.
 
+Application entry procedures, identified by the backend's explicit entrypoint
+list, do not gain mandatory inlining through transitive leaf expansion. Their
+ABI-wrapper caller can inline them after simplification; forcing them in early
+can retain redundant computations. The original wrapper and direct-leaf rules,
+and transitive inlining of ordinary helpers, are unchanged.
+
 The always-inline selection of wrappers and leaves is a speed-build policy.
 A size build (`--opt=size`) selects nothing: every function the module
 defines, including the linked builtins and the private runtime, carries

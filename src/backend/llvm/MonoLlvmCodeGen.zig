@@ -1105,7 +1105,7 @@ pub const MonoLlvmCodeGen = struct {
         }
 
         const procs = self.store.getProcSpecs();
-        try self.compileAllProcSpecs(procs);
+        try self.compileProcSpecs(procs, entrypoints);
         for (self.static_data_rc_helpers) |helper_key| {
             _ = try self.declareRcHelper(helper_key, .atomic);
         }
@@ -1746,6 +1746,10 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        try self.compileProcSpecs(procs, &.{});
+    }
+
+    fn compileProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         // Standalone in-process objects have no separately linked readonly
         // object. Declare the whole image first so cyclic data references
         // and procedure bodies resolve through the same symbol map.
@@ -1755,7 +1759,7 @@ pub const MonoLlvmCodeGen = struct {
             &.{};
         defer self.allocator.free(static_globals);
         try self.ensureLocalScratch();
-        try self.computeInlineEverywhere(procs);
+        try self.computeInlineEverywhere(procs, entrypoints);
         if (self.stack_checks) try self.computeStackCheckProcs(procs);
         try self.computeTailScratch(procs);
         const order = try self.procEmitOrder(procs);
@@ -3977,13 +3981,13 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    /// What the always-inline decision reads off a body: its statement count,
-    /// whether it loops, whether it calls through a value it cannot name, and
-    /// the procs it calls directly.
+    /// Explicit entrypoint membership and the body facts the always-inline
+    /// decision consumes: size, loops, opaque calls, and direct callees.
     const InlineShape = struct {
         count: usize = 0,
         has_loop: bool = false,
         opaque_call: bool = false,
+        application_entry: bool = false,
         callees: std.ArrayList(LirProcSpecId) = .empty,
     };
 
@@ -4026,7 +4030,7 @@ pub const MonoLlvmCodeGen = struct {
     /// duplicates at most `max_leaf_inline_stmts` statements of expanded
     /// body either way. A proc on a cycle of direct calls always keeps a
     /// call, so it is never a leaf.
-    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+    fn computeInlineEverywhere(self: *MonoLlvmCodeGen, procs: []const LirProcSpec, entrypoints: []const Entrypoint) Error!void {
         self.inline_everywhere.clearRetainingCapacity();
         try self.inline_everywhere.appendNTimes(self.allocator, false, procs.len);
         if (self.optimize_for_size) return;
@@ -4036,6 +4040,9 @@ pub const MonoLlvmCodeGen = struct {
             self.allocator.free(shapes);
         }
         @memset(shapes, .{});
+        if (self.program_kind == .platform) {
+            for (entrypoints) |entrypoint| shapes[@backingInt(entrypoint.proc)].application_entry = true;
+        }
         for (procs, 0..) |proc, i| {
             if (proc.is_static_initializer) continue;
             if (proc.body) |body| try self.inlineShapeOf(body, &shapes[i]);
@@ -4099,7 +4106,11 @@ pub const MonoLlvmCodeGen = struct {
                 const expansion = &expansions[finished];
                 expansion.state = .done;
                 const wrapper = shape.count <= max_wrapper_inline_stmts and !shape.has_loop;
-                const leaf = expansion.size <= max_leaf_inline_stmts and !expansion.calls;
+                // An application entry's single ABI-wrapper caller can inline
+                // it after simplification. Forcing transitive leaves in early
+                // pessimizes that code; retain the original direct-leaf rule.
+                const eligible_leaf = !shape.application_entry or shape.callees.items.len == 0;
+                const leaf = eligible_leaf and expansion.size <= max_leaf_inline_stmts and !expansion.calls;
                 self.inline_everywhere.items[finished] = wrapper or leaf;
             }
         }
@@ -16100,6 +16111,21 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
             return self.proc(arg, body, &.{});
         }
 
+        fn directLeaf(self: *@This()) Allocator.Error!LirProcSpecId {
+            const arg = try self.store.addLocal(.{ .layout_idx = .i64 });
+            const join: lir.LIR.JoinPointId = @fromBackingInt(self.next_join);
+            self.next_join += 1;
+            const repeat = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const enter = try self.store.addCFStmt(.{ .jump = .{ .target = join } }, .test_fixture);
+            const body = try self.store.addCFStmt(.{ .join = .{
+                .id = join,
+                .params = .empty(),
+                .body = repeat,
+                .remainder = enter,
+            } }, .test_fixture);
+            return self.proc(arg, body, &.{});
+        }
+
         /// A loop calling `callee` on every pass, or calling itself when
         /// `callee` is null.
         fn looping(self: *@This(), callee: ?LirProcSpecId) Allocator.Error!LirProcSpecId {
@@ -16150,17 +16176,35 @@ test "a looping helper whose only callees are inlined everywhere is a leaf" {
     const recursive = try fixture.looping(null);
     // Calls a proc that stays a call.
     const over_recursive = try fixture.looping(recursive);
+    const direct_leaf = try fixture.directLeaf();
 
     var codegen = MonoLlvmCodeGen.init(gpa, &store);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
-    try codegen.computeInlineEverywhere(store.getProcSpecs());
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &.{});
 
     try std.testing.expect(codegen.inlineEverywhere(wrapper));
     try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
     try std.testing.expect(codegen.inlineEverywhere(over_leaf));
     try std.testing.expect(!codegen.inlineEverywhere(recursive));
     try std.testing.expect(!codegen.inlineEverywhere(over_recursive));
+
+    const entrypoints = [_]MonoLlvmCodeGen.Entrypoint{
+        .{ .symbol_name = "arbitrary_export", .proc = over_leaf, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+        .{ .symbol_name = "direct_export", .proc = direct_leaf, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+        .{ .symbol_name = "wrapper_export", .proc = wrapper, .arg_layouts = &.{.i64}, .ret_layout = .i64 },
+    };
+    codegen.program_kind = .platform;
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &entrypoints);
+    try std.testing.expect(!codegen.inlineEverywhere(over_leaf));
+    try std.testing.expect(codegen.inlineEverywhere(over_wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(wrapper));
+    try std.testing.expect(codegen.inlineEverywhere(direct_leaf));
+
+    // Interpreter/CTFE entrypoints are not application entries.
+    codegen.program_kind = .in_process;
+    try codegen.computeInlineEverywhere(store.getProcSpecs(), &entrypoints);
+    try std.testing.expect(codegen.inlineEverywhere(over_leaf));
 }
 
 test "wasm C-ABI classification follows the target's SIMD support" {
