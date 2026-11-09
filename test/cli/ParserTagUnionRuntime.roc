@@ -40,7 +40,7 @@ Format := [Default].{
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, State, [MissingRequired]), State -> Try({ value : a, rest : State }, [MissingRequired])
 	parse_tag_union = |format, spec, state|
 		match state {
 			Tag(tag_name) => Encoding.ParseTagUnionSpec.parse(spec, {

@@ -139,6 +139,11 @@ A format that supports required record fields also defines
 `missing_field : encoding, Str -> err`. It receives the missing field's name and constructs
 the format's error. Optional and defaulted fields don't need this method.
 
+For tag unions, the format receives an
+`Encoding.ParseTagUnionSpec(shape, encoding, state, err)`. Its `parse` method uses
+those same encoding, state, and error types for the payload callbacks. Passing a
+different type is a compile-time error, even if the format converts the result afterward.
+
 ## Performance
 
 A parser reads its input directly into the Roc value being parsed. It doesn't first build some

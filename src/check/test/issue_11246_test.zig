@@ -239,7 +239,7 @@ test "issue 11246: heterogeneous format operations are rejected" {
 test "issue 11246: a tag callback cannot hide incompatible payload errors" {
     const input =
         \\Format := {}.{
-        \\    parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
+        \\    parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, Str, [Syntax(Str)]), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
         \\    parse_tag_union = |encoding, spec, state| {
         \\        result = Encoding.ParseTagUnionSpec.parse(spec, {
         \\            tag: "Item", encoding, state,

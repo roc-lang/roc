@@ -7167,7 +7167,7 @@ from a missing procedure template.
 
 The Boxy strategy represents compiler-owned opaque serialization evidence
 explicitly. `Encoding.FieldName.FieldNames(_shape)`,
-`Encoding.FieldName(_shape)`, and `Encoding.ParseTagUnionSpec(a)` are not the
+`Encoding.FieldName(_shape)`, and `Encoding.ParseTagUnionSpec(a, encoding, state, err)` are not the
 zero-sized source backings that keep their implementation hidden from Roc
 code. They have compiler-defined runtime representations whose complete shape
 is selected by checking and Boxy lowering. Generic format workers can receive,
@@ -7816,7 +7816,7 @@ parse strings, `U64`, tag unions, and records uses these method shapes:
 ```roc
 encoding.parse_str : encoding, state -> Try({ value : Str, rest : state }, err)
 encoding.parse_u64 : encoding, state -> Try({ value : U64, rest : state }, err)
-encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a), state -> Try({ value : a, rest : state }, err)
+encoding.parse_tag_union : encoding, Encoding.ParseTagUnionSpec(a, encoding, state, err), state -> Try({ value : a, rest : state }, err)
 
 encoding.parse_record_start : encoding, state -> Try([Counted({ len : U64, rest : state }), Uncounted(state)], err)
 encoding.parse_record_field : encoding, Encoding.FieldName.FieldNames(_shape), state -> Try(
@@ -11268,6 +11268,14 @@ which overlapping row variables checking selected; lowering carries that
 substitution alongside the nested evidence rather than inferring it again.
 Tag-union shape, payload and field-name evidence remains part of the
 generated spec; it does not authorize a different error representation.
+
+`ParseTagUnionSpec(shape, encoding, state, err)` binds the complete producer
+contract. Its `parse` options and result use those same parameters: a format
+cannot substitute different encoding, cursor, or error types and translate the
+result afterward. Such translation occurs outside the spec boundary; custom
+payload validation translates domain errors before returning the format error.
+Checking establishes this through ordinary nominal-argument unification.
+Both lowerers preserve all four parameters in generated spec identities.
 
 ### Parked Codec Relations Validate A Private Instance
 

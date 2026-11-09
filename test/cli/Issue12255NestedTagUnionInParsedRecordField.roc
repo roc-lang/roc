@@ -52,7 +52,7 @@ Counted := [Default].{
 		Ok(parts.rest)
 	}
 
-	parse_tag_union : Counted, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [Bad])
+	parse_tag_union : Counted, Encoding.ParseTagUnionSpec(a, Counted, State, [Bad]), State -> Try({ value : a, rest : State }, [Bad])
 	parse_tag_union = |encoding, spec, state| {
 		parts = take_token(state)?
 

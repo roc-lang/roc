@@ -60261,7 +60261,7 @@ const BodyContext = struct {
 
         const private_spec = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
-            &.{shape_node},
+            &.{ shape_node, encoding_node, state_node, target_result.err },
             try self.generatedParseTagUnionSpecBackingNode(shape_node),
         );
         const request_node = try functionRequestNode(

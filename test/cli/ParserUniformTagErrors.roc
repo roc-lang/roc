@@ -1,7 +1,7 @@
 ParserUniformTagErrors :: [].{}
 
 Format := {}.{
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, Str, [Syntax(Str)]), Str -> Try({ value : a, rest : Str }, [Syntax(Str)])
 	parse_tag_union = |encoding, spec, state| {
 		parse_once = |next_state| Encoding.ParseTagUnionSpec.parse(spec, {
 			tag: "Item",

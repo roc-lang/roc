@@ -81,13 +81,13 @@ Builtin :: [].{
 			name : FieldName(_shape) -> Str
 		}
 
-		ParseTagUnionSpec(_shape) :: {}.{
+		ParseTagUnionSpec(_shape, _encoding, _state, _err) :: {}.{
 
 			## After a format reads the tag name, the generated parser calls
 			## start_payloads once, next_payload before each payload after the
 			## first (with its zero-based index and the total count), and
 			## finish_payloads once after the final payload.
-			parse : ParseTagUnionSpec(_shape),
+			parse : ParseTagUnionSpec(_shape, _encoding, _state, _err),
 			{
 				tag : Str,
 				encoding : _encoding,
@@ -1078,7 +1078,7 @@ Builtin :: [].{
 				}
 			}
 
-			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_tag_union_from_json : Str, JsonEncoding, ParseTagUnionSpec(a, JsonEncoding, JsonState, [InvalidJson(Str)]) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union_from_json = |raw, encoding, spec| {
 				remaining = json_trim_start(raw)
 
@@ -1733,7 +1733,7 @@ Builtin :: [].{
 			missing_field : JsonEncoding, Str -> [InvalidJson(Str)]
 			missing_field = |_, name| InvalidJson("Missing required field: ${name}")
 
-			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a, JsonEncoding, JsonState, [InvalidJson(Str)]), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
 				match state {
 					Input(value) => Json.parse_tag_union_from_json(value, encoding, spec)

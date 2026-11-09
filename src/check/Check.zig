@@ -12868,6 +12868,9 @@ fn mkParseSpecVar(
     self: *Self,
     decl: BuiltinParseSpecDecl,
     shape_var: Var,
+    encoding_var: Var,
+    state_var: Var,
+    err_var: Var,
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
@@ -12877,7 +12880,7 @@ fn mkParseSpecVar(
             base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
         },
     };
-    return try self.freshFromContent(try self.mkBuiltinNominalContent(ident_idx, &.{shape_var}, self.sourceDeclForBuiltinParseSpec(decl)), env, region);
+    return try self.freshFromContent(try self.mkBuiltinNominalContent(ident_idx, &.{ shape_var, encoding_var, state_var, err_var }, self.sourceDeclForBuiltinParseSpec(decl)), env, region);
 }
 
 fn mkFieldsVar(
@@ -57002,7 +57005,10 @@ fn beginParseFormatMethod(
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, fields_var, state_var }, expected_ret), env, region);
         },
         .tag_union => blk: {
-            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, env, region);
+            // The spec owns the same complete callback contract as its format.
+            // Relating only the method's result would allow incompatible options
+            // to be hidden by a translation after ParseTagUnionSpec.parse.
+            const spec_var = try self.mkParseSpecVar(spec_decl, shape_var, encoding_var, state_var, child_err_var, env, region);
             break :blk try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, spec_var, state_var }, expected_ret), env, region);
         },
     };

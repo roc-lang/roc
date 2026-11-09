@@ -30,7 +30,7 @@ Format := [Default].{
 	skip_record_field : Format, State -> Try(State, [FormatError])
 	skip_record_field = |_, state| Ok(state)
 
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [FormatError])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, State, [FormatError]), State -> Try({ value : a, rest : State }, [FormatError])
 	parse_tag_union = |_, _, _| Err(FormatError)
 }
 

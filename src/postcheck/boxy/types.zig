@@ -1369,7 +1369,13 @@ pub const Converter = struct {
                         // union.
                         .fields => return try self.store.intern(.{ .list = try self.fieldHandle() }),
                         .field => return try self.fieldHandle(),
-                        .parse_tag_union_spec => return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = children[0], .effectful = false } }),
+                        .parse_tag_union_spec => {
+                            if (children.len != 4) invariant("a tag-union spec must carry shape, encoding, state, and error");
+                            // The spec uses the erased-callable representation.
+                            // Preserve its whole semantic contract here; codec
+                            // lowering supplies the options-record call signature.
+                            return try self.store.intern(.{ .function = .{ .args = children[1..], .ret = children[0], .effectful = false } });
+                        },
                         .bool_tag_union, .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
