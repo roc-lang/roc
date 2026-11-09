@@ -1171,6 +1171,21 @@ fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel)
     }
 }
 
+test "Boxy recursive callable evaluation templates instantiate their open result row" {
+    try @import("lower_to_lir_harness.zig").expectLowersToLirWithOptions(
+        \\pick : U64 -> [A, B]
+        \\pick = {
+        \\    z = 0
+        \\    |n| if n == z { A } else if n == 1 { B } else { pick(n - 2) }
+        \\}
+        \\main! = |args| {
+        \\    echo!(Str.inspect(pick(args.len())))
+        \\    echo!(Str.inspect(pick(args.len() + 1)))
+        \\    Ok({})
+        \\}
+    , .{ .specialization_strategy = .boxy });
+}
+
 test "computed callable aliases retain evaluation requests while proven forwards omit them" {
     const gpa = std.testing.allocator;
     const io = std.testing.io;

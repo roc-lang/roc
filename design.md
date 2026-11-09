@@ -2305,6 +2305,11 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+An ineligible callable root remains an instantiation template: its pending
+payload is not a promise of a stored value. Boxy instantiates its declared
+wrapper at each use's type arguments, including open result rows. An eligible
+pending root instead requires its compile-time producer; runtime lowering
+must never compute that missing value.
 Within each immutable root-output batch, concreteness and reachable
 callable-slot queries reuse completed graph proofs. Concreteness keys include
 whether a node is a value type or a nominal declaration's backing template:
