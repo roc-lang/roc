@@ -1,31 +1,33 @@
-//! Publish Boxy's committed field and tag positions for host marshalling.
+//! Record Boxy's committed field and tag positions for host marshalling.
 //! Schemas follow boundary types, not which fields a generator happens to read.
 
 const std = @import("std");
+const collections = @import("collections");
 const types = @import("types.zig");
 const schemas = @import("../runtime_schemas.zig");
 const Program = @import("lower.zig").Program;
 
+/// Collects a schema for every named record and tag union reachable from `roots`.
 pub fn collect(program: *Program, roots: []const types.TypeId) std.mem.Allocator.Error!schemas.RuntimeSchemaStore {
     const allocator = program.allocator;
     var result = schemas.RuntimeSchemaStore.init(allocator);
     errdefer result.deinit();
-    var seen: std.AutoHashMap(types.TypeId, void) = .init(allocator);
-    defer seen.deinit();
-    var named: std.AutoHashMap(types.NameId, void) = .init(allocator);
-    defer named.deinit();
+    var seen: collections.DenseMapUnmanaged(types.TypeId, void) = .empty;
+    defer seen.deinit(allocator);
+    var named: collections.DenseMapUnmanaged(types.NameId, void) = .empty;
+    defer named.deinit(allocator);
     var pending: std.ArrayList(types.TypeId) = .empty;
     defer pending.deinit(allocator);
     try pending.appendSlice(allocator, roots);
     while (pending.pop()) |ty| {
-        if ((try seen.getOrPut(ty)).found_existing) continue;
+        if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
         switch (program.store.get(ty)) {
             .nominal => |nominal| {
                 try pending.appendSlice(allocator, program.store.span(nominal.args));
                 if (!nominal.has_backing) continue;
                 const backing = try program.converter().backing(ty);
                 try pending.append(allocator, backing);
-                if (nominal.is_opaque or (try named.getOrPut(nominal.name)).found_existing) continue;
+                if (nominal.is_opaque or (try named.getOrPut(allocator, nominal.name)).found_existing) continue;
                 var shape = backing;
                 while (program.store.get(shape) == .nominal) {
                     const inner = program.store.get(shape).nominal;

@@ -15266,11 +15266,15 @@ test "embedded frozen data declares cycles offsets and callable edges at both wi
             .{ .offset = 2 * word, .target_symbol_name = "unused-helper-spelling", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
         };
         const cycle = [_]lir.Program.StaticDataRelocation{.{ .offset = 1, .target_symbol_name = "root", .addend = 1 }};
-        const exports = [_]lir.Program.StaticDataExport{
-            .{ .symbol_name = "root", .value_id = @fromBackingInt(0), .bytes = &@as([24]u8, @splat(0)), .alignment = word, .relocations = &edges },
+        var exports = [_]lir.Program.StaticDataExport{
+            .{ .symbol_name = "root", .bytes = &@as([24]u8, @splat(0)), .alignment = word, .relocations = &edges },
             .{ .symbol_name = "backing", .bytes = &@as([16]u8, @splat(0)), .symbol_offset = 1, .alignment = word, .relocations = &cycle },
             .{ .symbol_name = "zero", .bytes = &@as([4096]u8, @splat(0)), .alignment = 16 },
         };
+        // The root is this program's only static value, and static values are
+        // exported densely in root order, so its id is its export position.
+        const root_index: u32 = 0;
+        exports[root_index].value_id = @fromBackingInt(root_index);
         try codegen.setStaticDataExports(&exports);
         var builder = try codegen.createBuilder("embedded_frozen_data");
         defer builder.deinit();
@@ -15283,7 +15287,7 @@ test "embedded frozen data declares cycles offsets and callable edges at both wi
             const value = (try codegen.frozenExportConstant(data_export)).?;
             try variable.setInitializer(value, &builder);
         }
-        const slot = try codegen.staticDataGlobal(@fromBackingInt(0), 24);
+        const slot = try codegen.staticDataGlobal(exports[root_index].value_id.?, 24);
         try std.testing.expectEqual((try codegen.staticDataSymbol("root")).toValue(), slot);
         try std.testing.expectEqual(@as(usize, 3), builder.variables.items.len);
         for (builder.variables.items) |variable| {
