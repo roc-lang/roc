@@ -1513,7 +1513,7 @@ test "codec row equality - derived parser error row satisfies equality" {
         \\main = || {
         \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\    v = Json.parse("{\"a\":\"x\"}")
-        \\    v == Err(InvalidJson("Missing required field: b"))
+        \\    v == Err(InvalidJson("Missing field: b"))
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -1535,7 +1535,7 @@ test "codec row equality - expect parser error row satisfies equality" {
         \\expect {
         \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\    v = Json.parse("{\"a\":\"x\"}")
-        \\    v == Err(InvalidJson("Missing required field: b"))
+        \\    v == Err(InvalidJson("Missing field: b"))
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -1549,7 +1549,7 @@ test "codec row equality - independent expect parser and function error rows" {
         \\expect {
         \\  v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
         \\  v = Json.parse("{\"a\":\"x\"}")
-        \\  v == Err(InvalidJson("Missing required field: b"))
+        \\  v == Err(InvalidJson("Missing field: b"))
         \\}
         \\
         \\run : (Str -> Try(U64, [Bad, ..errs])), Str -> Try(U64, [Bad, ..errs])

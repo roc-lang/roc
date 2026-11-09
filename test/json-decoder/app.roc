@@ -237,7 +237,6 @@ strict_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 53
-		Err(_) => 999999
 	}
 
 lenient_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
@@ -284,7 +283,6 @@ strict_unknown_array_trailing_comma_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 73
-		Err(_) => 999999
 	}
 
 lenient_unknown_array_trailing_comma_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
@@ -304,7 +302,6 @@ invalid_unknown_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 83
-		Err(_) => 999999
 	}
 
 invalid_unknown_array_scalar_score : Try({ foo : Str }, [InvalidJson(Str)]) -> U64
@@ -312,7 +309,6 @@ invalid_unknown_array_scalar_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 89
-		Err(_) => 999999
 	}
 
 invalid_u64_plus_score : Try({ n : U64 }, [InvalidJson(Str)]) -> U64
@@ -320,7 +316,6 @@ invalid_u64_plus_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 97
-		Err(_) => 999999
 	}
 
 invalid_u64_leading_zero_score : Try({ n : U64 }, [InvalidJson(Str)]) -> U64
@@ -328,7 +323,6 @@ invalid_u64_leading_zero_score = |record_result|
 	match record_result {
 		Ok(_) => 999999
 		Err(InvalidJson(_)) => 101
-		Err(_) => 999999
 	}
 
 invalid_missing_tag_payload_score : Try([Active, Paused], [InvalidJson(Str)]) -> U64

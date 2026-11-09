@@ -134,7 +134,7 @@ expect {
 expect {
 	result : Try({ count : U8 }, [InvalidJson(Str)])
 	result = Json.parse("{}")
-	result == Err(InvalidJson("Missing required field: count"))
+	result == Err(InvalidJson("Missing field: count"))
 }
 
 # Same shape, different default: distinct monotypes, and each derived

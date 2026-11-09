@@ -22,7 +22,7 @@ show = |result| {
     match result {
         Ok({ wrapped, tag: A(number) }) => "ok ${wrapped.favoritesCount.to_str()} A ${number.to_str()}"
         Ok({ wrapped, tag: B(text) }) => "ok ${wrapped.favoritesCount.to_str()} B ${text}"
-        Err(InvalidJson(_)) => "invalid"
+        Err(InvalidJson(message)) => message
         Err(Rejected(reason)) => reason
     }
 }

@@ -13,7 +13,7 @@ expect {
 	result : Try({ length : F64 }, [InvalidJson(Str)])
 	result = Json.parse("{}")
 
-	result == Err(InvalidJson("Missing required field: length"))
+	result == Err(InvalidJson("Missing field: length"))
 }
 
 # A record containing only optional parser fields cannot produce that error.
@@ -42,6 +42,14 @@ expect {
 parse_length : Str -> Try({ length : F64 }, _)
 parse_length = |json| Json.parse(json)
 
-expect parse_length("{}") == Err(InvalidJson("Missing required field: length"))
+expect parse_length("{}") == Err(InvalidJson("Missing field: length"))
 
 expect parse_length("{\"length\":2.5}") == Ok({ length: 2.5 })
+
+# Missing-field diagnostics retain complete names even when they cannot fit
+# in an inline string and therefore allocate on this platform.
+expect {
+	result : Try({ this_field_name_is_long_enough_to_require_heap_storage : U8 }, [InvalidJson(Str)])
+	result = Json.parse("{}")
+	result == Err(InvalidJson("Missing field: this_field_name_is_long_enough_to_require_heap_storage"))
+}

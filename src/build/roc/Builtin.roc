@@ -1731,7 +1731,7 @@ Builtin :: [].{
 			invalid_value = |_, _| Json.invalid_json({})
 
 			missing_field : JsonEncoding, Str -> [InvalidJson(Str)]
-			missing_field = |_, name| InvalidJson("Missing required field: ${name}")
+			missing_field = |_, name| InvalidJson("Missing field: ${name}")
 
 			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a, JsonEncoding, JsonState, [InvalidJson(Str)]), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|

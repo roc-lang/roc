@@ -1834,17 +1834,26 @@ test "interning shares structurally equal nodes" {
 test "record interning preserves immutable field default identities" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
+    var modules: Modules = .{ .allocator = std.testing.allocator };
+    defer modules.deinit();
+    var view: checked.ImportedModuleView = undefined;
+    view.key = .{ .bytes = @splat(1) };
+    view.module_identity.stable_hash = view.key.bytes;
+    const first_module = try modules.add(view);
+    view.key.bytes = @splat(2);
+    view.module_identity.stable_hash = view.key.bytes;
+    const second_module = try modules.add(view);
     const count = try store.internName("count");
     const u8_ty = try store.primitive(.u8);
     var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
     const required = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    const first_default: FieldDefault = .{ .module = @fromBackingInt(0), .expr_node = 10 };
+    const first_default: FieldDefault = .{ .module = first_module, .expr_node = 10 };
     fields[0].default = first_default;
     const first = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expectEqual(first, try store.intern(.{ .record = .{ .fields = &fields, .ext = null } }));
     fields[0].default.?.expr_node = 20;
     const other_expr = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .{ .module = @fromBackingInt(1), .expr_node = 10 };
+    fields[0].default = .{ .module = second_module, .expr_node = 10 };
     const other_module = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     try std.testing.expect(required != first);
     try std.testing.expect(first != other_expr);

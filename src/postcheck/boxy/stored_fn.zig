@@ -1668,20 +1668,22 @@ test "stored type metadata preserves field defaults across module reindexing" {
     defer destination.store.deinit();
     destination.arena = std.heap.ArenaAllocator.init(allocator);
     defer destination.arena.deinit();
+    var source_modules: [2]types.ModuleIndex = undefined;
+    var destination_modules: [2]types.ModuleIndex = undefined;
     for (0..2) |index| {
         var view: checked.ImportedModuleView = undefined;
         view.key = .{ .bytes = @splat(@intCast(index + 1)) };
         view.module_identity.stable_hash = view.key.bytes;
-        _ = try source.modules.add(view);
+        source_modules[index] = try source.modules.add(view);
         view.key.bytes = @splat(@intCast(2 - index));
         view.module_identity.stable_hash = view.key.bytes;
-        _ = try destination.modules.add(view);
+        destination_modules[index] = try destination.modules.add(view);
     }
     const name = try source.store.internName("count");
     const number = try source.store.primitive(.u8);
     var fields = [_]types.Field{.{ .name = name, .ty = number, .kind = .inline_slot }};
     const required = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
-    fields[0].default = .{ .module = @fromBackingInt(0), .expr_node = 10 };
+    fields[0].default = .{ .module = source_modules[0], .expr_node = 10 };
     const defaulted = try source.store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
     const root = try source.store.intern(.{ .tuple = &.{ required, defaulted } });
     var encoder: Encoder = .{ .allocator = allocator, .program = &source };
@@ -1716,7 +1718,7 @@ test "stored type metadata preserves field defaults across module reindexing" {
     try std.testing.expect(restored[0] != restored[1]);
     try std.testing.expectEqual(@as(?types.FieldDefault, null), destination.store.fieldSpan(destination.store.get(restored[0]).record.fields)[0].default);
     const restored_default = destination.store.fieldSpan(destination.store.get(restored[1]).record.fields)[0].default.?;
-    try std.testing.expectEqual(@as(types.ModuleIndex, @fromBackingInt(1)), restored_default.module);
+    try std.testing.expectEqual(destination_modules[1], restored_default.module);
     try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
 }
 

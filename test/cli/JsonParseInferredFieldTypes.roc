@@ -42,7 +42,7 @@ expect {
 
 expect {
 	match summarize("{\"name\":\"Ann\",\"num_stars\":3}") {
-		Err(InvalidJson(message)) => message == "Missing required field: email"
+		Err(InvalidJson(message)) => message == "Missing field: email"
 		_ => False
 	}
 }

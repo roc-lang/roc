@@ -27,13 +27,13 @@ expect {
 expect {
 	result : Try(Req, [InvalidJson(Str)])
 	result = Json.parse("{}")
-	result == Err(InvalidJson("Missing required field: name"))
+	result == Err(InvalidJson("Missing field: name"))
 }
 
 expect {
 	result : Try([Wrap(Req), Nothing], [InvalidJson(Str)])
 	result = Json.parse("{\"Wrap\":{}}")
-	result == Err(InvalidJson("Missing required field: name"))
+	result == Err(InvalidJson("Missing field: name"))
 }
 
 # A different enclosing tag shape keeps its own generated parser while sharing

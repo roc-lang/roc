@@ -18,7 +18,7 @@ parse_user = |json| Json.parse(json)
 
 parse_user("{\"name\": \"Sam\", \"age\": 30}") # Ok({ name: "Sam", age: 30 })
 
-parse_user("{\"name\": \"Sam\"}") # Err(InvalidJson("Missing required field: age"))
+parse_user("{\"name\": \"Sam\"}") # Err(InvalidJson("Missing field: age"))
 
 parse_user("{\"name\": 5}") # Err(InvalidJson("Invalid JSON"))
 ```
@@ -148,8 +148,14 @@ different type is a compile-time error, even if the format converts the result a
 
 A parser reads its input directly into the Roc value being parsed. It doesn't first build some
 general-purpose representation of the input (like a tree of JSON values) and then convert that
-into the type you asked for. So parsing a JSON object into a record doesn't allocate anything
-except what the record itself needs, such as its strings and lists.
+into the type you asked for. Successfully parsing a JSON object into a record doesn't allocate
+anything except what the record itself needs, such as its strings and lists.
+
+Error messages may allocate. A missing-field message includes the complete field name;
+it fits in an inline string when its UTF-8 bytes fit the string's small-string capacity.
+The `"Missing field: "` prefix leaves room for short names on 64-bit targets, but already
+exceeds the 11-byte inline capacity on 32-bit targets. Failed parsing isn't universally
+allocation-free.
 
 That works because each parser is built specifically for one type, using
 [static dispatch](static-dispatch#performance). The parser for `{ name : Str, age : U64 }` knows at

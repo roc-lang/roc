@@ -62,7 +62,7 @@ expect {
 expect {
 	result : Try({ field : Try(Str, [Null]) }, [InvalidJson(Str)])
 	result = Json.parse("{}")
-	result == Err(InvalidJson("Missing required field: field"))
+	result == Err(InvalidJson("Missing field: field"))
 }
 
 expect {

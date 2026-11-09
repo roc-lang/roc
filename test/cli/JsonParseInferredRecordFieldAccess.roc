@@ -32,7 +32,7 @@ expect city("{\"address\":{\"city\":\"X\"}}") == Ok("X?")
 
 expect {
 	match city("{\"address\":{}}") {
-		Err(InvalidJson(message)) => message == "Missing required field: city"
+		Err(InvalidJson(message)) => message == "Missing field: city"
 		_ => False
 	}
 }

@@ -7,11 +7,11 @@ expect {
 		Ok({ x }) => x == "unused"
 		Err(_) => False
 	}
-	!missing_x and Str.inspect(v) == "Err(InvalidJson(\"Missing required field: x\"))"
+	!missing_x and Str.inspect(v) == "Err(InvalidJson(\"Missing field: x\"))"
 }
 
 expect {
 	v : Try({ x : Str, y : U8 }, _)
 	v = Json.parse("{\"x\":\"a\"}")
-	Str.inspect(v) == "Err(InvalidJson(\"Missing required field: y\"))"
+	Str.inspect(v) == "Err(InvalidJson(\"Missing field: y\"))"
 }

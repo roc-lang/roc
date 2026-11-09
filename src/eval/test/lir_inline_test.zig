@@ -2209,7 +2209,7 @@ test "issue 10979 shared JSON record continuations preserve field semantics" {
         \\        Err(_) => False
         \\    }
         \\    missing_ok = match missing {
-        \\        Err(InvalidJson(message)) => message == "Missing required field: f1"
+        \\        Err(InvalidJson(message)) => message == "Missing field: f1"
         \\        _ => False
         \\    }
         \\    invalid_ok = match invalid {

@@ -10,7 +10,7 @@ Issue11562BoxyDescriptorSources :: [].{}
 expect {
 	v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
 	v = Json.parse("{\"a\":\"x\"}")
-	v == Err(InvalidJson("Missing required field: b"))
+	v == Err(InvalidJson("Missing field: b"))
 }
 
 expect {

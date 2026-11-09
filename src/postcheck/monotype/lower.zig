@@ -73546,7 +73546,7 @@ test "stored capture witnesses preserve producer and instantiation identity" {
             0 => distinct.function = @fromBackingInt(2),
             1 => distinct.binder = @fromBackingInt(2),
             2 => distinct.module = @splat(2),
-            else => unreachable,
+            else => unreachable, // difference is drawn only from the range 0..3
         }
         const other = try Make.row(graph, &.{format_error});
         try std.testing.expectEqual(other, try ctx.reuseStoredCaptureWitness(distinct, request, other));

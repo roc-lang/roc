@@ -38,7 +38,7 @@ expect {
 	parsed : Try({ t : Token }, _)
 	parsed = Json.parse("{}")
 	match parsed {
-		Err(InvalidJson(message)) => message == "Missing required field: t"
+		Err(InvalidJson(message)) => message == "Missing field: t"
 		_ => False
 	}
 }
