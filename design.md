@@ -14972,8 +14972,10 @@ and Per-Module Output is the invariant that makes it possible:
   values and public surface, the bulk of the hashing) is hashed there, or
   earlier by a lane no unit was ready for, and the imports' parts come from
   the digest table their units recorded into, which the lanes share under a
-  mutex (`boxy_interface.Digests`). Nothing is hashed on the thread that
-  sequences the units. A compile-time value a module computes by running an
+  mutex (`boxy_interface.Digests`). The exports digest a finished unit
+  records folds the object's stored export-record digest with its imports',
+  so the thread that sequences the units hashes no module content itself. A
+  compile-time value a module computes by running an
   import's code is part of the module's own evaluation output, so an edit that
   changes that value rebuilds the module.
 - NAMES come from the link, not from content. A worker's symbol and a nominal
