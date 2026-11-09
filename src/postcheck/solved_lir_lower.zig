@@ -12687,7 +12687,7 @@ const Lowerer = struct {
         }
         const li = length_index orelse Common.invariant("a builtin sequence has a length hint");
         const si = step_index orelse Common.invariant("a builtin sequence has a step");
-        if (li != 0 or si != 1) Common.invariant("builtin sequence fields must retain their canonical logical order");
+        if (li != 0 or si != 1) Common.invariant("builtin sequence fields must retain their logical field order");
         const backing_ty = self.runtimeBackingType(sequence);
         const backing = try self.addTemp(backing_ty);
         const backing_layout = self.result.store.getLocal(backing).layout_idx;
