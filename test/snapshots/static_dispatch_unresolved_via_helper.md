@@ -14,37 +14,36 @@ ambiguous = conv(poly())
 ok = conv(5.U8)
 ~~~
 # EXPECTED
-TYPE NOT DETERMINED - static_dispatch_unresolved_via_helper.md:5:13:5:25
+MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 5 13) (end 5 25))
 		(headline
 			(reflow "This call uses a")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method, but nothing in this program determines the type it is called on:"))
-		(document
-			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
-			(line-break)
-			(reflow "This argument's type does not determine it:")
-			(line-break)
-			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
-			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow "method on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "method to use.")
+			(reflow "method."))
+		(document
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
 			(line-break)
+			(reflow "That type comes from this argument:")
 			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
+			(line-break)
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -109,7 +108,7 @@ ok = conv(5.U8)
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "to_i128") (constraint-fn-var 229)
+			(e-dispatch-call (method "to_i128") (constraint-fn-var 234)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -128,7 +127,7 @@ ok = conv(5.U8)
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 252)
+		(e-call (constraint-fn-var 257)
 			(e-lookup-local
 				(p-assign (ident "conv")))
 			(e-typed-int (value "5") (type "U8")))))
@@ -138,12 +137,12 @@ ok = conv(5.U8)
 (inferred-types
 	(defs
 		(patt (type "a -> b where [a.to_i128 : a -> b]"))
-		(patt (type "({}) -> _ret"))
+		(patt (type "() -> _ret"))
 		(patt (type "_a"))
 		(patt (type "I128")))
 	(expressions
 		(expr (type "a -> b where [a.to_i128 : a -> b]"))
-		(expr (type "({}) -> _ret"))
+		(expr (type "() -> _ret"))
 		(expr (type "_a"))
 		(expr (type "I128"))))
 ~~~

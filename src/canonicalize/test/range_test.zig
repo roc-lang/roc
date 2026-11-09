@@ -18,7 +18,7 @@ test "canonicalize exclusive range to range_exclusive binop" {
     var test_env = try TestEnv.init("1..<5");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const binop = try getBinop(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(CIR.Expr.Binop.Op.range_exclusive, binop.op);
 
@@ -32,7 +32,7 @@ test "canonicalize inclusive range to range_inclusive binop" {
     var test_env = try TestEnv.init("1..=5");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const binop = try getBinop(test_env.module_env, canonical_expr.get_idx());
     try testing.expectEqual(CIR.Expr.Binop.Op.range_inclusive, binop.op);
 
@@ -46,7 +46,7 @@ test "chained ranges are rejected with a diagnostic" {
     var test_env = try TestEnv.init("1..<5..<10");
     defer test_env.deinit();
 
-    const canonical_expr = try test_env.canonicalizeExpr() orelse unreachable;
+    const canonical_expr = try test_env.canonicalizeExpr() orelse return error.TestUnexpectedResult;
     const expr = test_env.module_env.store.getExpr(canonical_expr.get_idx());
     try testing.expect(expr == .e_runtime_error);
 

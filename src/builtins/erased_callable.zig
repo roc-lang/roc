@@ -32,7 +32,9 @@ pub const RocOps = utils.RocOps;
 /// transferred allocation is shared at runtime. `capture` remains borrowed for
 /// the duration of the call.
 /// `out_desc` receives the exact descriptor of the returned bytes, or null for
-/// descriptor-free results.
+/// descriptor-free results. The erased-call runtime passes a tagged address
+/// here that names its pending cell (`native_callable.callerCell`): a host
+/// passes an aligned pointer, and generated callees write nothing through it.
 pub const ErasedCallableFn = *const fn (
     ops: *RocOps,
     ret: ?[*]u8,
@@ -77,31 +79,6 @@ pub const HotReloadCaptureHeader = extern struct {
     code_ref: ?*anyopaque,
     original_on_drop: ?OnDropFn,
 };
-
-/// Metadata appended after a Roc-created callable's ordinary capture bytes.
-/// It is private to compiler-generated values and does not change `Payload`
-/// or the capture pointer exposed by the host ABI.
-pub const CompilerMetadata = extern struct {
-    result_desc: ?*const anyopaque,
-};
-
-/// Alignment of compiler-private metadata appended after capture bytes.
-pub const compiler_metadata_alignment: u32 = @alignOf(CompilerMetadata);
-
-/// Return the aligned byte offset of compiler metadata from the capture pointer.
-pub fn compilerMetadataOffset(capture_size: usize) usize {
-    return std.mem.alignForward(usize, capture_size, compiler_metadata_alignment);
-}
-
-/// Return the complete erased-callable payload size including compiler metadata.
-pub fn compilerPayloadSize(capture_size: usize) usize {
-    return payloadSize(compilerMetadataOffset(capture_size) + @sizeOf(CompilerMetadata));
-}
-
-/// Resolve compiler metadata at its precomputed offset from the capture pointer.
-pub fn compilerMetadataPtr(capture_ptr: [*]u8, metadata_offset: usize) *CompilerMetadata {
-    return @ptrCast(@alignCast(capture_ptr + metadata_offset));
-}
 
 /// Captures are aligned to this boundary so any legal Roc capture layout can be
 /// copied inline without an extra descriptor or runtime offset field.
@@ -194,7 +171,7 @@ pub fn repack(
     };
 
     if (capture_size > 0) {
-        const src = capture_src orelse unreachable;
+        const src = capture_src orelse utils.builtinInvariant(roc_ops, "erased callable repack with a nonzero capture size has no capture source");
         @memcpy(capturePtr(data_ptr)[0..capture_size], src[0..capture_size]);
     }
 

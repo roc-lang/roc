@@ -215,6 +215,26 @@ const cases = [_]Case{
         ,
     },
     .{
+        // An interpolated literal writes its parts once into a fresh string
+        // and borrows every part: a shared heap part keeps its count, and a
+        // part used again after the literal is still live.
+        .name = "interpolated literals write their parts once",
+        .source =
+        \\{
+        \\    shared = Str.concat("a string long enough to need the heap ", "plus a tail")
+        \\    holder = [shared, shared]
+        \\    small = Str.concat("ab", "c")
+        \\    joined = "<${shared}|${small}>${shared}"
+        \\    tiny = "${small}${small}"
+        \\    Str.count_utf8_bytes(joined)
+        \\        + Str.count_utf8_bytes(tiny)
+        \\        + Str.count_utf8_bytes(shared)
+        \\        + Str.count_utf8_bytes(small)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         // Concatenating nothing onto a value is the path where a
         // copy-on-write op can hand back its argument without either copying
         // it or checking whether anyone else holds it.
@@ -689,6 +709,110 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list keep_if compacts or copies its input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_kept = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_dropped = List.drop_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_none = List.keep_if(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_kept = List.keep_if(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_if(shared, |_| True)
+        \\    shared_none = List.keep_if(shared, |_| False)
+        \\    oks = List.keep_oks(shared, |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) })
+        \\    errs = List.keep_errs(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| if text.count_utf8_bytes() > 33 { Ok(text) } else { Err(text) },
+        \\    )
+        \\    List.len(unique_kept)
+        \\        + List.len(unique_dropped)
+        \\        + List.len(unique_none)
+        \\        + List.len(shared_kept)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(oks)
+        \\        + List.len(errs)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
+        .name = "list keep_while and keep_until return a prefix of their input",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique_some = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() > 33,
+        \\    )
+        \\    unique_until = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |text| text.count_utf8_bytes() < 33,
+        \\    )
+        \\    unique_none = List.keep_while(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    unique_all = List.keep_until(
+        \\        List.concat(
+        \\            ["a list element long enough to allocate", "another list element long enough"],
+        \\            ["a fourth list element long enough to allocate"],
+        \\        ),
+        \\        |_| False,
+        \\    )
+        \\    shared_some = List.keep_while(shared, |text| text.count_utf8_bytes() > 33)
+        \\    shared_all = List.keep_while(shared, |_| True)
+        \\    shared_none = List.keep_until(shared, |_| True)
+        \\    List.len(unique_some)
+        \\        + List.len(unique_until)
+        \\        + List.len(unique_none)
+        \\        + List.len(unique_all)
+        \\        + List.len(shared_some)
+        \\        + List.len(shared_all)
+        \\        + List.len(shared_none)
+        \\        + List.len(holder)
+        \\}
+        ,
+    },
+    .{
         .name = "boxed values are allocated, read, and updated",
         .source =
         \\{
@@ -1089,6 +1213,29 @@ const cases = [_]Case{
         \\}
         ,
     },
+    .{
+        // A loop whose only operation on its list is `append_le_bytes_to` is
+        // rewritten by `lir/loop_append_promote.zig` into a slack-guarded
+        // diamond whose hot side is `list_append_le_bytes_unsafe`.
+        .name = "loop byte appends promote to the unchecked word store",
+        .source_kind = .module,
+        .inline_wrappers = true,
+        .source =
+        \\main = || {
+        \\    var $out = List.with_capacity(3)
+        \\    var $i = 0.U64
+        \\    while $i < 40 {
+        \\        word = $i.times_wrap(0x0101010101010101).bitwise_xor(0x5A)
+        \\        $out = match word.append_le_bytes_to($out, 3) {
+        \\            Ok(next) => next
+        \\            Err(_) => $out
+        \\        }
+        \\        $i = $i + 1
+        \\    }
+        \\    List.len($out)
+        \\}
+        ,
+    },
 };
 
 /// Ops that this source-level sweep cannot reach. Each needs a reason; the
@@ -1102,15 +1249,8 @@ const cases = [_]Case{
 /// that removes it from this table.
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
-    .{ .op = .list_prefetched, .reason = "never executed: LIR lowering splits it into list_prefetch and an alias of the list" },
-    .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
-    .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
-    .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
-    .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
-    .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
-    .{ .op = .list_prefetched, .reason = "replaced: LIR lowering splits List.prefetched into list_prefetch and an alias of the list" },
 };
 
 /// Loaded once and kept for the life of the test binary: publishing the
@@ -1119,7 +1259,7 @@ var shared_builtins: ?eval.BuiltinModules = null;
 
 fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublishedBuiltin {
     if (shared_builtins == null) {
-        shared_builtins = try eval.BuiltinModules.init(allocator);
+        shared_builtins = try eval.BuiltinModules.init(allocator, std.testing.io);
     }
     return .{
         .env = shared_builtins.?.builtin_module.env,
@@ -1133,7 +1273,7 @@ fn sharedPrePublishedBuiltin(allocator: Allocator) SweepError!helpers.PrePublish
 /// A source with problems still lowers to something runnable, but not to the
 /// program the case meant to write, and its ops quietly go uncovered.
 fn assertCaseChecks(allocator: Allocator, case: Case) SweepError!void {
-    var resources = try helpers.parseAndCheckProgramForProblemsWithBuiltin(
+    var resources = try helpers.parseAndCheckProgramForProblems(
         allocator,
         case.source_kind,
         case.source,
@@ -1163,7 +1303,7 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
     // wrapper inlining, and it does not take a pre-published Builtin, so cases
     // pay for loading one only when they need that lowering.
     var wrapper_compiled = if (case.inline_wrappers)
-        try helpers.compileAllocationProgram(allocator, std.testing.io, case.source_kind, case.source, &.{})
+        try helpers.compileProgram(allocator, std.testing.io, case.source_kind, case.source, &.{}, helpers.allocation_test_lower_options)
     else
         null;
     defer if (wrapper_compiled) |*compiled| compiled.deinit(allocator);
@@ -1189,11 +1329,10 @@ fn runCase(allocator: Allocator, case: Case) SweepError!void {
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
-    var interp = try Interpreter.initWithBoxyTables(
+    var interp = try Interpreter.init(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
-        Interpreter.BoxyTables.fromImageView(&lowered.view),
         static_strings.view(),
         runtime_env.get_ops(),
     );
@@ -1323,9 +1462,9 @@ test "rc effect conformance: the #10023 row fails against the real builtin" {
 
     const allocator = base.defaultGpa();
 
-    // `Str.drop_prefix` returns a slice of its argument's allocation. Before PR
-    // roc-lang/roc#10023 its row also claimed `result_unique`, so ARC counted a
-    // birth on top of the link to the lender and every call leaked one
+    // `Str.drop_prefix` returns a slice of its argument's allocation. A row that
+    // also claims `result_unique` (the roc-lang/roc#10023 shape) makes ARC count
+    // a birth on top of the link to the lender, so every call leaks one
     // reference to the input string.
     var reintroduced = RcEffect.retainsSharingArgs(1);
     reintroduced.result_unique = true;

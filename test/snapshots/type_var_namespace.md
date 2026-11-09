@@ -34,7 +34,7 @@ UNUSED VARIABLE - type_var_namespace.md:7:5:7:9
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "item")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_item")
@@ -141,9 +141,9 @@ main! = |_| {}
 					(e-num (value "42")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "ok_or") (constraint-fn-var 268)
+					(e-dispatch-call (method "ok_or") (constraint-fn-var 273)
 						(receiver
-							(e-call (constraint-fn-var 265)
+							(e-call (constraint-fn-var 270)
 								(e-lookup-external
 									(builtin))
 								(e-lookup-local

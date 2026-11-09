@@ -11,7 +11,6 @@ const can = @import("can");
 const check = @import("check");
 const parse = @import("parse");
 const reporting = @import("reporting");
-const post_check_executor = @import("base").post_check_task_executor;
 const watch_inputs = @import("watch_inputs.zig");
 
 const ModuleEnv = can.ModuleEnv;
@@ -65,6 +64,40 @@ pub const DiscoveredExternalImport = struct {
 /// input type: the coordinator builds these once and the drain consumes them.
 pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
+/// A module source file that dependency discovery already read and parsed in
+/// full, handed to that module's parse task so each such file is read and
+/// parsed once per build.
+///
+/// Everything here is allocated with the allocator the coordinator's workers
+/// use for module environments, so the parse task takes ownership exactly as if
+/// it had produced these itself. The environment borrows its source, and its
+/// display module name borrows `path`, until the parse task takes them over.
+pub const DiscoveredParse = struct {
+    /// Absolute path the source was read from; the module's coordinator path.
+    path: []u8,
+    module_env: *ModuleEnv,
+    ast: *AST,
+    source_file_state: ?watch_inputs.State,
+
+    /// Free the parse, including the source it was read from.
+    pub fn deinit(self: DiscoveredParse) void {
+        const source = self.module_env.common.source;
+        const allocator = self.releaseKeepingSource();
+        if (source.len > 0) allocator.free(@constCast(source));
+    }
+
+    /// Free everything but the source, which the caller has taken over, and
+    /// return the allocator that owns it.
+    pub fn releaseKeepingSource(self: DiscoveredParse) Allocator {
+        const allocator = self.module_env.gpa;
+        self.ast.deinit();
+        self.module_env.deinit();
+        allocator.destroy(self.module_env);
+        allocator.free(self.path);
+        return allocator;
+    }
+};
+
 /// Task to parse a module source file
 pub const ParseTask = struct {
     /// Package this module belongs to
@@ -92,6 +125,9 @@ pub const ParseTask = struct {
     /// canonicalization input, so the parse task's cache probe keys on it.
     /// See `Can.ModuleInitContext.is_entry_module`.
     is_entry_module: bool,
+    /// This module's source as dependency discovery already parsed it, which
+    /// the task owns and uses in place of reading and parsing `path`.
+    discovered: ?DiscoveredParse = null,
 };
 
 /// Task to canonicalize a parsed module
@@ -128,6 +164,7 @@ pub const CanonicalizeTask = struct {
 
 /// Task to type-check a canonicalized module
 pub const TypeCheckTask = struct {
+    typing_context: ?*@import("checked_cache_entry.zig").Context = null,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier within the package
@@ -143,6 +180,9 @@ pub const TypeCheckTask = struct {
     /// Each import's resolution outcome, which `can`'s import-resolution drain
     /// consumes to settle this module's deferred references before checking.
     deferred_imports: []const CanonicalizeImport,
+    /// For a package or platform root, the public names its header exposes
+    /// whose selected nested type the selected module does not define.
+    missing_public_types: []const []const u8 = &.{},
     /// Published checked artifact keys for direct imports, keyed by typed-CIR module index
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     /// Published checked artifacts currently available for exact-key lookup during checking finalization
@@ -190,29 +230,10 @@ pub const WorkerTask = union(enum) {
     canonicalize: CanonicalizeTask,
     /// Type-check a canonicalized module
     type_check: TypeCheckTask,
-    /// Type-erased post-check work whose context owns all persistent task state.
-    post_check: post_check_executor.Task,
-
-    pub fn getPackageName(self: WorkerTask) ?[]const u8 {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.package_name,
-            .post_check => null,
-        };
-    }
-
-    pub fn getModuleId(self: WorkerTask) ?ModuleId {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.module_id,
-            .post_check => null,
-        };
-    }
-
-    pub fn getModuleName(self: WorkerTask) ?[]const u8 {
-        return switch (self) {
-            inline .parse, .canonicalize, .type_check => |t| t.module_name,
-            .post_check => null,
-        };
-    }
+    /// A token of a post-check session with a task queued: the worker
+    /// taking it runs a task of that session, if one is still queued, and
+    /// delivers the completion to the session itself.
+    post_check: *anyopaque,
 };
 
 /// Result of successfully parsing a module
@@ -314,6 +335,8 @@ pub const TypeCheckedPublication = CheckedArtifact.CheckedModuleArtifact;
 /// now or retained until platform/app relation construction. Selected roots
 /// are evaluated when the coordinator finishes the checked program.
 pub const OwnedSemanticModuleData = struct {
+    typing_metadata: ?@import("checked_cache_entry.zig").Metadata = null,
+    typing_reused: bool = false,
     /// The coordinator retains this input until it accepts the publication.
     module_env: *ModuleEnv,
     publication: TypeCheckedPublication,
@@ -321,6 +344,8 @@ pub const OwnedSemanticModuleData = struct {
     pending_evaluation: ?*PendingEvaluationState = null,
 
     pub fn deinit(self: *OwnedSemanticModuleData) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.module_env.gpa);
+        self.typing_metadata = null;
         if (self.pending_evaluation) |state| state.deinit();
         self.pending_evaluation = null;
         if (!self.publication_owned) return;
@@ -342,7 +367,8 @@ pub const TypeCheckedResult = struct {
     semantic: *OwnedSemanticModuleData,
     /// Any reports generated during type checking
     reports: std.ArrayList(Report),
-    /// Timing: nanoseconds spent type checking
+    checking_work: @import("compile_package.zig").CheckingWork = .{},
+    /// Checking, restoration and publication time, excluding local CTFE.
     type_check_ns: u64,
     /// Timing: nanoseconds spent on diagnostics
     check_diagnostics_ns: u64,
@@ -357,7 +383,7 @@ pub const PendingEvaluationState = struct {
     reported_problem_count: usize,
 
     pub fn deinit(self: *PendingEvaluationState) void {
-        self.problems.deinit(self.allocator);
+        self.problems.deinit();
         self.import_mapping.deinit();
         self.allocator.free(self.imported_envs);
         self.allocator.destroy(self);
@@ -408,44 +434,6 @@ pub const WorkerResult = union(enum) {
     operation_failed: WorkerOperationFailure,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
-    /// Returned in worker arrival order; `Completion.id` identifies the task.
-    post_check: post_check_executor.Completion,
-
-    pub fn getPackageName(self: WorkerResult) []const u8 {
-        return switch (self) {
-            .parsed => |r| r.package_name,
-            .canonicalized => |r| r.package_name,
-            .canonicalized_cached => |r| r.package_name,
-            .type_checked => |r| r.package_name,
-            .operation_failed => |r| r.package_name,
-            .worker_oom => |r| r.package_name,
-            .post_check => "",
-        };
-    }
-
-    pub fn getModuleId(self: WorkerResult) ModuleId {
-        return switch (self) {
-            .parsed => |r| r.module_id,
-            .canonicalized => |r| r.module_id,
-            .canonicalized_cached => |r| r.module_id,
-            .type_checked => |r| r.module_id,
-            .operation_failed => |r| r.module_id,
-            .worker_oom => |r| r.module_id,
-            .post_check => 0,
-        };
-    }
-
-    pub fn getModuleName(self: WorkerResult) []const u8 {
-        return switch (self) {
-            .parsed => |r| r.module_name,
-            .canonicalized => |r| r.module_name,
-            .canonicalized_cached => |r| r.module_name,
-            .type_checked => |r| r.module_name,
-            .operation_failed => |r| r.module_name,
-            .worker_oom => |r| r.module_name,
-            .post_check => "",
-        };
-    }
 
     /// Release a result that shutdown prevented the coordinator from accepting.
     /// Parsed environments have no coordinator owner yet; later stages borrow
@@ -461,7 +449,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .worker_oom, .post_check => {},
+            .canonicalized, .type_checked, .operation_failed, .worker_oom => {},
         }
         self.deinit(gpa);
     }
@@ -469,7 +457,6 @@ pub const WorkerResult = union(enum) {
     /// Free any owned memory in the result
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
-            .post_check => {},
             inline .parsed, .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
@@ -541,51 +528,4 @@ comptime {
     if (@sizeOf(WorkerResult) > max_message_size) {
         @compileError("WorkerResult too large for efficient thread-safe copy");
     }
-}
-
-test "WorkerTask accessors" {
-    const task = WorkerTask{
-        .parse = .{
-            .package_name = "app",
-            .module_id = 0,
-            .module_name = "Main",
-            .path = "/path/to/Main.roc",
-            .source_dir = "/path/to",
-            .package_root = "/path/to",
-            .depth = 0,
-            .module_role = .user,
-            .validation = .checking,
-            .is_entry_module = false,
-        },
-    };
-
-    try std.testing.expectEqualStrings("app", task.getPackageName().?);
-    try std.testing.expectEqual(@as(ModuleId, 0), task.getModuleId().?);
-    try std.testing.expectEqualStrings("Main", task.getModuleName().?);
-}
-
-test "WorkerResult accessors" {
-    const reports = std.ArrayList(Report).empty;
-
-    const result = WorkerResult{
-        .parsed = .{
-            .package_name = "app",
-            .module_id = 1,
-            .module_name = "Foo",
-            .path = "/path/to/Foo.roc",
-            .source_file_state = .{ .hash = @as([32]u8, @splat(0)) },
-            .module_env = undefined,
-            .cached_ast = undefined,
-            .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
-            .discovered_external_imports = std.ArrayList(DiscoveredExternalImport).empty,
-            .reports = reports,
-            .parse_ns = 1000,
-            .is_entry_module = false,
-            .canonicalized_cache_key = @as([32]u8, @splat(0)),
-        },
-    };
-
-    try std.testing.expectEqualStrings("app", result.getPackageName());
-    try std.testing.expectEqual(@as(ModuleId, 1), result.getModuleId());
-    try std.testing.expectEqualStrings("Foo", result.getModuleName());
 }

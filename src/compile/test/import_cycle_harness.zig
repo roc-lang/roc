@@ -28,7 +28,7 @@ pub const SourceFile = struct {
 };
 
 /// Check the app at `main.roc` among `files`, finalize it with executable
-/// artifacts, and require an import-cycle report.
+/// artifacts, and require an import-cycle report and a checked program.
 pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
@@ -66,7 +66,7 @@ pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!v
     defer arena_impl.deinit();
     const arena = arena_impl.allocator();
 
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, std.testing.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(
@@ -88,6 +88,7 @@ pub fn expectImportCycleReport(files: []const SourceFile) ImportCycleTestError!v
     try coord.finishCheckedProgram(.executable_artifacts);
 
     try std.testing.expect(coord.hasUserErrors());
+    try std.testing.expect(coord.hasCheckedProgram());
     var found_cycle_report = false;
     var reports = coord.iterReports();
     while (reports.next()) |entry| {

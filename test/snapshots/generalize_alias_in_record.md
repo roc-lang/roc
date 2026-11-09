@@ -21,7 +21,7 @@ TYPE MISMATCH - generalize_alias_in_record.md:5:25:5:28
 		(title "Type Mismatch")
 		(region (start 5 25) (end 5 28))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "generalize_alias_in_record.md") (start 5 25) (end 5 28) (annotation error) (line-text "main = ((r.f)(1), (r.f)(\"a\"))"))
 			(line-break)
@@ -96,7 +96,7 @@ NO CHANGE
 		(p-assign (ident "main"))
 		(e-tuple
 			(elems
-				(e-call (constraint-fn-var 243)
+				(e-call (constraint-fn-var 248)
 					(e-field-access
 						(receiver
 							(e-lookup-local
@@ -104,7 +104,7 @@ NO CHANGE
 						(segments
 							(segment (name "f") (mode "required"))))
 					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-call (constraint-fn-var 255)
+				(e-call (constraint-fn-var 260)
 					(e-field-access
 						(receiver
 							(e-lookup-local

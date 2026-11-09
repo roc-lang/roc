@@ -50,11 +50,6 @@ pub const IterationGuard = struct {
             }
         }
     }
-
-    /// Returns the current iteration count (useful for debugging).
-    pub fn getCount(self: *const Self) u32 {
-        return self.count;
-    }
 };
 
 test "IterationGuard does not panic for normal iteration counts" {
@@ -66,5 +61,5 @@ test "IterationGuard does not panic for normal iteration counts" {
     // In release builds, tick() is a no-op so count stays at 0.
     // In debug builds, count should be 1000.
     const expected: u32 = if (builtin.mode == .debug) 1000 else 0;
-    try std.testing.expectEqual(expected, guard.getCount());
+    try std.testing.expectEqual(expected, guard.count);
 }

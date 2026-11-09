@@ -57,7 +57,7 @@ TYPE MISMATCH - try_suffix_return_mismatch.md:29:2:29:2
 		(headline
 			(reflow "It's usually a mistake to use a postfix ")
 			(annotated code "?")
-			(reflow " on values being returned implicitly at the end of a function like this:"))
+			(reflow " on a value being returned implicitly at the end of a function."))
 		(document
 			(source-region (file "try_suffix_return_mismatch.md") (start 9 10) (end 9 11) (annotation warning) (line-text "\tparse(t)?"))
 			(line-break)
@@ -656,7 +656,7 @@ EndOfFile,
 ~~~roc
 # repro for https://github.com/roc-lang/roc/issues/11030
 parse : Str -> Try(Str, [BadInput])
-parse = |s| if s == "" Err(BadInput) else Ok(s)
+parse = |s| if (s == "") Err(BadInput) else Ok(s)
 
 # The trailing `?` unwraps the Try the body would otherwise return, so the
 # earlier `?` has nothing compatible to return into.
@@ -734,7 +734,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 430)
+								(e-call (constraint-fn-var 438)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -759,7 +759,7 @@ closure_arg = |xs| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 463)
+							(e-call (constraint-fn-var 471)
 								(e-lookup-local
 									(p-assign (ident "parse")))
 								(e-lookup-local
@@ -792,7 +792,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 496)
+								(e-call (constraint-fn-var 504)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -814,7 +814,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 537)
+				(e-call (constraint-fn-var 545)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -832,7 +832,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 538)
+								(e-dispatch-call (method "first") (constraint-fn-var 546)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "xs"))))
@@ -854,7 +854,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 576)
+				(e-call (constraint-fn-var 584)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local

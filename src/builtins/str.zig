@@ -28,7 +28,7 @@ const InPlace = enum(u8) {
 
 const MASK_ISIZE: isize = std.math.minInt(isize);
 const SMALL_STR_BIT: usize = @as(usize, @bitCast(MASK_ISIZE));
-const SEAMLESS_SLICE_TAG: usize = 1;
+const SEAMLESS_SLICE_TAG = @import("list.zig").SEAMLESS_SLICE_TAG;
 
 /// TODO
 pub const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
@@ -74,9 +74,37 @@ pub const RocStr = extern struct {
     /// low bit stays free for the seamless-slice tag.
     pub const capacity_shift = 1;
 
+    /// The low seven bits of a small RocStr's final byte: its length.
+    pub const small_str_len_mask: u8 = ~small_str_flag;
+
+    /// Byte offset of `field` in a RocStr laid out for a target whose words are
+    /// `target_word_size` bytes.
+    pub fn targetFieldOffset(comptime field: std.meta.FieldEnum(RocStr), target_word_size: u32) u32 {
+        return utils.targetWordOffset(@offsetOf(RocStr, @tagName(field)), target_word_size);
+    }
+
+    /// Byte offset of the final byte (the small-string flag byte) of a RocStr
+    /// laid out for a target whose words are `target_word_size` bytes.
+    pub fn targetFlagByteOffset(target_word_size: u32) u32 {
+        return word_count * target_word_size - 1;
+    }
+
+    /// The small-string flag as a bit of the `length` word, on a little-endian
+    /// target whose words are `target_word_size` bytes. The flag byte is the
+    /// final byte of the layout, which is the high byte of `length`.
+    pub fn targetSmallStrBit(target_word_size: u32) u64 {
+        return @as(u64, small_str_flag) << @intCast(target_word_size * 8 - 8);
+    }
+
     comptime {
         std.debug.assert(word_count * @sizeOf(usize) == @sizeOf(RocStr));
         std.debug.assert(SMALL_STR_BIT == @as(usize, small_str_flag) << (@bitSizeOf(usize) - 8));
+        std.debug.assert(SMALL_STR_BIT == targetSmallStrBit(@sizeOf(usize)));
+        // The flag byte is the high byte of `length`, so `length` must be the final word.
+        std.debug.assert(@offsetOf(RocStr, "length") + @sizeOf(usize) == @sizeOf(RocStr));
+        std.debug.assert(targetFieldOffset(.length, @sizeOf(usize)) == @offsetOf(RocStr, "length"));
+        std.debug.assert(targetFieldOffset(.capacity_or_alloc_ptr, @sizeOf(usize)) == @offsetOf(RocStr, "capacity_or_alloc_ptr"));
+        std.debug.assert(targetFieldOffset(.bytes, @sizeOf(usize)) == @offsetOf(RocStr, "bytes"));
     }
 
     pub inline fn empty() RocStr {
@@ -115,7 +143,7 @@ pub const RocStr = extern struct {
 
     /// Recover the small-string length from a RocStr's final byte.
     pub fn smallStrLenFromFlagByte(byte: u8) u8 {
-        return byte & ~small_str_flag;
+        return byte & small_str_len_mask;
     }
 
     pub inline fn encodeSliceAllocationPtr(ptr: [*]u8) usize {
@@ -255,8 +283,7 @@ pub const RocStr = extern struct {
         // Verify the computed allocation pointer is properly aligned
         if (comptime builtin.mode == .debug) {
             if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
-                // This indicates memory corruption - the allocation pointer should always be aligned
-                unreachable;
+                unreachable; // allocateWithRefcount returns usize-aligned data pointers, so only a corrupted RocStr is misaligned
             }
         }
 
@@ -588,7 +615,7 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return self.asArray()[index];
         } else {
-            const bytes = self.bytes orelse unreachable;
+            const bytes = self.bytes orelse unreachable; // callers index below the length, and a non-small string with a nonzero length has non-null bytes
 
             return bytes[index];
         }
@@ -619,8 +646,12 @@ pub const RocStr = extern struct {
         return update_mode == .InPlace or self.isUnique();
     }
 
-    /// Returns true when this string owns a big-string allocation whose extent
-    /// matches the visible value, so allocation-resize/reuse paths are safe.
+    /// Returns true when this string is a big string holding the only
+    /// reference to its allocation, so allocation-resize/reuse paths are safe.
+    /// The allocation can extend past the visible value: a string shortened
+    /// in place keeps its capacity, and the first piece `strSplitOn` makes
+    /// keeps the input's whole allocation while the later pieces are seamless
+    /// slices of it.
     pub inline fn canReuseAllocation(self: RocStr, update_mode: UpdateMode) bool {
         return !self.isSmallStr() and !self.isSeamlessSlice() and self.isExclusive(update_mode);
     }
@@ -644,8 +675,7 @@ pub const RocStr = extern struct {
             const ptr: [*]usize = utils.alignedPtrCast([*]usize, non_null_ptr, @src());
             return (ptr - 1)[0];
         } else {
-            // This should never happen - indicates corrupted RocStr structure
-            unreachable;
+            unreachable; // a seamless slice or a non-small string with nonzero capacity always points into an allocation
         }
     }
 
@@ -1142,14 +1172,7 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.c) bool {
     }
 
     // we won't exceed bytes_len due to the previous check
-    var i: usize = 0;
-    while (i < prefix_len) {
-        if (bytes_ptr[i] != prefix_ptr[i]) {
-            return false;
-        }
-        i += 1;
-    }
-    return true;
+    return std.mem.eql(u8, bytes_ptr[0..prefix_len], prefix_ptr[0..prefix_len]);
 }
 
 /// Str.drop_prefix - Returns string with prefix removed, or original if no match.
@@ -1320,14 +1343,7 @@ pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.c) bool {
     }
 
     const offset: usize = bytes_len - suffix_len;
-    var i: usize = 0;
-    while (i < suffix_len) {
-        if (bytes_ptr[i + offset] != suffix_ptr[i]) {
-            return false;
-        }
-        i += 1;
-    }
-    return true;
+    return std.mem.eql(u8, bytes_ptr[offset..bytes_len], suffix_ptr[0..suffix_len]);
 }
 
 /// Str.concat - concatenates two strings.
@@ -1373,17 +1389,129 @@ pub fn strConcat(
     } else {
         const combined_length = arg1.len() +| arg2.len();
 
+        if (arg1.isSmallStr() and combined_length < SMALL_STRING_SIZE) {
+            if (arg2.isSmallStr()) return concatSmall(arg1, arg2, combined_length);
+            // A small first argument and a big (or sliced) second into a small
+            // result: both written once into an empty (zeroed) small string. A
+            // small `arg1` owns no allocation, so there is nothing to release.
+            const arg1_length = arg1.len();
+            var small = RocStr.empty();
+            const dest: [*]u8 = @ptrCast(&small);
+            @memcpy(dest[0..arg1_length], arg1.asU8ptr()[0..arg1_length]);
+            @memcpy(dest[arg1_length..combined_length], arg2.asU8ptr()[0..arg2.len()]);
+            dest[SMALL_STRING_SIZE - 1] = RocStr.smallStrFlagByte(combined_length);
+            return small;
+        }
+
         var result = arg1.reallocateForAppend(combined_length, update_mode, roc_ops);
         const src = arg2.asU8ptr()[0..arg2.len()];
         const dest = result.asU8ptrMut()[arg1.len()..combined_length];
-        var i = src.len;
-        while (i > 0) {
-            i -= 1;
-            dest[i] = src[i];
-        }
+        // `arg2` may be a seamless slice into the buffer `result` reuses.
+        @memmove(dest, src);
 
         return result;
     }
+}
+
+/// A small string's three words, its first byte lowest. Kept as words, never
+/// one 192-bit integer: LLVM shifts an integer wider than two registers by a
+/// run-time amount through a stack temporary, and once this is inlined every
+/// call site keeps its own (a recursive caller's frame grew by them,
+/// test/fx/DeepStackParallel.roc).
+pub const SmallWords = [3]usize;
+const word_bits = @bitSizeOf(usize);
+const WordShift = std.math.Log2Int(usize);
+
+// The word arithmetic below (`concatSmall`) puts a string's
+// first byte in the lowest bits of its first word, which holds only where the
+// target is little-endian. A big-endian target fails here instead of
+// scrambling every small concat.
+comptime {
+    if (builtin.cpu.arch.endian() != .little) {
+        @compileError("small-string concat works on words in little-endian byte order");
+    }
+}
+
+/// A small string's words, its bytes past the length and its flag byte as
+/// they are.
+pub inline fn smallWords(string: RocStr) SmallWords {
+    return .{ @intFromPtr(string.bytes), string.capacity_or_alloc_ptr, string.length };
+}
+
+/// The small string whose words are `words`, the flag byte among them.
+pub inline fn smallFromWords(words: SmallWords) RocStr {
+    return .{
+        .bytes = @ptrFromInt(words[0]),
+        .capacity_or_alloc_ptr = words[1],
+        .length = words[2],
+    };
+}
+
+const DoubleWord = @Int(.unsigned, 2 * word_bits);
+const DoubleWordShift = std.math.Log2Int(DoubleWord);
+
+comptime {
+    std.debug.assert(SMALL_STRING_SIZE == 3 * @sizeOf(usize));
+}
+
+/// Two small strings whose result is small, in whole words, with little
+/// enough code to inline at every call site: the first masked to its length,
+/// the second shifted up by it, and the result masked once to its own
+/// length, which also clears whatever of the second lay past its length (its
+/// flag byte too). Each shift is of the first two words as one integer of
+/// twice their width, which a target does in registers; the masks come from
+/// a table. No byte copies, and no wide load waiting on narrow stores.
+pub inline fn concatSmall(arg1: RocStr, arg2: RocStr, combined_length: usize) RocStr {
+    std.debug.assert(arg1.isSmallStr() and arg2.isSmallStr());
+    std.debug.assert(combined_length < SMALL_STRING_SIZE);
+    const first = smallWords(arg1);
+    const first_mask = smallMask(arg1.len());
+    const second = smallShiftedUpBytes(smallWords(arg2), arg1.len());
+    const result_mask = smallMask(combined_length);
+    var words: SmallWords = undefined;
+    inline for (0..3) |index| {
+        words[index] = ((first[index] & first_mask[index]) | second[index]) & result_mask[index];
+    }
+    words[2] |= @as(usize, RocStr.smallStrFlagByte(combined_length)) << (word_bits - 8);
+    return smallFromWords(words);
+}
+
+/// The words of a small string whose first `length` bytes are all ones and
+/// the rest zero. A table, so a mask at an inlined call site is three loads
+/// of read-only data rather than shifts and selects (code LLVM weighs
+/// against inlining).
+inline fn smallMask(length: usize) SmallWords {
+    std.debug.assert(length < SMALL_STRING_SIZE);
+    return small_masks[length];
+}
+
+const small_masks: [SMALL_STRING_SIZE]SmallWords = blk: {
+    var masks: [SMALL_STRING_SIZE]SmallWords = undefined;
+    for (&masks, 0..) |*mask, length| {
+        var bytes: [SMALL_STRING_SIZE]u8 = @splat(0);
+        for (bytes[0..length]) |*byte| byte.* = 0xff;
+        mask.* = @bitCast(bytes);
+    }
+    break :blk masks;
+};
+
+/// `words` shifted up by `byte_count` bytes, what passes the top dropped. A
+/// shift of less than a word moves all three, the third by a funnel from
+/// the second; a longer one leaves the third word's bytes past the top, so
+/// the first two shifted as one integer, a word up, are all that remain.
+inline fn smallShiftedUpBytes(words: SmallWords, byte_count: usize) SmallWords {
+    std.debug.assert(byte_count < SMALL_STRING_SIZE);
+    const word_bytes = @sizeOf(usize);
+    const within_first_word = byte_count < word_bytes;
+    const first_two = @as(DoubleWord, words[0]) | (@as(DoubleWord, words[1]) << word_bits);
+    const two_bits: DoubleWordShift = @intCast(8 * (byte_count - @as(usize, if (within_first_word) 0 else word_bytes)));
+    const shifted = first_two << two_bits;
+    const low: usize = @truncate(shifted);
+    const high: usize = @truncate(shifted >> word_bits);
+    // `words[1] >> (word_bits - word_bits_shift)`, zero when the shift is zero.
+    const word_bits_shift: WordShift = @intCast(8 * (byte_count % word_bytes));
+    const third = (words[2] << word_bits_shift) | ((words[1] >> 1) >> (word_bits - 1 - word_bits_shift));
+    return if (within_first_word) .{ low, high, third } else .{ 0, low, high };
 }
 
 /// Str.contains
@@ -1502,6 +1630,58 @@ fn joinedLength(strs: []const RocStr, separator_len: usize) usize {
     var total: usize = 0;
     for (strs) |str| total +|= str.len();
     return total +| separator_len *| (strs.len - 1);
+}
+
+/// An interpolated literal's parts written once: the lengths summed, one
+/// small or heap string allocated, each part copied in. Every part is
+/// borrowed. The length saturates so an impossible total reaches the
+/// allocation guard instead of wrapping to a buffer the copies overrun.
+pub fn strFromParts(parts: []const RocStr, roc_ops: *RocOps) RocStr {
+    var total: usize = 0;
+    for (parts) |part| total +|= part.len();
+    var result = RocStr.allocate(total, roc_ops);
+    const dest = result.asU8ptrMut();
+    var offset: usize = 0;
+    for (parts) |part| {
+        part.memcpy(dest + offset);
+        offset += part.len();
+    }
+    return result;
+}
+
+test "strFromParts: small, big and empty parts, none and one" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const small = [_]RocStr{ RocStr.fromSliceSmall("12"), RocStr.fromSliceSmall("."), RocStr.fromSliceSmall("05") };
+    const small_result = strFromParts(&small, ops);
+    defer small_result.decref(ops);
+    try std.testing.expect(small_result.isSmallStr());
+    try std.testing.expectEqualStrings("12.05", small_result.asSlice());
+
+    const big_text = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const big = [_]RocStr{ RocStr.fromSlice(big_text, ops), RocStr.fromSliceSmall(""), RocStr.fromSliceSmall("-"), RocStr.fromSlice(big_text, ops) };
+    defer for (big) |part| part.decref(ops);
+    const big_result = strFromParts(&big, ops);
+    defer big_result.decref(ops);
+    try std.testing.expect(!big_result.isSmallStr());
+    try std.testing.expectEqualStrings(big_text ++ "-" ++ big_text, big_result.asSlice());
+
+    const crossing = [_]RocStr{ RocStr.fromSliceSmall("12345678901"), RocStr.fromSliceSmall("123456789012"), RocStr.fromSliceSmall("x") };
+    const crossing_result = strFromParts(&crossing, ops);
+    defer crossing_result.decref(ops);
+    try std.testing.expect(!crossing_result.isSmallStr());
+    try std.testing.expectEqualStrings("12345678901123456789012x", crossing_result.asSlice());
+
+    const none = [_]RocStr{};
+    const none_result = strFromParts(&none, ops);
+    try std.testing.expect(none_result.isSmallStr());
+    try std.testing.expectEqualStrings("", none_result.asSlice());
+
+    const one = [_]RocStr{RocStr.fromSliceSmall("only")};
+    const one_result = strFromParts(&one, ops);
+    try std.testing.expectEqualStrings("only", one_result.asSlice());
 }
 
 /// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
@@ -1636,7 +1816,7 @@ fn codepointSeqLengthLossy(c: u32) u3 {
             // fallthrough
         }
     }
-    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable;
+    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable; // U+FFFD is a valid scalar value
 }
 
 fn utf8EncodeLossy(c: u32, out: []u8) u3 {
@@ -1647,7 +1827,7 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
             // fallthrough
         }
     }
-    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable; // U+FFFD is a valid scalar value
 }
 
 /// Borrows bytes whose producer guarantees valid UTF-8. No validation scan is
@@ -1698,9 +1878,9 @@ fn fromWideUtfShort(comptime Unit: type, comptime endian: std.builtin.Endian, li
                 scalar = @intCast(unit);
             }
         }
-        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable; // scalar is U+FFFD or a decoded value at most 0x10FFFF outside the surrogate range
         std.debug.assert(buffer.len - written >= width);
-        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable;
+        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable; // scalar is U+FFFD or a decoded value at most 0x10FFFF outside the surrogate range
     }
     return RocStr.init(&buffer, written, roc_ops);
 }
@@ -1846,7 +2026,7 @@ pub fn fromUtf8(
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     } else {
-        const temp = errorToProblem(bytes);
+        const temp = errorToProblem(bytes) orelse utils.builtinInvariant(roc_ops, "fromUtf8: errorToProblem found no problem in bytes isValidUnicode rejected");
 
         return FromUtf8Try{
             .is_ok = false,
@@ -1865,7 +2045,7 @@ fn fromValidUtf8List(list: RocList, update_mode: UpdateMode, roc_ops: *RocOps) R
     return RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode, roc_ops);
 }
 
-fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
+fn errorToProblem(bytes: []const u8) ?struct { index: usize, problem: Utf8ByteProblem } {
     const len = bytes.len;
     var index: usize = 0;
 
@@ -1885,7 +2065,7 @@ fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8BytePro
         index += nextNumBytes;
     }
 
-    unreachable;
+    return null;
 }
 
 /// Returns true if the given buffer contains valid Unicode data.
@@ -1984,21 +2164,14 @@ pub fn validateUtf8Bytes(
 }
 
 /// TODO
-pub fn validateUtf8BytesX(
-    str: RocList,
-    roc_ops: *RocOps,
-) FromUtf8Try {
-    return fromUtf8(str, .Immutable, roc_ops);
-}
-
-/// TODO
 pub fn sliceHelp(
     bytes: [*]const u8,
     length: usize,
     roc_ops: *RocOps,
 ) RocList {
+    if (length == 0) return RocList.empty();
     var list = RocList.list_allocate(RocStr.alignment, length, @sizeOf(u8), false, roc_ops);
-    var list_bytes = list.bytes orelse unreachable;
+    var list_bytes = list.bytes orelse unreachable; // list_allocate returns non-null bytes for the nonzero length checked above
     @memcpy(list_bytes[0..length], bytes[0..length]);
     list.length = length;
 
@@ -2055,6 +2228,62 @@ pub fn strTrim(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
+    return trimWhitespace(true, true, input_string, update_mode, roc_ops);
+}
+
+/// Str.trim_start - removes leading whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** or **seamless-slice** depending on input
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique with no leading whitespace: returns same allocation unchanged
+/// - Otherwise: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
+pub fn strTrimStart(
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    return trimWhitespace(true, false, input_string, update_mode, roc_ops);
+}
+
+/// Str.trim_end - removes trailing whitespace.
+///
+/// ## Ownership
+/// - `input_string`: **consumes** - caller loses ownership
+/// - Returns: **copy-on-write** - may be same allocation if unique
+///
+/// Behavior depends on input state:
+/// - Empty string: returns empty (decrefs input if heap-allocated)
+/// - Small string: creates new small string with trimmed bytes
+/// - Unique: shrinks length in place (same allocation)
+/// - Shared: creates seamless slice pointing to trimmed region
+///
+/// An `.InPlace` update mode means the caller proved the string unique, so
+/// the big-string runtime uniqueness check is skipped.
+pub fn strTrimEnd(
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    return trimWhitespace(false, true, input_string, update_mode, roc_ops);
+}
+
+/// Shared body of `strTrim`, `strTrimStart`, and `strTrimEnd`, removing
+/// leading whitespace when `trim_start` and trailing whitespace when `trim_end`.
+inline fn trimWhitespace(
+    comptime trim_start: bool,
+    comptime trim_end: bool,
+    input_string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocStr {
     var string = input_string;
 
     if (string.isEmpty()) {
@@ -2063,16 +2292,20 @@ pub fn strTrim(
     }
 
     const bytes_ptr = string.asU8ptrMut();
-
-    const leading_bytes = countLeadingWhitespaceBytes(string);
     const original_len = string.len();
 
-    if (original_len == leading_bytes) {
+    const leading_bytes = if (trim_start) countLeadingWhitespaceBytes(string) else 0;
+    if (trim_start and original_len == leading_bytes) {
         string.decref(roc_ops);
         return RocStr.empty();
     }
 
-    const trailing_bytes = countTrailingWhitespaceBytes(string);
+    const trailing_bytes = if (trim_end) countTrailingWhitespaceBytes(string) else 0;
+    if (!trim_start and original_len == trailing_bytes) {
+        string.decref(roc_ops);
+        return RocStr.empty();
+    }
+
     const new_len = original_len - leading_bytes - trailing_bytes;
 
     if (string.isSmallStr()) {
@@ -2097,138 +2330,6 @@ pub fn strTrim(
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
             .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
-            .length = new_len,
-        };
-    }
-}
-
-/// Str.trim_start - removes leading whitespace.
-///
-/// ## Ownership
-/// - `input_string`: **consumes** - caller loses ownership
-/// - Returns: **copy-on-write** or **seamless-slice** depending on input
-///
-/// Behavior depends on input state:
-/// - Empty string: returns empty (decrefs input if heap-allocated)
-/// - Small string: creates new small string with trimmed bytes
-/// - Unique with no leading whitespace: returns same allocation unchanged
-/// - Otherwise: creates seamless slice pointing to trimmed region
-///
-/// An `.InPlace` update mode means the caller proved the string unique, so
-/// the big-string runtime uniqueness check is skipped.
-pub fn strTrimStart(
-    input_string: RocStr,
-    update_mode: UpdateMode,
-    roc_ops: *RocOps,
-) callconv(.c) RocStr {
-    var string = input_string;
-
-    if (string.isEmpty()) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const bytes_ptr = string.asU8ptrMut();
-
-    const leading_bytes = countLeadingWhitespaceBytes(string);
-    const original_len = string.len();
-
-    if (original_len == leading_bytes) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const new_len = original_len - leading_bytes;
-
-    if (string.isSmallStr()) {
-        // Just create another small string of the correct bytes.
-        // No need to decref because it is a small string.
-        return smallStringFromPtr(string.asU8ptr() + leading_bytes, new_len);
-    } else if (leading_bytes == 0 and string.canReuseAllocation(update_mode)) {
-        // Big and unique with no leading bytes to remove.
-        // Just take ownership and shrink the length.
-        var new_string = string;
-        new_string.length = new_len;
-
-        return new_string;
-    } else if (string.isSeamlessSlice()) {
-        // Already a seamless slice, just update the range.
-        return RocStr{
-            .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
-            .length = new_len,
-        };
-    } else {
-        // Not unique or removing leading bytes, just make a slice.
-        return RocStr{
-            .bytes = bytes_ptr + leading_bytes,
-            .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
-            .length = new_len,
-        };
-    }
-}
-
-/// Str.trim_end - removes trailing whitespace.
-///
-/// ## Ownership
-/// - `input_string`: **consumes** - caller loses ownership
-/// - Returns: **copy-on-write** - may be same allocation if unique
-///
-/// Behavior depends on input state:
-/// - Empty string: returns empty (decrefs input if heap-allocated)
-/// - Small string: creates new small string with trimmed bytes
-/// - Unique: shrinks length in place (same allocation)
-/// - Shared: creates seamless slice pointing to trimmed region
-///
-/// An `.InPlace` update mode means the caller proved the string unique, so
-/// the big-string runtime uniqueness check is skipped.
-pub fn strTrimEnd(
-    input_string: RocStr,
-    update_mode: UpdateMode,
-    roc_ops: *RocOps,
-) callconv(.c) RocStr {
-    var string = input_string;
-
-    if (string.isEmpty()) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const bytes_ptr = string.asU8ptrMut();
-
-    const trailing_bytes = countTrailingWhitespaceBytes(string);
-    const original_len = string.len();
-
-    if (original_len == trailing_bytes) {
-        string.decref(roc_ops);
-        return RocStr.empty();
-    }
-
-    const new_len = original_len - trailing_bytes;
-
-    if (string.isSmallStr()) {
-        // Just create another small string of the correct bytes.
-        // No need to decref because it is a small string.
-        return smallStringFromPtr(string.asU8ptr(), new_len);
-    } else if (string.canReuseAllocation(update_mode)) {
-        // Big and unique with no leading bytes to remove.
-        // Just take ownership and shrink the length.
-        var new_string = string;
-        new_string.length = new_len;
-
-        return new_string;
-    } else if (string.isSeamlessSlice()) {
-        // Already a seamless slice, just update the range.
-        return RocStr{
-            .bytes = bytes_ptr,
-            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
-            .length = new_len,
-        };
-    } else {
-        // Not unique, just make a slice.
-        return RocStr{
-            .bytes = bytes_ptr,
             .capacity_or_alloc_ptr = RocStr.encodeSliceAllocationPtr(bytes_ptr),
             .length = new_len,
         };
@@ -2267,6 +2368,31 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     return byte_count;
 }
 
+/// Shared body of `strWithAsciiLowercased` and `strWithAsciiUppercased`,
+/// mapping every byte through `convert`.
+inline fn strWithAsciiCase(
+    comptime convert: fn (u8) u8,
+    string: RocStr,
+    update_mode: UpdateMode,
+    roc_ops: *RocOps,
+) RocStr {
+    // Exclusive seamless slices may edit bytes inside their visible window: Str
+    // elements are plain bytes, and refcount 1 means no other value can observe
+    // the backing allocation. This is not an allocation-reuse decision.
+    var new_str = if (string.isExclusive(update_mode))
+        string
+    else blk: {
+        string.decref(roc_ops);
+        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = convert(c.*);
+    }
+    return new_str;
+}
+
 /// Str.with_ascii_lowercased
 ///
 /// Returns a string with all ASCII letters converted to lowercase.
@@ -2286,21 +2412,7 @@ pub fn strWithAsciiLowercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    // Exclusive seamless slices may edit bytes inside their visible window: Str
-    // elements are plain bytes, and refcount 1 means no other value can observe
-    // the backing allocation. This is not an allocation-reuse decision.
-    var new_str = if (string.isExclusive(update_mode))
-        string
-    else blk: {
-        string.decref(roc_ops);
-        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
-    };
-
-    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
-    for (new_str_bytes) |*c| {
-        c.* = ascii.toLower(c.*);
-    }
-    return new_str;
+    return strWithAsciiCase(ascii.toLower, string, update_mode, roc_ops);
 }
 
 /// Str.with_ascii_uppercased
@@ -2322,21 +2434,7 @@ pub fn strWithAsciiUppercased(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    // Exclusive seamless slices may edit bytes inside their visible window: Str
-    // elements are plain bytes, and refcount 1 means no other value can observe
-    // the backing allocation. This is not an allocation-reuse decision.
-    var new_str = if (string.isExclusive(update_mode))
-        string
-    else blk: {
-        string.decref(roc_ops);
-        break :blk RocStr.fromSlice(string.asSlice(), roc_ops);
-    };
-
-    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
-    for (new_str_bytes) |*c| {
-        c.* = ascii.toUpper(c.*);
-    }
-    return new_str;
+    return strWithAsciiCase(ascii.toUpper, string, update_mode, roc_ops);
 }
 
 /// TODO: Document strCaselessAsciiEquals.
@@ -2612,7 +2710,7 @@ const ReverseUtf8Iterator = struct {
                 i -= 1;
             }
 
-            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable;
+            const cp_len = unicode.utf8ByteSequenceLength(it.bytes[i]) catch unreachable; // RocStr bytes are valid UTF-8 and the loop above stopped on a start byte
             const slice = it.bytes[i .. i + cp_len];
 
             it.i = if (i == 0) null else i - 1;
@@ -2628,10 +2726,10 @@ const ReverseUtf8Iterator = struct {
 
         return switch (slice.len) {
             1 => @as(u21, slice[0]),
-            2 => unicode.utf8Decode2([2]u8{ slice[0], slice[1] }) catch unreachable,
-            3 => unicode.utf8Decode3([3]u8{ slice[0], slice[1], slice[2] }) catch unreachable,
-            4 => unicode.utf8Decode4([4]u8{ slice[0], slice[1], slice[2], slice[3] }) catch unreachable,
-            else => unreachable,
+            2 => unicode.utf8Decode2([2]u8{ slice[0], slice[1] }) catch unreachable, // RocStr bytes are valid UTF-8
+            3 => unicode.utf8Decode3([3]u8{ slice[0], slice[1], slice[2] }) catch unreachable, // RocStr bytes are valid UTF-8
+            4 => unicode.utf8Decode4([4]u8{ slice[0], slice[1], slice[2], slice[3] }) catch unreachable, // RocStr bytes are valid UTF-8
+            else => unreachable, // utf8ByteSequenceLength returns only lengths 1 through 4
         };
     }
 };
@@ -3796,6 +3894,106 @@ test "RocStr.concat: small concat small" {
     try std.testing.expect(roc_str3.eql(result));
 }
 
+test "RocStr.concat: a small first argument and every length, small and big results" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const roc_ops = test_env.getOps();
+    const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // A small string cut short keeps its old bytes past its length
+    // (substringUnsafe sets the length alone), so the first argument is
+    // one such: the result must not carry them.
+    const first_full = RocStr.fromSliceSmall(letters[0 .. SMALL_STRING_SIZE - 1]);
+    // The second argument of each length as a small string, and as a slice
+    // of a big one (big, however short).
+    const big = RocStr.fromSlice(letters, roc_ops);
+    defer big.decref(roc_ops);
+
+    for (0..SMALL_STRING_SIZE) |first_length| {
+        for (0..SMALL_STRING_SIZE + 8) |second_length| {
+            const first_bytes = letters[0..first_length];
+            const second_bytes = letters[letters.len - second_length ..];
+            const first = substringUnsafe(first_full, 0, first_length, roc_ops);
+            try std.testing.expect(first.isSmallStr());
+            const seconds = [2]RocStr{
+                RocStr.fromSlice(second_bytes, roc_ops),
+                substringUnsafe(big, letters.len - second_length, second_length, roc_ops),
+            };
+            for (seconds, 0..) |second, kind| {
+                // The slice holds no count of its own: `big` is released once.
+                defer if (kind == 0) second.decref(roc_ops);
+                try std.testing.expect(second.isSmallStr() == (kind == 0 and second_length < SMALL_STRING_SIZE));
+
+                const result = strConcat(first, second, .Immutable, roc_ops);
+                defer result.decref(roc_ops);
+
+                var expected_bytes: [2 * SMALL_STRING_SIZE + 8]u8 = undefined;
+                @memcpy(expected_bytes[0..first_length], first_bytes);
+                @memcpy(expected_bytes[first_length..][0..second_length], second_bytes);
+                const expected = expected_bytes[0 .. first_length + second_length];
+
+                try std.testing.expect(result.eqlSlice(expected));
+                if (second_length == 0) {
+                    // An empty second argument: the first is the result, as it
+                    // is (the branch above the small path).
+                    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&first), std.mem.asBytes(&result));
+                } else if (expected.len < SMALL_STRING_SIZE) {
+                    // A small result is byte for byte the one fromSliceSmall
+                    // makes: its length in the last byte, every byte past it zero.
+                    const small = RocStr.fromSliceSmall(expected);
+                    try std.testing.expectEqualSlices(u8, std.mem.asBytes(&small), std.mem.asBytes(&result));
+                } else {
+                    try std.testing.expect(!result.isSmallStr());
+                }
+            }
+        }
+    }
+}
+
+test "RocStr.concat: a small string's first byte is its first word's lowest" {
+    // The layout the word arithmetic of `concatSmall` relies on, checked
+    // from memory on the target the tests run on: each
+    // byte of the string at its place in the words, the flag byte the last
+    // word's highest.
+    const text = "abcdefghijklmnopqrstuvw";
+    const string = RocStr.fromSliceSmall(text[0 .. SMALL_STRING_SIZE - 1]);
+    const words = smallWords(string);
+    for (0..SMALL_STRING_SIZE - 1) |index| {
+        const word = words[index / @sizeOf(usize)];
+        const byte: u8 = @truncate(word >> @intCast(8 * (index % @sizeOf(usize))));
+        try std.testing.expectEqual(text[index], byte);
+    }
+    const flag: u8 = @truncate(words[2] >> (word_bits - 8));
+    try std.testing.expectEqual(RocStr.smallStrFlagByte(SMALL_STRING_SIZE - 1), flag);
+}
+
+test "RocStr.concat: concatSmall for every pair of lengths with a small result" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const roc_ops = test_env.getOps();
+    const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    // Both arguments cut short from full small strings: each keeps its old
+    // bytes past its length, and its flag byte says the cut length. The
+    // result must carry neither.
+    const first_full = RocStr.fromSliceSmall(letters[0 .. SMALL_STRING_SIZE - 1]);
+    const second_full = RocStr.fromSliceSmall(letters[letters.len - (SMALL_STRING_SIZE - 1) ..]);
+    for (0..SMALL_STRING_SIZE) |first_length| {
+        for (0..SMALL_STRING_SIZE - first_length) |second_length| {
+            const first = substringUnsafe(first_full, 0, first_length, roc_ops);
+            const second = substringUnsafe(second_full, 0, second_length, roc_ops);
+            try std.testing.expect(first.isSmallStr() and second.isSmallStr());
+            const combined_length = first_length + second_length;
+            const result = concatSmall(first, second, combined_length);
+            var expected: [SMALL_STRING_SIZE - 1]u8 = undefined;
+            @memcpy(expected[0..first_length], letters[0..first_length]);
+            @memcpy(expected[first_length..][0..second_length], second_full.asSlice()[0..second_length]);
+            // Byte for byte the small string fromSliceSmall makes: the bytes,
+            // zeros past them, the flag byte with the length.
+            const canonical = RocStr.fromSliceSmall(expected[0..combined_length]);
+            try std.testing.expectEqualSlices(u8, std.mem.asBytes(&canonical), std.mem.asBytes(&result));
+        }
+    }
+}
+
 test "RocStr.concat: concat result fed into concat again" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -3982,7 +4180,7 @@ test "validateUtf8Bytes: ascii" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -3995,7 +4193,7 @@ test "validateUtf8Bytes: unicode œ" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4008,7 +4206,7 @@ test "validateUtf8Bytes: unicode ∆" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4021,7 +4219,7 @@ test "validateUtf8Bytes: emoji" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -4034,7 +4232,7 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len, test_env.getOps());
 
-    const str_result = validateUtf8BytesX(list, test_env.getOps());
+    const str_result = fromUtf8(list, .Immutable, test_env.getOps());
     defer str_result.string.decref(test_env.getOps());
     try expectOk(str_result);
 }
@@ -5192,6 +5390,108 @@ test "default-platform RocStr view matches canonical RocStr layout" {
         try std.testing.expectEqual(CanonicalType, ViewType);
         try std.testing.expectEqual(@offsetOf(RocStr, canonical_name), @offsetOf(View, view_name));
     }
+}
+
+test "default-platform RocStr view constants match canonical representation" {
+    const view = @import("roc_str_view");
+
+    try std.testing.expectEqual(SEAMLESS_SLICE_TAG, view.seamless_slice_tag);
+    try std.testing.expectEqual(RocStr.small_str_flag, view.small_str_flag);
+    try std.testing.expectEqual(RocStr.capacity_shift, view.capacity_shift);
+    try std.testing.expectEqual(RocList.capacity_shift, view.capacity_shift);
+    try std.testing.expectEqual(utils.REFCOUNT_STATIC_DATA, view.static_refcount);
+}
+
+const default_platform_view_dealloc = struct {
+    var released: ?*anyopaque = null;
+
+    fn record(ptr: *anyopaque, _: usize) callconv(.c) void {
+        std.debug.assert(released == null);
+        released = ptr;
+    }
+};
+
+fn defaultPlatformView(canonical: RocStr) @import("roc_str_view").RocStr {
+    return std.mem.bytesToValue(@import("roc_str_view").RocStr, std.mem.asBytes(&canonical));
+}
+
+fn expectDefaultPlatformViewAgrees(canonical: RocStr) error{TestExpectedEqual}!void {
+    const view = defaultPlatformView(canonical);
+
+    try std.testing.expectEqual(canonical.isSmallStr(), view.isSmallStr());
+    try std.testing.expectEqual(canonical.isSeamlessSlice(), view.isSeamlessSlice());
+    try std.testing.expectEqual(canonical.len(), view.len());
+    try std.testing.expectEqualStrings(canonical.asSlice(), view.asSlice());
+    if (canonical.isSmallStr()) {
+        try std.testing.expectEqual(@as(?[*]u8, null), view.allocationPtr());
+    } else {
+        try std.testing.expectEqual(canonical.getAllocationPtr(), view.allocationPtr());
+    }
+}
+
+test "default-platform RocStr view agrees with canonical RocStr" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const ops = env.getOps();
+
+    // Small strings, including the empty string and one filling every inline byte.
+    try expectDefaultPlatformViewAgrees(RocStr.empty());
+    try expectDefaultPlatformViewAgrees(RocStr.fromSliceSmall("small"));
+    const full_small: [SMALL_STR_MAX_LENGTH]u8 = @splat('a');
+    try expectDefaultPlatformViewAgrees(RocStr.fromSliceSmall(&full_small));
+
+    // A big string, then a seamless slice into a list allocation.
+    const big = RocStr.fromSlice("a string long enough to be heap allocated", ops);
+    try expectDefaultPlatformViewAgrees(big);
+    const list = RocList.fromSlice(u8, "a list long enough to back a seamless slice", false, ops);
+    const slice = RocStr.fromSubListUnsafe(list, 2, 30, .Immutable, ops);
+    try std.testing.expect(slice.isSeamlessSlice());
+    try expectDefaultPlatformViewAgrees(slice);
+
+    // A static-lifetime allocation.
+    var static_storage: [8]usize = undefined;
+    static_storage[0] = @bitCast(utils.REFCOUNT_STATIC_DATA);
+    const static_bytes: [*]u8 = @ptrCast(&static_storage[1]);
+    const static_text = "static bytes long enough to be big";
+    @memcpy(static_bytes[0..static_text.len], static_text);
+    const static_str = RocStr{
+        .bytes = static_bytes,
+        .capacity_or_alloc_ptr = RocStr.encodeCapacity(static_text.len),
+        .length = static_text.len,
+    };
+    try expectDefaultPlatformViewAgrees(static_str);
+
+    // Static data is never released, and its count is never touched.
+    default_platform_view_dealloc.released = null;
+    var static_view = defaultPlatformView(static_str);
+    static_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+    try std.testing.expectEqual(@as(usize, @bitCast(utils.REFCOUNT_STATIC_DATA)), static_storage[0]);
+
+    // Small strings own no allocation.
+    var small_view = defaultPlatformView(RocStr.fromSliceSmall("small"));
+    small_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+
+    // A shared slice drops to unique without releasing, as the canonical decref would.
+    // The slice borrows the list's single reference, so sharing it takes one more.
+    slice.incref(1, ops);
+    var slice_view = defaultPlatformView(slice);
+    slice_view.decref(&default_platform_view_dealloc.record);
+    try std.testing.expectEqual(@as(?*anyopaque, null), default_platform_view_dealloc.released);
+    try std.testing.expect(slice.isUnique());
+
+    // Releasing the last reference frees the same allocation the canonical decref frees.
+    const allocation_count = env.getAllocationCount();
+    var big_view = defaultPlatformView(big);
+    big_view.decref(&default_platform_view_dealloc.record);
+    const released = default_platform_view_dealloc.released orelse return error.TestExpectedRelease;
+    try std.testing.expect(env.allocation_map.contains(released));
+    ops.roc_dealloc(ops, released, RocStr.alignment);
+    try std.testing.expectEqual(allocation_count - 1, env.getAllocationCount());
+
+    list.decref(1, 1, false, null, &rcNone, ops);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }
 
 test "validated UTF-8 construction: inline copies and retained heap ownership" {

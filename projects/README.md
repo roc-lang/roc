@@ -8,8 +8,8 @@ result for long-term correctness and performance, and what tests to add. Each
 doc's "What success looks like" section is a completion contract: the project
 is not done until every criterion listed there holds.
 
-- `small/`—localized, mostly additive checks or deletions, low design risk;
-  hours to days each.
+- Localized projects (mostly additive checks or deletions, low design risk;
+  hours to days each) live in `small/` while any are open. None are open now.
 - Projects on the order of weeks each (cross-cutting, and several
   requiring a design decision before implementation starts) are tracked
   as GitHub issues and linked from this README by issue number.
@@ -32,31 +32,81 @@ A second batch of projects came out of the 2026-07 comparative review of
 the post-check pipeline against the cor `lss` prototype it was
 productionized from (stage-by-stage divergence review; no shipped
 miscompile found, but several unstated load-bearing invariants, one
-termination hazard, and one verification coverage gap):
+termination hazard, and one verification coverage gap). All of them have
+landed and had their docs removed.
 
-- [small/spec-constr-specialization-limits.md](small/spec-constr-specialization-limits.md)—
-  termination budgets for call-pattern specialization (compile-time
-  divergence is reachable today).
-- [small/empty-tag-union-yield-provenance.md](small/empty-tag-union-yield-provenance.md)—
-  key Lambda Solved's one unification escape hatch on carried provenance
-  instead of shape.
-- [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)—
-  state, assert, and test the four invariants that make monomorphic
-  lambda-set solving sound.
-- [small/lambda-mono-oracle-fidelity.md](small/lambda-mono-oracle-fidelity.md)—
-  agreement asserts and contract pins for the Debug Lambda Mono oracle;
-  delete its dead Queue.
-- [small/monotype-machinery-hardening.md](small/monotype-machinery-hardening.md)—
-  release-gate verification-only type checks; measure-first fixes for
-  digest depth fallback, unify memo, spec duplication, cross-store reuse.
-- [small/lift-capture-single-sourcing.md](small/lift-capture-single-sourcing.md)—
-  one capture-fixpoint driver, the `if_initialized_payload` binder
-  question, and the capture-id override path.
+The last of them, SpecConstr specialization limits, had mostly landed before
+its turn came: a per-source-function worker budget of three and a body-size
+admission threshold already bounded the specialization drain, and shape
+derivation already spent explicit proof fuel, so the match-and-rebuild-deeper
+program the doc described compiles and runs under `--opt=speed` (the budget
+binds on it). No separate shape-depth cap was added, since the worker budget
+alone makes termination structural. What remained was the selection defect:
+a call accepted by several workers now binds to the most specific one (most
+constructor nodes, ties in admission order) instead of the first admitted,
+and the `--timings` SpecConstr breakdown now counts emitted workers and
+worker-budget refusals. design.md records the budget rule and why it is not a
+compile-time-evaluation limit. A separate ARC certification failure surfaced
+while writing the regression program: a recursive consumer of
+`[Leaf, Node(Tree, U64)]` (recursive payload first) fails ARC in dev and
+speed builds, independent of SpecConstr.
 
-Within this batch the projects are independent.
-(`spec-constr-specialization-limits` used to be paired here with
-`spec-constr-static-match-soundness`, which has since landed and had its
-doc removed.)
+The Monotype machinery hardening project has landed, mostly by finding its
+targets already gone. Every verification-only type-equality check in
+Monotype lowering is now a debug-only `assertSameType` (or a debug-gated
+`typeEql`), and `run-check-postcheck-architecture` rejects a release-computed
+one; on sampled echo and fx apps those checks had cost at most 0.16% of
+Monotype cycles, so this is policy, not speed. The digest walk has no depth
+cap any more (a 300-level nesting test pins that), the cross-call unify memo
+is a per-call set, and the checked source type is no longer part of
+specialization identity, so the depth-fallback, memo, and duplicate-spec
+items had nothing left to fix. The reserved-request refinement API had no
+production caller and is deleted, so a record's request view is its
+identity's requested type. Union-find paths averaged under 0.3 hops per
+`find` (at most 13), so `union_` keeps no rank, and `layoutOfType` already
+sizes its scratch by the visited subgraph.
+
+The lift capture single-sourcing project has landed, mostly by having
+already happened. The initial lift and the post-spec_constr re-solve both
+run `CaptureDependencyGraph.solve`, so there is one fixpoint driver, and the
+stale-id override it worried about is gone: operand keys join to slots by
+their explicit namespace. The `if_initialized_payload` payload is a read of
+the parser loop's payload parameter, not a binder, so the capture arms were
+already right and now say so. The free-variable walk itself had also
+existed twice (the graph builder's and the Lifter's `CaptureSet`, used for
+inline lambdas and operand fill-in); both now run the one `CaptureWalk`,
+supplying only their actions, and `run-check-postcheck-architecture` rejects
+a second walk in `lift.zig`.
+
+The Lambda Mono oracle-fidelity project has landed. Its dead `Queue` had
+already been deleted. The materializer now asserts that every type source of
+a local lowers to one Lambda Mono type up to nominal lifts (including the
+typed-local sequence path, which had reused the cached type instead of
+checking it), and it
+re-derives each replayed `List.map` fold through `FoldedMatch.isResolutionOf`
+instead of trusting the recorded body. The negative controls test that
+predicate directly.
+
+The empty-tag-union yield project has landed, by deletion rather than by
+carrying provenance. Sealing unresolved Monotype rows before publication had
+already removed every legitimate firing; a Debug corpus sweep (echo, fx, the
+remaining `test/` apps) found the yield, by then broadened to any proven
+uninhabited type, linking only identical uninhabited records. Lambda Solved
+now unifies uninhabited types structurally, and an empty row meeting a
+populated one is an invariant violation, so no provenance set is needed.
+
+The Lambda Solved invariants project has landed, with corrections. FnId
+granularity was not a soundness invariant: specialization no longer keys on
+the checked source type, and a shared `FnId`'s unioned lambda set is sound
+because calls dispatch on the value's member tag, so the stage instead
+asserts that lifted function symbols are distinct and pins shared-closure
+dispatch end to end. Capture lists were never matched positionally in
+practice: every member of a lambda carries the one capture span its function
+type created, so merges now assert span identity instead of unifying capture
+lists. Member order is canonicalized by one sort at the end of solving rather
+than at every merge, which keeps in-place set growth linear. A Debug sweep
+re-walks every erasure boundary (box operands included) after solving, and
+the return-target type comparison is Debug-only.
 
 A third batch came out of a whole-codebase competing-sources-of-truth
 audit (2026-07-18): a sweep of every subsystem for the same fact
@@ -70,12 +120,26 @@ batches and of each other:
 - [#12165](https://github.com/roc-lang/roc/issues/12165)—
   backends stop re-encoding RocStr/RocList offsets, flag bits, the
   refcount contract, and C-ABI thresholds as magic numbers.
-- [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
-  end the LLVM backend's `@tagName`-substring dispatch for numeric
-  conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
-  the nightly and Nix CI legs name MiniCI jobs by hand instead of
-  invoking MiniCI's own gate list.
+
+The LLVM conversion-op dispatch project from this batch has landed, mostly
+before it was picked up: `base/numeric_conversion.zig` already built the
+comptime-checked conversion table and LLVM's `emitLowLevel` already switched
+exhaustively. What remained was the drift profile: the conversion prong now
+passes a comptime `Conversion`, like the interpreter, so a conversion op that
+LLVM has no lowering for is a `@compileError` instead of a runtime
+`UnsupportedLowLevel`. Emitted code is unchanged.
+
+One CI gate list outside pull requests has landed. The nightly legs on
+hosts PR CI never uses (`minici-other-hosts` in `ci_zig.yml`) and the
+Nix test leg run `zig build minici -- --minici-lane secondary` instead
+of naming jobs, and a `workflows` table in `src/build/minici.zig`
+declares how each CI file runs MiniCI; `--minici-verify-workflows`, run
+on every PR, checks each file against it, including that none runs a
+MiniCI job by hand. That check found a fifth hand-listed job the
+project had missed (`run-coverage-parser` on arm64 Linux). `glue`'s
+module tests joined MiniCI (about 20 s, so no shard moved). The Debug
+`-Dfuzz` `run-test-zig` aggregate still runs nightly, because several
+of its suites (rc-conformance, boxy-abi, and others) are not MiniCI jobs.
 
 A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are
@@ -89,10 +153,15 @@ independent of the earlier batches and of each other:
   every `unreachable` under `src/` carries a same-line rationale (or
   is converted to a checked invariant), enforced forever by a CI lint
   with a shrinking allowlist.
-- [small/ice-crash-context.md](small/ice-crash-context.md)—
-  a panic handler that prints what the compiler was doing (phase,
-  module, def) plus a repro command before the stack trace, built from
-  thread-local context frames pushed at existing phase boundaries.
+
+The ICE crash-context project from this batch has landed (design.md
+"Crash Reports"). Corrections: the module is `base.ice_context`, since
+`eval` already has an unrelated `crash_context`; the repro command is the
+process's own command line and working directory rather than one derived
+from the crashing phase, so it reproduces imported-module and run-command
+crashes too; and frames name the module per front-end task, the stage per
+post-check step, and the procedure per codegen or interpreter unit, not
+individual defs.
 
 A fifth batch (2026-08-24) came out of a duplication audit of the
 stages between type checking and code generation—Monotype, Monotype
@@ -118,13 +187,6 @@ already diverged in behavior, not just in text.
   the god-structs (`BodyContext` at 44.5k lines, `ProcBodyBuilder` at
   28.3k) that force helpers to be copied rather than shared, with
   divergence already present in both.
-- [small/arc-shared-predicates.md](small/arc-shared-predicates.md)—
-  four ARC predicates defined twice, including the refcounted-local
-  predicate where the RC inserter and its own certifier already use
-  different code.
-- [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
-  the lowerer records erased ownership and the certifier re-derives it
-  with a copy of the rule; `.boxy` has no producer at all.
 
 Single-source primitive tables have landed (the batch's first
 project): `CheckedPrimitive`'s four post-check mappings—storage layout,
@@ -158,6 +220,32 @@ erased-callable proc lost it. `box_reuse` adopted the shared
 eligibility predicate; `loop_append_promote` deliberately did not,
 because its gate is a genuinely different one (it admits non-Roc ABI
 procs), which is recorded here rather than papered over.
+
+One definition per ARC predicate has landed. The refcounted-local
+predicate had already collapsed to a single layout query by the time the
+project ran, but the outcome predicates had not: the outcome-row mask
+arithmetic now lives once in `arc_sig.zig`, and the refinement walk and
+outcome binding target once in `arc_solve.zig`, pinned by a source-text
+lint in `arc_solve.zig`. The merge closed a live divergence: insertion's
+walk had learned to step over a statement `match`'s merge join while
+field dismantling's copy had not, so a field projection passed into a
+fallible call under such a `match` never got a restitution receipt. The
+shared walk also admits joins and aliases only before the discriminant
+read, which is what design.md states and what the certifier accepts.
+
+Erased-ownership single sourcing has landed, smaller than filed. The
+lowerer's decision was already LIR data—`assign_call_erased.reuse_source`
+—and the certifier's half of the rule had already moved into
+`lir/erased_owner.zig`, where it independently verifies that field
+against the emitted `assign_ref` chain (the check a certifier should make,
+so it stays; a per-local side table on `LirStore` would only have been
+re-checked by that same walk). What remained was the rule itself written
+twice: the lowerer's `transparentErasedOwnershipSource` and the LIR
+module's `transparentSource`. The edge now lives once in `lir_core`
+(`ErasedOwnerEdge`), every `assign_ref` the direct lowerer emits goes
+through `addAssignRef` so its target always gets recorded provenance, and
+source-text lints pin both. `.boxy` has no gap: it emits no owned erased
+calls, so it has no reuse source to choose, and a lint keeps it that way.
 
 One correction to the batch, from implementing it. The audit filed a
 `spec-constr-single-cloner` project on the claim that Monotype Lifted's
@@ -235,36 +323,66 @@ order. The rest are independent.
 
 ### Start here—enforcement layers, cheap and load-bearing
 
-1. [small/cross-phase-coverage-parity-tests.md](small/cross-phase-coverage-parity-tests.md)—
-   the divergence-classification parity suite; a regression net the big
-   lowering projects inherit.
-2. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
-   comptime validity plus a per-op refcount conformance harness for the
-   central ownership table (the PR 10023 bug class).
-3. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
-   closes the four small seams left after the identity/cache cures
-   (name-text fallback, hand-enrolled serde contracts, split version
-   hashes, `type_name` in nominal keys).
+RcEffect table conformance has landed, and had already been built when
+its doc was picked up: `base/rc_effect_rules.zig` rejects self-contradicting
+rows at comptime (with `run-test-rc-effect-rejected-row` requiring the
+#10023 row to fail compilation), and `run-test-zig-rc-conformance` runs every
+nontrivial row through the interpreter, failing on any uncovered op.
+Correction: mask-versus-arity is checked where an op meets its real
+arguments (the ARC certifier and the observer), not at comptime, since no
+arity table exists to check against.
+
+The divergence-classification parity suite has landed. Divergence is one
+classification, `checkedExprDivergence` in `checked_artifact.zig`; Monotype's
+and Boxy's never-divergent arms check it at compile time, and checked-artifact
+tests drive `DivergenceScan` over every expression kind against it, alongside
+pinned echo fixtures for a divergent nominal payload, call argument, and
+arithmetic operand. Correction: Boxy is a third consumer the doc missed, and
+both consumers lowered a divergent custom interpolation only through its
+operands although its dispatch plan can crash; it now lowers through its
+dispatch like the other plan-carrying kinds. The convention is written down in
+CONTRIBUTING/README.md.
+
+The cache-and-identity residuals project has landed. Its name-text
+auto-import fallback was already gone (auto-imports carry an explicit
+`AutoImportIdentity`). Every admitted serialization root now declares a
+`RootContract`, and a layout fingerprint exists only for a type that does;
+`compile/cache_versioning.zig` composes every entry's admission hash, and the
+platform-pairing entry gained its own instead of folding fingerprints into its
+key. `type_name` was redundant in `NominalTypeKey` and is removed—identity is
+the module content identity plus declaring statement. Correction: one consumer
+(imported nominal declaration resolution) had been using the name text to tell
+apart embedded declarations of different modules that share a statement index;
+it now compares the declaration's module identity.
 
 ### Chain A—dispatch evidence, consumed everywhere
 
-1. [small/hoist-consumes-dispatch-evidence.md](small/hoist-consumes-dispatch-evidence.md)—
-   hoist selection reads the dispatch resolution instead of re-deriving
-   evidence-dependence from type-var content (the PR 10073 seam), and
-   recovers the hoisting its conservative gate gives up.
+The `hoist-consumes-dispatch-evidence` project is retired: its premise did
+not survive contact. Hoist selection cannot read the dispatch resolution,
+because `resolveTotalDispatchPlans` takes the pruned compile-time roots as
+input, so the plan does not exist yet when hoisting is decided. Nor would
+an outer `direct` plan prove a root hoistable: `e == e` with `e : List(a)`
+under a where clause on `a` resolves `List.is_eq` directly while its nested
+`a.is_eq` still needs the caller's evidence. The conservative gate is
+therefore not re-deriving a fact that exists elsewhere. Recovering what it
+gives up (for example `n = [].len()` in a function body, whose dispatcher is
+`List(flex)`) would need the checker to record, as solving decides it,
+which obligations bind to an enclosing scheme and which stay free.
 
 ### Chain B—the host/platform boundary
 
-1. [small/hosted-extern-declared-abi.md](small/hosted-extern-declared-abi.md)—
-   the invariant that a hosted extern is only specialized at its declared
-   type, enforced at the producer instead of by a checker rewrite.
+The hosted-extern declared-ABI project has landed: Monotype lowering asserts
+(`requireHostedExternAtDeclaredAbi`) that every hosted extern is specialized
+at its declared type, with the non-`?` widening channels and the host
+`Ok`-not-misread case pinned on native and wasm32. Correction: the guard is
+a debug-only invariant assertion like every other, not a release-build stop,
+and the checker's hosted `?` widening rewrite is deleted rather than kept
+(PR 12118), so direct hosted errors are reconstructed explicitly in Roc.
 
 The solver-rewrite audit that followed this chain has landed: design.md's
-"Solver-Mutating Rewrites" section holds the mechanism/policy inventory,
+"Solver-Mutating Rewrites" section holds the mechanism/policy inventory, and
 `Store.dangerousSetVarRedirect` requires a declared `RedirectRule` at every
-call site, and the 9966 widening is the declared Hosted Try Question
-Widening rule, scoped to direct hosted calls with both sides pinned by
-tests.
+call site.
 
 The platform-relation migration that concluded this chain has landed:
 checking records each platform requirement's solution in the app's checked
@@ -273,20 +391,32 @@ once—the name-keyed re-resolution and double publication are deleted.
 
 ### Chain C—specialization sealing
 
-1. [small/pin-deferred-spec-requests.md](small/pin-deferred-spec-requests.md)—
-   seal-time instrumentation, the snapshot-regime pin, and the
-   `unifyThroughBacking` decision; end state: `row_default` unreachable
-   for checker-constrained rows.
+The deferred-spec-request pinning project was retired: its premise no longer
+holds. The July rework of Monotype row sealing deleted the snapshot regime
+(`stableSpecializationRequestType`) along with the pin's early return, and
+every deferred procedure-template request now relates to a fresh instance of
+the callee's checked root when the request is created—generated-private
+requests included—so no regime seals a request without its checked
+counterpart, and a row that still takes its default shares its class with that
+counterpart. A seal-time "defaulted while checked-concrete" check would only
+re-test union-find, so none was added. A phantom-row repro whose request
+carries a minted iterator now pins the generated-private case
+(`test/cli/issue_9968_pin_deferred_spec_requests/private_iter_arg.roc`).
+`unifyThroughBacking` needs no named-argument pairing: a nominal keeps its
+arguments on the joined class, and an alias argument is either related through
+the backing or unused by it, which Monotype equality ignores; its doc comment
+records this.
 
 ### Independent—start any time, in any order
 
-Small:
-- [small/frame-partitioned-checker-state.md](small/frame-partitioned-checker-state.md)—
-  inventory and convert frame-scoped checker/canonicalizer state to
-  dedicated frame storage (the 9929→10010 and 10001 shape).
-- [small/compact-constant-aggregates.md](small/compact-constant-aggregates.md)—
-  static-data and builtin-call materialization for constant/repeated
-  lists, ending the one-local-per-element explosion behind issue 9898.
+Compact constant aggregates have landed for cold builds: constant lists of
+any shape cost the runtime program fixed-size LIR, a literal-count repeat
+of a runtime value is one builtin call, and the freezing, merging, and
+re-encoding steps that were quadratic in a list's pointer count are linear.
+The correction to the original doc: the per-element explosion it described
+no longer exists on the cold path; it survives only when a warm cache
+restores a non-packable constant list, which still builds it through a
+one-local-per-element static initializer.
 
 The decision-tree match compiler has landed for `.lss`: the direct
 solved-to-LIR lowering compiles `match` through one shared Maranget-style
@@ -300,6 +430,15 @@ empty; `boxy/lower.zig` folds branches into a sequential chain), so the
 true. Closing that is part of
 [#12166](https://github.com/roc-lang/roc/issues/12166).
 
+Frame-partitioned phase state has landed: every field of `Can` and `Check`
+is classified in a compile-checked state inventory (design.md
+"Frame-Partitioned Phase State"), frame stacks assert they close their
+innermost frame, and both phases assert at completion that no frame-owned
+state leaked. One obligation remains off main: the
+`iterative-checker-prologue-epilogue` branch carries the tag-and-filter
+version of the issue 9827 fix and must adopt per-frame return-constraint
+storage, and pass the issue 9827 repro, before it merges.
+
 Single-source builtin registration has landed: the seven hand-typed
 `roc_builtins_*` symbol/ABI tables now derive from one comptime registry
 (src/builtins/builtin_registry.zig), and the LowLevel-to-builtin member
@@ -307,14 +446,4 @@ choice is shared across backends via `base.LowLevelBuiltins`.
 
 ### Suggested overall sequence
 
-If one person or agent works through everything serially, this order
-front-loads leverage and keeps prerequisites satisfied:
-
-1. `small/cross-phase-coverage-parity-tests.md`
-2. `small/rceffect-conformance.md`
-3. `small/cache-and-identity-residuals.md`
-4. `small/pin-deferred-spec-requests.md`
-5. `small/hoist-consumes-dispatch-evidence.md`
-6. `small/hosted-extern-declared-abi.md`
-7. `small/frame-partitioned-checker-state.md`
-8. `small/compact-constant-aggregates.md`
+Every project in the serial sequence this section listed has landed.

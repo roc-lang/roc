@@ -14,11 +14,13 @@ const Region = base.Region;
 const Pattern = CIR.Pattern;
 const Statement = CIR.Statement;
 const CoreCtx = @import("ctx").CoreCtx;
+const parse = @import("parse");
 
 /// Context helper for Scope tests
 const ScopeTestContext = struct {
     self: Can,
     module_env: *ModuleEnv,
+    ast: *parse.AST,
     gpa: std.mem.Allocator,
     builtin_ctx: BuiltinTestContext,
 
@@ -27,6 +29,8 @@ const ScopeTestContext = struct {
         const module_env = try gpa.create(ModuleEnv);
         module_env.* = try ModuleEnv.init(gpa, "");
         try module_env.initCIRFields("test");
+        const ast = try parse.file(gpa, &module_env.common);
+        errdefer ast.deinit();
 
         var builtin_ctx = try BuiltinTestContext.init(gpa);
         errdefer builtin_ctx.deinit();
@@ -34,8 +38,9 @@ const ScopeTestContext = struct {
         const roc_ctx = CoreCtx.testing(gpa, gpa);
 
         return ScopeTestContext{
-            .self = try Can.initModule(roc_ctx, module_env, undefined, builtin_ctx.canInitContext()),
+            .self = try Can.initModule(roc_ctx, module_env, ast, builtin_ctx.canInitContext()),
             .module_env = module_env,
+            .ast = ast,
             .gpa = gpa,
             .builtin_ctx = builtin_ctx,
         };
@@ -43,6 +48,7 @@ const ScopeTestContext = struct {
 
     fn deinit(ctx: *ScopeTestContext) void {
         ctx.self.deinit();
+        ctx.ast.deinit();
         ctx.module_env.deinit();
         ctx.gpa.destroy(ctx.module_env);
         ctx.builtin_ctx.deinit();

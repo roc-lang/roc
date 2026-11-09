@@ -165,7 +165,7 @@ run = |{}| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 321)
+								(e-call (constraint-fn-var 326)
 									(e-lookup-local
 										(p-assign (ident "query")))
 									(e-string
@@ -222,7 +222,7 @@ run = |{}| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 389)
+								(e-call (constraint-fn-var 394)
 									(e-lookup-local
 										(p-assign (ident "find")))
 									(e-lookup-local
@@ -254,7 +254,7 @@ run = |{}| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 434)
+								(e-call (constraint-fn-var 439)
 									(e-lookup-local
 										(p-assign (ident "find")))
 									(e-lookup-local
@@ -285,7 +285,7 @@ run = |{}| {
 																	(p-assign (ident "#err")))))))))))))))
 				(e-tag (name "Ok")
 					(args
-						(e-dispatch-call (method "plus") (constraint-fn-var 464)
+						(e-dispatch-call (method "plus") (constraint-fn-var 469)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "listing"))))
@@ -301,7 +301,7 @@ run = |{}| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 513)
+					(e-call (constraint-fn-var 519)
 						(e-lookup-local
 							(p-assign (ident "show")))
 						(e-lambda
@@ -318,11 +318,11 @@ run = |{}| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(a -> Try(ok, [NotFound, ..b])) -> Try(ok, [NotFound, ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
-		(patt (type "(a -> Try(ok, [NotFound, ..b])) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..b]), ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
+		(patt (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
+		(patt (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(patt (type "{} -> [Ok({})]")))
 	(expressions
-		(expr (type "(a -> Try(ok, [NotFound, ..b])) -> Try(ok, [NotFound, ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
-		(expr (type "(a -> Try(ok, [NotFound, ..b])) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..b]), ..b]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
+		(expr (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool]"))
+		(expr (type "(a -> Try(ok, err)) -> Try(ok, [NotFound, ShareLookupFailed([NotFound, ..err]), ..err]) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)]), ok.from_numeral : Numeral -> Try(ok, [InvalidNumeral(Str)]), ok.is_eq : ok, ok -> Bool, ok.plus : ok, ok -> ok]"))
 		(expr (type "{} -> [Ok({})]"))))
 ~~~

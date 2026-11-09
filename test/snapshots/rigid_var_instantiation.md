@@ -39,7 +39,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "num")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_num")
@@ -53,7 +53,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "str")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_str")
@@ -67,7 +67,7 @@ UNUSED VARIABLE - rigid_var_instantiation.md:16:5:16:8
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lst")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lst")
@@ -185,20 +185,20 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "num"))
-					(e-call (constraint-fn-var 256)
+					(e-call (constraint-fn-var 261)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-num (value "42"))))
 				(s-let
 					(p-assign (ident "str"))
-					(e-call (constraint-fn-var 267)
+					(e-call (constraint-fn-var 272)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-string
 							(e-literal (string "hello")))))
 				(s-let
 					(p-assign (ident "lst"))
-					(e-call (constraint-fn-var 294)
+					(e-call (constraint-fn-var 299)
 						(e-lookup-local
 							(p-assign (ident "identity")))
 						(e-list

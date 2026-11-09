@@ -7,19 +7,19 @@
 //! - x86_64: Linux (System V ABI), macOS (System V ABI), Windows (Fastcall)
 //! - aarch64: Linux and macOS (AAPCS64)
 
-/// Exact procedure-local stack lifetime and slot planning.
-pub const StackPlan = @import("StackPlan.zig");
-
 const std = @import("std");
 const builtin = @import("builtin");
 
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
+/// The instruction sets the dev backend emits.
+pub const isa = @import("isa.zig");
 const relocation_mod = @import("Relocation.zig");
 pub const Relocation = relocation_mod.Relocation;
 pub const applyRelocations = relocation_mod.applyRelocations;
 pub const applyRelocationsWithContext = relocation_mod.applyRelocationsWithContext;
+pub const expect_site_base_symbol = relocation_mod.expect_site_base_symbol;
 pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const SymbolResolverContext = relocation_mod.SymbolResolverContext;
 pub const ValueStorage = @import("ValueStorage.zig");
@@ -45,25 +45,38 @@ pub const host_lir_codegen_available = LirCodeGenMod.host_lir_codegen_available;
 /// Supports cross-compilation to any RocTarget.
 /// Only available on non-freestanding targets (uses std.fs)
 pub const ObjectFileCompiler = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").ObjectFileCompiler;
-/// Per-region machine-code artifacts and their reassembly.
-pub const ProcArtifact = @import("ProcArtifact.zig");
-/// Shared native procedure task driver and same-program retained artifacts.
+/// The source locations and failure meanings of an object's code.
+pub const CodeLocations = @import("CodeLocations.zig");
+/// Per-region machine-code excerpts and their reassembly.
+pub const CodeExcerpt = @import("CodeExcerpt.zig");
+/// Declared compatibility of relocatable native dev procedures.
+/// Shared native procedure task driver and same-program retained excerpts.
 pub const NativeProcCompiler = @import("NativeProcCompiler.zig");
-/// An artifact located in a loaded pack.
-pub const LocatedArtifact = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").LocatedArtifact;
-/// Where the object compiler splices object-cache procedures from.
-pub const SpliceSource = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").SpliceSource;
-/// Place object-cache entries into an open code generator.
-pub const spliceExternalProcs = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").spliceExternalProcs;
-/// Links object-cache entries spliced into the compile-time evaluator's image.
+/// Links native code and data in the compile-time evaluator's image.
 pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("HostSplice.zig").HostSplice;
-/// On-disk form of one module's pack of artifacts.
-pub const PackFile = @import("PackFile.zig");
+/// On-disk form of one module's pack of excerpts.
+pub const UnitPieces = @import("UnitPieces.zig");
+/// One unit's machine code laid out for a fast dev link.
+pub const UnitImage = @import("UnitImage.zig");
+/// The perf map of the functions the compiler places in its own process.
+pub const PerfMap = @import("PerfMap.zig");
+/// Loads a unit image into this process: every 64-bit x86 or ARM host the
+/// compiler runs on, whose own instruction set its native unit images hold.
+pub const UnitImageLoader = if (loader_host) @import("UnitImageLoader.zig") else void;
+const loader_host = (builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) and imageOs(builtin.os.tag);
+
+/// The operating systems whose executables unit images serve: those with
+/// an ELF, Mach-O or COFF fast dev link.
+pub fn imageOs(os: std.Target.Os.Tag) bool {
+    return os == .linux or os == .macos or os == .windows or os == .freebsd or os == .openbsd or os == .netbsd;
+}
+pub const Composition = @import("Composition.zig");
 pub const Entrypoint = if (builtin.os.tag == .freestanding) void else @import("ObjectFileCompiler.zig").Entrypoint;
 pub const StaticDataExport = @import("StaticDataExport.zig").StaticDataExport;
 pub const StaticDataRelocation = @import("StaticDataExport.zig").StaticDataRelocation;
 pub const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 pub const StaticDataImageFunctionResolver = @import("StaticDataImage.zig").FunctionResolver;
+pub const StaticDataImageError = @import("StaticDataImage.zig").Error;
 pub const StaticStringData = @import("StaticStringData.zig");
 pub const RunImage = @import("RunImage.zig");
 pub const procSymbolName = @import("StaticDataExport.zig").procSymbolName;

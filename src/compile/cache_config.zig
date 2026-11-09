@@ -1,7 +1,7 @@
 //! Cache configuration and directory management for the Roc compiler cache system.
 //!
-//! This module provides platform-specific cache directory logic that matches
-//! the Rust implementation, ensuring consistency across the codebase.
+//! Resolves the shared native store root and explicit logical cache scopes.
+//! Artifact scopes are identity data; only tooling/package paths are directories.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -9,10 +9,6 @@ const build_options = @import("build_options");
 const CoreCtx = @import("ctx").CoreCtx;
 
 const Allocator = std.mem.Allocator;
-
-/// Name of the per-version subdirectory that holds per-invocation scratch
-/// directories (see `CacheConfig.getScratchDir`).
-pub const scratch_dir_name = "tmp";
 
 const CacheOs = enum { windows, macos, other };
 
@@ -304,7 +300,56 @@ pub const Constants = struct {
     ///      "Row Coercion Primitive").
     /// 142: Module environments record the uses of top-level values that read
     ///      the value through a row coercion.
-    pub const CACHE_VERSION = 142;
+    /// 143: Module environments record row-coerced callees and the definitions
+    ///      whose bodies closed an annotated open result row.
+    /// 144: Annotation polarity flips through function argument positions, so a
+    ///      callback's result row is generated closed and its argument row open.
+    /// 145: Checked modules publish compile-time roots no compilation
+    ///      demanded as unevaluated, with every evaluated root's reads.
+    /// 146: Annotations record an erroneous generated type, and procedure
+    ///      templates record whether their signature reaches every scheme
+    ///      variable.
+    /// 147: Canonical node payloads are encoded from their payload field types.
+    /// 148: Low-level op numbering covers only ops that lowering produces.
+    /// 149: A stored checked runtime error keeps its evaluated operands in a
+    ///      field of their own.
+    /// 150: `str_from_utf8`'s builtin call takes only the `Try` discriminant
+    ///      and error-record field offsets.
+    /// 151: an import's exposed items record the declaration import
+    ///      resolution selected for them.
+    /// 152: a nested procedure site records whether its module's source
+    ///      calls it at exactly one site.
+    /// 153: a package or platform header's qualified exposures record a
+    ///      deferred reference, and canonical diagnostics gain
+    ///      `public_type_not_defined`.
+    /// 154: Type stores keep each slot's kind in a column beside its payload,
+    ///      and numeric literal facts in a table that static dispatch
+    ///      constraints index.
+    /// 155: Identifier stores assign serial indices, keep each name's end
+    ///      offset and probe fingerprints in columns of their own, and drop
+    ///      the per-identifier attribute column.
+    /// 156: Type stores keep each derived map payload selection in a table
+    ///      keyed by its callable's class instead of on every static
+    ///      dispatch constraint.
+    /// 157: canonical diagnostics drop `execution_requires_app_or_default_app`,
+    ///      and file-level diagnostics store no region.
+    /// 158: Module environments record row-coerced results in place of
+    ///      row-coerced callees and closed-result definitions.
+    /// 159: a module records which top-level definitions' calls can invoke a
+    ///      function value they do not name, and its strict-demand relation
+    ///      follows function values and every selected dispatch; type stores
+    ///      keep interpolation metadata in a table that static dispatch
+    ///      constraints index.
+    /// 160: procedure templates record how much of each quantified variable
+    ///      their bodies demand.
+    /// 161: generated codec derivations record the renaming their snapshot
+    ///      applied to every type that holds a variable.
+    /// 162: modules publish checking interfaces and imported callable eligibility.
+    /// 163: producer-owned declaration slots and stored checking diagnostics.
+    /// 164: sorted array builders serialize zeroed entry padding and an
+    ///      integer offset that the cache validator checks.
+    /// 165: compile-time reads persist placement and semantic root identity.
+    pub const CACHE_VERSION = 174;
 };
 
 /// Configuration for the Roc cache system.
@@ -390,7 +435,7 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &[_][]const u8{ base_dir, version_dir });
     }
 
-    /// Get the checked-artifact cache directory.
+    /// Logical checked-artifact scope within this compiler compatibility identity.
     pub fn getCheckedArtifactCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
         const version_dir = try self.getVersionCacheDir(allocator);
         defer allocator.free(version_dir);
@@ -405,7 +450,7 @@ pub const CacheConfig = struct {
         return std.fs.path.join(allocator, &.{ version_dir, "pair" });
     }
 
-    /// Get the canonicalized-module cache directory.
+    /// Logical canonicalized-module scope.
     ///
     /// Separate from the checked-artifact directory because the two caches key
     /// their entries on different inputs: a canonicalized entry names one
@@ -424,36 +469,6 @@ pub const CacheConfig = struct {
         defer allocator.free(version_dir);
 
         return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "src" });
-    }
-
-    /// Get the executable cache directory (for cached linked executables).
-    pub fn getExeCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "exe" });
-    }
-
-    /// Get the scratch directory for per-invocation build outputs and runtime
-    /// executables. Each invocation creates its own unique subdirectory here.
-    ///
-    /// This lives under the user's own cache root rather than the system temp
-    /// directory, so no other user can create or rename entries along the path,
-    /// and executables built here are on the same filesystem as the exe cache
-    /// they get hardlinked into.
-    pub fn getScratchDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, scratch_dir_name });
-    }
-
-    /// Get the test cache directory (for cached test results).
-    pub fn getTestCacheDir(self: Self, allocator: Allocator) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const version_dir = try self.getVersionCacheDir(allocator);
-        defer allocator.free(version_dir);
-
-        return std.fs.path.join(allocator, &[_][]const u8{ version_dir, "test" });
     }
 
     /// Get the cache entries directory (alias for module cache dir).
@@ -489,7 +504,7 @@ pub const CacheStats = struct {
     const Self = @This();
 
     /// Which cache an operation belongs to. Every recording call names one, so
-    /// no counter is ever shared between the two caches.
+    /// no counter is shared between caches.
     pub const Kind = enum { checked, canonicalized };
 
     /// Record a cache miss.

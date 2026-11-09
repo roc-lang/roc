@@ -11,7 +11,6 @@ const checked_ids = @import("../checked_ids.zig");
 const types = @import("types.zig");
 
 const Allocator = std.mem.Allocator;
-const CIR = can.CIR;
 const CheckedExhaustivenessSiteId = checked_ids.CheckedExhaustivenessSiteId;
 const Problem = types.Problem;
 const ExtraStringIdx = types.ExtraStringIdx;
@@ -34,15 +33,9 @@ pub const Store = struct {
         destructure,
     };
 
-    pub const PendingStaticExhaustivenessMode = enum {
-        static,
-        empirical,
-    };
+    pub const PendingStaticExhaustivenessMode = can.ModuleEnv.ExhaustivenessObligation.Mode;
 
-    pub const ExhaustivenessSiteSource = union(enum) {
-        match_expr: CIR.Expr.Idx,
-        destructure_pattern: CIR.Pattern.Idx,
-    };
+    pub const ExhaustivenessSiteSource = can.ModuleEnv.ExhaustivenessObligation.Source;
 
     pub const PendingStaticExhaustiveness = struct {
         kind: EmpiricalSiteKind,
@@ -54,6 +47,10 @@ pub const Store = struct {
         problem: Problem,
     };
 
+    /// Owns every list in the store, so whoever appends a problem, on
+    /// whichever thread or after an ownership transfer, grows it with the
+    /// allocator that made it.
+    gpa: Allocator,
     problems: std.ArrayListAligned(Problem, ALIGNMENT) = .empty,
     pending_static_exhaustiveness: std.ArrayList(PendingStaticExhaustiveness) = .empty,
 
@@ -65,6 +62,7 @@ pub const Store = struct {
     /// Allocation-free empty store, including after ownership transfer.
     pub fn initEmpty(gpa: Allocator) Self {
         return .{
+            .gpa = gpa,
             .extra_strings_backing = ByteList.init(gpa),
             .missing_patterns_backing = std.array_list.Managed(ExtraStringIdx).init(gpa),
         };
@@ -72,6 +70,7 @@ pub const Store = struct {
 
     pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
         return .{
+            .gpa = gpa,
             .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, 16),
             .pending_static_exhaustiveness = .empty,
             .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
@@ -81,6 +80,7 @@ pub const Store = struct {
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
+            .gpa = gpa,
             .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
             .pending_static_exhaustiveness = .empty,
             .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
@@ -88,11 +88,11 @@ pub const Store = struct {
         };
     }
 
-    pub fn deinit(self: *Self, gpa: Allocator) void {
+    pub fn deinit(self: *Self) void {
         self.extra_strings_backing.deinit();
         self.missing_patterns_backing.deinit();
-        self.pending_static_exhaustiveness.deinit(gpa);
-        self.problems.deinit(gpa);
+        self.pending_static_exhaustiveness.deinit(self.gpa);
+        self.problems.deinit(self.gpa);
     }
 
     /// Put an extra string in the backing store, returning an "id" (range)
@@ -105,53 +105,36 @@ pub const Store = struct {
 
     /// Get a stored pattern string by its range
     pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings_backing.items[idx.start..][0..idx.count];
+        return self.extra_strings_backing.items[@as(usize, @intCast(idx.start))..][0..@as(usize, @intCast(idx.count))];
     }
 
     /// Get the slice of missing pattern indices by range
     pub fn getMissingPatterns(self: *const Self, range: MissingPatternsRange) []const ExtraStringIdx {
-        return self.missing_patterns_backing.items[range.start..][0..range.count];
+        return self.missing_patterns_backing.items[@as(usize, @intCast(range.start))..][0..@as(usize, @intCast(range.count))];
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
-    pub fn appendProblem(self: *Self, gpa: Allocator, problem: Problem) std.mem.Allocator.Error!Problem.Idx {
+    pub fn appendProblem(self: *Self, problem: Problem) std.mem.Allocator.Error!Problem.Idx {
         const idx: Problem.Idx = @fromBackingInt(@intCast(self.problems.items.len));
-        try self.problems.append(gpa, problem);
+        try self.problems.append(self.gpa, problem);
         return idx;
     }
 
     pub fn appendPendingStaticExhaustiveness(
         self: *Self,
-        gpa: Allocator,
         kind: EmpiricalSiteKind,
         mode: PendingStaticExhaustivenessMode,
         source: ExhaustivenessSiteSource,
         region: base.Region,
         pending_problem: Problem,
     ) std.mem.Allocator.Error!void {
-        try self.pending_static_exhaustiveness.append(gpa, .{
+        try self.pending_static_exhaustiveness.append(self.gpa, .{
             .kind = kind,
             .mode = mode,
             .source = source,
             .region = region,
             .problem = pending_problem,
         });
-    }
-
-    pub fn assignPendingStaticExhaustivenessSite(
-        self: *Self,
-        source: ExhaustivenessSiteSource,
-        site: CheckedExhaustivenessSiteId,
-    ) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (!exhaustivenessSourcesEqual(pending.source, source)) continue;
-            pending.site = site;
-            return;
-        }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
-        }
-        unreachable;
     }
 
     /// Record that a checker-selected compile-time root will execute this site.
@@ -166,28 +149,7 @@ pub const Store = struct {
             pending.mode = .empirical;
             return;
         }
-        if (@import("builtin").mode == .debug) {
-            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
-        }
-        unreachable;
-    }
-
-    /// Record that the compile-time root selected to execute this site failed
-    /// and left its code to runtime, so the diagnostic is decided statically.
-    pub fn markPendingStaticExhaustivenessStatic(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        for (self.pending_static_exhaustiveness.items) |*pending| {
-            if (pending.site != null and pending.site.? == site) pending.mode = .static;
-        }
-    }
-
-    pub fn resolvePendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
-        var write: usize = 0;
-        for (self.pending_static_exhaustiveness.items) |pending| {
-            if (pending.site != null and pending.site.? == site) continue;
-            self.pending_static_exhaustiveness.items[write] = pending;
-            write += 1;
-        }
-        self.pending_static_exhaustiveness.shrinkRetainingCapacity(write);
+        base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
     }
 
     pub fn discardPendingStaticExhaustiveness(self: *Self, site: CheckedExhaustivenessSiteId) void {
@@ -202,17 +164,15 @@ pub const Store = struct {
 
     pub fn appendEmpiricalExhaustivenessFailure(
         self: *Self,
-        gpa: Allocator,
         site: CheckedExhaustivenessSiteId,
     ) std.mem.Allocator.Error!bool {
-        return self.appendEmpiricalExhaustivenessFailureRetaining(gpa, site, false);
+        return self.appendEmpiricalExhaustivenessFailureRetaining(site, false);
     }
 
     /// Generic platform evaluation can share a diagnostic site with roots that
     /// require app bindings. Retain its recipe while reporting it only once.
     pub fn appendEmpiricalExhaustivenessFailureRetaining(
         self: *Self,
-        gpa: Allocator,
         site: CheckedExhaustivenessSiteId,
         retain: bool,
     ) std.mem.Allocator.Error!bool {
@@ -238,9 +198,11 @@ pub const Store = struct {
                     .where_alias_in_type_position,
                     .recursive_where_alias,
                     .where_clause_receiver_not_introduced,
+                    .where_requirement_not_function,
                     .invalid_nominal_decl_recursion,
                     .infinite_recursion,
                     .anonymous_recursion,
+                    .polymorphic_recursion,
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,
@@ -251,6 +213,7 @@ pub const Store = struct {
                     .effectful_function_name,
                     .annotation_only_value,
                     .annotation_only_value_use,
+                    .hosted_where_requirement,
                     .derived_method_value_use,
                     .capturing_method,
                     .unsupported_generated_method,
@@ -282,17 +245,16 @@ pub const Store = struct {
                     .redundant_pattern,
                     .unmatchable_pattern,
                     .match_alt_binder_missing,
-                    .unreachable_code,
-                    .comptime_unused_branch,
+                    .discarded_var_update,
                     .comptime_condition,
                     .derived_parser_error_row,
                     .derived_codec_open_record,
                     .associated_item_not_found,
                     .redundant_open_tag_union,
-                    => unreachable,
+                    => unreachable, // the checker queues only non-exhaustive match and destructure problems as pending exhaustiveness diagnostics
                 }
             }
-            if (!pending.reported) _ = try self.appendProblem(gpa, problem);
+            if (!pending.reported) _ = try self.appendProblem(problem);
             if (retain) {
                 self.pending_static_exhaustiveness.items[index].reported = true;
             } else {
@@ -303,22 +265,22 @@ pub const Store = struct {
         return false;
     }
 
-    pub fn flushPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
+    pub fn flushPendingStaticExhaustiveness(self: *Self) std.mem.Allocator.Error!usize {
         var count: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
             if (pending.mode != .static or pending.reported) continue;
-            _ = try self.appendProblem(gpa, pending.problem);
+            _ = try self.appendProblem(pending.problem);
             count += 1;
         }
         self.pending_static_exhaustiveness.clearRetainingCapacity();
         return count;
     }
 
-    pub fn flushAllPendingStaticExhaustiveness(self: *Self, gpa: Allocator) std.mem.Allocator.Error!usize {
+    pub fn flushAllPendingStaticExhaustiveness(self: *Self) std.mem.Allocator.Error!usize {
         var count: usize = 0;
         for (self.pending_static_exhaustiveness.items) |pending| {
             if (pending.reported) continue;
-            _ = try self.appendProblem(gpa, pending.problem);
+            _ = try self.appendProblem(pending.problem);
             count += 1;
         }
         self.pending_static_exhaustiveness.clearRetainingCapacity();

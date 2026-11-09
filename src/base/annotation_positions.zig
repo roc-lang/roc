@@ -2,33 +2,67 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Exact occurrence classes of one source formal.
+/// Where one source formal occurs relative to its declaration's root. A
+/// function's argument positions flip the surrounding polarity and its
+/// return keeps it, so every occurrence stands either at the polarity of the
+/// reference to the declaration (`same`) or at its flip (`opposite`).
 pub const Positions = packed struct(u8) {
-    inherited: bool = false,
-    input: bool = false,
-    output: bool = false,
+    /// The declaration body names this formal, including inside the retained
+    /// argument storage of another reference.
+    used: bool = false,
+    /// An occurrence stands at the reference's own polarity.
+    same: bool = false,
+    /// An occurrence stands at the reference's flipped polarity.
+    opposite: bool = false,
     padding: u5 = 0,
 
     fn join(self: Positions, other: Positions) Positions {
         return @bitCast(@as(u8, @bitCast(self)) | @as(u8, @bitCast(other)));
     }
 
-    pub fn isEmpty(self: Positions) bool {
-        return @as(u8, @bitCast(self)) == 0;
+    fn hasSide(self: Positions) bool {
+        return self.same or self.opposite;
     }
 
+    fn swap(self: Positions) Positions {
+        return .{ .used = self.used, .same = self.opposite, .opposite = self.same };
+    }
+
+    /// Where an argument substituted for this formal stands, given where the
+    /// reference itself stands.
     fn compose(self: Positions, reference: Positions) Positions {
-        var result: Positions = if (self.inherited) reference else .{};
-        result.input = result.input or self.input;
-        result.output = result.output or self.output;
+        var result: Positions = .{};
+        if (self.same) result = result.join(reference);
+        if (self.opposite) result = result.join(reference.swap());
         return result;
     }
 
+    /// Whether the declaration body never names this formal.
+    pub fn isUnused(self: Positions) bool {
+        return !self.used;
+    }
+
+    /// Whether occurrences stand on both sides. One row cannot be open on the
+    /// output side and closed on the input side, and every row nested in an
+    /// argument substituted for such a formal stands on both sides too, so
+    /// the whole argument is generated as written, at every depth: a closing
+    /// polarity alone would reopen one function argument position further in.
+    pub fn isInvariant(self: Positions) bool {
+        return self.same and self.opposite;
+    }
+
+    /// The polarity an argument substituted for this formal is generated at,
+    /// given the polarity of the reference. An invariant formal's argument is
+    /// generated closed (see `isInvariant` for its nested rows). A formal
+    /// with no side at all (unused, or only carried through its own
+    /// recursion) keeps the reference's polarity.
     pub fn polarity(self: Positions, reference: anytype) @TypeOf(reference) {
-        if (self.input) return .neg;
-        if (self.inherited or self.isEmpty()) return reference;
-        std.debug.assert(self.output);
-        return .pos;
+        if (self.isInvariant()) return .neg;
+        if (self.opposite) return switch (reference) {
+            .pos => .neg,
+            .neg => .pos,
+        };
+        return reference;
     }
 };
 
@@ -50,272 +84,145 @@ pub fn Solver(comptime Adapter: type) type {
         const Declaration = struct {
             key: Adapter.Key,
             body: Adapter.Annotation,
-            formal_count: usize,
             positions: []Positions,
-            used: []bool,
-            nominal: bool,
-            formal_base: u32,
+            /// Declarations whose bodies reference this one, so they are
+            /// re-solved whenever its positions grow.
+            users: std.ArrayList(usize) = .empty,
+            queued: bool = false,
         };
-        const Pending = struct { annotation: Adapter.Annotation, positions: Positions, dependency: ?usize };
-        const Dependency = struct { formal: u32, parent: ?usize };
-        const Edge = struct { from: u32, to: u32 };
+        const Pending = struct { annotation: Adapter.Annotation, positions: Positions };
+        const Phase = enum { discover, solve };
 
         allocator: Allocator,
         adapter: Adapter,
         declarations: std.ArrayList(Declaration) = .empty,
         by_declaration: std.AutoHashMapUnmanaged(Adapter.Key, usize) = .empty,
         pending: std.ArrayList(Pending) = .empty,
-        next_inherited: std.ArrayList(bool) = .empty,
-        next_positions: std.ArrayList(Positions) = .empty,
-        dependencies: std.ArrayList(Dependency) = .empty,
-        edges: std.ArrayList(Edge) = .empty,
-        active_dependency: ?usize = null,
-        formal_count: u32 = 0,
-        components: []const u32 = &.{},
-        active_component: u32 = 0,
+        worklist: std.ArrayList(usize) = .empty,
         invalid: bool = false,
 
         pub fn deinit(self: *Self) void {
-            for (self.declarations.items) |decl| {
+            for (self.declarations.items) |*decl| {
                 self.allocator.free(decl.positions);
-                self.allocator.free(decl.used);
+                decl.users.deinit(self.allocator);
             }
             self.declarations.deinit(self.allocator);
             self.by_declaration.deinit(self.allocator);
             self.pending.deinit(self.allocator);
-            self.next_inherited.deinit(self.allocator);
-            self.next_positions.deinit(self.allocator);
-            self.dependencies.deinit(self.allocator);
-            self.edges.deinit(self.allocator);
+            self.worklist.deinit(self.allocator);
         }
 
         fn register(self: *Self, key: Adapter.Key) Allocator.Error!?usize {
             if (self.by_declaration.get(key)) |index| return index;
             const declaration = (try self.adapter.declaration(key)) orelse return null;
-            const count = declaration.formal_count;
-            const positions = try self.allocator.alloc(Positions, count);
+            const positions = try self.allocator.alloc(Positions, declaration.formal_count);
             errdefer self.allocator.free(positions);
             @memset(positions, .{});
-            const used = try self.allocator.alloc(bool, count);
-            errdefer self.allocator.free(used);
-            @memset(used, false);
             const index = self.declarations.items.len;
             try self.by_declaration.put(self.allocator, key, index);
-            try self.declarations.append(self.allocator, .{
-                .key = key,
-                .body = declaration.body,
-                .formal_count = count,
-                .positions = positions,
-                .used = used,
-                .nominal = declaration.nominal,
-                .formal_base = self.formal_count,
-            });
-            self.formal_count += @intCast(count);
+            try self.declarations.append(self.allocator, .{ .key = key, .body = declaration.body, .positions = positions });
             return index;
         }
 
         fn push(self: *Self, annotation: Adapter.Annotation, positions: Positions) Allocator.Error!void {
-            // Even a temporarily empty equation retains its argument syntax; a
-            // nested function establishes positions independently of that equation.
-            try self.pending.append(self.allocator, .{ .annotation = annotation, .positions = positions, .dependency = self.active_dependency });
+            try self.pending.append(self.allocator, .{ .annotation = annotation, .positions = positions });
         }
 
         fn pushSlice(self: *Self, annotations: []const Adapter.Annotation, positions: Positions) Allocator.Error!void {
             for (annotations) |annotation| try self.push(annotation, positions);
         }
 
-        const Phase = enum { discover, inheritance, dependencies, witnesses, settle };
-
+        /// Walk one declaration body. Discovery records usedness and the
+        /// declarations each body references; solving joins every
+        /// occurrence's position into the formal's equation and reports
+        /// whether the declaration's positions grew.
         fn evaluate(self: *Self, index: usize, phase: Phase) Allocator.Error!bool {
-            const decl = self.declarations.items[index];
-            if (phase == .witnesses or phase == .settle) {
-                var participates = false;
-                for (0..decl.formal_count) |formal| {
-                    participates = participates or self.components[decl.formal_base + formal] == self.active_component;
-                }
-                if (!participates) return false;
-            }
+            const key = self.declarations.items[index].key;
             var changed = false;
-            if (phase == .inheritance) {
-                try self.next_inherited.resize(self.allocator, decl.formal_count);
-                @memset(self.next_inherited.items, false);
-            }
-            if (phase == .settle) {
-                try self.next_positions.resize(self.allocator, decl.formal_count);
-                @memset(self.next_positions.items, .{});
-            }
-            self.active_dependency = null;
             self.pending.clearRetainingCapacity();
-            try self.push(decl.body, .{ .inherited = true });
+            try self.push(self.declarations.items[index].body, .{ .same = true });
             while (self.pending.pop()) |item| {
-                self.active_dependency = item.dependency;
-                const node = try self.adapter.node(decl.key, item.annotation);
-                const formal = switch (node) {
-                    .formal => |formal_index| formal_index,
-                    .leaf, .invalid, .children, .function, .apply => null,
-                };
-                if (formal) |formal_index| {
-                    if (phase == .discover) {
-                        decl.used[formal_index] = true;
-                        continue;
-                    }
-                    if (phase == .inheritance) {
-                        self.next_inherited.items[formal_index] = self.next_inherited.items[formal_index] or item.positions.inherited;
-                        continue;
-                    }
-                    const formal_id = decl.formal_base + @as(u32, @intCast(formal_index));
-                    if (phase == .dependencies) {
-                        var dependency = item.dependency;
-                        while (dependency) |dep| {
-                            const edge = self.dependencies.items[dep];
-                            try self.edges.append(self.allocator, .{ .from = formal_id, .to = edge.formal });
-                            dependency = edge.parent;
-                        }
-                        continue;
-                    }
-                    if (self.components[formal_id] != self.active_component) {
-                        continue;
-                    }
-                    if (phase == .settle) {
-                        self.next_positions.items[formal_index] = self.next_positions.items[formal_index].join(item.positions);
-                        continue;
-                    }
-                    const old = decl.positions[formal_index];
-                    const joined = old.join(item.positions);
-                    changed = changed or @as(u8, @bitCast(old)) != @as(u8, @bitCast(joined));
-                    decl.positions[formal_index] = joined;
-                    continue;
-                }
-                switch (node) {
+                // Below an argument whose formal has no side yet, nothing
+                // occurs; discovery still visits it for usedness.
+                if (phase == .solve and !item.positions.hasSide()) continue;
+                switch (try self.adapter.node(key, item.annotation)) {
+                    .formal => |formal| {
+                        const positions = self.declarations.items[index].positions;
+                        const old = positions[formal];
+                        const joined = switch (phase) {
+                            .discover => old.join(.{ .used = true }),
+                            .solve => old.join(item.positions),
+                        };
+                        changed = changed or @as(u8, @bitCast(old)) != @as(u8, @bitCast(joined));
+                        positions[formal] = joined;
+                    },
                     .children => |children| try self.pushSlice(children, item.positions),
                     .function => |func| {
-                        self.active_dependency = null;
-                        try self.pushSlice(func.args, .{ .input = true });
-                        try self.push(func.ret, .{ .output = true });
+                        try self.pushSlice(func.args, item.positions.swap());
+                        try self.push(func.ret, item.positions);
                     },
-                    .apply => |apply| {
-                        const args = apply.args;
-                        switch (apply.reference) {
-                            .builtin => try self.pushSlice(args, item.positions),
-                            .invalid => self.invalid = true,
-                            .declaration => |key| {
-                                const target_index = (try self.register(key)) orelse {
-                                    self.invalid = true;
-                                    continue;
-                                };
-                                const target = self.declarations.items[target_index];
-                                if (target.positions.len != args.len) {
-                                    self.invalid = true;
-                                    continue;
-                                }
-                                for (args, target.positions, target.used, 0..) |arg, positions, used, target_formal| {
-                                    // Source argument storage retains a phantom
-                                    // actual, including functions inside it. Usedness
-                                    // is complete before solving positions: an empty
-                                    // equation mid-iteration does not prove unusedness.
-                                    const target_id = target.formal_base + @as(u32, @intCast(target_formal));
-                                    self.active_dependency = item.dependency;
-                                    if (phase == .dependencies and used) {
-                                        const dependency = self.dependencies.items.len;
-                                        try self.dependencies.append(self.allocator, .{ .formal = target_id, .parent = item.dependency });
-                                        self.active_dependency = dependency;
-                                    }
-                                    var transfer = positions;
-                                    if (phase == .witnesses and target.nominal and self.components[target_id] == self.active_component) transfer.inherited = used;
-                                    const argument_positions = if (phase == .discover or !used) item.positions else transfer.compose(item.positions);
-                                    try self.push(arg, argument_positions);
-                                }
-                            },
-                        }
+                    .apply => |apply| switch (apply.reference) {
+                        .builtin => try self.pushSlice(apply.args, item.positions),
+                        .invalid => self.invalid = true,
+                        .declaration => |target_key| {
+                            const target_index = (try self.register(target_key)) orelse {
+                                self.invalid = true;
+                                continue;
+                            };
+                            if (phase == .discover) {
+                                const users = &self.declarations.items[target_index].users;
+                                // Discovery walks one body at a time, so a
+                                // repeated reference repeats the last user.
+                                if (users.items.len == 0 or users.items[users.items.len - 1] != index) try users.append(self.allocator, index);
+                            }
+                            const target_positions = self.declarations.items[target_index].positions;
+                            if (target_positions.len != apply.args.len) {
+                                self.invalid = true;
+                                continue;
+                            }
+                            for (apply.args, target_positions) |arg, target| {
+                                // An unused formal's actual is retained in the
+                                // reference's argument storage at the
+                                // reference's own position. Usedness is
+                                // complete before solving begins.
+                                const argument_positions = if (phase == .discover or target.isUnused()) item.positions else target.compose(item.positions);
+                                try self.push(arg, argument_positions);
+                            }
+                        },
                     },
-                    .formal, .leaf => {},
+                    .leaf => {},
                     .invalid => self.invalid = true,
-                }
-            }
-            if (phase == .inheritance) {
-                for (decl.positions, self.next_inherited.items) |*positions, inherited| {
-                    std.debug.assert(positions.inherited or !inherited);
-                    changed = changed or positions.inherited != inherited;
-                    positions.inherited = inherited;
-                }
-            }
-            if (phase == .settle) {
-                for (decl.positions, self.next_positions.items, 0..) |*positions, next, formal_index| {
-                    if (self.components[decl.formal_base + formal_index] != self.active_component) continue;
-                    const old_bits: u8 = @bitCast(positions.*);
-                    const next_bits: u8 = @bitCast(next);
-                    std.debug.assert((old_bits | next_bits) == old_bits);
-                    changed = changed or old_bits != next_bits;
-                    positions.* = next;
                 }
             }
             return changed;
         }
 
+        fn enqueue(self: *Self, index: usize) Allocator.Error!void {
+            const decl = &self.declarations.items[index];
+            if (decl.queued) return;
+            decl.queued = true;
+            try self.worklist.append(self.allocator, index);
+        }
+
         fn solve(self: *Self) Allocator.Error!void {
-            // Discover every declaration and every retained source-formal
-            // occurrence without depending on the position equations' initial bottom.
+            // Discover every declaration and every source-formal occurrence
+            // before any position equation is solved, so an equation that is
+            // still empty never reads as an unused formal.
             var index: usize = 0;
             while (index < self.declarations.items.len and !self.invalid) : (index += 1) {
                 _ = try self.evaluate(index, .discover);
             }
-            for (self.declarations.items) |decl| {
-                for (decl.positions, decl.used) |*positions, used| positions.inherited = used;
-            }
-            // Pure recursive argument storage preserves inheritance. Function
-            // boundaries remove it, so compute this bit by descending from true.
-            var inheritance_changed = true;
-            while (inheritance_changed and !self.invalid) {
-                inheritance_changed = false;
-                for (0..self.declarations.items.len) |decl_index| inheritance_changed = (try self.evaluate(decl_index, .inheritance)) or inheritance_changed;
-            }
             if (self.invalid) return;
-            const inherited = try self.allocator.alloc(bool, self.formal_count);
-            defer self.allocator.free(inherited);
-            for (self.declarations.items) |decl| {
-                for (decl.positions, 0..) |positions, formal| inherited[decl.formal_base + formal] = positions.inherited;
+            // Least fixed point: positions only grow, each formal has two
+            // sides, and a declaration is re-solved only when one it
+            // references grew.
+            for (0..self.declarations.items.len) |decl_index| try self.enqueue(decl_index);
+            while (self.worklist.pop()) |decl_index| {
+                self.declarations.items[decl_index].queued = false;
+                if (!try self.evaluate(decl_index, .solve)) continue;
+                for (self.declarations.items[decl_index].users.items) |user| try self.enqueue(user);
             }
-            for (0..self.declarations.items.len) |decl_index| _ = try self.evaluate(decl_index, .dependencies);
-            const adjacency = try self.allocator.alloc(std.ArrayListUnmanaged(u32), self.formal_count);
-            defer {
-                for (adjacency) |*edges| edges.deinit(self.allocator);
-                self.allocator.free(adjacency);
-            }
-            @memset(adjacency, .empty);
-            for (self.edges.items) |edge| try adjacency[edge.from].append(self.allocator, edge.to);
-            const components = try self.allocator.alloc(u32, self.formal_count);
-            defer self.allocator.free(components);
-            try stronglyConnectedComponents(self.allocator, adjacency, components);
-            self.components = components;
-            var component_count: u32 = 0;
-            for (components) |component| component_count = @max(component_count, component + 1);
-            for (0..component_count) |component| {
-                self.active_component = @intCast(component);
-                for (self.declarations.items) |decl| {
-                    for (decl.positions, 0..) |*positions, formal| {
-                        if (components[decl.formal_base + formal] == component) positions.* = .{};
-                    }
-                }
-                // Witness only actual contexts at recurring nominal boundaries.
-                // Transparent aliases still compose their own function resets.
-                var changed = true;
-                while (changed) {
-                    changed = false;
-                    for (0..self.declarations.items.len) |decl_index| changed = (try self.evaluate(decl_index, .witnesses)) or changed;
-                }
-                for (self.declarations.items) |decl| {
-                    for (decl.positions, 0..) |*positions, formal| {
-                        if (components[decl.formal_base + formal] == component) positions.inherited = inherited[decl.formal_base + formal];
-                    }
-                }
-                // The witness closure is an upper bound. Ordinary composition now
-                // removes contexts overwritten before the next recurring boundary.
-                changed = true;
-                while (changed) {
-                    changed = false;
-                    for (0..self.declarations.items.len) |decl_index| changed = (try self.evaluate(decl_index, .settle)) or changed;
-                }
-            }
+            std.debug.assert(!self.invalid);
         }
 
         /// Analyze one resolved declaration. The caller owns the returned slice.
@@ -331,75 +238,6 @@ pub fn Solver(comptime Adapter: type) type {
             return .{ .allocator = allocator, .adapter = adapter };
         }
     };
-}
-
-// Components are emitted after all components they depend on.
-fn stronglyConnectedComponents(
-    allocator: Allocator,
-    adjacency: []const std.ArrayListUnmanaged(u32),
-    component_of: []u32,
-) std.mem.Allocator.Error!void {
-    const node_count = adjacency.len;
-    const unvisited = std.math.maxInt(u32);
-    const index_of = try allocator.alloc(u32, node_count);
-    defer allocator.free(index_of);
-    @memset(index_of, unvisited);
-    const low_of = try allocator.alloc(u32, node_count);
-    defer allocator.free(low_of);
-    const on_stack = try allocator.alloc(bool, node_count);
-    defer allocator.free(on_stack);
-    @memset(on_stack, false);
-
-    var component_stack: std.ArrayListUnmanaged(u32) = .empty;
-    defer component_stack.deinit(allocator);
-    const WalkFrame = struct { node: u32, edge: u32 };
-    var walk_frames: std.ArrayListUnmanaged(WalkFrame) = .empty;
-    defer walk_frames.deinit(allocator);
-
-    var next_index: u32 = 0;
-    var next_component: u32 = 0;
-    for (0..node_count) |start| {
-        if (index_of[start] != unvisited) continue;
-        index_of[start] = next_index;
-        low_of[start] = next_index;
-        next_index += 1;
-        try component_stack.append(allocator, @intCast(start));
-        on_stack[start] = true;
-        try walk_frames.append(allocator, .{ .node = @intCast(start), .edge = 0 });
-        while (walk_frames.items.len != 0) {
-            const frame = &walk_frames.items[walk_frames.items.len - 1];
-            const node = frame.node;
-            if (frame.edge < adjacency[node].items.len) {
-                const next = adjacency[node].items[frame.edge];
-                frame.edge += 1;
-                if (index_of[next] == unvisited) {
-                    index_of[next] = next_index;
-                    low_of[next] = next_index;
-                    next_index += 1;
-                    try component_stack.append(allocator, next);
-                    on_stack[next] = true;
-                    try walk_frames.append(allocator, .{ .node = next, .edge = 0 });
-                } else if (on_stack[next]) {
-                    low_of[node] = @min(low_of[node], index_of[next]);
-                }
-                continue;
-            }
-            walk_frames.items.len -= 1;
-            if (walk_frames.items.len != 0) {
-                const parent = walk_frames.items[walk_frames.items.len - 1].node;
-                low_of[parent] = @min(low_of[parent], low_of[node]);
-            }
-            if (low_of[node] == index_of[node]) {
-                while (true) {
-                    const member = component_stack.pop().?;
-                    on_stack[member] = false;
-                    component_of[member] = next_component;
-                    if (member == node) break;
-                }
-                next_component += 1;
-            }
-        }
-    }
 }
 
 /// Only the entire signature's function return is adapter-reachable.

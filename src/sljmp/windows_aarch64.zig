@@ -100,7 +100,6 @@ test "setjmp/longjmp basic functionality" {
     const result = setjmp(&buf);
     if (result == 0) {
         longjmp(&buf, 42);
-        unreachable;
     } else {
         longjmp_called = true;
         try std.testing.expectEqual(@as(c_int, 42), result);
@@ -114,7 +113,6 @@ test "longjmp with value 0 returns 1" {
     const result = setjmp(&buf);
     if (result == 0) {
         longjmp(&buf, 0);
-        unreachable;
     } else {
         try std.testing.expectEqual(@as(c_int, 1), result);
     }
@@ -159,7 +157,7 @@ test "crash protection pattern (nested callback)" {
         const result = setjmp(&env.jmp_buf);
         if (result == 0) {
             _ = env.riskyOperation(true);
-            unreachable;
+            return error.TestUnexpectedResult;
         } else {
             try std.testing.expect(env.crashed);
             try std.testing.expectEqual(@as(c_int, 1), result);

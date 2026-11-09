@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) SmokeError!void {
     const expected_names: []const []const u8 = &.{"roc_main"};
 
     // 1. Builtins + Coordinator.
-    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    var builtin_modules = try eval.BuiltinModules.init(gpa, init.io);
     defer builtin_modules.deinit();
 
     var coord = try Coordinator.init(
@@ -170,11 +170,10 @@ pub fn main(init: std.process.Init) SmokeError!void {
     // 10. Initialize the interpreter and run the entrypoint.
     var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
     defer static_strings.deinit();
-    var interp = try eval.LirInterpreter.initWithBoxyTables(
+    var interp = try eval.LirInterpreter.init(
         gpa,
         &view.store,
         &view.layouts,
-        eval.LirInterpreter.BoxyTables.fromImageView(&view),
         static_strings.view(),
         &roc_ops,
     );

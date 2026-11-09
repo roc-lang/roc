@@ -1,10 +1,9 @@
-//! Decision-tree match compiler for the direct solved-to-LIR lowering.
+//! Decision-tree match compiler for LIR lowering.
 //!
-//! `.boxy` does not consume this yet: it folds match branches into a
-//! sequential chain of its own pattern tests, so the sharing invariant and
-//! the statement-count lint below cover `.lss` only. Bringing `.boxy` onto
-//! this compiler needs a `Ctx` written over its checked patterns and its
-//! representation plan.
+//! The direct solved-to-LIR lowering (`.lss`) reads Lambda Solved patterns
+//! through its `MatchTreeCtx`, and `.boxy` lowering reads checked patterns
+//! through its `Ctx` (`boxy/match.zig`). A lowerer gets the sharing
+//! invariant and the statement-count lint below.
 //!
 //! This module turns a `match` (a list of branches, each a pattern plus an
 //! optional guard and a body) into an explicit decision tree that the host
@@ -48,12 +47,13 @@
 //! site, `runtime_error` otherwise.
 
 const std = @import("std");
+const layout = @import("layout");
 const base = @import("base");
 const collections = @import("collections");
 
 /// Pattern kinds the accessor context reports. This is the module's neutral
-/// view of `PatData` across Monotype Lifted and Lambda Mono inputs; `callable`
-/// only occurs for Lambda Mono.
+/// view of each lowerer's patterns; `callable` only occurs for Lambda Mono,
+/// and `guarded_lit` only for checked patterns.
 pub const PatKind = enum {
     bind,
     wildcard,
@@ -70,6 +70,10 @@ pub const PatKind = enum {
     frac_f64_lit,
     str_lit,
     str_pattern,
+    /// A literal of a type with its own literal conversion: it matches when
+    /// its checked equality guard, which reads the matched value through the
+    /// pattern's binder, holds.
+    guarded_lit,
 };
 
 /// What a test node switches on.
@@ -90,6 +94,11 @@ pub const TestKind = enum {
     str_set,
     /// List length dispatch: exact lengths as switch arms.
     list_len,
+    /// Tag variants tested by name, one test per arm in order: for a union
+    /// whose runtime representation is described only at runtime.
+    tag_name,
+    /// Literal arms decided one at a time by their checked equality guards.
+    guard_lit,
 };
 
 /// One step from a parent occurrence to a child occurrence.
@@ -100,7 +109,7 @@ pub const Step = union(enum) {
     field: u32,
     /// Tag payload `index` of `variant`; `single` payloads extract through
     /// `tag_payload_struct` rather than `tag_payload`.
-    tag_payload: struct { variant: u32, index: u32, single: bool },
+    tag_payload: struct { variant: layout.VariantIndex, index: u32, single: bool },
     /// Callable payload of `variant` (Lambda Mono only).
     callable_payload: struct { variant: u32 },
     /// List element at a fixed index from the front.
@@ -114,6 +123,11 @@ pub const Step = union(enum) {
     nominal_backing,
     /// Capture `index` of a string-set arm with the given shape key.
     str_capture: struct { shape: u32, index: u32 },
+    /// The record minus the fields its record pattern destructures.
+    record_rest,
+    /// The parent value read at another representation, which the context
+    /// names by key.
+    retype: u32,
 };
 
 /// Interned occurrence id; `root` is always index 0.
@@ -140,10 +154,13 @@ pub const OccId = enum(u32) {
 /// tupleItemCount(pat) u32
 /// tupleItem(pat, ty, i) LowerError!SubPat
 /// nominalInner(pat, ty) LowerError!SubPat                 // backing pattern + type
-/// tagVariant(pat, ty) u32
+/// tagVariant(pat, ty) LowerError!u32
 /// tagPayloadCount(pat) u32
 /// tagPayload(pat, ty, i) LowerError!SubPat
 /// tagVariantCount(ty) ?u32                                // null: unknown, never exhaustive
+/// tagTestKind(ty) TestKind                                // .tag or .tag_name
+/// recordRest(pat, ty) LowerError!?SubPat                  // a record pattern's rest
+/// retype(pat, ty) ?Retype                                 // match `pat` at another representation
 /// callableVariant(pat, ty) u32                            // Lambda Mono only
 /// callablePayload(pat, ty) LowerError!?SubPat
 /// callableVariantCount(ty) ?u32
@@ -159,8 +176,10 @@ pub const OccId = enum(u32) {
 /// strCapturePat(pat, i) ?PatId
 /// ```
 ///
-/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` (field
-/// names, not the concrete type, are what matters).
+/// where `SubPat = struct { index: u32, ty: TypeId, pat: PatId }` and
+/// `Retype = struct { key: u32, ty: TypeId }` (field names, not the concrete
+/// types, are what matters). A `retype` answer must be null for the
+/// representation it names.
 pub fn Compiler(comptime Ctx: type) type {
     return struct {
         pub const PatId = Ctx.PatId;
@@ -341,6 +360,8 @@ pub fn Compiler(comptime Ctx: type) type {
                     .list_rest => |r| .{ .parent = parent.idx(), .tag = 6, .a = r.front, .b = r.back },
                     .nominal_backing => .{ .parent = parent.idx(), .tag = 7, .a = 0, .b = 0 },
                     .str_capture => |c| .{ .parent = parent.idx(), .tag = 8, .a = c.shape, .b = c.index },
+                    .record_rest => .{ .parent = parent.idx(), .tag = 9, .a = 0, .b = 0 },
+                    .retype => |key| .{ .parent = parent.idx(), .tag = 10, .a = key, .b = 0 },
                 };
             }
 
@@ -378,7 +399,13 @@ pub fn Compiler(comptime Ctx: type) type {
                         .field => |field| {
                             const is_record = self.ctx.patKind(field.pat) == .record;
                             const count = if (is_record) self.ctx.recordDestructCount(field.pat) else self.ctx.tupleItemCount(field.pat);
-                            if (field.index == count) continue;
+                            if (field.index == count) {
+                                if (!is_record) continue;
+                                const rest = (try self.ctx.recordRest(field.pat, field.ty)) orelse continue;
+                                const child = try self.intern(field.occ, .record_rest, rest.ty);
+                                try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = rest.ty, .pat = rest.pat } });
+                                continue;
+                            }
                             const sub = if (is_record)
                                 try self.ctx.recordDestruct(field.pat, field.ty, field.index)
                             else
@@ -391,6 +418,11 @@ pub fn Compiler(comptime Ctx: type) type {
                             continue;
                         },
                     };
+                    if (self.ctx.retype(current.pat, current.ty)) |retyped| {
+                        const child = try self.intern(current.occ, .{ .retype = retyped.key }, retyped.ty);
+                        try pending.append(self.arena, .{ .pattern = .{ .occ = child, .ty = retyped.ty, .pat = current.pat } });
+                        continue;
+                    }
                     self.stats.pattern_nodes += 1;
                     switch (self.ctx.patKind(current.pat)) {
                         .bind => try binds.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .local = self.ctx.bindLocal(current.pat) }),
@@ -420,7 +452,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             }
                             try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
                         },
-                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern => {
+                        .tag, .callable, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit, .str_pattern, .guarded_lit => {
                             try cols.append(self.arena, .{ .occ = current.occ, .ty = current.ty, .pat = current.pat });
                         },
                     }
@@ -458,13 +490,14 @@ pub fn Compiler(comptime Ctx: type) type {
 
             fn testKindOf(self: *Builder, col: Col) TestKind {
                 return switch (self.ctx.patKind(col.pat)) {
-                    .tag => .tag,
+                    .tag => self.ctx.tagTestKind(col.ty),
                     .callable => .callable,
                     .int_lit => if (self.ctx.intSwitchValue(col.pat, col.ty) != null) .int_switch else .eq_chain,
                     .dec_lit, .frac_f32_lit, .frac_f64_lit => .eq_chain,
                     .str_lit => if (self.ctx.strLitIsSetArm()) .str_set else .eq_chain,
                     .str_pattern => .str_set,
                     .list => .list_len,
+                    .guarded_lit => .guard_lit,
                     .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable, // normalized away
                 };
             }
@@ -527,15 +560,15 @@ pub fn Compiler(comptime Ctx: type) type {
                 try binds.appendSlice(self.arena, row.binds);
 
                 switch (kind) {
-                    .tag => {
-                        const variant = self.ctx.tagVariant(col.pat, col.ty);
+                    .tag, .tag_name => {
+                        const variant = try self.ctx.tagVariant(col.pat, col.ty);
                         const count = self.ctx.tagPayloadCount(col.pat);
                         const single = count == 1;
                         var i: u32 = 0;
                         while (i < count) : (i += 1) {
                             const sub = try self.ctx.tagPayload(col.pat, col.ty, i);
                             const child = try self.intern(col.occ, .{ .tag_payload = .{
-                                .variant = variant,
+                                .variant = @intCast(variant),
                                 .index = sub.index,
                                 .single = single,
                             } }, sub.ty);
@@ -549,7 +582,7 @@ pub fn Compiler(comptime Ctx: type) type {
                             try self.normalize(child, sub.ty, sub.pat, &cols, &binds);
                         }
                     },
-                    .int_switch, .eq_chain, .str_set, .list_len => unreachable,
+                    .int_switch, .eq_chain, .str_set, .list_len, .guard_lit => unreachable, // groupFrame, the only caller, passes only .tag and .callable
                 }
 
                 for (row.cols) |c| {
@@ -792,9 +825,9 @@ pub fn Compiler(comptime Ctx: type) type {
                         }
                         const arms = task.arms;
                         const exhaustive = switch (task.kind) {
-                            .tag => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
+                            .tag, .tag_name => if (self.ctx.tagVariantCount(task.occ_ty)) |count| arms.len == count else false,
                             .callable => if (self.ctx.callableVariantCount(task.occ_ty)) |count| arms.len == count else false,
-                            .int_switch, .eq_chain, .str_set, .list_len => false,
+                            .int_switch, .eq_chain, .str_set, .list_len, .guard_lit => false,
                         };
 
                         const default: ?*Tree = if (exhaustive) null else if (have_below)
@@ -863,7 +896,11 @@ pub fn Compiler(comptime Ctx: type) type {
                         i += 1;
                         continue;
                     }
-                    const run = self.runLength(rows[i..], col.occ, kind);
+                    // A guarded literal's test is a predicate of its own, so
+                    // one passing says nothing about another: each row tests
+                    // alone, and a miss anywhere in it (its test, a later
+                    // column, or its guard) continues with the rows after it.
+                    const run = if (kind == .guard_lit) 1 else self.runLength(rows[i..], col.occ, kind);
                     std.debug.assert(run > 0);
                     try segments.append(self.arena, .{ .start = i, .end = i + run, .kind = .{ .group = .{ .occ = col.occ, .ty = col.ty, .kind = kind } } });
                     i += run;
@@ -975,8 +1012,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         try arm_rows.append(self.arena, .empty);
                     }
                     const spec = switch (kind) {
-                        .tag, .callable => try self.specTagRow(row, col, kind),
-                        .int_switch, .eq_chain => try self.specLiteralRow(row, col),
+                        .tag, .tag_name, .callable => try self.specTagRow(row, col, kind),
+                        .int_switch, .eq_chain, .guard_lit => try self.specLiteralRow(row, col),
                         .str_set => try self.specStrRow(row, col, @truncate(key)),
                         .list_len => try self.specListRow(row, col, .{ .exact = @truncate(key) }),
                     };
@@ -1072,6 +1109,10 @@ pub fn Compiler(comptime Ctx: type) type {
         /// readListElemBack(target, source, len_local, back, next) CFStmtId
         /// readListRest(target, source, len_local, front, back, next) CFStmtId
         /// readNominalBacking(target, backing_ty, source, nominal_ty, next) CFStmtId
+        /// readRecordRest(target, rest_ty, source, record_ty, next) CFStmtId
+        /// readRetype(target, ty, source, source_ty, next) CFStmtId
+        /// tagNameTest(source, ty, pat, on_match, on_miss) CFStmtId
+        /// literalGuardTemp(pat) LirLocal
         /// switchStmt(cond, values: []const u64, bodies: []const CFStmtId, default) CFStmtId
         /// lenGteTest(len_local, min, then, els) CFStmtId
         /// literalEqTest(source, ty, pat, on_match, on_miss) CFStmtId
@@ -1136,12 +1177,16 @@ pub fn Compiler(comptime Ctx: type) type {
         /// Work the emitter hands back to the host lowerer. Each request is
         /// answered by passing the lowered statement to `Emitter.advance`.
         pub const EmitRequest = union(enum) {
-            /// Lower a branch body into the host's result local, then `next`.
-            body: struct { body: ExprId, next: CtxStmt },
+            /// Lower a branch body into the host's result local, then jump
+            /// to `done` when the body falls through.
+            body: struct { body: ExprId, done: Ctx.JoinPointId },
             /// Lower a branch's binding statements, then `next`.
             bindings: struct { bindings: BindingSpan, next: CtxStmt },
             /// Lower a guard expression into `cond`, then `next`.
             guard: struct { cond: CtxLocal, guard: ExprId, next: CtxStmt },
+            /// Bind `pat`'s matched value from `value`, lower its checked
+            /// equality guard into `cond`, then `next`.
+            literal_guard: struct { pat: PatId, value: CtxLocal, cond: CtxLocal, next: CtxStmt },
         };
 
         pub const EmitProgress = union(enum) {
@@ -1157,10 +1202,13 @@ pub fn Compiler(comptime Ctx: type) type {
             tree_stats: Stats,
             done: Ctx.JoinPointId,
             uses: collections.DenseMap(OccId, OccUse),
+            /// Each test's run of `scoped_use_items`, by the test's
+            /// `scopeOwnerIndex`.
+            scoped_uses: collections.DenseMapUnmanaged(u32, ScopedUseRun) = .empty,
             /// Every used occurrence in interning order, grouped by the test
             /// whose scope establishes it.
-            scoped_uses: std.AutoHashMapUnmanaged(ScopeOwner, std.ArrayList(ScopedUse)) = .empty,
-            exit_joins: std.AutoHashMap(u32, Ctx.JoinPointId),
+            scoped_use_items: []ScopedUse = &.{},
+            exit_joins: collections.DenseMap(u32, Ctx.JoinPointId),
             /// Statements added by delegated body/guard lowering, excluded
             /// from the lint's machinery count.
             delegated_stmts: usize,
@@ -1177,7 +1225,7 @@ pub fn Compiler(comptime Ctx: type) type {
             /// so a nested scope records each local it adds or changes and
             /// restores them all before its enclosing scope continues.
             const Env = struct {
-                locals: std.AutoHashMapUnmanaged(OccId, EmitLocals),
+                locals: collections.DenseMapUnmanaged(OccId, EmitLocals),
                 undo: std.ArrayList(EnvUndo) = .empty,
 
                 const EnvUndo = struct { occ: OccId, previous: ?EmitLocals };
@@ -1198,7 +1246,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     while (self.undo.items.len > mark) {
                         const entry = self.undo.pop().?;
                         if (entry.previous) |previous| {
-                            self.locals.putAssumeCapacity(entry.occ, previous);
+                            self.locals.putInReservedPage(entry.occ, previous);
                         } else {
                             _ = self.locals.remove(entry.occ);
                         }
@@ -1220,6 +1268,8 @@ pub fn Compiler(comptime Ctx: type) type {
                 switch_: SwitchTask,
                 eq_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
                 str_set: StrSetTask,
+                tag_name: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
+                guard_chain: struct { t: TestNode, env: *Env, source: CtxLocal = undefined, current: CtxStmt = undefined },
             };
 
             const TreeTask = struct {
@@ -1358,6 +1408,8 @@ pub fn Compiler(comptime Ctx: type) type {
                     .switch_ => |*task| self.stepSwitch(frame, task, input),
                     .eq_chain => |*task| self.stepEqChain(frame, task, input),
                     .str_set => |*task| self.stepStrSet(frame, task, input),
+                    .tag_name => |*task| self.stepTagName(frame, task, input),
+                    .guard_chain => |*task| self.stepGuardChain(frame, task, input),
                 };
             }
 
@@ -1396,6 +1448,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_elem_front,
                         .nominal_backing,
                         .str_capture,
+                        .record_rest,
+                        .retype,
                         => {},
                     }
                 }
@@ -1417,7 +1471,8 @@ pub fn Compiler(comptime Ctx: type) type {
                             // read (payload extraction marks the value on its
                             // own).
                             .tag, .callable => if (!(t.exhaustive and t.arms.len == 1)) try self.markUse(t.occ, .disc),
-                            .int_switch, .eq_chain, .str_set => try self.markUse(t.occ, .value),
+                            .tag_name => if (!(t.exhaustive and t.arms.len == 1)) try self.markUse(t.occ, .value),
+                            .int_switch, .eq_chain, .str_set, .guard_lit => try self.markUse(t.occ, .value),
                             .list_len => try self.markUse(t.occ, .len),
                         }
                         for (t.arms) |arm| try trees.append(self.arena, arm.subtree);
@@ -1448,7 +1503,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_elem_back => |j| return .{ .list_len = .{ .occ = entry.parent, .min_len = j } },
                         .list_rest => |r| return .{ .list_len = .{ .occ = entry.parent, .min_len = @as(u64, r.front) + r.back } },
                         .str_capture => |c| return .{ .str_arm = .{ .occ = entry.parent, .shape = c.shape } },
-                        .root, .field, .nominal_backing => walk = entry.parent,
+                        .root, .field, .nominal_backing, .record_rest, .retype => walk = entry.parent,
                     }
                 }
                 return .top;
@@ -1476,42 +1531,59 @@ pub fn Compiler(comptime Ctx: type) type {
                 extractions: *std.ArrayList(Extraction),
             ) Ctx.LowerError!void {
                 // Deterministic iteration: occs in interning order.
-                const scoped = self.scoped_uses.get(scopeOwner(scope)) orelse return;
-                for (scoped.items) |entry| {
+                const run = self.scoped_uses.get(try scopeOwnerIndex(scope)) orelse return;
+                for (self.scoped_use_items[run.start..][0..run.len]) |entry| {
                     if (!scopeSatisfies(scope, entry.needed)) continue;
                     try self.materialize(env, entry.occ, self.uses.get(entry.occ).?, extractions);
                 }
             }
 
-            /// The test a scope belongs to: only a scope of the same test can
-            /// satisfy another.
-            const ScopeOwner = struct {
-                kind: std.meta.Tag(Scope),
-                occ: OccId,
-            };
-
             const ScopedUse = struct { occ: OccId, needed: Scope };
+            const ScopedUseRun = struct { start: u32, len: u32 };
 
-            fn scopeOwner(scope: Scope) ScopeOwner {
-                return switch (scope) {
-                    .top => .{ .kind = .top, .occ = .root },
-                    .tag_arm => |s| .{ .kind = .tag_arm, .occ = s.occ },
-                    .callable_arm => |s| .{ .kind = .callable_arm, .occ = s.occ },
-                    .list_len => |s| .{ .kind = .list_len, .occ = s.occ },
-                    .str_arm => |s| .{ .kind = .str_arm, .occ = s.occ },
+            /// The test a scope belongs to, as a dense index: only a scope of
+            /// the same test can satisfy another, and a test is its kind on
+            /// its occurrence.
+            fn scopeOwnerIndex(scope: Scope) error{OutOfMemory}!u32 {
+                const kind_count = @typeInfo(std.meta.Tag(Scope)).@"enum".field_names.len;
+                const occ: OccId = switch (scope) {
+                    .top => .root,
+                    .tag_arm => |s| s.occ,
+                    .callable_arm => |s| s.occ,
+                    .list_len => |s| s.occ,
+                    .str_arm => |s| s.occ,
                 };
+                const by_occ = std.math.mul(u32, @backingInt(occ), kind_count) catch return error.OutOfMemory;
+                return std.math.add(u32, by_occ, @backingInt(std.meta.activeTag(scope))) catch return error.OutOfMemory;
             }
 
             /// Group the used occurrences by the test establishing them, once
-            /// every use is marked.
+            /// every use is marked: each test's uses form one run, in
+            /// interning order.
             fn indexScopedUses(self: *Emitter) error{OutOfMemory}!void {
+                var used = std.ArrayList(ScopedUse).empty;
                 for (0..self.occs.len) |i| {
                     const occ: OccId = @fromBackingInt(@intCast(i));
                     if (!self.uses.contains(occ)) continue;
-                    const needed = self.establishingScope(occ);
-                    const gop = try self.scoped_uses.getOrPut(self.arena, scopeOwner(needed));
-                    if (!gop.found_existing) gop.value_ptr.* = .empty;
-                    try gop.value_ptr.append(self.arena, .{ .occ = occ, .needed = needed });
+                    try used.append(self.arena, .{ .occ = occ, .needed = self.establishingScope(occ) });
+                }
+                for (used.items) |entry| {
+                    const gop = try self.scoped_uses.getOrPut(self.arena, try scopeOwnerIndex(entry.needed));
+                    if (!gop.found_existing) gop.value_ptr.* = .{ .start = 0, .len = 0 };
+                    gop.value_ptr.len += 1;
+                }
+                var next: u32 = 0;
+                var runs = self.scoped_uses.valueIterator();
+                while (runs.next()) |run| {
+                    run.start = next;
+                    next += run.len;
+                    run.len = 0;
+                }
+                self.scoped_use_items = try self.arena.alloc(ScopedUse, used.items.len);
+                for (used.items) |entry| {
+                    const run = self.scoped_uses.getPtr(try scopeOwnerIndex(entry.needed)).?;
+                    self.scoped_use_items[run.start + run.len] = entry;
+                    run.len += 1;
                 }
             }
 
@@ -1584,6 +1656,8 @@ pub fn Compiler(comptime Ctx: type) type {
                                 .list_elem_back => |back| try self.ctx.readListElemBack(target, parent, self.lenLocal(env, entry.parent), back, current),
                                 .list_rest => |r| try self.ctx.readListRest(target, parent, self.lenLocal(env, entry.parent), r.front, r.back, current),
                                 .nominal_backing => try self.ctx.readNominalBacking(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
+                                .record_rest => try self.ctx.readRecordRest(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
+                                .retype => try self.ctx.readRetype(target, entry.ty, parent, self.occEntry(entry.parent).ty, current),
                                 .str_capture => unreachable, // registered by the string arm
                             };
                         },
@@ -1593,15 +1667,18 @@ pub fn Compiler(comptime Ctx: type) type {
             }
 
             fn valueLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).value orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.value orelse base.invariant("match_tree invariant violated: occurrence {d} value local was read without a marked value use", .{occ.idx()});
             }
 
             fn lenLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).len orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.len orelse base.invariant("match_tree invariant violated: occurrence {d} len local was read without a marked len use", .{occ.idx()});
             }
 
             fn discLocal(_: *const Emitter, env: *Env, occ: OccId) CtxLocal {
-                return (env.locals.get(occ) orelse unreachable).disc orelse unreachable;
+                const locals = env.locals.get(occ) orelse base.invariant("match_tree invariant violated: occurrence {d} was read before materialize registered its locals", .{occ.idx()});
+                return locals.disc orelse base.invariant("match_tree invariant violated: occurrence {d} disc local was read without a marked disc use", .{occ.idx()});
             }
 
             fn emitBinds(self: *Emitter, binds: []const Bind, env: *Env, next: CtxStmt) Ctx.LowerError!CtxStmt {
@@ -1621,7 +1698,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     .leaf => |leaf| switch (frame.cursor) {
                         0 => {
                             frame.cursor = 1;
-                            return .{ .request = .{ .body = .{ .body = leaf.body, .next = try self.ctx.joinJump(self.done) } } };
+                            return .{ .request = .{ .body = .{ .body = leaf.body, .done = self.done } } };
                         },
                         1 => {
                             frame.cursor = 2;
@@ -1632,7 +1709,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     .guard => |g| switch (frame.cursor) {
                         0 => {
                             frame.cursor = 1;
-                            return .{ .request = .{ .body = .{ .body = g.body, .next = try self.ctx.joinJump(self.done) } } };
+                            return .{ .request = .{ .body = .{ .body = g.body, .done = self.done } } };
                         },
                         1 => {
                             task.body = input.?;
@@ -1658,6 +1735,8 @@ pub fn Compiler(comptime Ctx: type) type {
                         .list_len => .{ .switch_ = .{ .t = t, .env = env, .selector = .len } },
                         .eq_chain => .{ .eq_chain = .{ .t = t, .env = env } },
                         .str_set => .{ .str_set = .{ .t = t, .env = env } },
+                        .tag_name => .{ .tag_name = .{ .t = t, .env = env } },
+                        .guard_lit => .{ .guard_chain = .{ .t = t, .env = env } },
                     } },
                     .len_check => |lc| switch (frame.cursor) {
                         0 => {
@@ -1703,10 +1782,10 @@ pub fn Compiler(comptime Ctx: type) type {
                 }
                 const t = task.t;
                 const scope: Scope = switch (t.kind) {
-                    .tag => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
+                    .tag, .tag_name => .{ .tag_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
                     .callable => .{ .callable_arm = .{ .occ = t.occ, .variant = @intCast(task.arm.key) } },
                     .list_len => .{ .list_len = .{ .occ = t.occ, .min_len = @truncate(task.arm.key) } },
-                    .int_switch, .eq_chain => {
+                    .int_switch, .eq_chain, .guard_lit => {
                         // Literal arms impose no sub-structure; no new scope.
                         return .{ .tail = .{ .tree = .{ .tree = task.arm.subtree, .env = task.env } } };
                     },
@@ -1798,6 +1877,63 @@ pub fn Compiler(comptime Ctx: type) type {
                 return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
             }
 
+            /// Name tests, one per arm in order, each falling through to the
+            /// next. An exhaustive test takes its last arm without a test.
+            fn stepTagName(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        if (t.exhaustive and t.arms.len == 1) {
+                            return .{ .tail = .{ .arm = .{ .t = t, .arm = t.arms[0], .env = task.env } } };
+                        }
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.cursor = 1;
+                        if (t.exhaustive) {
+                            frame.index = t.arms.len - 1;
+                            return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+                        }
+                        frame.index = t.arms.len;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        task.current = try self.ctx.tagNameTest(task.source, t.ty, arm.example, input.?, task.current);
+                    },
+                }
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+            }
+
+            /// Checked equality guards, one per arm in order: each binds the
+            /// matched value and evaluates its guard, falling through to the
+            /// next arm when it does not hold.
+            fn stepGuardChain(self: *Emitter, frame: *EmitFrame, task: anytype, input: ?CtxStmt) Ctx.LowerError!EmitStep {
+                const t = task.t;
+                switch (frame.cursor) {
+                    0 => {
+                        task.source = self.valueLocal(task.env, t.occ);
+                        frame.index = t.arms.len;
+                        frame.cursor = 1;
+                        return .{ .call = .{ .tree = .{ .tree = t.default.?, .env = task.env } } };
+                    },
+                    1, 3 => task.current = input.?,
+                    else => {
+                        const arm = t.arms[frame.index];
+                        const cond = try self.ctx.literalGuardTemp(arm.example);
+                        const branch = try self.ctx.boolSwitch(cond, input.?, task.current);
+                        frame.cursor = 3;
+                        return .{ .request = .{ .literal_guard = .{ .pat = arm.example, .value = task.source, .cond = cond, .next = branch } } };
+                    },
+                }
+                if (frame.index == 0) return .{ .ret = task.current };
+                frame.index -= 1;
+                frame.cursor = 2;
+                return .{ .call = .{ .arm = .{ .t = t, .arm = t.arms[frame.index], .env = task.env } } };
+            }
+
             fn stepStrSet(self: *Emitter, frame: *EmitFrame, task: *StrSetTask, input: ?CtxStmt) Ctx.LowerError!EmitStep {
                 const t = task.t;
                 switch (frame.cursor) {
@@ -1859,7 +1995,7 @@ const MockPat = union(enum) {
     record: []const MockSub,
     tuple: []const MockSub,
     nominal: MockSub,
-    tag: struct { variant: u32, payloads: []const MockSub },
+    tag: struct { variant: layout.VariantIndex, payloads: []const MockSub },
     int_lit: struct { value: i64, switchable: bool = true },
     dec_lit: i128,
     str_lit: u32,
@@ -1937,7 +2073,7 @@ const MockCtx = struct {
         return self.get(pat).nominal;
     }
 
-    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) u32 {
+    pub fn tagVariant(self: MockCtx, pat: u32, _: u32) LowerError!layout.VariantIndex {
         return self.get(pat).tag.variant;
     }
 
@@ -1955,14 +2091,26 @@ const MockCtx = struct {
     }
 
     pub fn callableVariant(_: MockCtx, _: u32, _: u32) u32 {
-        unreachable;
+        unreachable; // patKind maps no MockPat to .callable, so no column has a callable test
     }
 
     pub fn callablePayload(_: MockCtx, _: u32, _: u32) LowerError!?MockSub {
-        unreachable;
+        unreachable; // patKind maps no MockPat to .callable, so no column has a callable test
     }
 
     pub fn callableVariantCount(_: MockCtx, _: u32) ?u32 {
+        return null;
+    }
+
+    pub fn tagTestKind(_: MockCtx, _: u32) TestKind {
+        return .tag;
+    }
+
+    pub fn recordRest(_: MockCtx, _: u32, _: u32) LowerError!?MockSub {
+        return null;
+    }
+
+    pub fn retype(_: MockCtx, _: u32, _: u32) ?struct { key: u32, ty: u32 } {
         return null;
     }
 
@@ -1992,7 +2140,7 @@ const MockCtx = struct {
             .str_lit => |s| s,
             .str_pattern => |s| s.shape,
             .list => |l| l.elems.len,
-            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable,
+            .bind, .wildcard, .as_pattern, .record, .tuple, .nominal => unreachable, // normalize expands these into sub-columns, so tested columns hold constructors
         };
     }
 
@@ -2037,7 +2185,7 @@ fn mockBranches(comptime n: usize, pats: [n]u32) [n]TestCompiler.Branch {
 }
 
 test "N tag branches with wildcard become one multiway test" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2067,7 +2215,7 @@ test "N tag branches with wildcard become one multiway test" {
 }
 
 test "closed tag match is exhaustive with no default and no fail" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2088,7 +2236,7 @@ test "closed tag match is exhaustive with no default and no fail" {
 }
 
 test "open tag match without wildcard keeps a fail default" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2109,7 +2257,7 @@ test "open tag match without wildcard keeps a fail default" {
 }
 
 test "duplicate constructors merge into one arm preserving row order" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2138,7 +2286,7 @@ test "duplicate constructors merge into one arm preserving row order" {
 }
 
 test "guarded wildcard row splits tag groups and shares the continuation" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2174,7 +2322,7 @@ test "guarded wildcard row splits tag groups and shares the continuation" {
 }
 
 test "tag payloads specialize into payload occurrence columns" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2211,7 +2359,7 @@ test "tag payloads specialize into payload occurrence columns" {
 }
 
 test "string arms with identical shapes merge and retry on guard failure" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2258,7 +2406,7 @@ test "string arms with identical shapes merge and retry on guard failure" {
 }
 
 test "list exact lengths bucket into one length test with rest row below" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2297,7 +2445,7 @@ test "list exact lengths bucket into one length test with rest row below" {
 }
 
 test "leading rest row forms a len_check with the remaining rows below" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2325,7 +2473,7 @@ test "leading rest row forms a len_check with the remaining rows below" {
 }
 
 test "continuation referenced from two miss sites keeps its exit join" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2356,7 +2504,7 @@ test "continuation referenced from two miss sites keeps its exit join" {
 }
 
 test "unguarded irrefutable row makes later rows dead" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2376,7 +2524,7 @@ test "unguarded irrefutable row makes later rows dead" {
 }
 
 test "records and tuples destructure without tests" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2414,7 +2562,7 @@ test "records and tuples destructure without tests" {
 }
 
 test "column selection prefers the longer run" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2450,7 +2598,7 @@ test "column selection prefers the longer run" {
 }
 
 test "non-switchable ints fall back to eq_chain kind" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -2471,7 +2619,7 @@ test "non-switchable ints fall back to eq_chain kind" {
 }
 
 test "pattern node stats count normalized nodes" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena_state = base.SingleThreadArena.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

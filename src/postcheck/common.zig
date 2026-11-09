@@ -8,6 +8,7 @@ const lir_core = @import("lir_core");
 
 const checked = check.CheckedModule;
 const LIR = lir_core.LIR;
+const LiteralDemand = @import("literal_demand.zig");
 
 /// Span into one of a post-check IR's flat side tables.
 ///
@@ -103,6 +104,14 @@ pub const RootRequests = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
+    /// The requests from this position on are discovery roots: runtime roots
+    /// lowered only to register the literal roots they reach, which no
+    /// consumer of the program runs (design.md "Demand-Driven Compile-Time
+    /// Specialization"). Null when the program has none.
+    discovery_start: ?usize = null,
+    /// Which specializations can register a literal root; present exactly
+    /// when `discovery_start` is.
+    literal_demand: ?*const LiteralDemand.LiteralDemand = null,
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
@@ -142,11 +151,15 @@ pub const StaticDataId = enum(u32) { _ };
 
 /// Optional command-level test-plan metadata for a checked root request.
 pub const RootTestPlanMetadata = struct {
-    /// Exact position in the producer-owned root request sequence.
+    /// Position in the execution subset (offset when CTFE prefixes its roots).
     request_index: u32,
+    /// Original source root order; never renumbered by cache admission.
     root_order: u32,
+    /// Slot in the complete reporting plan, including cached results.
     result_index: u32,
+    /// Original source module index, independent of execution partitions.
     module_index: u32,
+    /// Original root index within its source module.
     root_index: u32,
 };
 
@@ -239,7 +252,7 @@ pub fn primitiveLayout(primitive: checked.CheckedPrimitive) layout.Idx {
     };
 }
 
-/// The inspection operation shared by Monotype and Boxy for a primitive type.
+/// The inspection operation for a primitive type.
 pub const PrimitiveInspectLowering = union(enum) {
     low_level: LIR.LowLevel,
     builtin_method,
@@ -302,7 +315,7 @@ pub fn invariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: {s}", .{message});
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// `invariant` with runtime context formatted into the panic message.
@@ -310,7 +323,7 @@ pub fn invariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     if (@import("builtin").mode == .debug) {
         base.invariant("postcheck invariant violated: " ++ fmt, args);
     }
-    unreachable;
+    unreachable; // callers only report compiler invariants, which design.md makes unreachable outside debug builds
 }
 
 /// Stop the build with a compiler-bug message in every build mode.
@@ -372,47 +385,19 @@ test "test metadata uses explicit union request positions across equal root orde
     var root: checked.RootRequest = undefined;
     root.order = 0;
     const roots: RootRequests = .{ .test_plan_metadata = &.{
-        .{ .request_index = 2, .root_order = 0, .result_index = 0, .module_index = 4, .root_index = 0 },
-        .{ .request_index = 3, .root_order = 0, .result_index = 1, .module_index = 7, .root_index = 0 },
+        .{ .request_index = 2, .root_order = 0, .result_index = 11, .module_index = 4, .root_index = 3 },
+        .{ .request_index = 3, .root_order = 0, .result_index = 29, .module_index = 7, .root_index = 5 },
     } };
     try std.testing.expect(testPlanMetadataForRoot(roots, root, 0) == null);
     try std.testing.expectEqual(@as(u32, 4), testPlanMetadataForRoot(roots, root, 2).?.module_index);
     try std.testing.expectEqual(@as(u32, 7), testPlanMetadataForRoot(roots, root, 3).?.module_index);
+    try std.testing.expectEqual(@as(u32, 11), testPlanMetadataForRoot(roots, root, 2).?.result_index);
+    try std.testing.expectEqual(@as(u32, 29), testPlanMetadataForRoot(roots, root, 3).?.result_index);
+    try std.testing.expectEqual(@as(u32, 5), testPlanMetadataForRoot(roots, root, 3).?.root_index);
 }
 
-/// What the object cache knows about a specialization it can serve: the
-/// content identity of its compiled procedure and the ownership signature
-/// and uniqueness facts ARC solved for it, which the program that links the
-/// entry adopts as fixed.
-pub const SpecCacheHit = struct {
-    identity: [32]u8,
-    /// Producer-owned reachability summary: null means independent of app
-    /// filling; otherwise the code requires this exact platform/app relation.
-    platform_requirement_relation: ?[32]u8 = null,
-    rc_borrowed_params: u64,
-    rc_ret_borrowed: bool,
-    rc_ret_lenders: u64,
-    rc_read_only_params: u64,
-    rc_ret_unique: bool,
-    rc_ret_unique_fields: u64,
-    /// Each entry a `LIR.RcRetCondition`, borrowed from the cache.
-    rc_ret_conditions: []const u32,
-};
-
-/// The object cache's answer for a specialization key, asked when Monotype
-/// reserves the specialization and before its body exists. The consumer that
-/// owns the cache supplies the context and the lookup.
-pub const SpecCacheLookup = struct {
-    context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
-
-    /// Session capability identity, not a persistent cache key. Equal providers
-    /// expose the same immutable offer and artifact collection to both readers.
-    pub fn sameProvider(self: SpecCacheLookup, other: SpecCacheLookup) bool {
-        return self.context == other.context and self.find == other.find;
-    }
-
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
-        return self.find(self.context, key, current_relation);
-    }
+/// A checked compile-time root, named by its module's identity bytes.
+pub const ComptimeRootRead = extern struct {
+    module: [32]u8,
+    root: u32,
 };

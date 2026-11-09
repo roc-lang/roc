@@ -135,7 +135,6 @@ MISSING MATCH ARROW - fuzz_crash_019.md:60:16:60:16
 MISSING MATCH ARROW - fuzz_crash_019.md:62:5:62:5
 MISSING MATCH ARROW - fuzz_crash_019.md:63:7:63:7
 MISSING MATCH ARROW - fuzz_crash_019.md:66:12:66:12
-EXPECTED RECORD ACCESSOR - fuzz_crash_019.md:83:2:83:5
 UNDECLARED TYPE - fuzz_crash_019.md:13:13:13:16
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:13:19:13:21
 UNDECLARED TYPE VARIABLE - fuzz_crash_019.md:19:4:19:6
@@ -156,6 +155,7 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_019.md:74:9:74:15
 VAR NAME MISSING `$` - fuzz_crash_019.md:77:6:77:8
 NAME NOT IN SCOPE - fuzz_crash_019.md:78:9:78:14
+NAME NOT IN SCOPE - fuzz_crash_019.md:80:3:80:6
 NAME NOT IN SCOPE - fuzz_crash_019.md:86:9:86:11
 NAME NOT IN SCOPE - fuzz_crash_019.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_019.md:92:11:92:15
@@ -176,6 +176,7 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:105:55:105:59
 NAME NOT IN SCOPE - fuzz_crash_019.md:105:60:105:64
 NAME NOT IN SCOPE - fuzz_crash_019.md:108:4:108:5
 NAME NOT IN SCOPE - fuzz_crash_019.md:108:6:108:8
+UNREACHABLE CODE - fuzz_crash_019.md:83:2:110:3
 UNUSED VARIABLE - fuzz_crash_019.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_019.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_019.md:96:2:96:4
@@ -192,18 +193,18 @@ DOES NOT EXIST - fuzz_crash_019.md:93:2:93:7
 TOO FEW ARGS - fuzz_crash_019.md:17:3:18:4
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:22:1:23:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:37:1:37:9
-MISSING METHOD - fuzz_crash_019.md:39:2:39:3
-MISSING METHOD - fuzz_crash_019.md:58:6:58:11
+TYPE MISMATCH - fuzz_crash_019.md:39:2:39:3
+TYPE MISMATCH - fuzz_crash_019.md:58:6:58:11
 TYPE MISMATCH - fuzz_crash_019.md:52:2:52:2
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:74:1:74:22
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
-MISSING METHOD - fuzz_crash_019.md:86:11:86:17
+TYPE MISMATCH - fuzz_crash_019.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_019.md:89:3:89:6
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
-TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:66
-TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
+MISSING METHOD - fuzz_crash_019.md:105:55:105:66
+MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
 ~~~clojure
 (reports
@@ -377,42 +378,6 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(source-region (file "fuzz_crash_019.md") (start 66 12) (end 66 12) (annotation error) (line-text "\t\t(1, 2, 3)123"))))
 	(report
 		(severity runtime_error)
-		(title "Expected Record Accessor")
-		(region (start 83 2) (end 83 5))
-		(headline
-			(reflow "I was parsing access after `.`, and I expected a field name or tuple index."))
-		(document
-			(reflow "Required record access uses ")
-			(annotated code ".name")
-			(reflow ", optional record access uses ")
-			(annotated code ".?name")
-			(reflow ", and tuple access uses ")
-			(annotated code ".0")
-			(reflow ". Accessor names must be lowercase and adjacent to their punctuation.")
-			(line-break)
-			(line-break)
-			(text "For example:")
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "person.name")
-			(line-break)
-			(indent 1)
-			(text "maybe_person.?name")
-			(line-break)
-			(indent 1)
-			(text "pair.0")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(text "I found ")
-			(annotated code "...")
-			(text " here.")
-			(line-break)
-			(line-break)
-			(source-region (file "fuzz_crash_019.md") (start 83 2) (end 83 5) (annotation error) (line-text "\t..."))))
-	(report
-		(severity runtime_error)
 		(title "Undeclared Type")
 		(region (start 13 13) (end 13 16))
 		(headline
@@ -552,7 +517,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "lue")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_lue")
@@ -579,7 +544,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "er")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_er")
@@ -606,7 +571,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "est")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_est")
@@ -670,6 +635,19 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_019.md") (start 78 9) (end 78 14) (annotation error) (line-text "\texpect blaue"))))
+	(report
+		(severity runtime_error)
+		(title "Name Not In Scope")
+		(region (start 80 3) (end 80 6))
+		(headline
+			(reflow "Nothing is named ")
+			(annotated symbol-unqualified "tag")
+			(reflow " in this scope."))
+		(document
+			(reflow "Is it misspelled, or is there an import missing?")
+			(line-break)
+			(line-break)
+			(source-region (file "fuzz_crash_019.md") (start 80 3) (end 80 6) (annotation error) (line-text "\t\ttag"))))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
@@ -768,7 +746,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "t")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 97 2) (end 97 3) (annotation error) (line-text "\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])"))
 			(line-break)
@@ -779,7 +757,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 				(file "fuzz_crash_019.md")
 				(line 88)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "fuzz_crash_019.md") (start 88 1) (end 88 2) (annotation dim) (line-text "t = ["))))
 	(report
@@ -940,12 +918,27 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(source-region (file "fuzz_crash_019.md") (start 108 6) (end 108 8) (annotation error) (line-text "\t\t\tr(nu) # xpr"))))
 	(report
 		(severity warning)
+		(title "Unreachable Code")
+		(region (start 83 2) (end 110 3))
+		(headline
+			(reflow "This code will never run, because the code before it always ends with a ")
+			(annotated code "return")
+			(reflow ", ")
+			(annotated code "crash")
+			(reflow ", or ")
+			(annotated code "break")
+			(reflow ", or loops forever."))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 83 2) (end 110 3) (annotation error) (line-text "\t...\n\tme(\n\t\t..., # r\n\t)crash ke\"Unr!\" #)\n\ti= \"H, ${d}\"\nt = [\n\t\tone(er, \t\t),\t456, # two\n9, #ee\n\t]\n\tfor n in list {\n\tline!(\"Ag ${n} to ${er}\")\n\t\tber + n\n\t}\n\trd = { foo: 123, bar: \"H\", baz: tag, qux: Ok(world),ned }\n\tt = (123, \"World\", tag, O, (nd, t), [1, 2, 3])\n\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)\n\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?\n\tStdo!(\n\t\t\"Ho${ #\n\t\t\tr(nu) # xpr\n\t\t} \",\n\t)"))
+			(reflow "Remove this code, or change the code before it so that it can finish.")))
+	(report
+		(severity warning)
 		(title "Unused Variable")
 		(region (start 76 2) (end 76 3))
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "w")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_w")
@@ -959,7 +952,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "i")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_i")
@@ -973,7 +966,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "rd")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_rd")
@@ -987,7 +980,7 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "t")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_t")
@@ -1141,22 +1134,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 39 2) (end 39 3))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 39 2) (end 39 3) (annotation error) (line-text "\t1"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1165,22 +1150,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 58 6) (end 58 11))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 58 6) (end 58 11) (annotation error) (line-text "\t\t\t1\t\"for\" => 20[1, ] # t"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1313,22 +1290,14 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Are there any missing commas?")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 86 11) (end 86 17))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_quote")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This string literal is being used where a non-string type is needed."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 86 11) (end 86 17) (annotation error) (line-text "\t)crash ke\"Unr!\" #)"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_quote")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "The type was determined to be:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -1386,50 +1355,53 @@ TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 105 55) (end 105 66))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value whose type never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "od")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "od")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be.")))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 105 55) (end 105 72))
 		(headline
-			(reflow "Nothing in this program determines the type this")
+			(reflow "This")
 			(reflow " ")
 			(annotated code "ned")
 			(reflow " ")
-			(reflow "method is called on:"))
+			(reflow "call is on")
+			(reflow " ")
+			(reflow "a value of type")
+			(reflow " ")
+			(annotated code "ok")
+			(reflow ",")
+			(reflow " ")
+			(reflow "which never resolved to a concrete type,")
+			(reflow " ")
+			(reflow "so it has no")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "method to use.")
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "Add a type annotation saying which type it should be."))))
+			(reflow "Using the value somewhere that requires a specific type, or annotating it, will give it one."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -1737,7 +1709,8 @@ EndOfFile,
 						(s-expect
 							(e-ident (raw "blaue")))
 						(s-return
-							(e-malformed (reason "expr_dot_suffix_not_allowed")))
+							(e-ident (raw "tag")))
+						(e-ellipsis)
 						(e-apply
 							(e-ident (raw "me"))
 							(e-ellipsis))
@@ -1922,9 +1895,10 @@ Soine(a) : { #
 
 Maybe(a) : [Somne]
 
-Mayine(a) : [] # )
+Mayine(a) : [ #
+] # )
 
-ane = |num| if num 2 else 5
+ane = |num| if (num) 2 else 5
 
 one : U6
 
@@ -1982,10 +1956,11 @@ ma = |_| {
 	w = "d"
 	var er = 123
 	expect blaue
-	return
+	return # d
+		tag
 
-		#
-		
+	#
+	...
 	me(
 		..., # r
 	)

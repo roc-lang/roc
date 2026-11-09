@@ -100,7 +100,10 @@ main! = |_args| {
 						(elems
 							(e-num (value "1"))
 							(e-num (value "2"))))
-					(e-empty_record))
+					(e-block
+						(s-expr
+							(e-empty_record))
+						(e-empty_record)))
 				(e-tag (name "Ok")
 					(args
 						(e-empty_record)))))))

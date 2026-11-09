@@ -55,7 +55,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         // neither variant has a payload, so the copies drop the release.
         const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
             .value = outer,
-            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = .bool } }),
             .atomicity = .single_thread,
             .next = initialize,
         } }, .test_fixture) else initialize;
@@ -76,7 +76,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             } }, .test_fixture);
             consumer = try store.addCFStmt(.{ .assign_ref = .{
                 .target = disc,
-                .op = .{ .discriminant = .{ .source = outer } },
+                .op = .discriminant(outer),
                 .next = choose,
             } }, .test_fixture);
             const first = try store.addCFStmt(.{ .assign_tag = .{
@@ -175,12 +175,12 @@ fn expectFusionJoins(fixture: *Fixture, phase: passes.Phase) TestError!void {
             const params = fixture.store.getLocalSpan(stmt.join.params);
             if (params.len == 0) continue;
             nested += 1;
-            const initialized = fixture.store.getCFStmt(stmt.join.remainder).assign_literal;
+            const initialized = fixture.store.getCFStmtImmediate(stmt.join.remainder).assign_literal;
             try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), initialized.target);
-            try testing.expectEqual(stmt.join.id, fixture.store.getCFStmt(initialized.next).jump.target);
-            const bridge = fixture.store.getCFStmt(stmt.join.body).set_local;
+            try testing.expectEqual(stmt.join.id, fixture.store.getCFStmtImmediate(initialized.next).jump.target);
+            const bridge = fixture.store.getCFStmtImmediate(stmt.join.body).set_local;
             try testing.expectEqual(core.LirStore.GuardedList.at(params, 0), bridge.value);
-            try testing.expectEqual(joins.external, fixture.store.getCFStmt(bridge.next).jump.target);
+            try testing.expectEqual(joins.external, fixture.store.getCFStmtImmediate(bridge.next).jump.target);
         }
         try testing.expectEqual(@as(usize, if (phase == .tag_fusion) 2 else 1), nested);
         try testing.expect(external_jumps > 0);
@@ -212,7 +212,7 @@ const Fixture = struct {
             const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } }, .test_fixture);
             const read = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = projected,
-                .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
+                .op = .field(wrapper, 0),
                 .next = ret,
             } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .assign_struct = .{
@@ -247,7 +247,7 @@ const Fixture = struct {
         const reuse_layout = try self.layouts.insertErasedCallable();
         for (0..self.store.procSpecCount()) |index| {
             const id: core.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            const source_args = self.store.getLocalSpan(self.store.getProcSpec(id).args);
+            const source_args = self.store.getLocalSpan(self.store.getProcSpecImmediate(id).args);
             const number = core.LirStore.GuardedList.at(source_args, 0);
             const text = core.LirStore.GuardedList.at(source_args, 1);
             const capture = try self.store.addLocal(.{ .layout_idx = capture_layout });
@@ -280,12 +280,12 @@ const Fixture = struct {
             const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
             const read_text = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = text,
-                .op = .{ .field = .{ .source = state, .field_idx = 1 } },
+                .op = .field(state, 1),
                 .next = ret,
             } }, .test_fixture);
             const read_number = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = number,
-                .op = .{ .field = .{ .source = state, .field_idx = 0 } },
+                .op = .field(state, 0),
                 .next = read_text,
             } }, .test_fixture);
             const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
@@ -330,6 +330,10 @@ const ReverseExecutor = struct {
     // Successful shard allocations survive submit until the phase is drained.
     output_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
     scratch_failure: testing.FailingAllocator = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 }),
+    /// The lane the scratch-failing task runs on: passes retain their
+    /// transient storage in lane state, so its allocator fails with the
+    /// task's scratch.
+    failing_lane: ?executor.LaneState = null,
     accepted: usize = 0,
     frozen_source: ?*const core.LirStore = null,
     frozen_prefix: core.LirStore.BodyPrefix = undefined,
@@ -337,42 +341,50 @@ const ReverseExecutor = struct {
 
     fn deinit(self: *ReverseExecutor) void {
         for (&self.lane_states) |*lane| lane.deinit();
+        if (self.failing_lane) |*lane| lane.deinit();
     }
 
-    fn begin(context: *anyopaque) void {
+    fn begin(context: *anyopaque) std.mem.Allocator.Error!*anyopaque {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         self.ended = false;
         self.received = 0;
         self.accepted = 0;
         if (self.frozen_source) |source| self.frozen_prefix = source.captureBodyPrefix();
+        return context;
     }
 
-    fn submit(context: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
+    fn submit(context: *anyopaque, _: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         if (self.fail_submit_task == task.id) return error.OutOfMemory;
-        var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
         defer scratch.deinit();
         const worker_id = task.id % self.lanes;
+        const fail_scratch = self.fail_scratch_task == task.id;
+        if (fail_scratch and self.failing_lane == null) self.failing_lane = executor.LaneState.init(self.scratch_failure.allocator());
         const result = task.run(task.context, .{
             .id = worker_id,
             .allocator = if (self.fail_output_task == task.id) self.output_failure.allocator() else testing.allocator,
-            .scratch = if (self.fail_scratch_task == task.id) self.scratch_failure.allocator() else scratch.allocator(),
-            .lane_state = &self.lane_states[worker_id],
+            .scratch = if (fail_scratch) self.scratch_failure.allocator() else scratch.allocator(),
+            .lane_state = if (fail_scratch) &self.failing_lane.? else &self.lane_states[worker_id],
         });
         self.pending[self.pending_len] = .{ .id = task.id, .worker_id = worker_id, .value = result };
         self.pending_len += 1;
         self.accepted += 1;
     }
 
-    fn receive(context: *anyopaque) executor.Completion {
+    fn receive(context: *anyopaque, _: *anyopaque) executor.Completion {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         self.pending_len -= 1;
         self.received += 1;
         return self.pending[self.pending_len];
     }
 
-    fn end(context: *anyopaque) void {
+    fn tryReceive(_: *anyopaque, _: *anyopaque) ?executor.Completion {
+        return null;
+    }
+
+    fn end(context: *anyopaque, _: *anyopaque) void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         std.debug.assert(self.pending_len == 0);
         if (self.frozen_source) |source| {
@@ -386,9 +398,11 @@ const ReverseExecutor = struct {
         return .{
             .context = self,
             .worker_count = self.lanes,
+            .lane_count = self.lanes,
             .beginFn = begin,
             .submitFn = submit,
             .receiveFn = receive,
+            .tryReceiveFn = tryReceive,
             .endFn = end,
         };
     }
@@ -431,8 +445,8 @@ test "LIR proc pass fusion relocates only generated joins in procedure order" {
             for (0..fixture.store.procSpecCount()) |index| {
                 const id: core.LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
                 try testing.expectEqualDeep(serial.store.getProcSpec(id), fixture.store.getProcSpec(id));
-                const serial_frame = serial.store.getLocalSpan(serial.store.getProcSpec(id).frame_locals);
-                const parallel_frame = fixture.store.getLocalSpan(fixture.store.getProcSpec(id).frame_locals);
+                const serial_frame = serial.store.getLocalSpan(serial.store.getProcSpecImmediate(id).frame_locals);
+                const parallel_frame = fixture.store.getLocalSpan(fixture.store.getProcSpecImmediate(id).frame_locals);
                 try testing.expectEqual(serial_frame.len, parallel_frame.len);
                 for (0..serial_frame.len) |local_index| {
                     const serial_local = core.LirStore.GuardedList.at(serial_frame, local_index);
@@ -508,16 +522,16 @@ test "LIR proc pass forwarding generated joins become frozen source for tag fusi
         var external_ids: [8]core.LIR.JoinPointId = undefined;
         for (&external_ids, 0..) |*external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmt(proc.body.?).join;
+            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
             try testing.expectEqual(@as(u32, 3), @backingInt(inner.id));
-            external.* = fixture.store.getCFStmt(inner.body).join.id;
+            external.* = fixture.store.getCFStmtImmediate(inner.body).join.id;
             try testing.expect(@backingInt(external.*) > 4);
         }
         try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .tag_fusion, exec, &metrics);
         for (external_ids, 0..) |external, index| {
             const proc = fixture.store.getProcSpec(@fromBackingInt(@intCast(index)));
-            const inner = fixture.store.getCFStmt(proc.body.?).join;
-            try testing.expectEqual(external, fixture.store.getCFStmt(inner.body).join.id);
+            const inner = fixture.store.getCFStmtImmediate(proc.body.?).join;
+            try testing.expectEqual(external, fixture.store.getCFStmtImmediate(inner.body).join.id);
             var walk = try body_clone.ReachableStmts.init(&fixture.store, proc.body.?);
             defer walk.deinit();
             var external_jumps: usize = 0;
@@ -813,7 +827,7 @@ test "LIR proc pass prunes unread join parameters to a fixed point" {
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpecImmediate(proc).body.?);
     defer walk.deinit();
     var joins: usize = 0;
     var live_writes: usize = 0;
@@ -837,6 +851,112 @@ test "LIR proc pass prunes unread join parameters to a fixed point" {
     }
     try testing.expectEqual(@as(usize, 2), joins);
     try testing.expectEqual(@as(usize, 2), live_writes);
+}
+
+test "LIR proc pass deletes pure definitions that only fed pruned join parameter writes" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const sum = try store.addLocal(.{ .layout_idx = .u64 });
+    const alias = try store.addLocal(.{ .layout_idx = .u64 });
+    const reread = try store.addLocal(.{ .layout_idx = .u64 });
+    const kept = try store.addLocal(.{ .layout_idx = .u64 });
+    const dead_reread = try store.addLocal(.{ .layout_idx = .u64 });
+    const dead_sum = try store.addLocal(.{ .layout_idx = .u64 });
+    const dead_kept = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // `reread` reads `alias`, and both exist only for the write to
+    // `dead_reread`. `sum` is computed by a low-level, which stays even though
+    // its only read is a deleted write. `kept` is also returned.
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_kept = try store.addCFStmt(.{ .set_local = .{ .target = dead_kept, .value = kept, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_sum = try store.addCFStmt(.{ .set_local = .{ .target = dead_sum, .value = sum, .mode = .initialize_join_param, .next = write_kept } }, .test_fixture);
+    const write_reread = try store.addCFStmt(.{ .set_local = .{ .target = dead_reread, .value = reread, .mode = .initialize_join_param, .next = write_sum } }, .test_fixture);
+    const define_kept = try store.addCFStmt(.{ .assign_ref = .{ .target = kept, .op = LIR.RefOp.local(value), .next = write_reread } }, .test_fixture);
+    const define_reread = try store.addCFStmt(.{ .assign_ref = .{ .target = reread, .op = LIR.RefOp.local(alias), .next = define_kept } }, .test_fixture);
+    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(value), .next = define_reread } }, .test_fixture);
+    const define_sum = try store.addLowLevelStmt(sum, .num_int_add_crash_on_overflow, &.{ value, value }, define_alias, .test_fixture);
+    const body = try store.addCFStmt(.{ .ret = .{ .value = kept } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ dead_reread, dead_sum, dead_kept }),
+        .body = body,
+        .remainder = define_sum,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{value}),
+        .frame_locals = try store.addLocalSpan(&.{ value, sum, alias, reread, kept, dead_reread, dead_sum, dead_kept }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    const pruned = store.getCFStmtImmediate(join).join;
+    try testing.expectEqual(@as(usize, 0), store.getLocalSpan(pruned.params).len);
+    try testing.expectEqual(define_sum, pruned.remainder);
+    try testing.expectEqual(define_kept, store.getCFStmtImmediate(define_sum).assign_low_level.next);
+    try testing.expectEqual(jump, store.getCFStmtImmediate(define_kept).assign_ref.next);
+}
+
+test "LIR proc pass prunes a join parameter whose only reader is a dead definition" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const unread = try store.addLocal(.{ .layout_idx = .u64 });
+    const kept = try store.addLocal(.{ .layout_idx = .u64 });
+    const alias = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // The join body binds `unread` to `alias`, which nothing reads, so
+    // `unread` is unread too, and both its write and the alias go.
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_kept = try store.addCFStmt(.{ .set_local = .{ .target = kept, .value = value, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_unread = try store.addCFStmt(.{ .set_local = .{ .target = unread, .value = value, .mode = .initialize_join_param, .next = write_kept } }, .test_fixture);
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = kept } }, .test_fixture);
+    const define_alias = try store.addCFStmt(.{ .assign_ref = .{ .target = alias, .op = LIR.RefOp.local(unread), .next = ret } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ unread, kept }),
+        .body = define_alias,
+        .remainder = write_unread,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{value}),
+        .frame_locals = try store.addLocalSpan(&.{ value, unread, kept, alias }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    const pruned = store.getCFStmtImmediate(join).join;
+    const params = store.getLocalSpan(pruned.params);
+    try testing.expectEqual(@as(usize, 1), params.len);
+    try testing.expectEqual(kept, core.LirStore.GuardedList.at(params, 0));
+    try testing.expectEqual(write_kept, pruned.remainder);
+    try testing.expectEqual(ret, pruned.body);
 }
 
 test "LIR proc pass keeps join parameters that are read or are procedure arguments" {
@@ -874,9 +994,9 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
     var metrics: passes.ParallelMetrics = .{};
     try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
 
-    try testing.expectEqual(join, store.getProcSpec(proc).body.?);
-    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmt(join).join.params).len);
-    try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
+    try testing.expectEqual(join, store.getProcSpecImmediate(proc).body.?);
+    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmtImmediate(join).join.params).len);
+    try testing.expectEqual(write_arg, store.getCFStmtImmediate(join).join.remainder);
 }
 
 test "LIR proc pass range phase admits a body whose only provable statement is an unsigned comparison" {
@@ -912,7 +1032,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .ret_layout = .bool,
     }, .none);
 
-    const shapes = store.getProcSpec(proc).shapes;
+    const shapes = store.getProcSpecImmediate(proc).shapes;
     try testing.expect(shapes.unsigned_compare);
     try testing.expect(!shapes.switch_stmt);
     try testing.expect(!shapes.checked_arithmetic);
@@ -952,7 +1072,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
         .ret_layout = .u8x16,
     }, .none);
 
-    const shapes = store.getProcSpec(proc).shapes;
+    const shapes = store.getProcSpecImmediate(proc).shapes;
     try testing.expect(shapes.simd_concat_shift);
     try testing.expect(!shapes.switch_stmt);
     try testing.expect(!shapes.checked_arithmetic);
@@ -960,7 +1080,7 @@ test "LIR proc pass range phase admits a body whose only provable statement is a
 
     try passes.run(testing.allocator, &store, &layouts, .range, null, null);
 
-    try testing.expectEqual(@as(?u5, 3), store.getCFStmt(shift).assign_low_level.simd_concat_count);
+    try testing.expectEqual(@as(?u5, 3), store.stmtRowOrDefault(store.getCFStmtImmediate(shift).assign_low_level.extra).simd_concat_count);
 }
 
 test "LIR store records an unsigned comparison shape only for range-tracked operand layouts" {

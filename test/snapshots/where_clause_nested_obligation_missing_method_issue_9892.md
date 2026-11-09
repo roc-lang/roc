@@ -57,7 +57,12 @@ MISSING METHOD - where_clause_nested_obligation_missing_method_issue_9892.md:10:
 			(reflow " ")
 			(annotated code "frobnicate")
 			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "associated with it in the type's declaration.")
+			(line-break)
+			(line-break)
+			(reflow "This use needs that because of this code in the definition it uses:")
+			(line-break)
+			(source-region (file "where_clause_nested_obligation_missing_method_issue_9892.md") (start 3 26) (end 3 40) (annotation error) (line-text "    unwrap = |Wrap.W(x)| x.frobnicate()")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -157,7 +162,7 @@ main = run(Wrap.W(42.U8))
 			(args
 				(p-nominal
 					(p-applied-tag)))
-			(e-dispatch-call (method "frobnicate") (constraint-fn-var 285)
+			(e-dispatch-call (method "frobnicate") (constraint-fn-var 290)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))
@@ -177,7 +182,7 @@ main = run(Wrap.W(42.U8))
 		(e-lambda
 			(args
 				(p-assign (ident "v")))
-			(e-dispatch-call (method "unwrap") (constraint-fn-var 295)
+			(e-dispatch-call (method "unwrap") (constraint-fn-var 300)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "v"))))

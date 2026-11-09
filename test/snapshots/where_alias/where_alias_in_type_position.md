@@ -69,10 +69,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Stringable :  where [a.to_str : a -> Str]
-
-describe : Stringable -> Str
-describe = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

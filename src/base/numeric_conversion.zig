@@ -292,7 +292,6 @@ pub fn assertTableConforms() void {
 /// nor between a number and its text.
 const not_conversions = [_]LowLevel{
     .str_to_utf8,
-    .num_to_str,
     .f32_to_bits,
     .f64_to_bits,
     .simd_to_u128_bits,
@@ -398,7 +397,6 @@ test "prefix parse ops classify by number type and source" {
 test "a number and its text are separate classifications" {
     try std.testing.expectEqual(@as(?Conversion, null), getConversionSpec(.u8_to_str));
     try std.testing.expectEqual(@as(?StringConversion, null), getStringConversionSpec(.u8_to_i16));
-    try std.testing.expectEqual(@as(?StringConversion, null), getStringConversionSpec(.num_to_str));
 }
 
 test "the widths a conversion computes at come from its types" {

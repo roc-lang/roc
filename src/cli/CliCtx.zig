@@ -207,6 +207,8 @@ pub const Command = enum {
 /// Shared context for CLI operations.
 /// Contains allocators, I/O, and accumulated problems.
 pub const CliCtx = struct {
+    /// Registered scratch leases survive until explicit release or CLI teardown.
+    scratch: std.ArrayList(@import("compile").artifacts.Scratch) = .empty,
     /// General purpose allocator for long-lived allocations
     gpa: Allocator,
     /// Arena allocator for temporary/scoped allocations
@@ -293,6 +295,11 @@ pub const CliCtx = struct {
         return policy;
     }
 
+    /// Spell `path` the way reports do: relative to the working directory.
+    pub fn displayPath(self: *const Self, path: []const u8) Allocator.Error![]u8 {
+        return reporting.displayPath(self.arena, path, self.baseReportConfig().source_path_base);
+    }
+
     /// Whether a particular standard stream should receive ANSI color.
     pub fn usesColor(self: *Self, stream: OutputStream) bool {
         const policy = self.colorPolicy();
@@ -329,6 +336,8 @@ pub const CliCtx = struct {
 
     /// Clean up resources and flush I/O
     pub fn deinit(self: *Self) void {
+        for (self.scratch.items) |*scratch| scratch.deinit();
+        self.scratch.deinit(self.gpa);
         self.io.flush();
         self.problems.deinit(self.gpa);
     }
@@ -380,11 +389,6 @@ pub const CliCtx = struct {
             count += @intFromBool(problem.severity().isError());
         }
         return count;
-    }
-
-    /// Get the number of warnings
-    pub fn warningCount(self: *const Self) usize {
-        return self.problemCount() - self.errorCount();
     }
 
     /// Render all problems to a writer
@@ -518,7 +522,6 @@ test "CliCtx counts errors vs warnings correctly" {
     try ctx.addProblem(.{ .file_read_failed = .{ .path = "b.roc", .err = error.OutOfMemory } }); // runtime_error
 
     try std.testing.expectEqual(@as(usize, 2), ctx.errorCount());
-    try std.testing.expectEqual(@as(usize, 0), ctx.warningCount());
 }
 
 test "CliCtx clear resets state" {

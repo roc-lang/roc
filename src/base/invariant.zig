@@ -9,5 +9,5 @@ const std = @import("std");
 /// runtime check for it.
 pub inline fn invariant(comptime fmt: []const u8, args: anytype) noreturn {
     if (std.debug.runtime_safety) std.debug.panic(fmt, args);
-    unreachable;
+    unreachable; // callers reach this only when a compiler invariant is violated, which design.md makes undefined in optimized builds
 }

@@ -5,6 +5,7 @@ const builtin = @import("builtin");
 const target = @import("target.zig");
 const reporting = @import("reporting");
 const builtins = @import("builtins");
+const base = @import("base");
 const builtin_registry = builtins.builtin_registry;
 const BuiltinFn = builtin_registry.BuiltinFn;
 
@@ -22,6 +23,23 @@ var stderr_file_writer: std.Io.File.Writer = .{
 fn stderrWriter() *std.Io.Writer {
     if (is_windows) stderr_file_writer.file = std.Io.File.stderr();
     return &stderr_file_writer.interface;
+}
+
+/// Renders a builder failure report to stderr.
+fn renderReportToStderr(report: *reporting.Report, config: reporting.ReportingConfig) void {
+    reporting.renderReportToTerminal(
+        report,
+        stderrWriter(),
+        reporting.ColorUtils.getPaletteForConfig(config),
+        config,
+    ) catch {};
+}
+
+/// Appends the `LLVM error: <message>` line to a builder failure report.
+fn addLlvmErrorLine(report: *reporting.Report, llvm_message: []const u8) Allocator.Error!void {
+    try report.document.addText("LLVM error: ");
+    try report.document.addAnnotated(llvm_message, .error_highlight);
+    try report.document.addLineBreak();
 }
 
 /// Set to true locally to have the LLVM backend also write the optimized IR for
@@ -57,6 +75,9 @@ pub const LinkedBuiltins = struct {
     /// name). The 64-bit builtin payload links the compression function built
     /// for them.
     sha256_rounds: builtins.sha256.Rounds,
+    /// Link the stack-checked builtins, for a wasm platform that reserves low
+    /// memory (`builtins.stack_guard`).
+    stack_checked: bool = false,
 };
 
 /// Configuration for compiling LLVM bitcode to object files
@@ -74,6 +95,11 @@ pub const CompileConfig = struct {
     pic: bool = false, // Position-independent code (required for shared library output)
     no_target_libcalls: bool = false,
     lower_memory_intrinsics_to_loops: bool = false,
+    /// Link the target's private runtime (src/builtins/llvm_private_runtime.zig),
+    /// so every routine LLVM's code generator calls binds to a definition
+    /// internal to the object. A target `llvmPrivateRuntimeTarget` names no
+    /// runtime for composes its support elsewhere.
+    private_runtime: bool = false,
 };
 
 fn sanitizerCoverageOptions(enabled: bool) ZigLLVMCoverageOptions {
@@ -172,6 +198,12 @@ const LLVMCodeModelDefault: c_int = 0;
 
 // External C functions from zig_llvm.cpp and LLVM C API - only available when LLVM is enabled
 const llvm_externs = if (llvm_available) struct {
+    extern fn ZigLLVMWriteImportLibrary(
+        def_path: [*:0]const u8,
+        coff_machine: c_uint,
+        output_lib_path: [*:0]const u8,
+        kill_at: bool,
+    ) bool;
     extern fn ZigLLVMWriteArchiveFlattened(
         archive_name: [*:0]const u8,
         file_names: [*]const [*:0]const u8,
@@ -247,6 +279,14 @@ const llvm_externs = if (llvm_available) struct {
     extern fn LLVMAddAttributeAtIndex(fn_val: ?*anyopaque, idx: c_uint, attr: ?*anyopaque) void;
     extern fn LLVMGetNamedFunction(module: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
     extern fn ZigLLVMRunGlobalDCE(module: ?*anyopaque) void;
+    // The private runtime's routines are kept through `llvm.compiler.used`.
+    extern fn LLVMGetNamedGlobalAlias(module: ?*anyopaque, name: [*]const u8, len: usize) ?*anyopaque;
+    extern fn LLVMAddGlobal(module: ?*anyopaque, ty: ?*anyopaque, name: [*:0]const u8) ?*anyopaque;
+    extern fn LLVMPointerTypeInContext(ctx: ?*anyopaque, address_space: c_uint) ?*anyopaque;
+    extern fn LLVMArrayType2(element_type: ?*anyopaque, count: u64) ?*anyopaque;
+    extern fn LLVMConstArray2(element_type: ?*anyopaque, values: [*]const ?*anyopaque, len: u64) ?*anyopaque;
+    extern fn LLVMSetInitializer(global: ?*anyopaque, value: ?*anyopaque) void;
+    extern fn LLVMSetSection(global: ?*anyopaque, section: [*:0]const u8) void;
 } else struct {};
 
 /// Embedded builtin bitcode. Stubbed out when LLVM is unavailable.
@@ -260,9 +300,13 @@ const llvm_embedded = if (llvm_available) @import("llvm_embedded") else struct {
     pub const builtins64_extern_bc: []const u8 = "";
     pub const builtins32_core_extern_bc: []const u8 = "";
     pub const builtins64_core_extern_bc: []const u8 = "";
+    pub const builtins32_extern_stack_checked_bc: []const u8 = "";
+    pub const builtins32_core_extern_stack_checked_bc: []const u8 = "";
     pub const sha256_portable_bc: []const u8 = "";
     pub const sha256_x86_sha_bc: []const u8 = "";
     pub const sha256_aarch64_sha2_bc: []const u8 = "";
+    pub const PrivateRuntime = struct { target: target.RocTarget, bitcode: []const u8 };
+    pub const private_runtimes = [_]PrivateRuntime{};
 };
 
 const core_builtin_roots = builtin_registry.core_root_symbols;
@@ -279,8 +323,14 @@ fn canUseCoreBuiltins(app_decls: *const std.StringHashMap(void)) bool {
     return true;
 }
 
-fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void), host_call_extern: bool) []const u8 {
+fn selectBuiltinBitcode(ptr_width: u16, app_decls: *const std.StringHashMap(void), host_call_extern: bool, stack_checked: bool) []const u8 {
     const use_core = canUseCoreBuiltins(app_decls);
+    if (stack_checked) {
+        if (ptr_width != 32 or !host_call_extern) {
+            base.invariant("LLVM builtins invariant violated: stack-checked builtins requested for {d}-bit {s} output", .{ ptr_width, if (host_call_extern) "symbol-ABI" else "RocOps-ABI" });
+        }
+        return if (use_core) llvm_embedded.builtins32_core_extern_stack_checked_bc else llvm_embedded.builtins32_extern_stack_checked_bc;
+    }
     if (host_call_extern) {
         return switch (ptr_width) {
             32 => if (use_core) llvm_embedded.builtins32_core_extern_bc else llvm_embedded.builtins32_extern_bc,
@@ -330,8 +380,8 @@ test "core builtin roots include common LLVM declarations" {
         try std.testing.expect(core_builtin_roots.has(root));
     }
 
-    // `.full`-only and `.jit_only` wrappers are absent from the core payload,
-    // so they are not valid core roots.
+    // `.full`-only wrappers are absent from the core payload, so they are not
+    // valid core roots.
     try std.testing.expect(!core_builtin_roots.has(BuiltinFn.dec_sqrt.symbolName()));
     try std.testing.expect(!core_builtin_roots.has(BuiltinFn.hot_reload_enter.symbolName()));
 }
@@ -339,6 +389,7 @@ test "core builtin roots include common LLVM declarations" {
 /// LLVM-C linkage value for `internal`: a local definition, never an exported
 /// symbol, and discarded by global DCE when unused.
 const LLVMInternalLinkage: c_int = 8;
+const LLVMAppendingLinkage: c_int = 7;
 
 /// LLVM-C attribute index for function-level attributes (`~0U`).
 const LLVMAttributeFunctionIndex: c_uint = 0xFFFFFFFF;
@@ -349,6 +400,26 @@ const LLVMAttributeReturnIndex: c_uint = 0;
 // LLVM archive kinds (object::Archive::Kind)
 const LLVMArchiveKindGNU: c_int = 0;
 const LLVMArchiveKindDarwin: c_int = 3;
+
+/// Write the COFF import library `output_path` from the module definition
+/// at `def_path`, for a DLL of the `machine` COFF machine type.
+pub fn writeImportLibrary(
+    gpa: Allocator,
+    def_path: []const u8,
+    machine: u16,
+    output_path: []const u8,
+) error{ OutOfMemory, ImportLibraryWriteFailed, LLVMNotAvailable }!void {
+    if (comptime !llvm_available) {
+        return error.LLVMNotAvailable;
+    }
+    const def_z = try gpa.dupeSentinel(u8, def_path, 0);
+    defer gpa.free(def_z);
+    const output_z = try gpa.dupeSentinel(u8, output_path, 0);
+    defer gpa.free(output_z);
+    if (llvm_externs.ZigLLVMWriteImportLibrary(def_z.ptr, machine, output_z.ptr, false)) {
+        return error.ImportLibraryWriteFailed;
+    }
+}
 
 /// Write a static archive containing the given input files. Inputs that are
 /// themselves archives are flattened into the output, so the result never
@@ -380,6 +451,92 @@ pub fn writeStaticArchive(
     if (externs.ZigLLVMWriteArchiveFlattened(output_z.ptr, names.ptr, names.len, kind)) {
         return error.ArchiveWriteFailed;
     }
+}
+
+/// The embedded private runtime bitcode `runtime_target` names.
+fn privateRuntimeBitcode(runtime_target: target.RocTarget) []const u8 {
+    for (llvm_embedded.private_runtimes) |runtime| {
+        if (runtime.target == runtime_target) return runtime.bitcode;
+    }
+    unreachable; // build.zig embeds a runtime for every target llvmPrivateRuntimeTarget names
+}
+
+fn isPrivateRuntimeRoutine(name: []const u8) bool {
+    for (builtins.shim_symbols.llvm_private_runtime_set) |routine| {
+        if (std.mem.eql(u8, name, routine)) return true;
+    }
+    return false;
+}
+
+/// Link the private runtime into `module` and give each routine of
+/// `shim_symbols.llvm_private_runtime_set` it defines internal linkage, kept
+/// through `llvm.compiler.used`. LLVM's code generator introduces its calls to
+/// these routines after optimization; listing them there keeps the
+/// definitions until then, without retaining them in a final link that
+/// references none of them, so each call the code generator emits binds to
+/// the object's own definition. Everything else in the runtime is internal
+/// before linking and remains only where a routine uses it.
+fn linkPrivateRuntime(module: ?*anyopaque, bitcode: []const u8, target_triple_z: [*:0]const u8) bool {
+    const externs = llvm_externs;
+    const buffer = externs.LLVMCreateMemoryBufferWithMemoryRangeCopy(bitcode.ptr, bitcode.len, "roc-llvm-private-runtime-bc");
+    var runtime_module: ?*anyopaque = null;
+    if (externs.LLVMParseBitcode2(buffer, &runtime_module) != 0) return false;
+    externs.LLVMSetTarget(runtime_module, target_triple_z);
+    externs.LLVMSetDataLayout(runtime_module, externs.LLVMGetDataLayoutStr(module));
+    if (externs.LLVMGetNamedGlobal(runtime_module, "llvm.used")) |used| externs.LLVMDeleteGlobal(used);
+    if (externs.LLVMGetNamedGlobal(runtime_module, "llvm.compiler.used")) |compiler_used| externs.LLVMDeleteGlobal(compiler_used);
+
+    var func = externs.LLVMGetFirstFunction(runtime_module);
+    while (func) |fv| : (func = externs.LLVMGetNextFunction(fv)) {
+        if (externs.LLVMIsDeclaration(fv) != 0) continue;
+        // The runtime is compiled for the lowest CPU its target names; the
+        // target machine supplies the CPU this object is built for.
+        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-features", "target-features".len);
+        externs.LLVMRemoveStringAttributeAtIndex(fv, LLVMAttributeFunctionIndex, "target-cpu", "target-cpu".len);
+        if (!isPrivateRuntimeRoutine(valueName(fv))) externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
+    }
+    var global = externs.LLVMGetFirstGlobal(runtime_module);
+    while (global) |gv| : (global = externs.LLVMGetNextGlobal(gv)) {
+        if (externs.LLVMIsDeclaration(gv) != 0) continue;
+        if (!isPrivateRuntimeRoutine(valueName(gv))) externs.LLVMSetLinkage(gv, LLVMInternalLinkage);
+    }
+    var alias = externs.LLVMGetFirstGlobalAlias(runtime_module);
+    while (alias) |av| : (alias = externs.LLVMGetNextGlobalAlias(av)) {
+        if (!isPrivateRuntimeRoutine(valueName(av))) externs.LLVMSetLinkage(av, LLVMInternalLinkage);
+    }
+    externs.ZigLLVMRunGlobalDCE(runtime_module);
+
+    // Linking resolves the module's declarations of these routines to the
+    // runtime's definitions and destroys runtime_module.
+    if (externs.LLVMLinkModules2(module, runtime_module) != 0) return false;
+
+    std.debug.assert(externs.LLVMGetNamedGlobal(module, "llvm.compiler.used") == null);
+    var kept: [builtins.shim_symbols.llvm_private_runtime_set.len]?*anyopaque = undefined;
+    var kept_len: usize = 0;
+    for (builtins.shim_symbols.llvm_private_runtime_set) |routine| {
+        const definition = externs.LLVMGetNamedFunction(module, routine.ptr) orelse
+            externs.LLVMGetNamedGlobal(module, routine.ptr) orelse
+            externs.LLVMGetNamedGlobalAlias(module, routine.ptr, routine.len) orelse
+            continue;
+        if (externs.LLVMIsDeclaration(definition) != 0) continue;
+        externs.LLVMSetLinkage(definition, LLVMInternalLinkage);
+        kept[kept_len] = definition;
+        kept_len += 1;
+    }
+    if (kept_len == 0) return true;
+
+    const ptr_type = externs.LLVMPointerTypeInContext(externs.LLVMGetModuleContext(module), 0);
+    const used = externs.LLVMAddGlobal(module, externs.LLVMArrayType2(ptr_type, kept_len), "llvm.compiler.used");
+    externs.LLVMSetLinkage(used, LLVMAppendingLinkage);
+    externs.LLVMSetSection(used, "llvm.metadata");
+    externs.LLVMSetInitializer(used, externs.LLVMConstArray2(ptr_type, &kept, kept_len));
+    return true;
+}
+
+fn valueName(value: ?*anyopaque) []const u8 {
+    var name_len: usize = 0;
+    const name_ptr = llvm_externs.LLVMGetValueName2(value, &name_len);
+    return name_ptr[0..name_len];
 }
 
 /// Initialize LLVM targets (must be called once before using LLVM)
@@ -511,7 +668,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
             try app_defs.put(name, {});
         }
 
-        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern);
+        const builtins_bc = selectBuiltinBitcode(config.target.ptrBitWidth(), &app_decls, linked_builtins.host_call_extern, linked_builtins.stack_checked);
         if (builtins_bc.len == 0) {
             std.log.err("No embedded builtin bitcode for {d}-bit target pointers", .{config.target.ptrBitWidth()});
             return false;
@@ -554,18 +711,25 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 }
             }
 
-            // Hot list and string builtins sit right at the inliner's default
-            // threshold once a caller grows: nudge every linked builtin with
-            // inlinehint so a large decode loop keeps its append and copy
-            // helpers inline, matching how the emitted procs are declared.
+            // In a speed build, hot list and string builtins sit right at the
+            // inliner's default threshold once a caller grows: nudge every
+            // linked builtin with inlinehint so a large decode loop keeps its
+            // append and copy helpers inline, matching how the emitted procs
+            // are declared. A size build gives no hint: every function in the
+            // module is marked `minsize` below, and LLVM's size cost model
+            // decides each call on the callee's size alone.
             //
             // The hint is only a cost-model bonus, and the inliner still
             // declines these helpers once a caller crosses its size budget --
             // at which point a hot loop's straight-line appends degrade into
             // out-of-line calls exactly where staying inline matters most.
             // The unchecked leaf helpers behind that failure are pinned with
-            // alwaysinline instead: they are tiny and non-recursive, so
+            // alwaysinline in every mode: they are tiny and non-recursive, so
             // inlining them is right at any caller size.
+            // The str concat wrapper is pinned for the same reason: its small-into-
+            // small path is a few word operations that only pay off in registers
+            // at the call site, and every other case is already a call to its
+            // noinline out-of-line half.
             const inlinehint_kind = externs.LLVMGetEnumAttributeKindForName("inlinehint", "inlinehint".len);
             const inlinehint_attr = externs.LLVMCreateEnumAttribute(externs.LLVMGetModuleContext(builtins_module), inlinehint_kind, 0);
             const alwaysinline_kind = externs.LLVMGetEnumAttributeKindForName("alwaysinline", "alwaysinline".len);
@@ -576,6 +740,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                 "roc_builtins_list_slack_unique",
                 "roc_builtins_list_replace",
                 "roc_builtins_list_owned_unique",
+                "roc_builtins_str_concat",
             };
             var builtin_func = externs.LLVMGetFirstFunction(builtins_module);
             while (builtin_func) |fv| : (builtin_func = externs.LLVMGetNextFunction(fv)) {
@@ -593,7 +758,11 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
                         break;
                     }
                 }
-                externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, if (pinned) alwaysinline_attr else inlinehint_attr);
+                if (pinned) {
+                    externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, alwaysinline_attr);
+                } else if (config.optimization != .size) {
+                    externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, inlinehint_attr);
+                }
 
                 if (!app_decls.contains(name)) {
                     externs.LLVMSetLinkage(fv, LLVMInternalLinkage);
@@ -668,6 +837,32 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
         } else {
             std.log.err("Failed to parse builtin bitcode", .{});
             return false;
+        }
+    }
+
+    if (config.private_runtime) {
+        if (config.target.llvmPrivateRuntimeTarget()) |runtime_target| {
+            if (!linkPrivateRuntime(module, privateRuntimeBitcode(runtime_target), target_triple_z.ptr)) {
+                std.log.err("Failed to link the LLVM private runtime for {s}", .{@tagName(runtime_target)});
+                return false;
+            }
+        }
+    }
+
+    // A size build optimizes every function the module defines for size:
+    // the emitted procedures, their wrappers and helpers, the linked
+    // builtins and the private runtime. `optsize` and `minsize` are per
+    // function, not per pipeline: without them the `Oz` pipeline's inliner
+    // and loop passes keep their speed thresholds inside every function.
+    if (config.optimization == .size) {
+        const context = externs.LLVMGetModuleContext(module);
+        const optsize_attr = externs.LLVMCreateEnumAttribute(context, externs.LLVMGetEnumAttributeKindForName("optsize", "optsize".len), 0);
+        const minsize_attr = externs.LLVMCreateEnumAttribute(context, externs.LLVMGetEnumAttributeKindForName("minsize", "minsize".len), 0);
+        var defined = externs.LLVMGetFirstFunction(module);
+        while (defined) |fv| : (defined = externs.LLVMGetNextFunction(fv)) {
+            if (externs.LLVMIsDeclaration(fv) != 0) continue;
+            externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, optsize_attr);
+            externs.LLVMAddAttributeAtIndex(fv, LLVMAttributeFunctionIndex, minsize_attr);
         }
     }
 
@@ -821,12 +1016,7 @@ fn renderLLVMNotAvailableError(allocator: Allocator, config: reporting.Reporting
     try report.document.addText("To use this feature, rebuild roc with LLVM enabled.");
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderFileNotAccessibleError(
@@ -846,12 +1036,7 @@ fn renderFileNotAccessibleError(
     try report.document.addAnnotated(@errorName(err), .error_highlight);
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderLLVMError(
@@ -865,16 +1050,9 @@ fn renderLLVMError(
     defer report.deinit();
 
     try report.document.addLineBreak();
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderTargetError(
@@ -890,16 +1068,9 @@ fn renderTargetError(
     try report.document.addText("    ");
     try report.document.addAnnotated(triple, .emphasized);
     try report.document.addLineBreaks(2);
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderTargetMachineError(
@@ -933,12 +1104,7 @@ fn renderTargetMachineError(
     try report.document.addText("This may indicate an unsupported target configuration.");
     try report.document.addLineBreak();
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }
 
 fn renderEmitError(
@@ -954,14 +1120,7 @@ fn renderEmitError(
     try report.document.addText("    Output: ");
     try report.document.addAnnotated(output_path, .path);
     try report.document.addLineBreaks(2);
-    try report.document.addText("LLVM error: ");
-    try report.document.addAnnotated(llvm_message, .error_highlight);
-    try report.document.addLineBreak();
+    try addLlvmErrorLine(&report, llvm_message);
 
-    reporting.renderReportToTerminal(
-        &report,
-        stderrWriter(),
-        reporting.ColorUtils.getPaletteForConfig(config),
-        config,
-    ) catch {};
+    renderReportToStderr(&report, config);
 }

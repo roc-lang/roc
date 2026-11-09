@@ -94,17 +94,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Stringable :  where [a.to_str : a -> Str]
-
-Name := [Name(Str)].{
-	to_str : Name -> Str
-	to_str = |Name.Name(str)| str
-}
-
-stringify : a -> Str where [a.Stringable]
-stringify = |value| value.to_str()
-
-main = stringify(Name.Name("hi"))
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -126,7 +116,7 @@ main = stringify(Name.Name("hi"))
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 284)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 289)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
@@ -141,7 +131,7 @@ main = stringify(Name.Name("hi"))
 					(ty-lookup (name "Stringable") (local))))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-call (constraint-fn-var 306)
+		(e-call (constraint-fn-var 311)
 			(e-lookup-local
 				(p-assign (ident "stringify")))
 			(e-nominal (nominal "Name")

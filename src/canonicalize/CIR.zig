@@ -61,6 +61,7 @@ pub const BuiltinIndices = struct {
     utf16_problem_type: Statement.Idx,
     utf32_problem_type: Statement.Idx,
     range_type: Statement.Idx,
+    raw_order_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
     u16_type: Statement.Idx,
@@ -118,6 +119,7 @@ pub const BuiltinIndices = struct {
     utf16_problem_ident: Ident.Idx,
     utf32_problem_ident: Ident.Idx,
     range_ident: Ident.Idx,
+    raw_order_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
     u16_ident: Ident.Idx,
@@ -266,6 +268,7 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Utf16Problem", .qualified_name = "Builtin.Str.Utf16Problem", .type_field = "utf16_problem_type", .ident_field = "utf16_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf16Problem" } } },
     .{ .display_name = "Utf32Problem", .qualified_name = "Builtin.Str.Utf32Problem", .type_field = "utf32_problem_type", .ident_field = "utf32_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf32Problem" } } },
     .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
+    .{ .display_name = "RawOrder", .qualified_name = "Builtin.Num.RawOrder", .type_field = "raw_order_type", .ident_field = "raw_order_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "RawOrder" } }, .auto_import = false },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
     .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
     .{ .display_name = "U16", .qualified_name = "Builtin.Num.U16", .type_field = "u16_type", .ident_field = "u16_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U16" } }, .num_kind = .u16 },
@@ -620,6 +623,12 @@ pub const Annotation = struct {
     /// ignored. A hole is inferred from the def's body, so an annotation
     /// containing one does not on its own determine a generalized scheme.
     contains_underscore: bool = false,
+    /// Whether type checking generated an erroneous type for this annotation,
+    /// for example because it names an undeclared type. An erroneous annotation
+    /// declares no type, so nothing may be related to it. Recorded by
+    /// `NodeStore.markAnnotationErroneous` and populated on read by
+    /// `getAnnotation`; the value passed at construction is ignored.
+    erroneous: bool = false,
 
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
@@ -661,6 +670,11 @@ pub const ExposedItem = struct {
     alias: ?base.Ident.Idx,
     is_wildcard: bool,
     kind: Kind,
+    /// For an item of an `import ... exposing [...]` list, the node of the
+    /// declaration in the imported module that import resolution selected: a
+    /// value definition, or a type declaration statement. Null for a module
+    /// header's own exposes and for an item the module does not expose.
+    target: ?u32 = null,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
         const begin = try tree.beginNamedNode("exposed");
@@ -768,7 +782,7 @@ pub const IntValue = struct {
     pub fn pushStringPair(self: IntValue, tree: *SExprTree, key: []const u8) std.mem.Allocator.Error!void {
         const begin = try tree.reserveStringBuffer(40);
         errdefer tree.discardReservedStringBuffer(begin);
-        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable;
+        const value_str = self.bufPrint(tree.reservedStringBuffer(begin)[0..40]) catch unreachable; // IntValue.bufPrint only writes into the given buffer, and 40 bytes fit any i128 or u128 in decimal
         try tree.pushReservedStringPair(key, begin, value_str);
     }
 };

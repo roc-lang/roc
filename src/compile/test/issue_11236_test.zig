@@ -21,10 +21,10 @@ const harness = @import("lower_to_lir_harness.zig");
 // store. A rejected value must still fail when optimizations erase its consumer.
 fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
     for (0..store.procSpecCount()) |i| {
-        var current = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body orelse continue;
+        var current = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).body orelse continue;
         var remaining = store.cfStmtCount() + 1;
         while (remaining > 0) : (remaining -= 1) {
-            switch (store.getCFStmt(current)) {
+            switch (store.getCFStmtImmediate(current).*) {
                 .runtime_error => return true,
                 .crash => |crash| {
                     if (crash.msg == .literal and std.mem.eql(u8, store.getString(crash.msg.literal), "runtime error")) return true;
@@ -36,19 +36,6 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .assign_call,
                 .assign_call_erased,
                 .assign_packed_erased_fn,
-                .assign_boxy_desc_ref,
-                .assign_boxy_dict_ref,
-                .assign_boxy_box,
-                .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
-                .assign_boxy_unbox,
-                .assign_boxy_adapt,
-                .assign_boxy_inspect,
-                .assign_boxy_eq,
-                .assign_boxy_hash,
-                .assign_boxy_tag,
-                .assign_boxy_tag_payload,
-                .assign_call_dict,
                 .assign_low_level,
                 .assign_list,
                 .assign_struct,
@@ -58,13 +45,13 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .set_local,
                 .debug,
                 .expect,
-                .comptime_branch_taken,
                 .incref,
                 .decref,
                 .decref_if_initialized,
                 .free,
+                .dyn,
                 => |stmt| current = stmt.next,
-                .boxy_tag_match, .expect_err, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret => break,
+                .expect_err, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret => break,
             }
         }
     }
@@ -80,6 +67,7 @@ fn expectNoCheckedError(store: *const lir.LirStore, _: *const @import("layout").
 }
 
 const base = @import("base");
+const can = @import("can");
 const check = @import("check");
 const collections = @import("collections");
 const roc_target = @import("roc_target");
@@ -163,9 +151,8 @@ fn expectRejectedBinding(artifact: *const check.CheckedArtifact.CheckedModuleArt
         if (binding.body != .checked_error) continue;
         rejected += 1;
         const expr = binding.body.checked_error;
-        try std.testing.expect(artifact.checked_bodies.expr(expr).data == .runtime_error);
+        try std.testing.expect(artifact.bodies().exprData(expr) == .runtime_error);
         for (artifact.compile_time_roots.roots) |root| try std.testing.expect(root.expr != expr);
-        for (artifact.entry_wrappers.wrappers.items) |wrapper| try std.testing.expect(wrapper.body_expr != expr);
     }
     try std.testing.expectEqual(@as(usize, 1), rejected);
     try std.testing.expectEqual(@as(usize, 0), artifact.callable_eval_templates.templates.items.len);
@@ -241,13 +228,18 @@ test "issue 11236: rejection survives exports and serialization without callable
     }
     const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_use = false;
-    for (importer.checked_bodies.stored_exprs.items) |expr| {
-        const source = imported_source[expr.source_region.start.offset..expr.source_region.end.offset];
+    const importer_bodies = importer.bodies();
+    const importer_store = &importer.moduleEnvConst().store;
+    for (0..importer_bodies.nodeCount()) |raw| {
+        if (importer_bodies.index().nodeKind(@intCast(raw)) != .expr) continue;
+        const expr: can.CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
+        const region = importer_store.getExprRegion(expr);
+        const source = imported_source[region.start.offset..region.end.offset];
         if (std.mem.eql(u8, source, "Alias.f")) {
-            try std.testing.expect(expr.data == .runtime_error);
-            try std.testing.expect(expr.diverges);
-            try std.testing.expect(expr.contains_diagnostic_error);
-            try std.testing.expect(!expr.evaluation_may_be_elided_for_inspect);
+            try std.testing.expect(importer_bodies.exprData(expr) == .runtime_error);
+            try std.testing.expect(try importer_bodies.exprDiverges(expr, .run));
+            try std.testing.expect(try importer_bodies.exprContainsDiagnosticError(expr));
+            try std.testing.expect(!try importer_bodies.exprEvaluationMayBeElidedForInspect(expr));
             found_use = true;
         }
     }
@@ -265,5 +257,6 @@ test "issue 11236: rejection survives exports and serialization without callable
     const serialized: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
     var loaded = serialized.deserialize(buffer, gpa, artifact.module_env);
     defer loaded.deinitRetainingModuleEnv(gpa);
+    try loaded.attachSealedTypes(gpa, io);
     try expectRejectedBinding(&loaded);
 }

@@ -22,17 +22,22 @@ fn runApp(lowered: *const lir.CheckedPipeline.LoweredProgram) RunError!void {
     var host = eval.RuntimeHostEnv.init(std.testing.allocator);
     defer host.deinit();
     const program = &lowered.lir_result;
+    var static_data = try harness.interpreterStaticData(lowered);
+    defer if (static_data) |*data| data.deinit();
     var static_strings = try eval.LirInterpreter.buildStaticStrings(std.testing.allocator, &program.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         std.testing.allocator,
         &program.store,
         &program.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(program),
         static_strings.view(),
         host.get_ops(),
     );
     defer interpreter.deinit();
+    if (static_data) |*data| {
+        data.install(&interpreter);
+        data.ownByInterpreter(&interpreter);
+    }
     const root_id = program.root_procs.items[0];
     const root = program.store.getProcSpec(root_id);
     const args = program.store.getLocalSpan(root.args);
@@ -77,7 +82,7 @@ test "issue 11560: LSS lowers and runs the unannotated Try match with a payload 
 }
 
 // The payload-carrying `Try` form of the issue's unannotated match: Boxy must
-// map the worker's hidden descriptor parameters onto the direct call's
+// map the worker's hidden descriptors onto the direct call's
 // `Try(List(U64), U8)` representation, lower the app, and run it to the
 // correct result (`h(Ok([1, 2])) == [1, 2]`, so `main!` returns `Ok({})`).
 test "issue 11560: Boxy lowers and runs the unannotated Try match with a payload descriptor" {
@@ -119,7 +124,7 @@ test "issue 11560: LSS lowers and runs the unannotated Try match through a recor
 }
 
 // The callee's record field is an open tag row where the call's is `Try`;
-// Boxy aligns both its descriptor and dictionary parameters through `Try`.
+// Boxy aligns both its hidden descriptors and dictionaries through `Try`.
 test "issue 11560: Boxy lowers and runs the unannotated Try match through a record field" {
     try harness.runAppPathLoweredInspection(record_field_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
 }

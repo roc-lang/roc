@@ -9,7 +9,6 @@ const Allocator = std.mem.Allocator;
 const base = @import("base");
 
 const CIR = @import("CIR.zig");
-const DependencyGraph = @import("DependencyGraph.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
 /// Returns whether this module is the compiler-owned Builtin module.
@@ -101,46 +100,6 @@ pub fn isIntrinsicAnnotation(env: *const ModuleEnv, ident: base.Ident.Idx) bool 
 pub fn apply(env: *ModuleEnv) (Allocator.Error || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound })!void {
     var new_def_indices = try replaceProvidedByCompilerLowLevels(env);
     defer new_def_indices.deinit(env.gpa);
-
-    if (new_def_indices.items.len == 0) return;
-
-    var graph = try DependencyGraph.buildDependencyGraph(
-        env,
-        env.all_defs,
-        env.gpa,
-    );
-    defer graph.deinit();
-
-    var demand_dependencies = try DependencyGraph.collectDependencies(&graph, env.gpa);
-    errdefer demand_dependencies.deinit(env.gpa);
-    const eval_order = try DependencyGraph.computeSCCs(&graph, env.gpa);
-    if (env.evaluation_order) |old_order| {
-        old_order.deinit();
-        env.gpa.destroy(old_order);
-    }
-    const eval_order_ptr = try env.gpa.create(DependencyGraph.EvaluationOrder);
-    eval_order_ptr.* = eval_order;
-    env.setTopLevelDemandDependencies(demand_dependencies);
-    demand_dependencies = .{};
-    env.evaluation_order = eval_order_ptr;
-}
-
-fn numericFromStrLowLevel(num_type: []const u8) CIR.Expr.LowLevel {
-    if (std.mem.eql(u8, num_type, "U8")) return .u8_from_str;
-    if (std.mem.eql(u8, num_type, "I8")) return .i8_from_str;
-    if (std.mem.eql(u8, num_type, "U16")) return .u16_from_str;
-    if (std.mem.eql(u8, num_type, "I16")) return .i16_from_str;
-    if (std.mem.eql(u8, num_type, "U32")) return .u32_from_str;
-    if (std.mem.eql(u8, num_type, "I32")) return .i32_from_str;
-    if (std.mem.eql(u8, num_type, "U64")) return .u64_from_str;
-    if (std.mem.eql(u8, num_type, "I64")) return .i64_from_str;
-    if (std.mem.eql(u8, num_type, "U128")) return .u128_from_str;
-    if (std.mem.eql(u8, num_type, "I128")) return .i128_from_str;
-    if (std.mem.eql(u8, num_type, "Dec")) return .dec_from_str;
-    if (std.mem.eql(u8, num_type, "F32")) return .f32_from_str;
-    if (std.mem.eql(u8, num_type, "F64")) return .f64_from_str;
-
-    unreachable;
 }
 
 const LowLevelMap = std.AutoHashMap(base.Ident.Idx, CIR.Expr.LowLevel);
@@ -154,7 +113,7 @@ fn scratchFmt(
     scratch.clearRetainingCapacity();
     const len = std.fmt.count(fmt, args);
     try scratch.resize(gpa, len);
-    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable;
+    _ = std.fmt.bufPrint(scratch.items, fmt, args) catch unreachable; // scratch was resized to std.fmt.count of the same format and args
     return scratch.items;
 }
 
@@ -168,11 +127,20 @@ fn putLowLevelFmt(
     comptime fmt: []const u8,
     args: anytype,
     op: CIR.Expr.LowLevel,
-) std.mem.Allocator.Error!void {
-    const name = try scratchFmt(scratch, env.gpa, fmt, args);
-    if (env.common.findIdent(name)) |ident| {
-        try low_level_map.put(ident, op);
-    }
+) error{ OutOfMemory, LowLevelOperationsNotFound }!void {
+    try putLowLevel(low_level_map, env, try scratchFmt(scratch, env.gpa, fmt, args), op);
+}
+
+/// Maps a builtin declaration to its low-level operation. Every mapped name
+/// must be declared in Builtin.roc; a name that is not is a stale entry.
+fn putLowLevel(
+    low_level_map: *LowLevelMap,
+    env: *ModuleEnv,
+    name: []const u8,
+    op: CIR.Expr.LowLevel,
+) error{ OutOfMemory, LowLevelOperationsNotFound }!void {
+    const ident = env.common.findIdent(name) orelse return error.LowLevelOperationsNotFound;
+    try low_level_map.put(ident, op);
 }
 
 /// Replace specific `e_anno_only` builtin declarations with `e_lambda` wrappers
@@ -238,7 +206,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "str_from_utf32_le_short", .str_from_utf32_le_short },
         .{ "str_from_utf32_be_short", .str_from_utf32_be_short },
         .{ "Builtin.Str.from_utf8_lossy", .str_from_utf8_lossy },
-        .{ "Builtin.Str.from_utf8", .str_from_utf8 },
+        .{ "str_from_utf8_raw", .str_from_utf8 },
         .{ "Builtin.Str.split_on", .str_split_on },
         .{ "Builtin.Str.join_with", .str_join_with },
         .{ "Builtin.Box.box", .box_box },
@@ -266,7 +234,6 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "u8_list_reserve_for_append", .list_reserve_for_append },
         .{ "list_release_excess_capacity", .list_release_excess_capacity },
         .{ "list_clear", .list_clear },
-        .{ "list_sort_with", .list_sort_with },
         .{ "Builtin.List.drop_at", .list_drop_at },
         .{ "Builtin.List.sublist", .list_sublist },
         .{ "Builtin.List.prepend", .list_prepend },
@@ -278,54 +245,40 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "list_map_cast_unsafe", .list_map_cast_unsafe },
         .{ "list_map_extract_unsafe", .list_map_extract_unsafe },
         .{ "list_map_write_unsafe", .list_map_write_unsafe },
+        .{ "list_move_out_unsafe", .list_move_out_unsafe },
+        .{ "list_move_in_unsafe", .list_map_write_unsafe },
+        .{ "list_owned_unique", .list_owned_unique },
+        .{ "list_item_size_at_most", .list_item_size_at_most },
+        .{ "plus_infallible", .num_int_add_proven_cannot_overflow },
+        .{ "minus_infallible", .num_int_sub_proven_cannot_overflow },
         .{ "dict_pseudo_seed", .dict_pseudo_seed },
         .{ "hasher_finish", .hasher_finish },
+        .{ "Builtin.Hasher.write_bool", .hasher_write_bool },
+        .{ "Builtin.Hasher.write_u8", .hasher_write_u8 },
+        .{ "Builtin.Hasher.write_u16", .hasher_write_u16 },
+        .{ "Builtin.Hasher.write_u32", .hasher_write_u32 },
+        .{ "Builtin.Hasher.write_u64", .hasher_write_u64 },
+        .{ "Builtin.Hasher.write_u128", .hasher_write_u128 },
+        .{ "Builtin.Hasher.write_i8", .hasher_write_i8 },
+        .{ "Builtin.Hasher.write_i16", .hasher_write_i16 },
+        .{ "Builtin.Hasher.write_i32", .hasher_write_i32 },
+        .{ "Builtin.Hasher.write_i64", .hasher_write_i64 },
+        .{ "Builtin.Hasher.write_i128", .hasher_write_i128 },
+        .{ "Builtin.Hasher.write_f32", .hasher_write_f32 },
+        .{ "Builtin.Hasher.write_f64", .hasher_write_f64 },
+        .{ "Builtin.Hasher.write_dec", .hasher_write_dec },
+        .{ "Builtin.Hasher.write_bytes", .hasher_write_bytes },
+        .{ "Builtin.Hasher.write_str", .hasher_write_str },
+        .{ "crypto_sha256_hash_bytes", .crypto_sha256_hash_bytes },
+        .{ "crypto_sha256_hasher_empty", .crypto_sha256_hasher_empty },
+        .{ "crypto_sha256_hasher_write", .crypto_sha256_hasher_write },
+        .{ "crypto_sha256_hasher_finish", .crypto_sha256_hasher_finish },
+        .{ "crypto_blake3_hash_bytes", .crypto_blake3_hash_bytes },
+        .{ "crypto_blake3_hasher_empty", .crypto_blake3_hasher_empty },
+        .{ "crypto_blake3_hasher_write", .crypto_blake3_hasher_write },
+        .{ "crypto_blake3_hasher_finish", .crypto_blake3_hasher_finish },
     }) |entry| {
-        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
-    }
-    const hasher_primitives = [_]struct {
-        name: []const u8,
-        op: CIR.Expr.LowLevel,
-    }{
-        .{ .name = "Builtin.Hasher.write_bool", .op = .hasher_write_bool },
-        .{ .name = "Builtin.Hasher.write_u8", .op = .hasher_write_u8 },
-        .{ .name = "Builtin.Hasher.write_u16", .op = .hasher_write_u16 },
-        .{ .name = "Builtin.Hasher.write_u32", .op = .hasher_write_u32 },
-        .{ .name = "Builtin.Hasher.write_u64", .op = .hasher_write_u64 },
-        .{ .name = "Builtin.Hasher.write_u128", .op = .hasher_write_u128 },
-        .{ .name = "Builtin.Hasher.write_i8", .op = .hasher_write_i8 },
-        .{ .name = "Builtin.Hasher.write_i16", .op = .hasher_write_i16 },
-        .{ .name = "Builtin.Hasher.write_i32", .op = .hasher_write_i32 },
-        .{ .name = "Builtin.Hasher.write_i64", .op = .hasher_write_i64 },
-        .{ .name = "Builtin.Hasher.write_i128", .op = .hasher_write_i128 },
-        .{ .name = "Builtin.Hasher.write_f32", .op = .hasher_write_f32 },
-        .{ .name = "Builtin.Hasher.write_f64", .op = .hasher_write_f64 },
-        .{ .name = "Builtin.Hasher.write_dec", .op = .hasher_write_dec },
-        .{ .name = "Builtin.Hasher.write_bytes", .op = .hasher_write_bytes },
-        .{ .name = "Builtin.Hasher.write_str", .op = .hasher_write_str },
-    };
-    for (hasher_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
-    }
-    const crypto_primitives = [_]struct {
-        name: []const u8,
-        op: CIR.Expr.LowLevel,
-    }{
-        .{ .name = "crypto_sha256_hash_bytes", .op = .crypto_sha256_hash_bytes },
-        .{ .name = "crypto_sha256_hasher_empty", .op = .crypto_sha256_hasher_empty },
-        .{ .name = "crypto_sha256_hasher_write", .op = .crypto_sha256_hasher_write },
-        .{ .name = "crypto_sha256_hasher_finish", .op = .crypto_sha256_hasher_finish },
-        .{ .name = "crypto_blake3_hash_bytes", .op = .crypto_blake3_hash_bytes },
-        .{ .name = "crypto_blake3_hasher_empty", .op = .crypto_blake3_hasher_empty },
-        .{ .name = "crypto_blake3_hasher_write", .op = .crypto_blake3_hasher_write },
-        .{ .name = "crypto_blake3_hasher_finish", .op = .crypto_blake3_hasher_finish },
-    };
-    for (crypto_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
     const numeric_types = numeric_type_names;
     const signed_types = [_][]const u8{ "I8", "I16", "I32", "I64", "I128", "Dec", "F32", "F64" };
@@ -342,39 +295,22 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     // Note: Types like Dec are nested under Num in Builtin.roc, so the canonical identifier is
     // "Builtin.Num.Dec.to_str". But Dec is auto-imported as "Dec", so user code
     // calling Dec.to_str looks up "Builtin.Dec.to_str". We need the canonical name here.
-    for (numeric_types) |num_type| {
-        const to_str_name = try scratchFmt(&name_scratch, gpa, "Builtin.Num.{s}.to_str", .{num_type});
-        if (env.common.findIdent(to_str_name)) |ident| {
-            const low_level_op: CIR.Expr.LowLevel = if (std.mem.eql(u8, num_type, "U8"))
-                .u8_to_str
-            else if (std.mem.eql(u8, num_type, "I8"))
-                .i8_to_str
-            else if (std.mem.eql(u8, num_type, "U16"))
-                .u16_to_str
-            else if (std.mem.eql(u8, num_type, "I16"))
-                .i16_to_str
-            else if (std.mem.eql(u8, num_type, "U32"))
-                .u32_to_str
-            else if (std.mem.eql(u8, num_type, "I32"))
-                .i32_to_str
-            else if (std.mem.eql(u8, num_type, "U64"))
-                .u64_to_str
-            else if (std.mem.eql(u8, num_type, "I64"))
-                .i64_to_str
-            else if (std.mem.eql(u8, num_type, "U128"))
-                .u128_to_str
-            else if (std.mem.eql(u8, num_type, "I128"))
-                .i128_to_str
-            else if (std.mem.eql(u8, num_type, "Dec"))
-                .dec_to_str
-            else if (std.mem.eql(u8, num_type, "F32"))
-                .f32_to_str
-            else if (std.mem.eql(u8, num_type, "F64"))
-                .f64_to_str
-            else
-                continue;
-            try low_level_map.put(ident, low_level_op);
-        }
+    for ([_]NamedLowLevel{
+        .{ "Builtin.Num.U8.to_str", .u8_to_str },
+        .{ "Builtin.Num.I8.to_str", .i8_to_str },
+        .{ "Builtin.Num.U16.to_str", .u16_to_str },
+        .{ "Builtin.Num.I16.to_str", .i16_to_str },
+        .{ "Builtin.Num.U32.to_str", .u32_to_str },
+        .{ "Builtin.Num.I32.to_str", .i32_to_str },
+        .{ "Builtin.Num.U64.to_str", .u64_to_str },
+        .{ "Builtin.Num.I64.to_str", .i64_to_str },
+        .{ "Builtin.Num.U128.to_str", .u128_to_str },
+        .{ "Builtin.Num.I128.to_str", .i128_to_str },
+        .{ "Builtin.Num.Dec.to_str", .dec_to_str },
+        .{ "Builtin.Num.F32.to_str", .f32_to_str },
+        .{ "Builtin.Num.F64.to_str", .f64_to_str },
+    }) |entry| {
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.to_bits", .{}, .f32_to_bits);
     try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.F32.from_bits", .{}, .f32_from_bits);
@@ -392,35 +328,27 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     }
 
     // Three-way ordering (every numeric type with a total order)
-    for (non_float_numeric_type_names) |num_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.order_relative_to", .{num_type}, .compare);
-    }
-
-    // from_str (all numeric types)
-    for (numeric_types) |num_type| {
-        const from_str = try scratchFmt(&name_scratch, gpa, "Builtin.Num.{s}.from_str", .{num_type});
-        if (env.common.findIdent(from_str)) |ident| {
-            try low_level_map.put(ident, numericFromStrLowLevel(num_type));
-        }
+    for ([_][]const u8{ "u8", "i8", "u16", "i16", "u32", "i32", "u64", "i64", "u128", "i128", "dec" }) |num_type| {
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "{s}_order_raw", .{num_type}, .compare);
     }
 
     const internal_from_str_primitives = [_]struct {
         name: []const u8,
         op: CIR.Expr.LowLevel,
     }{
-        .{ .name = "u8_from_str", .op = .u8_from_str },
-        .{ .name = "i8_from_str", .op = .i8_from_str },
-        .{ .name = "u16_from_str", .op = .u16_from_str },
-        .{ .name = "i16_from_str", .op = .i16_from_str },
-        .{ .name = "u32_from_str", .op = .u32_from_str },
-        .{ .name = "i32_from_str", .op = .i32_from_str },
-        .{ .name = "u64_from_str", .op = .u64_from_str },
-        .{ .name = "i64_from_str", .op = .i64_from_str },
-        .{ .name = "u128_from_str", .op = .u128_from_str },
-        .{ .name = "i128_from_str", .op = .i128_from_str },
-        .{ .name = "dec_from_str", .op = .dec_from_str },
-        .{ .name = "f32_from_str", .op = .f32_from_str },
-        .{ .name = "f64_from_str", .op = .f64_from_str },
+        .{ .name = "u8_from_str_raw", .op = .u8_from_str },
+        .{ .name = "i8_from_str_raw", .op = .i8_from_str },
+        .{ .name = "u16_from_str_raw", .op = .u16_from_str },
+        .{ .name = "i16_from_str_raw", .op = .i16_from_str },
+        .{ .name = "u32_from_str_raw", .op = .u32_from_str },
+        .{ .name = "i32_from_str_raw", .op = .i32_from_str },
+        .{ .name = "u64_from_str_raw", .op = .u64_from_str },
+        .{ .name = "i64_from_str_raw", .op = .i64_from_str },
+        .{ .name = "u128_from_str_raw", .op = .u128_from_str },
+        .{ .name = "i128_from_str_raw", .op = .i128_from_str },
+        .{ .name = "dec_from_str_raw", .op = .dec_from_str },
+        .{ .name = "f32_from_str_raw", .op = .f32_from_str },
+        .{ .name = "f64_from_str_raw", .op = .f64_from_str },
         .{ .name = "u8_from_str_prefix_raw", .op = .u8_from_str_prefix },
         .{ .name = "u8_from_utf8_prefix_raw", .op = .u8_from_utf8_prefix },
         .{ .name = "i8_from_str_prefix_raw", .op = .i8_from_str_prefix },
@@ -449,9 +377,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ .name = "f64_from_utf8_prefix_raw", .op = .f64_from_utf8_prefix },
     };
     for (internal_from_str_primitives) |primitive| {
-        if (env.common.findIdent(primitive.name)) |ident| {
-            try low_level_map.put(ident, primitive.op);
-        }
+        try putLowLevel(&low_level_map, env, primitive.name, primitive.op);
     }
 
     // Numeric arithmetic operations (all numeric types have plus, minus, times, div_by, rem_by)
@@ -546,42 +472,97 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ .owner = "U8x16", .name = "table_lookup", .op = .simd_table_lookup },
         .{ .owner = "U64x2", .name = "carryless_times_lo", .op = .simd_clmul_lo },
         .{ .owner = "U64x2", .name = "carryless_times_hi", .op = .simd_clmul_hi },
+        .{ .owner = "U8x16", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I8x16", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U16x8", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I16x8", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U32x4", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I32x4", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "I64x2", .name = "gt_lanes", .op = .simd_gt_lanes },
+        .{ .owner = "U8x16", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I8x16", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U16x8", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I16x8", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U32x4", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I32x4", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "I64x2", .name = "gte_lanes", .op = .simd_gte_lanes },
+        .{ .owner = "U8x16", .name = "min", .op = .simd_min },
+        .{ .owner = "I8x16", .name = "min", .op = .simd_min },
+        .{ .owner = "U16x8", .name = "min", .op = .simd_min },
+        .{ .owner = "I16x8", .name = "min", .op = .simd_min },
+        .{ .owner = "U32x4", .name = "min", .op = .simd_min },
+        .{ .owner = "I32x4", .name = "min", .op = .simd_min },
+        .{ .owner = "U8x16", .name = "max", .op = .simd_max },
+        .{ .owner = "I8x16", .name = "max", .op = .simd_max },
+        .{ .owner = "U16x8", .name = "max", .op = .simd_max },
+        .{ .owner = "I16x8", .name = "max", .op = .simd_max },
+        .{ .owner = "U32x4", .name = "max", .op = .simd_max },
+        .{ .owner = "I32x4", .name = "max", .op = .simd_max },
+        .{ .owner = "U16x8", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "I16x8", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "U32x4", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "I32x4", .name = "times_wrap", .op = .simd_mul_wrap },
+        .{ .owner = "U8x16", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I8x16", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U16x8", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I16x8", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U32x4", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "I32x4", .name = "times_wide_lo", .op = .simd_mul_wide_lo },
+        .{ .owner = "U8x16", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I8x16", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U16x8", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I16x8", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U32x4", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "I32x4", .name = "times_wide_hi", .op = .simd_mul_wide_hi },
+        .{ .owner = "U8x16", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I8x16", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U16x8", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I16x8", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U32x4", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "I32x4", .name = "even_lanes", .op = .simd_even_lanes },
+        .{ .owner = "U8x16", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I8x16", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U16x8", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I16x8", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U32x4", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "I32x4", .name = "odd_lanes", .op = .simd_odd_lanes },
+        .{ .owner = "U8x16", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I8x16", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U16x8", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I16x8", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U32x4", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "I32x4", .name = "sum_lanes", .op = .simd_sum_lanes },
+        .{ .owner = "U64x2", .name = "sum_lanes_wrap", .op = .simd_sum_lanes_wrap },
+        .{ .owner = "I64x2", .name = "sum_lanes_wrap", .op = .simd_sum_lanes_wrap },
+        .{ .owner = "U8x16", .name = "to_u16x8_lo", .op = .simd_widen_lo },
+        .{ .owner = "I8x16", .name = "to_i16x8_lo", .op = .simd_widen_lo },
+        .{ .owner = "U16x8", .name = "to_u32x4_lo", .op = .simd_widen_lo },
+        .{ .owner = "I16x8", .name = "to_i32x4_lo", .op = .simd_widen_lo },
+        .{ .owner = "U32x4", .name = "to_u64x2_lo", .op = .simd_widen_lo },
+        .{ .owner = "I32x4", .name = "to_i64x2_lo", .op = .simd_widen_lo },
+        .{ .owner = "U8x16", .name = "to_u16x8_hi", .op = .simd_widen_hi },
+        .{ .owner = "I8x16", .name = "to_i16x8_hi", .op = .simd_widen_hi },
+        .{ .owner = "U16x8", .name = "to_u32x4_hi", .op = .simd_widen_hi },
+        .{ .owner = "I16x8", .name = "to_i32x4_hi", .op = .simd_widen_hi },
+        .{ .owner = "U32x4", .name = "to_u64x2_hi", .op = .simd_widen_hi },
+        .{ .owner = "I32x4", .name = "to_i64x2_hi", .op = .simd_widen_hi },
+        .{ .owner = "U8x16", .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen },
+        .{ .owner = "I8x16", .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
+        .{ .owner = "U16x8", .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen },
+        .{ .owner = "I16x8", .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
+        .{ .owner = "U16x8", .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U32x4", .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U64x2", .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },
+        .{ .owner = "U16x8", .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I16x8", .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I16x8", .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "U32x4", .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I32x4", .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
+        .{ .owner = "I32x4", .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
     };
     for (simd_method_mappings) |mapping| {
         try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ mapping.owner, mapping.name }, mapping.op);
     }
-
-    for (simd_types) |simd_type| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gt_lanes", .{simd_type}, .simd_gt_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.gte_lanes", .{simd_type}, .simd_gte_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.min", .{simd_type}, .simd_min);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.max", .{simd_type}, .simd_max);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wrap", .{simd_type}, .simd_mul_wrap);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_lo", .{simd_type}, .simd_mul_wide_lo);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.times_wide_hi", .{simd_type}, .simd_mul_wide_hi);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.even_lanes", .{simd_type}, .simd_even_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.odd_lanes", .{simd_type}, .simd_odd_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes", .{simd_type}, .simd_sum_lanes);
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.sum_lanes_wrap", .{simd_type}, .simd_sum_lanes_wrap);
-    }
-
-    const width_method_mappings = [_]struct { name: []const u8, op: CIR.Expr.LowLevel }{
-        .{ .name = "to_u16x8_lo", .op = .simd_widen_lo },                      .{ .name = "to_i16x8_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u32x4_lo", .op = .simd_widen_lo },                      .{ .name = "to_i32x4_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u64x2_lo", .op = .simd_widen_lo },                      .{ .name = "to_i64x2_lo", .op = .simd_widen_lo },
-        .{ .name = "to_u16x8_hi", .op = .simd_widen_hi },                      .{ .name = "to_i16x8_hi", .op = .simd_widen_hi },
-        .{ .name = "to_u32x4_hi", .op = .simd_widen_hi },                      .{ .name = "to_i32x4_hi", .op = .simd_widen_hi },
-        .{ .name = "to_u64x2_hi", .op = .simd_widen_hi },                      .{ .name = "to_i64x2_hi", .op = .simd_widen_hi },
-        .{ .name = "pairwise_plus_to_u16x8", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i16x8", .op = .simd_pairwise_add_widen },
-        .{ .name = "pairwise_plus_to_u32x4", .op = .simd_pairwise_add_widen }, .{ .name = "pairwise_plus_to_i32x4", .op = .simd_pairwise_add_widen },
-        .{ .name = "narrow_to_u8x16_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u16x8_wrap", .op = .simd_narrow_wrap },
-        .{ .name = "narrow_to_u32x4_wrap", .op = .simd_narrow_wrap },          .{ .name = "narrow_to_u8x16_saturated", .op = .simd_narrow_sat },
-        .{ .name = "narrow_to_i8x16_saturated", .op = .simd_narrow_sat },      .{ .name = "narrow_to_u16x8_saturated", .op = .simd_narrow_sat },
-        .{ .name = "narrow_to_i16x8_saturated", .op = .simd_narrow_sat },
-    };
-    for (simd_types) |simd_type| for (width_method_mappings) |mapping| {
-        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.{s}", .{ simd_type, mapping.name }, mapping.op);
-    };
 
     // Numeric negate operation (signed types only)
     for (signed_types) |num_type| {
@@ -629,7 +610,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     // U8 conversion operations
     for ([_]NamedLowLevel{
         .{ "Builtin.Num.U8.to_i8_wrap", .u8_to_i8_wrap },
-        .{ "Builtin.Num.U8.to_i8_try", .u8_to_i8_try },
+        .{ "u8_to_i8_try_raw", .u8_to_i8_try },
         .{ "Builtin.Num.U8.to_i16", .u8_to_i16 },
         .{ "Builtin.Num.U8.to_i32", .u8_to_i32 },
         .{ "Builtin.Num.U8.to_i64", .u8_to_i64 },
@@ -648,29 +629,29 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "Builtin.Num.I8.to_i64", .i8_to_i64 },
         .{ "Builtin.Num.I8.to_i128", .i8_to_i128 },
         .{ "Builtin.Num.I8.to_u8_wrap", .i8_to_u8_wrap },
-        .{ "Builtin.Num.I8.to_u8_try", .i8_to_u8_try },
+        .{ "i8_to_u8_try_raw", .i8_to_u8_try },
         .{ "Builtin.Num.I8.to_u16_wrap", .i8_to_u16_wrap },
-        .{ "Builtin.Num.I8.to_u16_try", .i8_to_u16_try },
+        .{ "i8_to_u16_try_raw", .i8_to_u16_try },
         .{ "Builtin.Num.I8.to_u32_wrap", .i8_to_u32_wrap },
-        .{ "Builtin.Num.I8.to_u32_try", .i8_to_u32_try },
+        .{ "i8_to_u32_try_raw", .i8_to_u32_try },
         .{ "Builtin.Num.I8.to_u64_wrap", .i8_to_u64_wrap },
-        .{ "Builtin.Num.I8.to_u64_try", .i8_to_u64_try },
+        .{ "i8_to_u64_try_raw", .i8_to_u64_try },
         .{ "Builtin.Num.I8.to_u128_wrap", .i8_to_u128_wrap },
-        .{ "Builtin.Num.I8.to_u128_try", .i8_to_u128_try },
+        .{ "i8_to_u128_try_raw", .i8_to_u128_try },
         .{ "Builtin.Num.I8.to_f32", .i8_to_f32 },
         .{ "Builtin.Num.I8.to_f64", .i8_to_f64 },
         .{ "Builtin.Num.I8.to_dec", .i8_to_dec },
 
         // U16 conversion operations
         .{ "Builtin.Num.U16.to_i8_wrap", .u16_to_i8_wrap },
-        .{ "Builtin.Num.U16.to_i8_try", .u16_to_i8_try },
+        .{ "u16_to_i8_try_raw", .u16_to_i8_try },
         .{ "Builtin.Num.U16.to_i16_wrap", .u16_to_i16_wrap },
-        .{ "Builtin.Num.U16.to_i16_try", .u16_to_i16_try },
+        .{ "u16_to_i16_try_raw", .u16_to_i16_try },
         .{ "Builtin.Num.U16.to_i32", .u16_to_i32 },
         .{ "Builtin.Num.U16.to_i64", .u16_to_i64 },
         .{ "Builtin.Num.U16.to_i128", .u16_to_i128 },
         .{ "Builtin.Num.U16.to_u8_wrap", .u16_to_u8_wrap },
-        .{ "Builtin.Num.U16.to_u8_try", .u16_to_u8_try },
+        .{ "u16_to_u8_try_raw", .u16_to_u8_try },
         .{ "Builtin.Num.U16.to_u32", .u16_to_u32 },
         .{ "Builtin.Num.U16.to_u64", .u16_to_u64 },
         .{ "Builtin.Num.U16.to_u128", .u16_to_u128 },
@@ -680,37 +661,37 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
         // I16 conversion operations
         .{ "Builtin.Num.I16.to_i8_wrap", .i16_to_i8_wrap },
-        .{ "Builtin.Num.I16.to_i8_try", .i16_to_i8_try },
+        .{ "i16_to_i8_try_raw", .i16_to_i8_try },
         .{ "Builtin.Num.I16.to_i32", .i16_to_i32 },
         .{ "Builtin.Num.I16.to_i64", .i16_to_i64 },
         .{ "Builtin.Num.I16.to_i128", .i16_to_i128 },
         .{ "Builtin.Num.I16.to_u8_wrap", .i16_to_u8_wrap },
-        .{ "Builtin.Num.I16.to_u8_try", .i16_to_u8_try },
+        .{ "i16_to_u8_try_raw", .i16_to_u8_try },
         .{ "Builtin.Num.I16.to_u16_wrap", .i16_to_u16_wrap },
-        .{ "Builtin.Num.I16.to_u16_try", .i16_to_u16_try },
+        .{ "i16_to_u16_try_raw", .i16_to_u16_try },
         .{ "Builtin.Num.I16.to_u32_wrap", .i16_to_u32_wrap },
-        .{ "Builtin.Num.I16.to_u32_try", .i16_to_u32_try },
+        .{ "i16_to_u32_try_raw", .i16_to_u32_try },
         .{ "Builtin.Num.I16.to_u64_wrap", .i16_to_u64_wrap },
-        .{ "Builtin.Num.I16.to_u64_try", .i16_to_u64_try },
+        .{ "i16_to_u64_try_raw", .i16_to_u64_try },
         .{ "Builtin.Num.I16.to_u128_wrap", .i16_to_u128_wrap },
-        .{ "Builtin.Num.I16.to_u128_try", .i16_to_u128_try },
+        .{ "i16_to_u128_try_raw", .i16_to_u128_try },
         .{ "Builtin.Num.I16.to_f32", .i16_to_f32 },
         .{ "Builtin.Num.I16.to_f64", .i16_to_f64 },
         .{ "Builtin.Num.I16.to_dec", .i16_to_dec },
 
         // U32 conversion operations
         .{ "Builtin.Num.U32.to_i8_wrap", .u32_to_i8_wrap },
-        .{ "Builtin.Num.U32.to_i8_try", .u32_to_i8_try },
+        .{ "u32_to_i8_try_raw", .u32_to_i8_try },
         .{ "Builtin.Num.U32.to_i16_wrap", .u32_to_i16_wrap },
-        .{ "Builtin.Num.U32.to_i16_try", .u32_to_i16_try },
+        .{ "u32_to_i16_try_raw", .u32_to_i16_try },
         .{ "Builtin.Num.U32.to_i32_wrap", .u32_to_i32_wrap },
-        .{ "Builtin.Num.U32.to_i32_try", .u32_to_i32_try },
+        .{ "u32_to_i32_try_raw", .u32_to_i32_try },
         .{ "Builtin.Num.U32.to_i64", .u32_to_i64 },
         .{ "Builtin.Num.U32.to_i128", .u32_to_i128 },
         .{ "Builtin.Num.U32.to_u8_wrap", .u32_to_u8_wrap },
-        .{ "Builtin.Num.U32.to_u8_try", .u32_to_u8_try },
+        .{ "u32_to_u8_try_raw", .u32_to_u8_try },
         .{ "Builtin.Num.U32.to_u16_wrap", .u32_to_u16_wrap },
-        .{ "Builtin.Num.U32.to_u16_try", .u32_to_u16_try },
+        .{ "u32_to_u16_try_raw", .u32_to_u16_try },
         .{ "Builtin.Num.U32.to_u64", .u32_to_u64 },
         .{ "Builtin.Num.U32.to_u128", .u32_to_u128 },
         .{ "Builtin.Num.U32.to_f32", .u32_to_f32 },
@@ -719,41 +700,41 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
         // I32 conversion operations
         .{ "Builtin.Num.I32.to_i8_wrap", .i32_to_i8_wrap },
-        .{ "Builtin.Num.I32.to_i8_try", .i32_to_i8_try },
+        .{ "i32_to_i8_try_raw", .i32_to_i8_try },
         .{ "Builtin.Num.I32.to_i16_wrap", .i32_to_i16_wrap },
-        .{ "Builtin.Num.I32.to_i16_try", .i32_to_i16_try },
+        .{ "i32_to_i16_try_raw", .i32_to_i16_try },
         .{ "Builtin.Num.I32.to_i64", .i32_to_i64 },
         .{ "Builtin.Num.I32.to_i128", .i32_to_i128 },
         .{ "Builtin.Num.I32.to_u8_wrap", .i32_to_u8_wrap },
-        .{ "Builtin.Num.I32.to_u8_try", .i32_to_u8_try },
+        .{ "i32_to_u8_try_raw", .i32_to_u8_try },
         .{ "Builtin.Num.I32.to_u16_wrap", .i32_to_u16_wrap },
-        .{ "Builtin.Num.I32.to_u16_try", .i32_to_u16_try },
+        .{ "i32_to_u16_try_raw", .i32_to_u16_try },
         .{ "Builtin.Num.I32.to_u32_wrap", .i32_to_u32_wrap },
-        .{ "Builtin.Num.I32.to_u32_try", .i32_to_u32_try },
+        .{ "i32_to_u32_try_raw", .i32_to_u32_try },
         .{ "Builtin.Num.I32.to_u64_wrap", .i32_to_u64_wrap },
-        .{ "Builtin.Num.I32.to_u64_try", .i32_to_u64_try },
+        .{ "i32_to_u64_try_raw", .i32_to_u64_try },
         .{ "Builtin.Num.I32.to_u128_wrap", .i32_to_u128_wrap },
-        .{ "Builtin.Num.I32.to_u128_try", .i32_to_u128_try },
+        .{ "i32_to_u128_try_raw", .i32_to_u128_try },
         .{ "Builtin.Num.I32.to_f32", .i32_to_f32 },
         .{ "Builtin.Num.I32.to_f64", .i32_to_f64 },
         .{ "Builtin.Num.I32.to_dec", .i32_to_dec },
 
         // U64 conversion operations
         .{ "Builtin.Num.U64.to_i8_wrap", .u64_to_i8_wrap },
-        .{ "Builtin.Num.U64.to_i8_try", .u64_to_i8_try },
+        .{ "u64_to_i8_try_raw", .u64_to_i8_try },
         .{ "Builtin.Num.U64.to_i16_wrap", .u64_to_i16_wrap },
-        .{ "Builtin.Num.U64.to_i16_try", .u64_to_i16_try },
+        .{ "u64_to_i16_try_raw", .u64_to_i16_try },
         .{ "Builtin.Num.U64.to_i32_wrap", .u64_to_i32_wrap },
-        .{ "Builtin.Num.U64.to_i32_try", .u64_to_i32_try },
+        .{ "u64_to_i32_try_raw", .u64_to_i32_try },
         .{ "Builtin.Num.U64.to_i64_wrap", .u64_to_i64_wrap },
-        .{ "Builtin.Num.U64.to_i64_try", .u64_to_i64_try },
+        .{ "u64_to_i64_try_raw", .u64_to_i64_try },
         .{ "Builtin.Num.U64.to_i128", .u64_to_i128 },
         .{ "Builtin.Num.U64.to_u8_wrap", .u64_to_u8_wrap },
-        .{ "Builtin.Num.U64.to_u8_try", .u64_to_u8_try },
+        .{ "u64_to_u8_try_raw", .u64_to_u8_try },
         .{ "Builtin.Num.U64.to_u16_wrap", .u64_to_u16_wrap },
-        .{ "Builtin.Num.U64.to_u16_try", .u64_to_u16_try },
+        .{ "u64_to_u16_try_raw", .u64_to_u16_try },
         .{ "Builtin.Num.U64.to_u32_wrap", .u64_to_u32_wrap },
-        .{ "Builtin.Num.U64.to_u32_try", .u64_to_u32_try },
+        .{ "u64_to_u32_try_raw", .u64_to_u32_try },
         .{ "Builtin.Num.U64.to_u128", .u64_to_u128 },
         .{ "Builtin.Num.U64.to_f32", .u64_to_f32 },
         .{ "Builtin.Num.U64.to_f64", .u64_to_f64 },
@@ -761,68 +742,68 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
         // I64 conversion operations
         .{ "Builtin.Num.I64.to_i8_wrap", .i64_to_i8_wrap },
-        .{ "Builtin.Num.I64.to_i8_try", .i64_to_i8_try },
+        .{ "i64_to_i8_try_raw", .i64_to_i8_try },
         .{ "Builtin.Num.I64.to_i16_wrap", .i64_to_i16_wrap },
-        .{ "Builtin.Num.I64.to_i16_try", .i64_to_i16_try },
+        .{ "i64_to_i16_try_raw", .i64_to_i16_try },
         .{ "Builtin.Num.I64.to_i32_wrap", .i64_to_i32_wrap },
-        .{ "Builtin.Num.I64.to_i32_try", .i64_to_i32_try },
+        .{ "i64_to_i32_try_raw", .i64_to_i32_try },
         .{ "Builtin.Num.I64.to_i128", .i64_to_i128 },
         .{ "Builtin.Num.I64.to_u8_wrap", .i64_to_u8_wrap },
-        .{ "Builtin.Num.I64.to_u8_try", .i64_to_u8_try },
+        .{ "i64_to_u8_try_raw", .i64_to_u8_try },
         .{ "Builtin.Num.I64.to_u16_wrap", .i64_to_u16_wrap },
-        .{ "Builtin.Num.I64.to_u16_try", .i64_to_u16_try },
+        .{ "i64_to_u16_try_raw", .i64_to_u16_try },
         .{ "Builtin.Num.I64.to_u32_wrap", .i64_to_u32_wrap },
-        .{ "Builtin.Num.I64.to_u32_try", .i64_to_u32_try },
+        .{ "i64_to_u32_try_raw", .i64_to_u32_try },
         .{ "Builtin.Num.I64.to_u64_wrap", .i64_to_u64_wrap },
-        .{ "Builtin.Num.I64.to_u64_try", .i64_to_u64_try },
+        .{ "i64_to_u64_try_raw", .i64_to_u64_try },
         .{ "Builtin.Num.I64.to_u128_wrap", .i64_to_u128_wrap },
-        .{ "Builtin.Num.I64.to_u128_try", .i64_to_u128_try },
+        .{ "i64_to_u128_try_raw", .i64_to_u128_try },
         .{ "Builtin.Num.I64.to_f32", .i64_to_f32 },
         .{ "Builtin.Num.I64.to_f64", .i64_to_f64 },
         .{ "Builtin.Num.I64.to_dec", .i64_to_dec },
 
         // U128 conversion operations
         .{ "Builtin.Num.U128.to_i8_wrap", .u128_to_i8_wrap },
-        .{ "Builtin.Num.U128.to_i8_try", .u128_to_i8_try },
+        .{ "u128_to_i8_try_raw", .u128_to_i8_try },
         .{ "Builtin.Num.U128.to_i16_wrap", .u128_to_i16_wrap },
-        .{ "Builtin.Num.U128.to_i16_try", .u128_to_i16_try },
+        .{ "u128_to_i16_try_raw", .u128_to_i16_try },
         .{ "Builtin.Num.U128.to_i32_wrap", .u128_to_i32_wrap },
-        .{ "Builtin.Num.U128.to_i32_try", .u128_to_i32_try },
+        .{ "u128_to_i32_try_raw", .u128_to_i32_try },
         .{ "Builtin.Num.U128.to_i64_wrap", .u128_to_i64_wrap },
-        .{ "Builtin.Num.U128.to_i64_try", .u128_to_i64_try },
+        .{ "u128_to_i64_try_raw", .u128_to_i64_try },
         .{ "Builtin.Num.U128.to_i128_wrap", .u128_to_i128_wrap },
-        .{ "Builtin.Num.U128.to_i128_try", .u128_to_i128_try },
+        .{ "u128_to_i128_try_raw", .u128_to_i128_try },
         .{ "Builtin.Num.U128.to_u8_wrap", .u128_to_u8_wrap },
-        .{ "Builtin.Num.U128.to_u8_try", .u128_to_u8_try },
+        .{ "u128_to_u8_try_raw", .u128_to_u8_try },
         .{ "Builtin.Num.U128.to_u16_wrap", .u128_to_u16_wrap },
-        .{ "Builtin.Num.U128.to_u16_try", .u128_to_u16_try },
+        .{ "u128_to_u16_try_raw", .u128_to_u16_try },
         .{ "Builtin.Num.U128.to_u32_wrap", .u128_to_u32_wrap },
-        .{ "Builtin.Num.U128.to_u32_try", .u128_to_u32_try },
+        .{ "u128_to_u32_try_raw", .u128_to_u32_try },
         .{ "Builtin.Num.U128.to_u64_wrap", .u128_to_u64_wrap },
-        .{ "Builtin.Num.U128.to_u64_try", .u128_to_u64_try },
+        .{ "u128_to_u64_try_raw", .u128_to_u64_try },
         .{ "Builtin.Num.U128.to_f32", .u128_to_f32 },
         .{ "Builtin.Num.U128.to_f64", .u128_to_f64 },
         .{ "u128_to_dec_try_unsafe", .u128_to_dec_try_unsafe },
 
         // I128 conversion operations
         .{ "Builtin.Num.I128.to_i8_wrap", .i128_to_i8_wrap },
-        .{ "Builtin.Num.I128.to_i8_try", .i128_to_i8_try },
+        .{ "i128_to_i8_try_raw", .i128_to_i8_try },
         .{ "Builtin.Num.I128.to_i16_wrap", .i128_to_i16_wrap },
-        .{ "Builtin.Num.I128.to_i16_try", .i128_to_i16_try },
+        .{ "i128_to_i16_try_raw", .i128_to_i16_try },
         .{ "Builtin.Num.I128.to_i32_wrap", .i128_to_i32_wrap },
-        .{ "Builtin.Num.I128.to_i32_try", .i128_to_i32_try },
+        .{ "i128_to_i32_try_raw", .i128_to_i32_try },
         .{ "Builtin.Num.I128.to_i64_wrap", .i128_to_i64_wrap },
-        .{ "Builtin.Num.I128.to_i64_try", .i128_to_i64_try },
+        .{ "i128_to_i64_try_raw", .i128_to_i64_try },
         .{ "Builtin.Num.I128.to_u8_wrap", .i128_to_u8_wrap },
-        .{ "Builtin.Num.I128.to_u8_try", .i128_to_u8_try },
+        .{ "i128_to_u8_try_raw", .i128_to_u8_try },
         .{ "Builtin.Num.I128.to_u16_wrap", .i128_to_u16_wrap },
-        .{ "Builtin.Num.I128.to_u16_try", .i128_to_u16_try },
+        .{ "i128_to_u16_try_raw", .i128_to_u16_try },
         .{ "Builtin.Num.I128.to_u32_wrap", .i128_to_u32_wrap },
-        .{ "Builtin.Num.I128.to_u32_try", .i128_to_u32_try },
+        .{ "i128_to_u32_try_raw", .i128_to_u32_try },
         .{ "Builtin.Num.I128.to_u64_wrap", .i128_to_u64_wrap },
-        .{ "Builtin.Num.I128.to_u64_try", .i128_to_u64_try },
+        .{ "i128_to_u64_try_raw", .i128_to_u64_try },
         .{ "Builtin.Num.I128.to_u128_wrap", .i128_to_u128_wrap },
-        .{ "Builtin.Num.I128.to_u128_try", .i128_to_u128_try },
+        .{ "i128_to_u128_try_raw", .i128_to_u128_try },
         .{ "Builtin.Num.I128.to_f32", .i128_to_f32 },
         .{ "Builtin.Num.I128.to_f64", .i128_to_f64 },
         .{ "i128_to_dec_try_unsafe", .i128_to_dec_try_unsafe },
@@ -929,7 +910,7 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
         .{ "dec_to_f32_try_unsafe", .dec_to_f32_try_unsafe },
         .{ "Builtin.Num.Dec.to_f64", .dec_to_f64 },
     }) |entry| {
-        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
+        try putLowLevel(&low_level_map, env, entry[0], entry[1]);
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations

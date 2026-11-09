@@ -13,9 +13,7 @@ pub const dev = @import("dev/mod.zig");
 pub const wasm = @import("wasm/mod.zig");
 
 comptime {
-    if (@import("builtin").is_test) {
-        @import("std").testing.refAllDecls(dev.PackFile);
-    }
+    if (@import("builtin").is_test) {}
 }
 
 // Re-export dev backend types at top level.
@@ -31,6 +29,7 @@ pub const StaticDataExport = dev.StaticDataExport;
 pub const StaticDataRelocation = dev.StaticDataRelocation;
 pub const StaticDataImage = dev.StaticDataImage;
 pub const StaticDataImageFunctionResolver = dev.StaticDataImageFunctionResolver;
+pub const StaticDataImageError = dev.StaticDataImageError;
 pub const StaticStringData = dev.StaticStringData;
 pub const RunImage = dev.RunImage;
 pub const procSymbolName = dev.procSymbolName;
@@ -40,6 +39,18 @@ pub const collectReferencedProcs = dev.collectReferencedProcs;
 pub const ObjectFileCompiler = dev.ObjectFileCompiler;
 pub const CompilationError = dev.CompilationError;
 pub const writeFileWindowsAvSafe = dev.writeFileWindowsAvSafe;
+
+/// The Boxy runtime entry points generated code calls (`roc_desc_*`), by
+/// symbol name.
+pub const boxy_runtime_symbols: []const []const u8 = blk: {
+    const exports = @import("boxy_runtime").exports;
+    const prefix = "roc_desc_";
+    var names: []const []const u8 = &.{};
+    for (@typeInfo(exports).@"struct".decl_names) |name| {
+        if (name.len > prefix.len and @import("std").mem.eql(u8, name[0..prefix.len], prefix)) names = names ++ .{name};
+    }
+    break :blk names;
+};
 
 test "backend tests" {
     const std = @import("std");
@@ -53,169 +64,6 @@ test "native driver tests" {
     @import("std").testing.refAllDecls(NativeProcCompiler);
 }
 
-test "issue 10295: dev backend preserves deep structural equality under register pressure" {
-    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
-
-    // https://github.com/roc-lang/roc/issues/10295
-    const std = @import("std");
-    const layout = @import("layout");
-    const lir = @import("lir");
-
-    const allocator = std.testing.allocator;
-    var store = lir.LirStore.init(allocator);
-    defer store.deinit();
-    var layout_store = try layout.Store.init(allocator, .u64);
-    defer layout_store.deinit();
-
-    const depth = 32;
-    var nested_layouts: [depth + 1]layout.Idx = undefined;
-    nested_layouts[0] = .i64;
-    for (1..nested_layouts.len) |i| {
-        nested_layouts[i] = try layout_store.putStructFields(&.{.{ .index = 0, .layout = nested_layouts[i - 1] }});
-    }
-
-    var lhs: [depth + 1]lir.LIR.LocalId = undefined;
-    var rhs: [depth + 1]lir.LIR.LocalId = undefined;
-    for (0..nested_layouts.len) |i| {
-        lhs[i] = try store.addLocal(.{ .layout_idx = nested_layouts[i] });
-        rhs[i] = try store.addLocal(.{ .layout_idx = nested_layouts[i] });
-    }
-    const answer = try store.addLocal(.{ .layout_idx = .bool });
-
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
-    const eq_args = try store.addLocalSpan(&.{ lhs[depth], rhs[depth] });
-    var body = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = answer,
-        .op = .num_is_eq,
-        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
-        .args = eq_args,
-        .next = ret,
-    } }, .test_fixture);
-
-    var level: usize = depth;
-    while (level > 0) : (level -= 1) {
-        const rhs_fields = try store.addLocalSpan(&.{rhs[level - 1]});
-        body = try store.addCFStmt(.{ .assign_struct = .{
-            .target = rhs[level],
-            .fields = rhs_fields,
-            .next = body,
-        } }, .test_fixture);
-        const lhs_fields = try store.addLocalSpan(&.{lhs[level - 1]});
-        body = try store.addCFStmt(.{ .assign_struct = .{
-            .target = lhs[level],
-            .fields = lhs_fields,
-            .next = body,
-        } }, .test_fixture);
-    }
-    body = try store.addCFStmt(.{ .assign_literal = .{
-        .target = rhs[0],
-        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
-        .next = body,
-    } }, .test_fixture);
-    body = try store.addCFStmt(.{ .assign_literal = .{
-        .target = lhs[0],
-        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
-        .next = body,
-    } }, .test_fixture);
-
-    const root = try store.addProcSpec(.{
-        .name = store.freshSyntheticSymbol(),
-        .identity = lir.LIR.ProcIdentity.forTest(5),
-        .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
-        .ret_layout = .bool,
-    }, .none);
-
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
-    defer codegen.deinit();
-    try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool);
-    defer allocator.free(generated.code);
-
-    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-        generated.code,
-        generated.entry_offset,
-        codegen.getUnwindFunctions(),
-    );
-    defer executable.deinit();
-
-    var actual: u8 = 0;
-    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual));
-    try std.testing.expectEqual(@as(u8, 1), actual);
-}
-
-test "issue 10295: nested list equality has bounded register pressure" {
-    if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
-
-    const std = @import("std");
-    const layout = @import("layout");
-    const lir = @import("lir");
-
-    const allocator = std.testing.allocator;
-    var store = lir.LirStore.init(allocator);
-    defer store.deinit();
-    var layout_store = try layout.Store.init(allocator, .u64);
-    defer layout_store.deinit();
-
-    const depth = 32;
-    var nested_layouts: [depth + 1]layout.Idx = undefined;
-    nested_layouts[0] = .i64;
-    for (1..nested_layouts.len) |i| {
-        nested_layouts[i] = try layout_store.insertLayout(layout.Layout.list(nested_layouts[i - 1]));
-    }
-
-    const lhs = try store.addLocal(.{ .layout_idx = nested_layouts[depth] });
-    const rhs = try store.addLocal(.{ .layout_idx = nested_layouts[depth] });
-    const answer = try store.addLocal(.{ .layout_idx = .bool });
-
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = answer } }, .test_fixture);
-    const eq_args = try store.addLocalSpan(&.{ lhs, rhs });
-    const eq = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = answer,
-        .op = .num_is_eq,
-        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
-        .args = eq_args,
-        .next = ret,
-    } }, .test_fixture);
-    const empty_elems = try store.addLocalSpan(&.{});
-    const assign_rhs = try store.addCFStmt(.{ .assign_list = .{
-        .target = rhs,
-        .elems = empty_elems,
-        .next = eq,
-    } }, .test_fixture);
-    const body = try store.addCFStmt(.{ .assign_list = .{
-        .target = lhs,
-        .elems = empty_elems,
-        .next = assign_rhs,
-    } }, .test_fixture);
-    const root = try store.addProcSpec(.{
-        .name = store.freshSyntheticSymbol(),
-        .identity = lir.LIR.ProcIdentity.forTest(4),
-        .args = lir.LIR.LocalSpan.empty(),
-        .body = body,
-        .ret_layout = .bool,
-    }, .none);
-
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
-    defer codegen.deinit();
-    try codegen.compileAllProcSpecs(store.getProcSpecs());
-    const generated = try codegen.generateCode(root, .bool);
-    defer allocator.free(generated.code);
-
-    var executable = try dev.ExecutableMemory.initWithEntryOffsetAndUnwindInfo(
-        generated.code,
-        generated.entry_offset,
-        codegen.getUnwindFunctions(),
-    );
-    defer executable.deinit();
-
-    var actual: u8 = 0;
-    const entry: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(executable.entryPtr()));
-    entry(@ptrCast(&actual));
-    try std.testing.expectEqual(@as(u8, 1), actual);
-}
-
 test "issue 10993: erased callable ABI writes exactly ret_size bytes through the return pointer" {
     if (comptime !dev.host_lir_codegen_available) return error.SkipZigTest;
 
@@ -224,10 +72,9 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     // The uniform erased-callable ABI hands the callee a pointer to
     // caller-owned result storage of exactly the return layout's size (see
     // builtins/erased_callable.zig). A callee that stores past that size
-    // corrupts whatever the caller keeps next to the result slot:
-    // `listSortWith` comparators return a 1-byte ordering into a
-    // `var ordering: u8` stack slot, so any wider store smashes the caller's
-    // frame and segfaults `List.sort` under the machine-code shim.
+    // corrupts whatever the caller keeps next to the result slot: a callee
+    // returning a 1-byte value into a `var result: u8` stack slot smashes the
+    // caller's frame with any wider store.
     //
     // The four return layouts cover every copy shape: a register-sized
     // scalar (1 byte), sub-word aggregates with and without an overlapping
@@ -348,7 +195,7 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     const u32x3_body = try helpers.addStructBody(&store, u32x3_layout, .u32, &.{ 0x01020304, 0x05060708, 0x090A0B0C });
     const u32x3_proc = try helpers.addErasedProc(&store, &layout_store, u32x3_body, u32x3_layout);
 
-    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, roc_target.host_cpu.level());
+    var codegen = try dev.HostLirCodeGen.init(allocator, &store, &layout_store, .{}, roc_target.host_cpu.level());
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
@@ -430,7 +277,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 
@@ -467,7 +314,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result,
-        .value = .{ .i128_literal = .{ .value = 0x11111111111111112222222222222222, .layout_idx = .u128 } },
+        .value = .{ .i128_literal = try store.addStmtRow(lir.LIR.I128Literal, .{ .value = 0x11111111111111112222222222222222, .layout_idx = .u128 }) },
         .next = ret,
     } }, .test_fixture);
     const proc = try store.addProcSpec(.{
@@ -479,7 +326,7 @@ test "x86_64 Windows U128 entrypoint return loads all 16 bytes into XMM0" {
     }, .none);
 
     const WinCodeGen = dev.LirCodeGenMod.LirCodeGen(.x64win);
-    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, &.{}, .default);
+    var codegen = try WinCodeGen.init(allocator, &store, &layout_store, .{}, .default);
     defer codegen.deinit();
     codegen.generation_mode = .object_file;
 

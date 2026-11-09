@@ -9,6 +9,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const invariant = @import("base").invariant;
+const FunctionRelocationKind = @import("../Relocation.zig").FunctionRelocationKind;
 const DataRelocationKind = @import("../Relocation.zig").DataRelocationKind;
 const object = @import("mod.zig");
 const DebugReloc = object.DebugReloc;
@@ -63,6 +65,7 @@ const ELF = struct {
     const R_X86_64_PC32 = 2;
     const R_X86_64_PLT32 = 4;
     const R_X86_64_32 = 10;
+    const R_X86_64_32S = 11;
 
     // aarch64 relocation types
     const R_AARCH64_ABS64 = 257;
@@ -285,10 +288,18 @@ pub const ElfWriter = struct {
     }
 
     /// Add a relocation to the text section
-    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, addend: i64) Allocator.Error!void {
-        const reloc_type: u32 = switch (self.arch) {
-            .x86_64 => ELF.R_X86_64_PLT32,
-            .aarch64 => ELF.R_AARCH64_CALL26,
+    pub fn addTextRelocation(self: *Self, offset: u64, symbol_idx: u32, kind: FunctionRelocationKind) Allocator.Error!void {
+        std.debug.assert(self.arch == switch (kind) {
+            .x86_call_rel32 => Architecture.x86_64,
+            .aarch64_call26 => Architecture.aarch64,
+        });
+        const reloc_type: u32 = switch (kind) {
+            .x86_call_rel32 => ELF.R_X86_64_PLT32,
+            .aarch64_call26 => ELF.R_AARCH64_CALL26,
+        };
+        const addend: i64 = switch (kind) {
+            .x86_call_rel32 => -4,
+            .aarch64_call26 => 0,
         };
 
         try self.text_relocs.append(self.allocator, .{
@@ -312,23 +323,38 @@ pub const ElfWriter = struct {
             .rel32 => .{
                 .kind = switch (self.arch) {
                     .x86_64 => ELF.R_X86_64_PC32,
-                    .aarch64 => unreachable,
+                    .aarch64 => invariant("ELF invariant violated: rel32 data relocation in aarch64 code, which emits page21 and pageoff12", .{}),
                 },
                 .addend = @as(i64, -4),
             },
             .page21 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: page21 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADR_PREL_PG_HI21,
                 },
                 .addend = @as(i64, 0),
             },
             .pageoff12 => .{
                 .kind = switch (self.arch) {
-                    .x86_64 => unreachable,
+                    .x86_64 => invariant("ELF invariant violated: pageoff12 data relocation in x86_64 code, which emits rel32", .{}),
                     .aarch64 => ELF.R_AARCH64_ADD_ABS_LO12_NC,
                 },
                 .addend = @as(i64, 0),
+            },
+            // The field's own bytes hold the addend.
+            .abs32s => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => ELF.R_X86_64_32S,
+                    .aarch64 => invariant("ELF invariant violated: abs32s data relocation in aarch64 code, which only an x86_64 test unit emits", .{}),
+                },
+                .addend = std.mem.readInt(i32, self.text[@intCast(offset)..][0..4], .little),
+            },
+            .abs64_field => .{
+                .kind = switch (self.arch) {
+                    .x86_64 => invariant("ELF invariant violated: abs64_field data relocation in x86_64 code, which only an arm64 test unit emits", .{}),
+                    .aarch64 => ELF.R_AARCH64_ABS64,
+                },
+                .addend = std.mem.readInt(i64, self.text[@intCast(offset)..][0..8], .little),
             },
         };
 
@@ -364,9 +390,13 @@ pub const ElfWriter = struct {
 
         // Add section names to shstrtab
         const shname_text = try self.addString(&self.shstrtab, ".text");
-        const shname_rodata = try self.addString(&self.shstrtab, ".rodata");
+        // Read-only data holding absolute pointers is writable, as a
+        // compiler's `.data.rel.ro` is, so a loader can relocate it in a
+        // position-independent output without writing to code pages.
+        const pointer_bearing = self.rodata_relocs.items.len != 0;
+        const shname_rodata = try self.addString(&self.shstrtab, if (pointer_bearing) ".data.rel.ro" else ".rodata");
         const shname_rela_text = try self.addString(&self.shstrtab, ".rela.text");
-        const shname_rela_rodata = try self.addString(&self.shstrtab, ".rela.rodata");
+        const shname_rela_rodata = try self.addString(&self.shstrtab, if (pointer_bearing) ".rela.data.rel.ro" else ".rela.rodata");
         const shname_symtab = try self.addString(&self.shstrtab, ".symtab");
         const shname_strtab = try self.addString(&self.shstrtab, ".strtab");
         const shname_shstrtab = try self.addString(&self.shstrtab, ".shstrtab");
@@ -579,7 +609,7 @@ pub const ElfWriter = struct {
         appendShdr(output, .{ .sh_name = shname_text, .sh_type = ELF.SHT_PROGBITS, .sh_flags = ELF.SHF_ALLOC | ELF.SHF_EXECINSTR, .sh_offset = text_offset, .sh_size = self.text.len, .sh_addralign = 16 });
 
         // 2: .rodata
-        appendShdr(output, .{ .sh_name = shname_rodata, .sh_type = ELF.SHT_PROGBITS, .sh_flags = ELF.SHF_ALLOC, .sh_offset = rodata_offset, .sh_size = self.rodata.len, .sh_addralign = 16 });
+        appendShdr(output, .{ .sh_name = shname_rodata, .sh_type = ELF.SHT_PROGBITS, .sh_flags = if (pointer_bearing) ELF.SHF_ALLOC | ELF.SHF_WRITE else ELF.SHF_ALLOC, .sh_offset = rodata_offset, .sh_size = self.rodata.len, .sh_addralign = 16 });
 
         // 3: .rela.text
         appendShdr(output, .{ .sh_name = shname_rela_text, .sh_type = ELF.SHT_RELA, .sh_flags = ELF.SHF_INFO_LINK, .sh_offset = rela_text_offset, .sh_size = rela_text_size, .sh_link = SHIDX_SYMTAB, .sh_info = SHIDX_TEXT, .sh_addralign = 8, .sh_entsize = @sizeOf(Elf64_Rela) });
@@ -709,7 +739,7 @@ test "elf with external symbol" {
     const ext_idx = try writer.addExternalSymbol("external_func");
 
     // Add relocation for the call
-    try writer.addTextRelocation(1, ext_idx, -4);
+    try writer.addTextRelocation(1, ext_idx, .x86_call_rel32);
 
     var output: std.ArrayList(u8) = .empty;
     defer output.deinit(std.testing.allocator);

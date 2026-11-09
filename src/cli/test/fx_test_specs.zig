@@ -37,6 +37,60 @@ pub const host_boxed_fn_boundary_test = TestSpec{
     .description = "Regression test: Boxed erased callables across the host boundary in both directions",
 };
 
+/// Repro for https://github.com/roc-lang/roc/issues/12266: a stream whose
+/// state owns a host box is released at the loop exit whether the `for!` loop
+/// runs to the end or is left with `break`, for both a named and an inline
+/// stream, on every backend.
+pub const loop_break_release_test = TestSpec{
+    .roc_file = "test/fx/loop_break_release.roc",
+    .io_spec = "1>named, runs to the end: released|1>named, break at 3: released|1>inline, runs to the end: released|1>inline, break at 3: released",
+    .description = "Regression test: a stream left with break is released at the loop exit (issue #12266)",
+};
+
+/// A value one successor of a branch never reads is released where that
+/// successor begins: an `if` arm, the exit of a `for` over a list, and the
+/// exit of a `while` whose body held the last use.
+pub const branch_entry_release_test = TestSpec{
+    .roc_file = "test/fx/branch_entry_release.roc",
+    .io_spec = "1>if arm: released|1>list loop: released|1>while body: released",
+    .description = "Regression test: a value a branch never reads is released at the branch entry",
+};
+
+/// A loop whose only operation on its list is `append_le_bytes_to`: the
+/// promoter guards each append with a word of slack and runs it unchecked,
+/// so the bytes must match a byte-at-a-time construction across growth.
+pub const le_bytes_append_loop_test = TestSpec{
+    .roc_file = "test/fx/le_bytes_append_loop.roc",
+    .io_spec = "1>count 1: len 300 same|1>count 2: len 600 same|1>count 3: len 900 same|1>count 4: len 1200 same|1>count 5: len 1500 same|1>count 6: len 1800 same|1>count 7: len 2100 same|1>count 8: len 2400 same",
+    .description = "A promoted byte-append loop matches a byte-at-a-time construction",
+};
+
+/// Repro for https://github.com/roc-lang/roc/issues/12196: a list literal and
+/// `List.with_capacity` built on cold paths in different functions.
+pub const issue_12196_cold_list_builds_test = TestSpec{
+    .roc_file = "test/fx/issue_12196_cold_list_builds.roc",
+    .io_spec = "0<abcde|1>2 0",
+    .description = "Regression test: cold-path list literal and List.with_capacity share a builtin",
+};
+
+/// Repro for https://github.com/roc-lang/roc/issues/12328: a field taken out of
+/// a dying record and passed to a function's owned variant, which takes a
+/// field out of its argument in turn, is released exactly once.
+pub const take_binding_alias_owned_variant_test = TestSpec{
+    .roc_file = "test/fx/take_binding_alias_owned_variant.roc",
+    .io_spec = "0<abcdef|1>once: 197|1>looped: 603",
+    .description = "Regression test: a taken field passed to an owned variant is released exactly once",
+};
+
+/// The slow arms of the LLVM backend's inline list fast paths: a byte append
+/// into a unique list with and without a spare word of capacity, and a
+/// reserve with and without the spare already there.
+pub const inline_list_slow_arms_test = TestSpec{
+    .roc_file = "test/fx/inline_list_slow_arms.roc",
+    .io_spec = "0<abcde|1>219 12112725369229970337 50 17131679588414959641",
+    .description = "Inline list fast paths and their builtin slow arms leave the same bytes",
+};
+
 /// All fx platform tests that can be run with --test mode IO specs.
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.
@@ -258,6 +312,14 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/host_interop_padding.roc",
         .io_spec = "1>1122",
         .description = "Nominal record declared-order + unnamed padding matches the host C struct layout",
+    },
+    // The same for generic nominals: their records are built by one body whose
+    // field offsets a type table descriptor has to give, and a padding
+    // type can be the nominal's own type parameter.
+    .{
+        .roc_file = "test/fx/host_interop_generic_padding.roc",
+        .io_spec = "1>1122|1>3344|1>held across the host|1>110|1>mixed across the host|1>3|1>6677|1>77|1>8899",
+        .description = "Generic nominal records with unnamed padding match the host C struct layout",
     },
 
     // Lookup tests
@@ -718,6 +780,36 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/hosted_list_str_ownership.roc",
         .io_spec = "0<abcdefgh|1>hosted bytes: 120 local bytes: 120",
         .description = "Regression test for #10774: a hosted function owns a List(Str) argument whose elements the caller still holds, so the caller's retain must cover the element strings the host's release drops",
+    },
+    .{
+        .roc_file = "test/fx/issue_12438_input_list_overfree.roc",
+        .io_spec = "0<aa|1>ok: True, len: 2, first: 97",
+        .description = "Regression test for #12438: a list passed through cursor records into helper calls is not decremented more often than it is owned",
+    },
+    .{
+        .roc_file = "test/fx/issue_12692_handle_shape.roc",
+        .io_spec = "1>method call: closed|1>qualified call: closed|1>recursive helper: closed|1>wrapper call: closed",
+        .description = "Regression test for #12692: a record argument returned to its caller on a switched result outcome keeps the field its callee passed to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/issue_12746_single_field_handle.roc",
+        .io_spec = "1>method call: 1|1>qualified call: 2|1>match return: 3|1>recursive helper: 4|1>scalar sibling: 5|1>tag payload: 6",
+        .description = "Regression test for #12746: an argument returned to its caller on a switched result outcome keeps the handle its callee reads through an ownership-complete projection and passes to a hosted call",
+    },
+    .{
+        .roc_file = "test/fx/issue_12746_connection_handle.roc",
+        .io_spec = "1>connection: 16 1",
+        .description = "Regression test for #12746: a record of a handle and scalar settings returned to its caller on a switched result outcome keeps the handle its callee passes to a hosted call alongside a method call on a sibling field",
+    },
+    .{
+        .roc_file = "test/fx/issue_12706_shared_case_arm.roc",
+        .io_spec = "1>small 2001|1>small 1001|1>small 2008|1>big 1060|1>small 2099|1>small missing101",
+        .description = "Regression test for #12706: a case-of-case arm shared through a join keeps the arms of the code after a match whose result reaches that code along several paths",
+    },
+    .{
+        .roc_file = "test/fx/issue_12707_try_split_first_map_err_not_found.roc",
+        .io_spec = "1>Ok(\"0\")",
+        .description = "Regression test for #12707: an unannotated function whose `?` on Str.split_first and whose map_err both produce NotFound builds and runs",
     },
     .{
         .roc_file = "test/fx/tailcc_stack_args.roc",

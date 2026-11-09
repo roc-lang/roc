@@ -242,7 +242,7 @@ unlabeled = { count: 3 } # This is fine, because label is optional.
 ```
 
 Since the field might be missing, you can't access it with `.` like a normal field.
-Instead, you use `.?`, which gives you a [`Try`](../builtins/Try):
+Instead, you use `.?`, which gives you a [`Try`](../Try):
 
 ```roc
 read_label : Attributes -> Try(Str, [MissingField])
@@ -469,7 +469,7 @@ That takes the space of the value, plus one byte to say which tag it is, plus pa
 to keep the next value aligned.
 
 For example, on a 64-bit target, `label : Str` takes 24 bytes, but `label ?: Str` takes
-32. If you're storing a lot of records in a [list](../builtins/List) and you don't
+32. If you're storing a lot of records in a [list](../List) and you don't
 actually need to know whether a field was provided, a [defaulted field](#defaulted-fields)
 takes no extra space.
 

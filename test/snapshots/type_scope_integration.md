@@ -41,7 +41,7 @@ UNDECLARED TYPE - type_scope_integration.md:8:7:8:25
 				(file "type_scope_integration.md")
 				(line 2)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "type_scope_integration.md") (start 2 1) (end 2 10) (annotation dim) (line-text "Foo : U64"))))
 	(report

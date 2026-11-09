@@ -13,6 +13,7 @@
 //! canonical strings is the whole equality check.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const PackageApi = @This();
 
@@ -245,7 +246,7 @@ fn constraintLessThan(_: void, a: Constraint, b: Constraint) bool {
 
 const NormalizeState = struct {
     next_index: u32,
-    assigned: std.AutoHashMapUnmanaged(TypeId, void),
+    assigned: collections.DenseMapUnmanaged(TypeId, void),
 };
 
 fn normalizeItem(self: *PackageApi, item: Item) std.mem.Allocator.Error!void {
@@ -310,7 +311,7 @@ const WriteError = std.mem.Allocator.Error || std.Io.Writer.Error;
 /// have run. Two items are API-equal iff their canonical S-expressions are
 /// byte-identical.
 pub fn writeItemSExpr(self: *const PackageApi, gpa: std.mem.Allocator, item: Item, writer: *std.Io.Writer) WriteError!void {
-    var visited = std.AutoHashMapUnmanaged(TypeId, void).empty;
+    var visited = collections.DenseMapUnmanaged(TypeId, void).empty;
     defer visited.deinit(gpa);
     var state = SExprState{ .gpa = gpa, .visited = &visited };
 
@@ -342,7 +343,7 @@ pub fn writeItemSExpr(self: *const PackageApi, gpa: std.mem.Allocator, item: Ite
 
 const SExprState = struct {
     gpa: std.mem.Allocator,
-    visited: *std.AutoHashMapUnmanaged(TypeId, void),
+    visited: *collections.DenseMapUnmanaged(TypeId, void),
 };
 
 fn writeTypeSExpr(self: *const PackageApi, id: TypeId, writer: *std.Io.Writer, state: *SExprState) WriteError!void {
@@ -491,7 +492,7 @@ pub fn itemCanonicalString(self: *const PackageApi, gpa: std.mem.Allocator, item
 /// Render a human-readable signature for one item, for diff output. Variables
 /// render as their source name when available, else `a`, `b`, ... by index.
 pub fn renderItemSignature(self: *const PackageApi, gpa: std.mem.Allocator, item: Item, writer: *std.Io.Writer) WriteError!void {
-    var visited = std.AutoHashMapUnmanaged(TypeId, void).empty;
+    var visited = collections.DenseMapUnmanaged(TypeId, void).empty;
     defer visited.deinit(gpa);
     var state = SExprState{ .gpa = gpa, .visited = &visited };
 
@@ -533,7 +534,7 @@ pub fn renderItemSignature(self: *const PackageApi, gpa: std.mem.Allocator, item
             first = false;
             try renderVariableName(variable, &where_out.writer);
             try where_out.writer.print(".{s} : ", .{constraint.method});
-            var inner_visited = std.AutoHashMapUnmanaged(TypeId, void).empty;
+            var inner_visited = collections.DenseMapUnmanaged(TypeId, void).empty;
             defer inner_visited.deinit(gpa);
             var inner_state = SExprState{ .gpa = gpa, .visited = &inner_visited };
             try self.renderType(constraint.fn_ty, &where_out.writer, &inner_state);

@@ -38,10 +38,11 @@ pub fn sanitisePathForSnapshots(path: []const u8) []const u8 {
     return path;
 }
 
-/// Format terminal locations relative to the caller's working directory.
-/// Relative paths and virtual source names already have their display spelling.
-fn terminalPath(gpa: Allocator, path: []const u8, config: ReportingConfig) Allocator.Error![]u8 {
-    if (config.source_path_base) |base| {
+/// Spell a file path the way every report shows it: relative to the caller's
+/// absolute working directory `working_dir`. Relative paths and virtual source
+/// names already have their display spelling.
+pub fn displayPath(gpa: Allocator, path: []const u8, working_dir: ?[]const u8) Allocator.Error![]u8 {
+    if (working_dir) |base| {
         if (std.fs.path.isAbsolute(path)) {
             return std.fs.path.relative(gpa, base, null, base, path);
         }
@@ -70,9 +71,10 @@ pub const RenderTarget = enum {
 };
 
 /// In debug builds, enforce that a report's headline reads as a complete
-/// sentence (ending in a period) or introduces a code block (ending in a
-/// colon). The headline is the one-sentence summary below the diagnostic header
-/// (or below the title in markdown/HTML/LSP). Compiled out of
+/// sentence ending in a period. A headline never ends in a colon: it must read
+/// correctly on its own, without relying on the source snippet printed after
+/// it. The headline is the one-sentence summary below the diagnostic header
+/// (or below the title in markdown/HTML, and first in LSP). Compiled out of
 /// release builds. Reports that have not yet been migrated to a headline
 /// (none of the elements carry text) are exempt.
 fn assertValidHeadline(report: *const Report) void {
@@ -92,7 +94,7 @@ fn assertValidHeadline(report: *const Report) void {
     }
     // `last` stays 0 when the headline has no text content at all (legacy
     // reports without a headline)—those are exempt.
-    std.debug.assert(last == 0 or last == '.' or last == ':');
+    std.debug.assert(last == 0 or last == '.');
 }
 
 /// The default reporting configuration for a render target.
@@ -239,22 +241,32 @@ fn reportRegion(layout: source_region.Layout, index: usize) PrimaryRegion {
 
 /// Source-block hook for report prose below the summary. Nested document
 /// structures keep their normal style; only top-level blocks receive framing.
+/// Prose is buffered until the next source block (or the end of the report),
+/// then emitted word-wrapped. Every block of prose and every source block is
+/// separated from what precedes it by one blank line.
 const BelowContent = struct {
     writer: *std.Io.Writer,
     buffer: *std.Io.Writer.Allocating,
     highlight_color: []const u8,
+    width: usize,
     gpa: Allocator,
-    started: bool = false,
+
+    /// Emit the buffered prose word-wrapped, after a separating blank line.
+    fn flushText(self: *BelowContent) error{WriteFailed}!void {
+        defer self.buffer.clearRetainingCapacity();
+        const trimmed = std.mem.trim(u8, self.buffer.written(), "\n");
+        if (std.mem.trim(u8, trimmed, " \n\r\t").len == 0) return;
+        try self.writer.writeByte('\n');
+        var it = std.mem.splitScalar(u8, trimmed, '\n');
+        while (it.next()) |ln| try wrapAndEmitBelowLine(self.writer, ln, 0, self.width);
+    }
 
     fn writeSource(self: *BelowContent, palette: ColorPalette, layout: source_region.Layout) (Allocator.Error || error{WriteFailed})!void {
         const region = reportRegion(layout, 0);
-        const text = std.mem.trim(u8, self.buffer.written(), " \n\r\t");
-        if (!self.started) {
-            try self.writer.writeByte('\n');
-            self.started = true;
-        }
-        try renderSecondaryRegion(self.writer, palette, self.highlight_color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, text, self.gpa);
-        self.buffer.clearRetainingCapacity();
+        try self.flushText();
+        if (region.line_text.len == 0) return;
+        try self.writer.writeByte('\n');
+        try writeReportSnippet(self.writer, palette, self.highlight_color, region.start_line, region.start_column, region.end_line, region.end_column, region.line_text, self.gpa);
     }
 };
 
@@ -273,6 +285,7 @@ const SummaryText = struct {
 fn collectStyledText(
     elements: []const DocumentElement,
     palette: ColorPalette,
+    config: ReportingConfig,
     plain: *std.array_list.Managed(u8),
     colors: *std.array_list.Managed([]const u8),
 ) (Allocator.Error || error{WriteFailed})!void {
@@ -281,7 +294,7 @@ fn collectStyledText(
     var sink = std.Io.Writer.Allocating.init(plain.allocator);
     defer sink.deinit();
     var ctx = RenderCtx{
-        .config = ReportingConfig.initColorTerminal(),
+        .config = config,
         .palette = palette,
         .annotation_stack = &annotations,
         .summary = .{ .plain = plain, .colors = colors },
@@ -385,15 +398,13 @@ pub fn writeLowercased(writer: *std.Io.Writer, s: []const u8) error{WriteFailed}
     }
 }
 
-/// Write a `path/to/Scalar.roc:141:1` location, with the filename itself in the
-/// cyan so it stands out from the dim directories, `:line:col`, and horizontal
-/// rule around it. Leaves the writer in the secondary color.
-fn writeLocation(
+/// Write a `path/to/Scalar.roc` path, with the filename itself in the cyan so
+/// it stands out from the dim directories and horizontal rule around it.
+/// Leaves the writer in the secondary color.
+fn writePath(
     writer: *std.Io.Writer,
     palette: ColorPalette,
     path: []const u8,
-    line: u32,
-    column: u32,
 ) error{WriteFailed}!void {
     const start = filenameStart(path);
     if (start > 0) {
@@ -403,8 +414,28 @@ fn writeLocation(
     try writer.writeAll(palette.primary);
     try bidi.writeVisible(writer, path[start..]);
     try writer.writeAll(palette.secondary);
+}
+
+/// Write a `path/to/Scalar.roc:141:1` location: the path as `writePath` writes
+/// it, followed by `:line:col`. Leaves the writer in the secondary color.
+fn writeLocation(
+    writer: *std.Io.Writer,
+    palette: ColorPalette,
+    path: []const u8,
+    line: u32,
+    column: u32,
+) error{WriteFailed}!void {
+    try writePath(writer, palette, path);
     try writer.print(":{d}:{d}", .{ line, column });
 }
+
+/// What a report's header line names as the report's location: a position in
+/// a file, a whole file, or nothing.
+const HeaderLocation = union(enum) {
+    none,
+    file: []const u8,
+    position: struct { path: []const u8, line: u32, column: u32 },
+};
 
 fn renderHeaderLine(
     writer: *std.Io.Writer,
@@ -412,19 +443,17 @@ fn renderHeaderLine(
     config: ReportingConfig,
     icon_info: IconAndColor,
     title: []const u8,
-    filename: ?[]const u8,
-    start_line: u32,
-    start_column: u32,
+    location: HeaderLocation,
 ) error{WriteFailed}!void {
     const total_w = @min(config.getMaxLineWidth(), 120);
     const icon_w: usize = icon_info.width;
     const prefix_w = 3 + icon_w + 1 + source_region.displayWidth(title) + 1;
 
-    var loc_len: usize = 0;
-    const fname = filename;
-    if (fname) |f| {
-        loc_len = 1 + source_region.displayWidth(f) + 1 + decimalWidth(start_line) + 1 + decimalWidth(start_column);
-    }
+    const loc_len: usize = switch (location) {
+        .none => 0,
+        .file => |path| 1 + source_region.displayWidth(path),
+        .position => |position| 1 + source_region.displayWidth(position.path) + 1 + source_region.calculateLineNumberWidth(position.line) + 1 + source_region.calculateLineNumberWidth(position.column),
+    };
 
     const dashes = @max(total_w -| prefix_w -| loc_len, 1);
 
@@ -437,9 +466,16 @@ fn renderHeaderLine(
     try writer.writeByte(' ');
     try writer.writeAll(palette.secondary);
     try writer.splatBytesAll("─", dashes);
-    if (fname) |f| {
-        try writer.writeByte(' ');
-        try writeLocation(writer, palette, f, start_line, start_column);
+    switch (location) {
+        .none => {},
+        .file => |path| {
+            try writer.writeByte(' ');
+            try writePath(writer, palette, path);
+        },
+        .position => |position| {
+            try writer.writeByte(' ');
+            try writeLocation(writer, palette, position.path, position.line, position.column);
+        },
     }
     try writer.writeAll(palette.reset);
     try writer.writeByte('\n');
@@ -455,6 +491,7 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
         try renderReportPlainFallback(report, writer, palette, config);
         return;
     };
+    std.debug.assert(report.file == null);
 
     var summary_buf = std.array_list.Managed(u8).init(gpa);
     defer summary_buf.deinit();
@@ -462,7 +499,7 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
     defer color_buf.deinit();
     var below_start: usize = 0;
     if (report.headline.elementCount() > 0) {
-        try collectStyledText(report.headline.elements.items, palette, &summary_buf, &color_buf);
+        try collectStyledText(report.headline.elements.items, palette, config, &summary_buf, &color_buf);
     } else {
         var summary_end = region.index;
         var i: usize = 0;
@@ -472,16 +509,17 @@ fn renderReportToTerminalLayout(report: *const Report, writer: *std.Io.Writer, p
                 break;
             }
         }
-        try collectStyledText(elements[0..summary_end], palette, &summary_buf, &color_buf);
+        try collectStyledText(elements[0..summary_end], palette, config, &summary_buf, &color_buf);
         below_start = if (summary_end < region.index) summary_end + 1 else region.index;
     }
     const summary = std.mem.trim(u8, summary_buf.items, " ");
     const title = report.title;
     const icon_info = getSeverityIcon(report.severity, title, palette);
 
-    const path = if (region.filename) |filename| try terminalPath(gpa, filename, config) else null;
+    const path = if (region.filename) |filename| try displayPath(gpa, filename, config.source_path_base) else null;
     defer if (path) |p| gpa.free(p);
-    try renderHeaderLine(writer, palette, config, icon_info, title, path, region.start_line, region.start_column);
+    const location: HeaderLocation = if (path) |p| .{ .position = .{ .path = p, .line = region.start_line, .column = region.start_column } } else .none;
+    try renderHeaderLine(writer, palette, config, icon_info, title, location);
 
     if (summary.len > 0) {
         try writer.writeByte('\n');
@@ -518,70 +556,22 @@ fn renderBelowContent(
     defer buf.deinit();
     var ann = std.array_list.Managed(Annotation).init(gpa);
     defer ann.deinit();
-    var below = BelowContent{ .writer = writer, .buffer = &buf, .highlight_color = highlight_color, .gpa = gpa };
+    var below = BelowContent{ .writer = writer, .buffer = &buf, .highlight_color = highlight_color, .width = width, .gpa = gpa };
     var ctx = RenderCtx{ .config = config, .palette = palette, .annotation_stack = &ann, .below_content = &below };
     var idx = @min(below_start, region_idx);
     while (idx < elements.len) : (idx += 1) {
         if (idx == region_idx) continue;
         try renderElementAs(.color_terminal, elements[idx], &buf.writer, &ctx);
     }
-    try flushBelowText(writer, &buf, width, &below.started);
+    try below.flushText();
     try writer.writeByte('\n');
-}
-
-/// Flush accumulated prose (`buf`) as word-wrapped text.
-fn flushBelowText(
-    writer: *std.Io.Writer,
-    buf: *std.Io.Writer.Allocating,
-    width: usize,
-    started: *bool,
-) error{WriteFailed}!void {
-    const trimmed = std.mem.trim(u8, buf.written(), "\n");
-    if (trimmed.len == 0) {
-        buf.clearRetainingCapacity();
-        return;
-    }
-    if (!started.*) {
-        try writer.writeByte('\n');
-        started.* = true;
-    }
-    var it = std.mem.splitScalar(u8, trimmed, '\n');
-    while (it.next()) |ln| try wrapAndEmitBelowLine(writer, ln, 0, width);
-    buf.clearRetainingCapacity();
-}
-
-/// Render a secondary source region after its structured introductory prose.
-fn renderSecondaryRegion(
-    writer: *std.Io.Writer,
-    palette: ColorPalette,
-    highlight_color: []const u8,
-    start_line: u32,
-    start_column: u32,
-    end_line: u32,
-    end_column: u32,
-    line_text: []const u8,
-    preceding_text: []const u8,
-    gpa: Allocator,
-) (Allocator.Error || error{WriteFailed})!void {
-    const body = std.mem.trim(u8, preceding_text, " \n\r\t");
-
-    if (body.len > 0) {
-        try bidi.writeVisible(writer, body);
-        try writer.writeByte('\n');
-    }
-
-    if (line_text.len > 0) {
-        try writer.writeByte('\n');
-
-        writeReportSnippet(writer, palette, highlight_color, start_line, start_column, end_line, end_column, line_text, gpa) catch return error.WriteFailed;
-    }
 }
 
 /// Report framing consumes the shared dedented source layout.
 fn writeReportSnippet(writer: *std.Io.Writer, palette: ColorPalette, highlight_color: []const u8, start_line: u32, start_column: u32, end_line: u32, end_column: u32, text: []const u8, gpa: Allocator) (Allocator.Error || error{WriteFailed})!void {
     var snippet = try source_region.Snippet.init(gpa, text, start_column, end_column);
     defer snippet.deinit();
-    for (snippet.rows.items, 0..) |row, index| {
+    for (snippet.rows, 0..) |row, index| {
         const line = snippet.line(row);
         var i: usize = 0;
         while (i < line.len) {
@@ -697,10 +687,15 @@ fn wrapAndEmitBelowLine(
     }
 }
 
-/// Fallback for reports with no source region: title line then the body.
+/// Layout for reports with no source region: title line, naming the file the
+/// report is about if it has one, then the body.
 fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, palette: ColorPalette, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
+    const gpa = report.document.allocator;
     const icon_info = getSeverityIcon(report.severity, report.title, palette);
-    try renderHeaderLine(writer, palette, config, icon_info, report.title, null, 0, 0);
+    const path = if (report.file) |file| try displayPath(gpa, file, config.source_path_base) else null;
+    defer if (path) |p| gpa.free(p);
+    const location: HeaderLocation = if (path) |p| .{ .file = p } else .none;
+    try renderHeaderLine(writer, palette, config, icon_info, report.title, location);
     if (report.headline.elementCount() > 0) {
         try writer.writeByte('\n');
         var hbuf = std.Io.Writer.Allocating.init(report.document.allocator);
@@ -712,12 +707,8 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
             try wrapAndEmitBelowLine(writer, ln, 0, width);
         }
     }
-    if (!report.document.isEmpty()) {
-        try writer.writeByte('\n');
-        try renderDocumentToTerminal(&report.document, writer, palette, config);
-        try writer.writeByte('\n');
-    }
-    try writer.writeByte('\n');
+    const elements = report.document.elements.items;
+    try renderBelowContent(writer, palette, config, icon_info.color, elements, 0, elements.len, gpa);
 }
 
 /// Render a report to HTML.
@@ -741,9 +732,7 @@ pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config:
 /// Render a report for language server protocol.
 pub fn renderReportToLsp(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
-    // LSP typically wants plain text without formatting
-    try writeLowercased(writer, report.title);
-    try writer.writeAll("\n\n");
+    // Editors may show only the first line, so lead with the description.
     if (report.headline.elementCount() > 0) {
         try renderDocumentToLsp(&report.headline, writer, config);
         try writer.writeByte('\n');
@@ -950,9 +939,12 @@ fn renderElementAs(comptime target: RenderTarget, element: DocumentElement, writ
         },
         .annotated => |annotated| {
             if (ctx.source_selection != null) return;
-            if (ctx.summary) |summary| return summary.append(annotated.content, ctx.palette.colorForAnnotation(annotated.annotation));
+            const gpa = ctx.annotation_stack.allocator;
+            const content = if (annotated.annotation == .path) try displayPath(gpa, annotated.content, ctx.config.source_path_base) else annotated.content;
+            defer if (annotated.annotation == .path) gpa.free(content);
+            if (ctx.summary) |summary| return summary.append(content, ctx.palette.colorForAnnotation(annotated.annotation));
             try S.openInline(ctx, writer, annotated.annotation);
-            try S.writeText(ctx, writer, annotated.content);
+            try S.writeText(ctx, writer, content);
             try S.closeInline(ctx, writer, annotated.annotation);
         },
         .line_break => if (ctx.source_selection == null) {
@@ -1202,7 +1194,7 @@ const TerminalStyle = struct {
 
     fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) (Allocator.Error || error{WriteFailed})!void {
         const gpa = ctx.annotation_stack.allocator;
-        const path = try terminalPath(gpa, location.filename orelse "<source>", ctx.config);
+        const path = try displayPath(gpa, location.filename orelse "<source>", ctx.config.source_path_base);
         defer gpa.free(path);
         try writeLocation(writer, ctx.palette, path, location.line, location.column);
         try writer.writeAll(ctx.palette.reset);
@@ -1265,8 +1257,10 @@ const MarkdownStyle = struct {
         }
     }
 
-    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
-        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) (Allocator.Error || error{WriteFailed})!void {
+        const gpa = ctx.annotation_stack.allocator;
+        const path = try displayPath(gpa, location.filename orelse "<source>", ctx.config.source_path_base);
+        defer gpa.free(path);
         try bidi.writeVisible(writer, path);
         try writer.print(":{d}:{d}", .{ location.line, location.column });
     }
@@ -1339,8 +1333,10 @@ const HtmlStyle = struct {
         try writer.writeAll("</ul></div>");
     }
 
-    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
-        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) (Allocator.Error || error{WriteFailed})!void {
+        const gpa = ctx.annotation_stack.allocator;
+        const path = try displayPath(gpa, location.filename orelse "<source>", ctx.config.source_path_base);
+        defer gpa.free(path);
         try writer.writeAll("<span class=\"source-location\"><span class=\"filename\">");
         try writeEscapedHtml(writer, path);
         try writer.print("</span>:{d}:{d}</span>", .{ location.line, location.column });
@@ -1397,20 +1393,19 @@ const LspStyle = struct {
         }
     }
 
-    fn writeSourceLocation(_: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) error{WriteFailed}!void {
-        const path = sanitisePathForSnapshots(location.filename orelse "<source>");
+    fn writeSourceLocation(ctx: *RenderCtx, writer: *std.Io.Writer, location: SourceLocation) (Allocator.Error || error{WriteFailed})!void {
+        const gpa = ctx.annotation_stack.allocator;
+        const path = try displayPath(gpa, location.filename orelse "<source>", ctx.config.source_path_base);
+        defer gpa.free(path);
         try bidi.writeVisible(writer, path);
         try writer.print(":{d}:{d}", .{ location.line, location.column });
     }
 };
 
 /// Number of decimal digits needed to print `n` (e.g. 1 for 7, 4 for 1242).
-fn decimalWidth(n: u32) usize {
-    if (n == 0) return 1;
-    return std.math.log10(n) + 1;
-}
-
-fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
+/// Writes `text` with HTML special characters escaped and each bidirectional
+/// control character replaced by its visible spelling.
+pub fn writeEscapedHtml(writer: *std.Io.Writer, text: []const u8) error{WriteFailed}!void {
     var i: usize = 0;
     while (i < text.len) : (i += 1) {
         if (bidi.at(text[i..])) |control| {
@@ -1590,9 +1585,33 @@ test "terminal source locations are relative to the configured working directory
     }
 }
 
+test "every target shows annotated paths relative to the working directory" {
+    const gpa = testing.allocator;
+    const sep = std.fs.path.sep_str;
+    const base = if (builtin.os.tag == .windows) "C:\\work\\project" else "/work/project";
+    const path = base ++ sep ++ "src" ++ sep ++ "main.roc";
+    const relative = "src" ++ sep ++ "main.roc";
+    inline for (.{ ReportingConfig.initColorTerminal(), ReportingConfig.initMarkdown(), ReportingConfig.initHtml(), ReportingConfig.initLsp() }) |initial| {
+        var config = initial;
+        config.source_path_base = base;
+        config.color_preference = .never;
+        var report = try Report.initWithPath(gpa, "File Not Found", "I could not find the file ", path, ".", .fatal);
+        defer report.deinit();
+        try report.document.addText("Searched in ");
+        try report.document.addAnnotated(path, .path);
+        try report.document.addText(" and ");
+        try report.document.addSourceLocation(.{ .start_line_idx = 0, .start_col_idx = 0, .end_line_idx = 0, .end_col_idx = 1 }, path);
+        var out = std.Io.Writer.Allocating.init(gpa);
+        defer out.deinit();
+        try renderReportWithConfig(&report, &out.writer, config);
+        try testing.expect(std.mem.find(u8, out.written(), base) == null);
+        try testing.expectEqual(@as(usize, 3), std.mem.count(u8, out.written(), relative));
+    }
+}
+
 test "terminal source paths preserve absolute locations without a working directory" {
     const path = if (builtin.os.tag == .windows) "C:\\work\\main.roc" else "/work/main.roc";
-    const displayed = try terminalPath(testing.allocator, path, ReportingConfig.initColorTerminal());
+    const displayed = try displayPath(testing.allocator, path, null);
     defer testing.allocator.free(displayed);
     try testing.expectEqualStrings(path, displayed);
 }

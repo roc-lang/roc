@@ -13,6 +13,7 @@
 
 const LowLevel = @import("LowLevel.zig").LowLevel;
 const builtins = @import("builtins");
+const invariant = @import("invariant.zig").invariant;
 
 pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 
@@ -20,7 +21,7 @@ fn lookup(op: LowLevel, mappings: anytype) BuiltinFn {
     inline for (mappings) |mapping| {
         if (op == mapping[0]) return mapping[1];
     }
-    unreachable;
+    invariant("LowLevelBuiltins invariant violated: low-level op {t} has no member in the requested builtin family", .{op});
 }
 
 /// Float variant of a unary transcendental math op.
@@ -129,7 +130,7 @@ pub fn scalarModBy(bits: u16, is_signed: bool) BuiltinFn {
         16 => if (is_signed) BuiltinFn.i16_mod_by else BuiltinFn.u16_mod_by,
         32 => if (is_signed) BuiltinFn.i32_mod_by else BuiltinFn.u32_mod_by,
         64 => if (is_signed) BuiltinFn.i64_mod_by else BuiltinFn.u64_mod_by,
-        else => unreachable,
+        else => invariant("LowLevelBuiltins invariant violated: scalar modulo width {d} is not 8, 16, 32, or 64", .{bits}),
     };
 }
 
@@ -223,6 +224,7 @@ pub fn strOp(op: LowLevel) BuiltinFn {
 
         .{ LowLevel.str_split_on, BuiltinFn.str_split },
         .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
+        .{ LowLevel.str_from_parts, BuiltinFn.str_from_parts },
         .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },
     });
 }
@@ -240,12 +242,11 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_append_range_within_unsafe, BuiltinFn.list_append_range_within_unsafe },
         .{ LowLevel.list_append_sublist, BuiltinFn.list_append_sublist },
         .{ LowLevel.list_append_le_bytes, BuiltinFn.list_append_le_bytes },
+        .{ LowLevel.list_append_le_bytes_unsafe, BuiltinFn.list_append_le_bytes },
         .{ LowLevel.list_slack_unique, BuiltinFn.list_slack_unique },
         .{ LowLevel.list_owned_unique, BuiltinFn.list_owned_unique },
         .{ LowLevel.list_prepend, BuiltinFn.list_prepend },
         .{ LowLevel.list_sublist, BuiltinFn.list_sublist },
-        .{ LowLevel.list_drop_first, BuiltinFn.list_sublist },
-        .{ LowLevel.list_drop_last, BuiltinFn.list_sublist },
         .{ LowLevel.list_take_first, BuiltinFn.list_sublist },
         .{ LowLevel.list_take_last, BuiltinFn.list_sublist },
         .{ LowLevel.list_sublist_borrowed, BuiltinFn.list_sublist_borrowed },
@@ -259,22 +260,8 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
         .{ LowLevel.list_clear, BuiltinFn.list_sublist },
         .{ LowLevel.list_reverse, BuiltinFn.list_reverse },
-        .{ LowLevel.list_sort_with, BuiltinFn.list_sort_with },
         .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },
     });
-}
-
-/// Element kind selecting a structural list-equality wrapper.
-pub const ListEqElem = enum { str, list, flat };
-
-/// Structural list equality by element kind, for backends that call rather
-/// than inline it.
-pub fn listEq(elem: ListEqElem) BuiltinFn {
-    return switch (elem) {
-        .str => .list_str_eq,
-        .list => .list_list_eq,
-        .flat => .list_eq,
-    };
 }
 
 /// Hasher primitives. Scalar writes funnel into the width-normalized wrappers:

@@ -184,6 +184,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => null,
     };
 }
@@ -203,6 +204,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
         .tag,
         .nominal,
         .fn_value,
+        .boxy_fn,
         => null,
     };
 }
@@ -223,7 +225,7 @@ fn constF32ListMatches(
         .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f32 or scalar_bytes.len != expected.len) break :blk false;
-            const bytes = store.blobBytes(scalar_bytes.bytes);
+            const bytes = store.blobData(scalar_bytes.bytes);
             if (bytes.len != expected.len * @sizeOf(u32)) break :blk false;
             for (expected, 0..) |bits, i| {
                 if (std.mem.readInt(u32, bytes[i * 4 ..][0..4], .little) != bits) break :blk false;
@@ -249,7 +251,7 @@ fn constF64ListMatches(
         .empty => expected.len == 0,
         .packed_bytes => |scalar_bytes| blk: {
             if (scalar_bytes.element != .f64 or scalar_bytes.len != expected.len) break :blk false;
-            const bytes = store.blobBytes(scalar_bytes.bytes);
+            const bytes = store.blobData(scalar_bytes.bytes);
             if (bytes.len != expected.len * @sizeOf(u64)) break :blk false;
             for (expected, 0..) |bits, i| {
                 if (std.mem.readInt(u64, bytes[i * 8 ..][0..8], .little) != bits) break :blk false;
@@ -837,9 +839,9 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
             },
             .allocations_at_most => |expected| blk: {
                 var compiled = (if (expected.optimized)
-                    helpers.compileAllocationProgram(allocator, io, tc.source_kind, tc.source, tc.imports)
+                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, helpers.allocation_test_lower_options)
                 else
-                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports)) catch {
+                    helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, .{})) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX—skipped allocation test has parse/check/lower errors",
@@ -855,7 +857,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 };
             },
             .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => blk: {
-                var resources = helpers.parseAndCanonicalizeProgram(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var resources = helpers.parseProgram(allocator, tc.source_kind, tc.source, tc.imports, .{ .io = io }) catch {
                     return .{
                         .status = .fail,
                         .message = "INVALID_SYNTAX—skipped compile-time float-bits test has parse/check errors",
@@ -887,7 +889,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout
                 };
             },
             .problem => blk: {
-                var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports) catch {
+                var resources = helpers.parseAndCheckProgramForProblems(allocator, tc.source_kind, tc.source, tc.imports, null) catch {
                     return .{
                         .status = .pass,
                         .timings = .{},
@@ -949,7 +951,7 @@ fn backendImplemented(index: usize) bool {
         1 => DEV_BACKEND_IMPLEMENTED,
         2 => WASM_BACKEND_IMPLEMENTED,
         3 => LLVM_BACKEND_IMPLEMENTED,
-        else => unreachable,
+        else => unreachable, // initBackendRows passes indices below NUM_BACKENDS, which is 4
     };
 }
 
@@ -990,21 +992,22 @@ fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, ti
     return switch (tc.expected) {
         .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, tc.specialization_strategy, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
-        .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
-        .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
+        .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
+        .problem => runTestProblem(io, allocator, tc.source_kind, tc.source, tc.imports),
         .crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, false, timeout_ms),
         .problem_and_crash => runCrashTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.skip, true, timeout_ms),
     };
 }
 
 fn runComptimeFloatBitsTest(
+    io: std.Io,
     allocator: std.mem.Allocator,
     source_kind: helpers.SourceKind,
     src: []const u8,
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
 ) RunnerError!TestOutcome {
-    var resources = try helpers.parseAndCanonicalizeProgram(allocator, source_kind, src, imports);
+    var resources = try helpers.parseProgram(allocator, source_kind, src, imports, .{ .io = io });
     defer resources.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1025,7 +1028,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect, .runtime => {
+        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1060,7 +1063,7 @@ fn runComptimeFloatBitsTest(
         .problem,
         .crash,
         .problem_and_crash,
-        => unreachable,
+        => unreachable, // runSingleTestInner calls runComptimeFloatBitsTest only for comptime float-bit expectations
     };
     if (!matches) {
         const message = switch (expected) {
@@ -1083,7 +1086,7 @@ fn runComptimeFloatBitsTest(
             .problem,
             .crash,
             .problem_and_crash,
-            => unreachable,
+            => unreachable, // runSingleTestInner calls runComptimeFloatBitsTest only for comptime float-bit expectations
         };
         return .{
             .status = .fail,
@@ -1138,7 +1141,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect, .runtime => return false,
+        .pending, .unevaluated, .fn_value, .discarded, .expect, .runtime => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1192,7 +1195,7 @@ fn materializedComptimeFloatBitsMatch(
         .problem,
         .crash,
         .problem_and_crash,
-        => unreachable,
+        => unreachable, // runComptimeFloatBitsTest, the only caller, receives only comptime float-bit expectations
     };
 }
 
@@ -1240,9 +1243,9 @@ fn runAllocationTest(
     skip: TestCase.Skip,
 ) RunnerError!TestOutcome {
     var compiled = if (expected.optimized)
-        try helpers.compileAllocationProgram(allocator, io, source_kind, src, imports)
+        try helpers.compileProgram(allocator, io, source_kind, src, imports, helpers.allocation_test_lower_options)
     else
-        try helpers.compileProgram(allocator, io, source_kind, src, imports);
+        try helpers.compileProgram(allocator, io, source_kind, src, imports, .{});
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1259,7 +1262,7 @@ fn runAllocationTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalWithStatsFn{
         helpers.lirInterpreterStrWithStats,
         helpers.devEvaluatorStrWithStats,
-        helpers.wasmEvaluatorStrWithStats,
+        wasmBothCpuLevelsStrWithStats,
         helpers.devEvaluatorStrWithStats, // unused; LLVM allocation stats are not implemented
     };
 
@@ -1286,7 +1289,7 @@ fn runAllocationTest(
             continue;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
         const dur = timer.read();
@@ -1384,7 +1387,7 @@ fn runInspectTest(
         [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
     // Only the wasm backend reads the 32-bit lowering.
     const wasm_lowering: helpers.WasmLowering = if (skips[2] or !WASM_BACKEND_IMPLEMENTED) .skip else .lower;
-    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy, wasm_lowering);
+    var compiled = try helpers.compileInspectedProgramWithOptions(allocator, io, source_kind, src, imports, .{ .specialization_strategy = specialization_strategy, .wasm = wasm_lowering });
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1398,7 +1401,7 @@ fn runInspectTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1422,7 +1425,7 @@ fn runInspectTest(
         }
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
@@ -1433,11 +1436,15 @@ fn runInspectTest(
             .success => |str| {
                 const expected_str = switch (expected) {
                     .inspect_str => |value| value,
-                    .allocations_at_most => unreachable,
-                    .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => unreachable,
-                    .problem => unreachable,
-                    .crash => unreachable,
-                    .problem_and_crash => unreachable,
+                    .allocations_at_most,
+                    .comptime_f32_bits,
+                    .comptime_f64_bits,
+                    .comptime_f32_list_bits,
+                    .comptime_f64_list_bits,
+                    .problem,
+                    .crash,
+                    .problem_and_crash,
+                    => unreachable, // runSingleTestInner calls runInspectTest only for inspect_str expectations
                 };
                 const value_ok = std.mem.eql(u8, expected_str, str);
                 const agreement_ok = if (first_ok) |fok| std.mem.eql(u8, fok, str) else true;
@@ -1509,13 +1516,14 @@ fn runInspectTest(
 }
 
 fn runTestProblem(
+    io: std.Io,
     allocator: std.mem.Allocator,
     source_kind: helpers.SourceKind,
     src: []const u8,
     imports: []const helpers.ModuleSource,
 ) RunnerError!TestOutcome {
-    var timer = Timer.start() catch unreachable;
-    var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports) catch {
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
+    var resources = helpers.parseAndCheckProgramForProblems(allocator, source_kind, src, imports, null) catch {
         // Parse or canonicalize error means a problem was found—that's a pass.
         const elapsed = timer.read();
         return .{
@@ -1548,7 +1556,7 @@ fn runTestProblem(
 
     // Checking found nothing; publish so compile-time evaluation can report
     // problems (e.g. a custom from_numeral rejecting a literal).
-    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, source_kind, src, imports);
+    const comptime_outcome = try helpers.publishProgramForComptimeProblems(allocator, io, source_kind, src, imports, null);
     if (comptime_outcome == .comptime_problems) {
         return .{
             .status = .pass,
@@ -1639,7 +1647,7 @@ fn runCrashTest(
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
         helpers.devEvaluatorInspectedStr,
-        helpers.wasmEvaluatorInspectedStr,
+        wasmBothCpuLevelsInspectedStr,
         helpers.llvmEvaluatorInspectedStr,
     };
 
@@ -1661,7 +1669,7 @@ fn runCrashTest(
             break;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
@@ -1746,6 +1754,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .deprecated_number_suffix,
         .trailing_try_suffix,
         .redundant_return,
+        .unreachable_code,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,
@@ -1785,6 +1794,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_not_allowed_on_local_type_decl,
         .record_default_reference_cycle,
         .var_across_function_boundary,
+        .var_in_binder_pattern,
         .type_redeclared,
         .file_import_not_found,
         .file_import_io_error,
@@ -1793,6 +1803,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .module_not_found,
         .value_not_exposed,
         .type_not_exposed,
+        .public_type_not_defined,
         .private_type_in_exposed_type,
         .private_type_in_exposed_field,
         .type_from_missing_module,
@@ -1811,7 +1822,6 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .default_app_missing_main,
         .default_app_wrong_arity,
         .cannot_import_default_app,
-        .execution_requires_app_or_default_app,
         .type_name_case_mismatch,
         .redundant_expose_main_type,
         .invalid_main_type_rename_in_exposing,
@@ -1950,7 +1960,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// The "RUN <name>" log is emitted by the parent via `onTestStarted` (gated
 /// on --verbose) so it stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestResult {
-    var timer = Timer.start() catch unreachable;
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const outcome = if (tc.stack_bytes) |stack_bytes|
         runSingleTestOnStack(io, allocator, tc, timeout_ms, stack_bytes)
     else
@@ -2524,7 +2534,7 @@ fn writeStatsJson(
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
 ) RunnerError!void {
-    var stats_arena = std.heap.ArenaAllocator.init(gpa);
+    var stats_arena = base.SingleThreadArena.init(gpa);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
 
@@ -2779,7 +2789,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
         var passed: usize = 0;
         var failed: usize = 0;
         var skipped: usize = 0;
-        var wall_timer = Timer.start() catch unreachable;
+        var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
 
         for (tests, 0..) |tc, i| {
             _ = arena.reset(.retain_capacity);
@@ -2818,7 +2828,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     defer gpa.free(spans);
     @memset(spans, null);
 
-    var wall_timer = Timer.start() catch unreachable;
+    var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
 
     // Native musl CI has enough process-startup variance for the larger shared
     // harness default to be more reliable, especially for heavy boundary tests.
@@ -2941,4 +2951,25 @@ pub fn main(init: std.process.Init) RunnerError!void {
     if (failed > 0 or crashed > 0 or timed_out > 0) {
         std.process.exit(1);
     }
+}
+
+/// Evaluate via the wasm backend for both CPU levels. A WebAssembly 1.0
+/// result that differs from the default one, in output or allocation count,
+/// is reported as the output, so it never agrees with the expected value.
+fn wasmBothCpuLevelsStrWithStats(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error!helpers.EvalRunResult {
+    const default = try helpers.wasmEvaluatorStrWithStats(allocator, lowered);
+    const v1 = try helpers.wasmRunAt(allocator, lowered, .v1);
+    defer allocator.free(v1.output);
+    if (std.mem.eql(u8, default.output, v1.output) and default.allocation_count == v1.allocation_count) return default;
+    defer allocator.free(default.output);
+    return .{
+        .output = try std.fmt.allocPrint(allocator, "{s} ({d} allocations), but wasm32v1: {s} ({d} allocations)", .{ default.output, default.allocation_count, v1.output, v1.allocation_count }),
+        .allocation_count = default.allocation_count,
+    };
+}
+
+/// The output of `wasmBothCpuLevelsStrWithStats`.
+fn wasmBothCpuLevelsInspectedStr(allocator: std.mem.Allocator, lowered: *const LoweredProgram) helpers.Error![]u8 {
+    const result = try wasmBothCpuLevelsStrWithStats(allocator, lowered);
+    return result.output;
 }

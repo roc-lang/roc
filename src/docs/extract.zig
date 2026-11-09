@@ -8,7 +8,6 @@ const base = @import("base");
 const CIR = @import("can").CIR;
 const ModuleEnv = @import("can").ModuleEnv;
 const types_mod = @import("types").types;
-const CheckedArtifact = @import("check").CheckedArtifact;
 
 const DocModel = @import("DocModel.zig");
 const render_type = @import("render_type.zig");
@@ -140,27 +139,6 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
     };
 }
 
-/// Extract documentation for all exported definitions in a module.
-///
-/// For type modules, only the main type entry (the one matching the module name)
-/// and its nested children are included. All other top-level definitions are
-/// considered private to the module and are excluded from documentation.
-/// For example, in a `Color.roc` type module, only `Color := ...` and its
-/// methods are documented; any helper functions defined outside the `Color`
-/// type declaration are not visible.
-///
-/// The Builtin module receives additional special handling: the `Builtin` opaque
-/// entry itself is removed, and its children are re-distributed under the
-/// proper parent types (Str, List, Bool, Num, etc.).
-pub fn extractModuleDocs(
-    gpa: Allocator,
-    module_env: *const ModuleEnv,
-    package_name: []const u8,
-    source_path: ?[]const u8,
-) Allocator.Error!DocModel.ModuleDocs {
-    return extractModuleDocsWithOptions(gpa, module_env, package_name, source_path, .{});
-}
-
 /// Controls which source-level entries are included in one module's docs.
 pub const ExtractOptions = struct {
     /// When set, retain only these top-level entries and their children.
@@ -170,8 +148,6 @@ pub const ExtractOptions = struct {
     /// Every exact public type projection in the generated package docs,
     /// sorted once with `sortPublicTypeProjections` before extraction.
     public_types: []const PublicTypeProjection = &.{},
-    /// Checked import identities for resolving external annotation references.
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact = null,
 };
 
 /// A borrowed mapping from one exact source type to its public docs namespace.
@@ -200,10 +176,22 @@ fn publicTypeProjectionLessThan(_: void, a: PublicTypeProjection, b: PublicTypeP
 const PublicReferenceRouting = struct {
     current: ?PublicTypeProjection,
     all: []const PublicTypeProjection,
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Extract documentation, optionally restricted to explicit top-level names.
+/// Extract documentation for all exported definitions in a module.
+///
+/// For type modules, only the main type entry (the one matching the module name)
+/// and its nested children are included. All other top-level definitions are
+/// considered private to the module and are excluded from documentation.
+/// For example, in a `Color.roc` type module, only `Color := ...` and its
+/// methods are documented; any helper functions defined outside the `Color`
+/// type declaration are not visible.
+///
+/// The Builtin module receives additional special handling: the `Builtin` opaque
+/// entry itself is removed, and its children are re-distributed under the
+/// proper parent types (Str, List, Bool, Num, etc.).
+///
+/// `options` can restrict the result to explicit top-level names.
 pub fn extractModuleDocsWithOptions(
     gpa: Allocator,
     module_env: *const ModuleEnv,
@@ -263,7 +251,6 @@ pub fn extractModuleDocsWithOptions(
     const reference_routing = PublicReferenceRouting{
         .current = options.public_type,
         .all = options.public_types,
-        .checked_artifact = options.checked_artifact,
     };
 
     const documented_region: ?base.Region = if (documentedRootDecl(module_env, options.public_type)) |root|
@@ -551,7 +538,8 @@ pub fn extractModuleDocsWithOptions(
 
 fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjection) []const u8 {
     std.debug.assert(module_env == projection.source_env);
-    return typeDeclName(projection.source_env, projection.source_decl) orelse unreachable;
+    return typeDeclName(projection.source_env, projection.source_decl) orelse
+        base.invariant("docs invariant violated: public type projection `{s}` does not name a type declaration", .{projection.public_name});
 }
 
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
@@ -592,7 +580,11 @@ fn nameIsAtOrUnder(root: []const u8, name: []const u8) bool {
 fn documentedRootDecl(module_env: *const ModuleEnv, public_type: ?PublicTypeProjection) ?CIR.Statement.Idx {
     if (public_type) |projection| return projection.source_decl;
     return switch (module_env.module_kind) {
-        .type_module => |main_type_ident| @fromBackingInt(@intCast(module_env.getExposedTypeNodeIndexById(main_type_ident) orelse unreachable)),
+        .type_module => |main_type_ident| blk: {
+            const node_idx = module_env.getExposedTypeNodeIndexById(main_type_ident) orelse
+                base.invariant("docs invariant violated: type module `{s}` does not expose its main type", .{module_env.module_name});
+            break :blk @as(CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
+        },
         .default_app, .app, .package, .platform, .hosted, .module, .malformed => null,
     };
 }
@@ -655,29 +647,30 @@ fn projectedTypeReference(
     module_env: *const ModuleEnv,
     current_projection: ?PublicTypeProjection,
     public_types: []const PublicTypeProjection,
-    checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
     base_ref: TypeAnno.LocalOrExternal,
 ) ?PublicTypeProjection {
     if (current_projection == null and public_types.len == 0) return null;
 
     const identity, const target_statement = switch (base_ref) {
-        .local => |local| .{
-            (module_env.contentIdentityHash() orelse unreachable).*,
-            local.decl_idx,
+        .local => |local| local_blk: {
+            const content_identity = module_env.contentIdentityHash() orelse
+                base.invariant("docs invariant violated: module `{s}` has no content identity for a local type reference", .{module_env.module_name});
+            break :local_blk .{ content_identity.*, local.decl_idx };
         },
-        .external => |external| external_blk: {
-            const artifact = checked_artifact orelse unreachable;
-            const import_index = @backingInt(external.module_idx);
-            if (import_index >= artifact.checking_context_identity.imports.len) unreachable;
-            const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
-            break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))) };
+        // The compiler's baked `Builtin` module is part of the compiler, so
+        // its import records no identity (`ImportResolution.recordImportIdentities`)
+        // and none of its types has a public type projection in any package's
+        // docs.
+        .external => |external| .{
+            module_env.moduleIdentityHash(module_env.importIdentity(external.module_idx) orelse return null).*,
+            @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .external_identity => |external| .{
             module_env.moduleIdentityHash(external.module_identity).*,
             @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .builtin => return null,
-        .pending => unreachable,
+        .pending => base.invariant("docs invariant violated: a pending type reference reached docs extraction, which runs after checking", .{}),
     };
 
     return selectPublicProjection(current_projection, public_types, &identity, target_statement);
@@ -740,11 +733,11 @@ fn annotatedTypeReferenceDisplay(
         module_env,
         routing.current,
         routing.all,
-        routing.checked_artifact,
         base_ref,
     )) |projection| {
-        const statement = typeReferenceStatement(base_ref) orelse unreachable;
-        const target_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+        const statement = typeReferenceStatement(base_ref) orelse unreachable; // projectedTypeReference returns null for builtin references, so base_ref names a statement
+        const target_name = typeDeclName(projection.source_env, statement) orelse
+            base.invariant("docs invariant violated: projected type reference does not target a type declaration in `{s}`", .{projection.public_name});
         const module_path = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ projection.package_name, projection.public_name });
         errdefer gpa.free(module_path);
         return .{
@@ -810,7 +803,7 @@ test "Builtin docs exclude private sibling types and preserve public nested type
     defer gpa.free(diagnostics);
     try std.testing.expectEqual(0, diagnostics.len);
 
-    var docs = try extractModuleDocs(gpa, &env, "Builtin", null);
+    var docs = try extractModuleDocsWithOptions(gpa, &env, "Builtin", null, .{});
     defer docs.deinit(gpa);
     try std.testing.expectEqual(2, docs.entries.len);
     try std.testing.expectEqualStrings("Public", docs.entries[0].name);
@@ -1957,7 +1950,7 @@ fn extractTypeAnnoAsDocType(
                         .where_clause,
                         .wildcard,
                         .@"error",
-                        => unreachable,
+                        => unreachable, // each tag's finish_tag frame pushed exactly one single-tag tag_union
                     }
                     gpa.destroy(single_tag);
                 }
@@ -2303,7 +2296,8 @@ fn inferredTypeReferenceDisplay(
             origin_identity,
             statement,
         )) |projection| {
-            const source_name = typeDeclName(projection.source_env, statement) orelse unreachable;
+            const source_name = typeDeclName(projection.source_env, statement) orelse
+                base.invariant("docs invariant violated: projected alias source does not name a type declaration in `{s}`", .{projection.public_name});
             const module_path = try std.fmt.allocPrint(
                 ctx.gpa,
                 "{s}.{s}",
@@ -2428,47 +2422,7 @@ fn extractDocTypeInner(
                 origin_text,
                 ident_text,
             );
-            var display_moved = false;
-            errdefer if (!display_moved) {
-                gpa.free(display.module_path);
-                gpa.free(display.type_name);
-            };
-
-            var args_iter = types.iterAliasArgs(alias);
-            if (args_iter.count() > 0) {
-                // Type application
-                const constructor = try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-                display_moved = true;
-                errdefer {
-                    constructor.deinit(gpa);
-                    gpa.destroy(constructor);
-                }
-
-                var args = std.ArrayList(*const DocType).empty;
-                defer args.deinit(gpa);
-
-                while (args_iter.next()) |arg_var| {
-                    const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                        try allocDocType(gpa, .@"error");
-                    try args.append(gpa, arg_type);
-                }
-
-                const args_slice = try args.toOwnedSlice(gpa);
-                return try allocDocType(gpa, .{ .apply = .{
-                    .constructor = constructor,
-                    .args = args_slice,
-                    .layout = .compact,
-                } });
-            } else {
-                // Simple type reference
-                return try allocDocType(gpa, .{ .type_ref = .{
-                    .module_path = display.module_path,
-                    .type_name = display.type_name,
-                } });
-            }
+            return displayedTypeApplication(ctx, display, types.iterAliasArgs(alias));
         },
         .structure => |flat_type| {
             return try extractFlatType(ctx, flat_type);
@@ -2557,11 +2511,59 @@ fn extractFunction(
     } });
 }
 
+/// Builds the doc type that refers to `display`, applied to the iterated
+/// type arguments when there are any. Takes ownership of `display`'s strings.
+fn displayedTypeApplication(
+    ctx: *ExtractContext,
+    display: TypeReferenceDisplay,
+    args_iter_in: anytype,
+) ExtractError!*const DocType {
+    const gpa = ctx.gpa;
+    var display_moved = false;
+    errdefer if (!display_moved) {
+        gpa.free(display.module_path);
+        gpa.free(display.type_name);
+    };
+
+    var args_iter = args_iter_in;
+    if (args_iter.count() == 0) {
+        return try allocDocType(gpa, .{ .type_ref = .{
+            .module_path = display.module_path,
+            .type_name = display.type_name,
+        } });
+    }
+
+    const constructor = try allocDocType(gpa, .{ .type_ref = .{
+        .module_path = display.module_path,
+        .type_name = display.type_name,
+    } });
+    display_moved = true;
+    errdefer {
+        constructor.deinit(gpa);
+        gpa.destroy(constructor);
+    }
+
+    var args = std.ArrayList(*const DocType).empty;
+    defer args.deinit(gpa);
+
+    while (args_iter.next()) |arg_var| {
+        const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
+            try allocDocType(gpa, .@"error");
+        try args.append(gpa, arg_type);
+    }
+
+    const args_slice = try args.toOwnedSlice(gpa);
+    return try allocDocType(gpa, .{ .apply = .{
+        .constructor = constructor,
+        .args = args_slice,
+        .layout = .compact,
+    } });
+}
+
 fn extractNominalType(
     ctx: *ExtractContext,
     nominal: NominalType,
 ) ExtractError!*const DocType {
-    const gpa = ctx.gpa;
     const idents = ctx.idents;
     const origin_text = ctx.env.moduleIdentityDisplayText(nominal.origin_module);
     const ident_text = idents.getText(nominal.ident.ident_idx);
@@ -2572,45 +2574,7 @@ fn extractNominalType(
         origin_text,
         ident_text,
     );
-    var display_moved = false;
-    errdefer if (!display_moved) {
-        gpa.free(display.module_path);
-        gpa.free(display.type_name);
-    };
-
-    var args_iter = ctx.types.iterNominalArgs(nominal);
-    if (args_iter.count() > 0) {
-        const constructor = try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-        display_moved = true;
-        errdefer {
-            constructor.deinit(gpa);
-            gpa.destroy(constructor);
-        }
-
-        var args = std.ArrayList(*const DocType).empty;
-        defer args.deinit(gpa);
-
-        while (args_iter.next()) |arg_var| {
-            const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
-                try allocDocType(gpa, .@"error");
-            try args.append(gpa, arg_type);
-        }
-
-        const args_slice = try args.toOwnedSlice(gpa);
-        return try allocDocType(gpa, .{ .apply = .{
-            .constructor = constructor,
-            .args = args_slice,
-            .layout = .compact,
-        } });
-    } else {
-        return try allocDocType(gpa, .{ .type_ref = .{
-            .module_path = display.module_path,
-            .type_name = display.type_name,
-        } });
-    }
+    return displayedTypeApplication(ctx, display, ctx.types.iterNominalArgs(nominal));
 }
 
 /// The documentation kind of a solved record field. A field whose kind solved
@@ -3170,7 +3134,7 @@ test "issue 11592: inferred nested function tag payloads stay compact" {
     const result = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = closed } } });
     const inner = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{b}), .ret = result } } });
     const outer = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{ .args = try store.appendVars(&.{a}), .ret = inner } } });
-    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{}, .checked_artifact = null }, outer)).?;
+    const doc = (try extractDocType(gpa, &store, &env, "Test", .{ .current = null, .all = &.{} }, outer)).?;
     defer {
         doc.deinit(gpa);
         gpa.destroy(doc);

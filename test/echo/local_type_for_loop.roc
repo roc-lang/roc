@@ -13,7 +13,7 @@ sum_all = |xs| {
 main! = |args| {
 	extra = List.len(args) + 1
 	Countdown := { n : U64, extra : U64 }.{
-		iter = |c| Iter.custom(c.n, Known(c.n), |i| if i == 0 { Err(NoMore) } else { Ok((i + c.extra, i - 1)) })
+		iter = |c| Iter.custom(c.n, Ok(c.n), |i| if i == 0 { Err(NoMore) } else { Ok((i + c.extra, i - 1)) })
 	}
 
 	var $direct = 0

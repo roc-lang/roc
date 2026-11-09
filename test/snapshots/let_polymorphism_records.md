@@ -102,7 +102,7 @@ TYPE MISMATCH - let_polymorphism_records.md:8:7:8:14
 		(title "Type Mismatch")
 		(region (start 8 7) (end 8 14))
 		(headline
-			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both."))
 		(document
 			(source-region (file "let_polymorphism_records.md") (start 8 7) (end 8 14) (annotation error) (line-text "str = \"hello\""))
 			(line-break)
@@ -312,21 +312,21 @@ NO CHANGE
 						(e-num (value "1")))))))
 	(d-let
 		(p-assign (ident "int_container"))
-		(e-call (constraint-fn-var 358)
+		(e-call (constraint-fn-var 363)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "num")))))
 	(d-let
 		(p-assign (ident "str_container"))
-		(e-call (constraint-fn-var 366)
+		(e-call (constraint-fn-var 371)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
 				(p-assign (ident "str")))))
 	(d-let
 		(p-assign (ident "list_container"))
-		(e-call (constraint-fn-var 374)
+		(e-call (constraint-fn-var 379)
 			(e-lookup-local
 				(p-assign (ident "make_container")))
 			(e-lookup-local
@@ -347,7 +347,7 @@ NO CHANGE
 							(p-assign (ident "new_value"))))))))
 	(d-let
 		(p-assign (ident "updated_int"))
-		(e-call (constraint-fn-var 391)
+		(e-call (constraint-fn-var 396)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -355,7 +355,7 @@ NO CHANGE
 			(e-num (value "100"))))
 	(d-let
 		(p-assign (ident "updated_str"))
-		(e-call (constraint-fn-var 405)
+		(e-call (constraint-fn-var 410)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -363,7 +363,7 @@ NO CHANGE
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "updated_mismatch"))
-		(e-call (constraint-fn-var 418)
+		(e-call (constraint-fn-var 423)
 			(e-lookup-local
 				(p-assign (ident "update_data")))
 			(e-lookup-local
@@ -381,20 +381,20 @@ NO CHANGE
 							(p-assign (ident "x"))))))))
 	(d-let
 		(p-assign (ident "int_record"))
-		(e-call (constraint-fn-var 432)
+		(e-call (constraint-fn-var 437)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-num (value "42"))))
 	(d-let
 		(p-assign (ident "str_record"))
-		(e-call (constraint-fn-var 445)
+		(e-call (constraint-fn-var 450)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-string
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "list_record"))
-		(e-call (constraint-fn-var 474)
+		(e-call (constraint-fn-var 479)
 			(e-lookup-local
 				(p-assign (ident "identity_record")))
 			(e-list
@@ -409,7 +409,7 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-runtime-error (tag "erroneous_value_expr"))
-				(e-dispatch-call (method "plus") (constraint-fn-var 499)
+				(e-dispatch-call (method "plus") (constraint-fn-var 504)
 					(receiver
 						(e-field-access
 							(receiver

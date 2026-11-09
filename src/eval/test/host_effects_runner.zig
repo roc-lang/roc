@@ -28,8 +28,6 @@ const backend = @import("backend");
 const roc_target = @import("roc_target");
 const HostLirCodeGen = backend.HostLirCodeGen;
 const ExecutableMemory = backend.ExecutableMemory;
-const BoxyBuiltinFn = backend.LirCodeGenMod.BoxyBuiltinFn;
-const BoxyNativeFnTable = backend.LirCodeGenMod.BoxyNativeFnTable;
 const collections = @import("collections");
 
 /// Public struct `TestCase`.
@@ -176,7 +174,7 @@ fn appendEncodedRun(
             .dbg => 0,
             .expect_failed => 1,
             .crashed => 2,
-            .effect => unreachable,
+            .effect => @panic("host-effects runner invariant violated: a run recorded a hosted effect event"),
         };
         const payload = event.bytes();
         const event_header: EventHeader = .{
@@ -329,11 +327,10 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
 
     var static_strings = try Interpreter.buildStaticStrings(allocator, &lowered.view.store);
     defer static_strings.deinit();
-    var interp = try Interpreter.initWithBoxyTables(
+    var interp = try Interpreter.init(
         allocator,
         &lowered.view.store,
         &lowered.view.layouts,
-        Interpreter.BoxyTables.fromImageView(&lowered.view),
         static_strings.view(),
         runtime_env.get_ops(),
     );
@@ -350,7 +347,6 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
             runtime_env.noteCrash(interp.getCrashMessage());
             return runtime_env.snapshot(allocator);
         },
-        error.ComptimeExhaustiveness,
         error.DivisionByZero,
         error.ExpectErr,
         error.InvalidHostedFunctionSignature,
@@ -366,16 +362,6 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
     return runtime_env.snapshot(allocator);
 }
 
-fn boxyNativeFnTable() BoxyNativeFnTable {
-    var table: BoxyNativeFnTable = undefined;
-    inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
-        const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
-        const name = comptime boxy_fn.symbolName();
-        table[field_value] = @intFromPtr(&@field(eval.boxy_abi, name));
-    }
-    return table;
-}
-
 fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendEvalError!RuntimeHostEnv.RecordedRun {
     if (comptime !DEV_BACKEND_IMPLEMENTED) {
         return error.DevBackendUnavailable;
@@ -387,19 +373,17 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
         );
         defer static_strings.deinit();
 
-        var codegen = try HostLirCodeGen.initWithBoxyMetadata(
+        var codegen = try HostLirCodeGen.initWithCapturePrefix(
             allocator,
             &lowered.view.store,
             &lowered.view.layouts,
             static_strings.view(),
-            lowered.view.boxy_erased_arg_desc_offsets,
-            lowered.view.boxy_erased_arg_desc_params,
-            lowered.view.boxy_worker_procs,
+            // An image's program reserves no capture prefix; writing the
+            // image checks that.
+            0,
             roc_target.host_cpu.level(),
         );
         defer codegen.deinit();
-        var native_fns = boxyNativeFnTable();
-        codegen.boxy_native_fns = &native_fns;
         try codegen.compileAllProcSpecs(lowered.view.store.getProcSpecs());
 
         const proc = lowered.view.store.getProcSpec(lowered.mainProc());
@@ -421,18 +405,6 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
 
         var runtime_env = RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
-
-        eval.boxy_abi.initGlobal(
-            allocator,
-            &lowered.view.store,
-            &lowered.view.layouts,
-            Interpreter.BoxyTables.fromImageView(&lowered.view),
-            runtime_env.get_ops(),
-        ) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.AlreadyInitialized => @panic("host-effects runner invariant violated: boxy runtime was already initialized"),
-        };
-        defer eval.boxy_abi.deinitGlobal();
 
         const arg_buffer = try helpers.zeroedEntrypointArgBuffer(allocator, lowered, arg_layouts);
         defer if (arg_buffer) |buf| allocator.free(buf);
@@ -494,7 +466,7 @@ fn matchesExpectation(run: RuntimeHostEnv.RecordedRun, tc: TestCase) bool {
 }
 
 fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOutcome {
-    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports) catch |err| {
+    var compiled = helpers.compileProgram(allocator, io, tc.source_kind, tc.source, tc.imports, .{}) catch |err| {
         return .{
             .status = .fail,
             .message = allocator.dupe(u8, @errorName(err)) catch null,
@@ -529,7 +501,7 @@ fn runSingleTest(io: std.Io, allocator: std.mem.Allocator, tc: TestCase) TestOut
             continue;
         }
 
-        var timer = Timer.start() catch unreachable;
+        var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
         const lowered = &compiled.lowered;
         const fork_result = forkAndEval(backend_spec.eval_fn, lowered);
         const duration_ns = timer.read();
@@ -692,7 +664,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 }
 
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, _: u64) TestResult {
-    var timer = Timer.start() catch unreachable;
+    var timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const outcome = runSingleTest(io, allocator, tc);
     const duration_ns = timer.read();
     return .{
@@ -893,7 +865,7 @@ fn printRecordedRun(run: RuntimeHostEnv.RecordedRun) void {
                 std.debug.print("crashed=", .{});
                 printEscapedBytes(msg);
             },
-            .effect => unreachable,
+            .effect => @panic("host-effects runner invariant violated: a run recorded a hosted effect event"),
         }
     }
     std.debug.print("]", .{});
@@ -1070,7 +1042,7 @@ fn writeStatsJson(
     results: []const TestResult,
     spans: []const ?harness.PoolSpan,
 ) StatsJsonError!void {
-    var stats_arena = std.heap.ArenaAllocator.init(allocator);
+    var stats_arena = base.SingleThreadArena.init(allocator);
     defer stats_arena.deinit();
     const stats_allocator = stats_arena.allocator();
 
@@ -1150,7 +1122,7 @@ pub fn main(init: std.process.Init) RunnerMainError!void {
     defer gpa.free(spans);
     @memset(spans, null);
 
-    var wall_timer = Timer.start() catch unreachable;
+    var wall_timer = Timer.start() catch unreachable; // Timer.start always returns a timer; its error set is never produced
     const hang_timeout_ms: u64 = if (cli.timeout_provided and cli.timeout_ms > 0)
         cli.timeout_ms
     else if (max_children <= 1)

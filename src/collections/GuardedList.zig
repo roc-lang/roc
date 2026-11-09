@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
+const SupersededBackings = @import("SupersededBackings.zig");
 const debug_guards = builtin.mode == .debug;
 
 /// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
@@ -86,6 +87,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             self.bumpIfMoved(old);
         }
 
+        pub fn appendNTimes(self: *Self, allocator: Allocator, value: T, n: usize) Allocator.Error!void {
+            const old = self.moveStateBeforeGrowth();
+            try self.__guarded_backing.appendNTimes(allocator, value, n);
+            self.bumpIfMoved(old);
+        }
+
         pub fn appendSliceAssumeCapacity(self: *Self, values: []const T) void {
             self.__guarded_backing.appendSliceAssumeCapacity(values);
         }
@@ -98,6 +105,19 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             const old = self.moveStateBeforeGrowth();
             try self.__guarded_backing.ensureUnusedCapacity(allocator, additional_count);
             self.bumpIfMoved(old);
+        }
+
+        /// `ensureUnusedCapacity` for a list whose captured prefix another
+        /// thread may be reading: growth keeps the old backing alive in
+        /// `superseded` instead of moving or freeing it.
+        pub fn ensureUnusedCapacityKeepingBacking(
+            self: *Self,
+            allocator: Allocator,
+            additional_count: usize,
+            superseded: *SupersededBackings,
+        ) Allocator.Error!void {
+            const moved = try superseded.ensureUnusedCapacity(T, &self.__guarded_backing, allocator, additional_count);
+            if (debug_guards and moved and self.__guarded_backing.items.len != 0) self.__guarded_generation +%= 1;
         }
 
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, new_capacity: usize) Allocator.Error!void {
@@ -144,6 +164,12 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
             return &self.__guarded_backing.items[index];
         }
 
+        /// A read-only pointer to one element, for a caller that reads through
+        /// it before anything can append to the list.
+        pub fn getPtrConstImmediate(self: *const Self, index: usize) *const T {
+            return &self.__guarded_backing.items[index];
+        }
+
         pub fn set(self: *Self, index: usize, value: T) void {
             self.__guarded_backing.items[index] = value;
         }
@@ -155,20 +181,14 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
         }
 
         pub fn borrowSpan(self: *const Self, start: usize, span_len: usize) BorrowSpan(T, list_name) {
-            assertRangeInBounds(list_name, self.__guarded_backing.items.len, start, span_len);
-            if (debug_guards) {
-                return .{
-                    .list = self,
-                    .start = start,
-                    .len = span_len,
-                    .generation = self.currentGeneration(),
-                };
-            } else {
-                return self.__guarded_backing.items[start..][0..span_len];
-            }
+            return spanOf(false, self, start, span_len);
         }
 
         pub fn borrowSpanMut(self: *Self, start: usize, span_len: usize) BorrowSpanMut(T, list_name) {
+            return spanOf(true, self, start, span_len);
+        }
+
+        fn spanOf(comptime mutable: bool, self: if (mutable) *Self else *const Self, start: usize, span_len: usize) GuardedSpan(T, list_name, mutable) {
             assertRangeInBounds(list_name, self.__guarded_backing.items.len, start, span_len);
             if (debug_guards) {
                 return .{
@@ -248,64 +268,22 @@ pub fn List(comptime T: type, comptime list_name: []const u8) type {
 
 /// Read-only span borrow type for a guarded list.
 pub fn BorrowSpan(comptime T: type, comptime list_name: []const u8) type {
-    if (!debug_guards) return []const T;
-
-    return struct {
-        const Self = @This();
-
-        list: *const List(T, list_name),
-        start: usize,
-        len: usize,
-        generation: u64,
-
-        pub fn at(self: Self, index: usize) T {
-            self.assertElementAccess(index);
-            return self.list.__guarded_backing.items[self.start + index];
-        }
-
-        pub fn assertValid(self: Self) void {
-            if (self.len == 0) return;
-            self.assertCurrent("span validation");
-        }
-
-        fn assertElementAccess(self: Self, index: usize) void {
-            if (index >= self.len) {
-                std.debug.panic(
-                    "guarded list invalidated: {s}: span access index={d} exceeds borrowed len={d}",
-                    .{ list_name, index, self.len },
-                );
-            }
-            self.assertCurrent("span element access");
-        }
-
-        fn assertCurrent(self: Self, operation: []const u8) void {
-            assertRangeInBounds(list_name, self.list.__guarded_backing.items.len, self.start, self.len);
-            if (self.list.__guarded_generation != self.generation) {
-                std.debug.panic(
-                    "guarded list invalidated: {s}: {s}; borrowed start={d} len={d} generation={d} current_generation={d} current_len={d}",
-                    .{
-                        list_name,
-                        operation,
-                        self.start,
-                        self.len,
-                        self.generation,
-                        self.list.__guarded_generation,
-                        self.list.__guarded_backing.items.len,
-                    },
-                );
-            }
-        }
-    };
+    return GuardedSpan(T, list_name, false);
 }
 
 /// Mutable span borrow type for a guarded list.
 pub fn BorrowSpanMut(comptime T: type, comptime list_name: []const u8) type {
-    if (!debug_guards) return []T;
+    return GuardedSpan(T, list_name, true);
+}
+
+fn GuardedSpan(comptime T: type, comptime list_name: []const u8, comptime mutable: bool) type {
+    if (!debug_guards) return if (mutable) []T else []const T;
+    const kind = if (mutable) "mutable span" else "span";
 
     return struct {
         const Self = @This();
 
-        list: *List(T, list_name),
+        list: if (mutable) *List(T, list_name) else *const List(T, list_name),
         start: usize,
         len: usize,
         generation: u64,
@@ -327,17 +305,17 @@ pub fn BorrowSpanMut(comptime T: type, comptime list_name: []const u8) type {
 
         pub fn assertValid(self: Self) void {
             if (self.len == 0) return;
-            self.assertCurrent("mutable span validation");
+            self.assertCurrent(kind ++ " validation");
         }
 
         fn assertElementAccess(self: Self, index: usize) void {
             if (index >= self.len) {
                 std.debug.panic(
-                    "guarded list invalidated: {s}: mutable span access index={d} exceeds borrowed len={d}",
+                    "guarded list invalidated: {s}: " ++ kind ++ " access index={d} exceeds borrowed len={d}",
                     .{ list_name, index, self.len },
                 );
             }
-            self.assertCurrent("mutable span element access");
+            self.assertCurrent(kind ++ " element access");
         }
 
         fn assertCurrent(self: Self, operation: []const u8) void {
@@ -400,41 +378,6 @@ pub fn BorrowPtr(comptime T: type, comptime list_name: []const u8) type {
     };
 }
 
-/// Read-only element pointer borrow type for a guarded list.
-pub fn BorrowPtrConst(comptime T: type, comptime list_name: []const u8) type {
-    if (!debug_guards) return *const T;
-
-    return struct {
-        const Self = @This();
-
-        list: *const List(T, list_name),
-        index: usize,
-        generation: u64,
-
-        pub fn get(self: Self) T {
-            self.assertCurrent("const pointer get");
-            return self.list.__guarded_backing.items[self.index];
-        }
-
-        fn assertCurrent(self: Self, operation: []const u8) void {
-            assertIndexInBounds(list_name, self.list.__guarded_backing.items.len, self.index);
-            if (self.list.__guarded_generation != self.generation) {
-                std.debug.panic(
-                    "guarded list invalidated: {s}: {s}; borrowed index={d} generation={d} current_generation={d} current_len={d}",
-                    .{
-                        list_name,
-                        operation,
-                        self.index,
-                        self.generation,
-                        self.list.__guarded_generation,
-                        self.list.__guarded_backing.items.len,
-                    },
-                );
-            }
-        }
-    };
-}
-
 /// Returns the length of a slice or guarded span borrow.
 pub fn borrowLen(borrow: anytype) usize {
     const Borrow = @TypeOf(borrow);
@@ -459,9 +402,10 @@ pub fn at(borrow: anytype, index: usize) BorrowElement(@TypeOf(borrow)) {
         const ptr = borrow_info.pointer;
         return switch (ptr.size) {
             .slice => borrow[index],
-            .one => if (@typeInfo(ptr.child) == .array)
-                if (@typeInfo(ptr.child).array.len == 0) unreachable else borrow[index]
-            else blk: {
+            .one => if (@typeInfo(ptr.child) == .array) blk: {
+                if (@typeInfo(ptr.child).array.len == 0) unreachable; // callers index within bounds, and a zero-length array has no in-bounds index
+                break :blk borrow[index];
+            } else blk: {
                 std.debug.assert(index == 0);
                 break :blk borrow.*;
             },
@@ -643,6 +587,5 @@ test "GuardedList release representation and borrow types are raw" {
         try std.testing.expect(BorrowSpan(u32, "test.release_span") == []const u32);
         try std.testing.expect(BorrowSpanMut(u32, "test.release_span_mut") == []u32);
         try std.testing.expect(BorrowPtr(u32, "test.release_ptr") == *u32);
-        try std.testing.expect(BorrowPtrConst(u32, "test.release_ptr_const") == *const u32);
     }
 }

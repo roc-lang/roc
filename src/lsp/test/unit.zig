@@ -23,4 +23,5 @@ test "lsp unit tests" {
     std.testing.refAllDecls(@import("completion_context_test.zig"));
     std.testing.refAllDecls(@import("scope_map_test.zig"));
     std.testing.refAllDecls(@import("rename_test.zig"));
+    std.testing.refAllDecls(@import("uri_test.zig"));
 }

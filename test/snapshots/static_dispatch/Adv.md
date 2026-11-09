@@ -46,7 +46,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
-TYPE NOT DETERMINED - Adv.md:28:13:28:20
+MISSING METHOD - Adv.md:28:13:28:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -65,7 +65,18 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end)))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Write the number in quotes to make it a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow ", or convert it with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow ".")))
 	(report
 		(severity runtime_error)
 		(title "Missing Method")
@@ -101,10 +112,14 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Type Not Determined")
+		(title "Missing Method")
 		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "Nothing in this program determines the type of this string:"))
+			(reflow "This string's type never resolved to a concrete type, so it has no")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method."))
 		(document
 			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)
@@ -115,13 +130,6 @@ TYPE NOT DETERMINED - Adv.md:28:13:28:20
 			(indent 1)
 			(text "a where [a.update : a, b -> _ret]")
 			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Without knowing which type it is, there's no way to tell which")
-			(reflow " ")
-			(annotated code "update")
-			(reflow " ")
-			(reflow "method to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
@@ -446,7 +454,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 445)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 450)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -477,11 +485,10 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update") (constraint-fn-var 497)
-					(receiver
-						(e-runtime-error (tag "erroneous_value_expr")))
-					(args
-						(e-num (value "100")))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-string
+						(e-literal (string "Hello")))
+					(e-num (value "100"))))
 			(e-lookup-local
 				(p-assign (ident "next_val")))))
 	(d-let
@@ -497,9 +504,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 534)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 539)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 522)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 527)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -510,12 +517,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 544)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 549)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 547)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 552)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

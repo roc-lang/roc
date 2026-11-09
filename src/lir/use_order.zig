@@ -6,6 +6,8 @@ const builtin = @import("builtin");
 const collections = @import("collections");
 const core = @import("lir_core");
 const body_clone = @import("body_clone.zig");
+const task_executor = @import("base").post_check_task_executor;
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -14,6 +16,50 @@ const no_local = std.math.maxInt(u32);
 
 /// Exact topology construction count for reuse tests.
 pub threadlocal var topology_builds: usize = 0;
+
+/// Memoized `usesAfter` answers: each statement's answered locals are a
+/// chain from that statement's head through `entries`.
+pub const UseAnswers = struct {
+    pub const Entry = struct {
+        stmt: LIR.CFStmtId,
+        local: LIR.LocalId,
+        answer: bool,
+        next: u32,
+    };
+
+    allocator: Allocator,
+    heads: collections.DenseMap(LIR.CFStmtId, u32),
+    entries: std.ArrayList(Entry) = .empty,
+
+    pub fn init(allocator: Allocator) UseAnswers {
+        return .{ .allocator = allocator, .heads = collections.DenseMap(LIR.CFStmtId, u32).init(allocator) };
+    }
+
+    pub fn deinit(self: *UseAnswers) void {
+        self.heads.deinit();
+        self.entries.deinit(self.allocator);
+    }
+
+    pub fn get(self: *const UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId) ?bool {
+        var cursor = self.heads.get(stmt) orelse return null;
+        while (cursor != no_local) {
+            const entry = self.entries.items[cursor];
+            if (entry.local == local) return entry.answer;
+            cursor = entry.next;
+        }
+        return null;
+    }
+
+    /// Records the answer for a query `get` has not answered.
+    pub fn put(self: *UseAnswers, stmt: LIR.CFStmtId, local: LIR.LocalId, answer: bool) Allocator.Error!void {
+        const position = std.math.cast(u32, self.entries.items.len) orelse return error.OutOfMemory;
+        if (position == no_local) return error.OutOfMemory;
+        const head = try self.heads.getOrPut(stmt);
+        if (!head.found_existing) head.value_ptr.* = no_local;
+        try self.entries.append(self.allocator, .{ .stmt = stmt, .local = local, .answer = answer, .next = head.value_ptr.* });
+        head.value_ptr.* = position;
+    }
+};
 
 /// Orders the uses of a local along control flow. A consuming use takes the
 /// value's single ownership unit with it, so the value is unique at that use
@@ -53,10 +99,8 @@ pub const UseOrder = struct {
     mark_defs: std.ArrayList(u64) = .empty,
     /// Only the fixed-point workspace enables this cache. Each key names
     /// an immutable ordered-use question, independent of signatures/takes.
-    use_answers: ?*std.AutoHashMap(UseQuery, bool) = null,
+    use_answers: ?*UseAnswers = null,
     backward_visits: usize = 0,
-
-    pub const UseQuery = struct { stmt: LIR.CFStmtId, local: LIR.LocalId };
 
     /// Explicit compact domains for one procedure. Whole-program ARC already
     /// owns dense store-wide domains and leaves this absent.
@@ -82,9 +126,9 @@ pub const UseOrder = struct {
             for (lists) |list| for (list) |id| {
                 if (self.stmts.contains(id)) continue;
                 try self.stmts.put(id, @intCast(self.stmts.count()));
-                const stmt = store.getCFStmt(id);
-                body_clone.forEachStmtRead(store, stmt, &locals, Locals.note);
-                body_clone.forEachStmtDef(store, stmt, &locals, Locals.note);
+                const stmt = store.getCFStmtImmediate(id);
+                body_clone.forEachStmtRead(store, stmt.*, &locals, Locals.note);
+                body_clone.forEachStmtDef(store, stmt.*, &locals, Locals.note);
                 if (locals.err) |err| return err;
             };
             return self;
@@ -148,9 +192,9 @@ pub const UseOrder = struct {
                 self.defs_of.clearIndex();
                 self.preds.clearIndex();
             }
-            self.reads_of.deinit(allocator);
-            self.defs_of.deinit(allocator);
-            self.preds.deinit(allocator);
+            self.reads_of.deinit();
+            self.defs_of.deinit();
+            self.preds.deinit();
             allocator.free(self.unresolved_list);
             allocator.free(self.members);
         }
@@ -275,7 +319,10 @@ pub const UseOrder = struct {
     };
 
     /// Sorted rows of statement ids per key, placed through a shared index.
+    /// A row table may be built on a worker lane, so it keeps the allocator
+    /// that owns its storage.
     pub const Rows = struct {
+        allocator: Allocator,
         index: *RowIndex,
         /// The keys whose rows are nonempty.
         keys: []u32,
@@ -298,22 +345,22 @@ pub const UseOrder = struct {
             for (self.keys) |key| self.index.len[key] = 0;
         }
 
-        pub fn deinit(self: *Rows, allocator: Allocator) void {
-            allocator.free(self.keys);
-            allocator.free(self.stmts);
+        pub fn deinit(self: *Rows) void {
+            self.allocator.free(self.keys);
+            self.allocator.free(self.stmts);
         }
     };
 
     const RowKind = enum { reads, defs };
 
     pub fn init(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .owned = .with_marks }, null, null));
     }
 
     /// An order over `lists` whose store-indexed tables are the caller's
     /// reusable `scratch`, which must outlive the order.
     pub fn initInScratch(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, scratch: *Scratch) Allocator.Error!UseOrder {
-        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .scratch = scratch }, null, null));
     }
 
     fn fromTopology(allocator: Allocator, topology: Topology) UseOrder {
@@ -339,7 +386,24 @@ pub const UseOrder = struct {
         compact: *Domain,
     };
 
-    pub fn initTopology(allocator: Allocator, store: *const LirStore, lists: []const []const LIR.CFStmtId, source: Tables) Allocator.Error!Topology {
+    /// With an executor of more than one lane, the three row tables are built
+    /// as one session of three tasks; each table then belongs to the output
+    /// allocator of the lane that built it.
+    /// Exact count of the row-table tasks a topology build submitted to an
+    /// executor and received back from it.
+    pub const TopologyTaskMetrics = struct {
+        submitted: u64 = 0,
+        committed: u64 = 0,
+    };
+
+    pub fn initTopology(
+        allocator: Allocator,
+        store: *const LirStore,
+        lists: []const []const LIR.CFStmtId,
+        source: Tables,
+        executor: ?*const task_executor.Executor,
+        task_metrics: ?*TopologyTaskMetrics,
+    ) Allocator.Error!Topology {
         if (builtin.is_test) topology_builds += 1;
         const scratch: ?*Scratch = switch (source) {
             .owned, .compact => null,
@@ -351,7 +415,7 @@ pub const UseOrder = struct {
             owned.* = switch (source) {
                 .owned => |marks| try Scratch.initTables(allocator, store, marks),
                 .compact => |domain| try Scratch.initTablesInDomain(allocator, store, .with_marks, domain),
-                .scratch => unreachable,
+                .scratch => unreachable, // scratch is null only for owned and compact sources
             };
             break :owned owned;
         };
@@ -374,7 +438,7 @@ pub const UseOrder = struct {
             }
         }
         for (member_list.items) |stmt| tables.seen.unset(tables.stmtIndex(stmt));
-        const members = try allocator.dupe(u32, member_list.items);
+        const members = try member_list.toOwnedSlice(allocator);
         errdefer allocator.free(members);
         errdefer if (scratch != null) for (members) |stmt| {
             tables.jump_join[tables.stmtIndex(stmt)] = no_local;
@@ -385,38 +449,31 @@ pub const UseOrder = struct {
         for (lists) |list| {
             joins.clearRetainingCapacity();
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
             }
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt != .jump) continue;
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
                     tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
                 }
             }
         }
 
-        var reads_of = try buildRows(allocator, store, members, &tables.reads_index, .reads);
-        errdefer {
-            reads_of.clearIndex();
-            reads_of.deinit(allocator);
-        }
-        var defs_of = try buildRows(allocator, store, members, &tables.defs_index, .defs);
-        errdefer {
-            defs_of.clearIndex();
-            defs_of.deinit(allocator);
-        }
-        var unresolved_list = std.ArrayList(u32).empty;
-        errdefer unresolved_list.deinit(allocator);
-        errdefer for (unresolved_list.items) |stmt| tables.unresolved.unset(tables.stmtIndex(stmt));
-        var preds = try buildPreds(allocator, store, members, tables, &unresolved_list);
-        errdefer {
-            preds.clearIndex();
-            preds.deinit(allocator);
-        }
-        const owned_unresolved = try allocator.dupe(u32, unresolved_list.items);
-        unresolved_list.deinit(allocator);
+        var row_tables = [_]RowTableTask{
+            .{ .store = store, .members = members, .tables = tables, .table = .reads },
+            .{ .store = store, .members = members, .tables = tables, .table = .defs },
+            .{ .store = store, .members = members, .tables = tables, .table = .preds },
+        };
+        errdefer for (&row_tables) |*table| table.release();
+        try RowTableTask.buildAll(allocator, &row_tables, executor, task_metrics);
+        const owned_unresolved = try allocator.dupe(u32, row_tables[2].unresolved.items);
+        // Nothing below fails: the topology takes every row table.
+        row_tables[2].unresolved.deinit(row_tables[2].allocator.?);
+        const reads_of = row_tables[0].rows.?;
+        const defs_of = row_tables[1].rows.?;
+        const preds = row_tables[2].rows.?;
         buildBlocks(store, members, tables, &preds);
         // Only a reusable scratch needs `seen` for a later build, or the
         // member inventory to reset its entries on release.
@@ -447,7 +504,7 @@ pub const UseOrder = struct {
     /// join parameter) and no other edge reaches the successor.
     fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
         if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
-        if (store.getCFStmt(@fromBackingInt(@intCast(stmt))) == .jump) return null;
+        if (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).* == .jump) return null;
         const Single = struct {
             count: u32 = 0,
             succ: u32 = no_local,
@@ -511,20 +568,6 @@ pub const UseOrder = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -532,18 +575,16 @@ pub const UseOrder = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .switch_stmt,
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -595,6 +636,7 @@ pub const UseOrder = struct {
                     std.mem.sortUnstable(u32, self.stmts[self.index.start[raw]..][0..self.index.len[raw]], {}, std.sort.asc(u32));
                 }
                 return .{
+                    .allocator = self.allocator,
                     .index = self.index,
                     .keys = try self.keys.toOwnedSlice(self.allocator),
                     .stmts = self.stmts,
@@ -622,24 +664,112 @@ pub const UseOrder = struct {
         var builder = Builder{ .allocator = allocator, .index = index };
         errdefer builder.abandon();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.count),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.count),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.count),
             }
         }
         try builder.place();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             builder.stmt = raw;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.fill),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.fill),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.fill),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.fill),
             }
         }
         return try builder.finish();
+    }
+
+    /// One of a topology's three row tables over fixed members and jump
+    /// targets. Each table writes only its own row index (predecessors also
+    /// the unresolved set), so the three are independent tasks.
+    const RowTableTask = struct {
+        store: *const LirStore,
+        members: []const u32,
+        tables: *Scratch,
+        table: enum { reads, defs, preds },
+        /// The allocator owning `rows` and `unresolved`, once executed.
+        allocator: ?Allocator = null,
+        rows: ?Rows = null,
+        unresolved: std.ArrayList(u32) = .empty,
+        failed: bool = false,
+        completed: bool = false,
+
+        fn run(context: *anyopaque, worker: task_executor.Worker) ?*anyopaque {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.execute(worker.allocator) catch {
+                self.failed = true;
+            };
+            return self;
+        }
+
+        fn execute(self: *@This(), allocator: Allocator) Allocator.Error!void {
+            self.allocator = allocator;
+            self.rows = switch (self.table) {
+                .reads => try buildRows(allocator, self.store, self.members, &self.tables.reads_index, .reads),
+                .defs => try buildRows(allocator, self.store, self.members, &self.tables.defs_index, .defs),
+                .preds => try buildPreds(allocator, self.store, self.members, self.tables, &self.unresolved),
+            };
+        }
+
+        /// Frees whatever this table built and resets the entries it wrote.
+        fn release(self: *@This()) void {
+            const allocator = self.allocator orelse return;
+            if (self.rows) |*rows| {
+                rows.clearIndex();
+                rows.deinit();
+                self.rows = null;
+            }
+            for (self.unresolved.items) |stmt| self.tables.unresolved.unset(self.tables.stmtIndex(stmt));
+            self.unresolved.deinit(allocator);
+            self.allocator = null;
+        }
+
+        /// Builds every table, on lanes when there are several. A failed
+        /// table leaves the others built for the caller to release.
+        fn buildAll(allocator: Allocator, row_tables: *[3]RowTableTask, executor: ?*const task_executor.Executor, task_metrics: ?*TopologyTaskMetrics) Allocator.Error!void {
+            const lanes = executor orelse return buildInline(allocator, row_tables);
+            if (lanes.worker_count <= 1) return buildInline(allocator, row_tables);
+            var session = try lanes.begin();
+            var submitted: usize = 0;
+            var received: usize = 0;
+            var failed = false;
+            while (received < submitted or (!failed and submitted < row_tables.len)) {
+                while (!failed and submitted < row_tables.len and session.canSubmit()) {
+                    session.submit(.{ .id = submitted, .context = &row_tables[submitted], .run = run }) catch {
+                        failed = true;
+                        break;
+                    };
+                    submitted += 1;
+                    if (task_metrics) |metrics| metrics.submitted += 1;
+                }
+                if (received < submitted) {
+                    const completion = session.receive();
+                    if (completion.id >= submitted or completion.worker_id >= lanes.lane_count) topologyInvariant("row table received invalid task identity");
+                    const context = &row_tables[completion.id];
+                    if (context.completed or completion.value != @as(*anyopaque, @ptrCast(context))) topologyInvariant("row table received invalid task completion");
+                    context.completed = true;
+                    if (task_metrics) |metrics| metrics.committed += 1;
+                    received += 1;
+                    if (context.failed) failed = true;
+                }
+            }
+            session.end();
+            if (failed) return error.OutOfMemory;
+            for (row_tables) |context| if (context.failed) return error.OutOfMemory;
+        }
+
+        fn buildInline(allocator: Allocator, row_tables: *[3]RowTableTask) Allocator.Error!void {
+            for (row_tables) |*context| try context.execute(allocator);
+        }
+    };
+
+    fn topologyInvariant(comptime message: []const u8) noreturn {
+        invariant(message, .{});
     }
 
     /// Predecessor rows over the successor edges of every member, and the
@@ -671,11 +801,11 @@ pub const UseOrder = struct {
     /// Statement inventories walked structurally from each procedure body,
     /// for callers that hold no per-procedure lists of their own.
     pub fn initFromStore(allocator: Allocator, store: *const LirStore, only_proc: ?LIR.LirProcSpecId) Allocator.Error!UseOrder {
-        var lists = std.ArrayList([]const LIR.CFStmtId).empty;
-        defer {
-            for (lists.items) |list| allocator.free(list);
-            lists.deinit(allocator);
-        }
+        // Every procedure's inventory is one run of a shared buffer.
+        var stmts = std.ArrayList(LIR.CFStmtId).empty;
+        defer stmts.deinit(allocator);
+        var ends = std.ArrayList(usize).empty;
+        defer ends.deinit(allocator);
         var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
         defer seen.deinit();
         var stack = std.ArrayList(LIR.CFStmtId).empty;
@@ -683,26 +813,30 @@ pub const UseOrder = struct {
         const first: usize = if (only_proc) |id| @backingInt(id) else 0;
         const end = if (only_proc != null) first + 1 else store.procSpecCount();
         for (first..end) |proc_index| {
-            const proc = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
-            const body = proc.body orelse continue;
-            var list = std.ArrayList(LIR.CFStmtId).empty;
-            errdefer list.deinit(allocator);
+            const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
+            const body = proc.arcBody() orelse continue;
             seen.clearRetainingCapacity();
             stack.clearRetainingCapacity();
             try stack.append(allocator, body);
             while (stack.pop()) |current| {
                 if (seen.contains(current)) continue;
                 try seen.put(current, {});
-                try list.append(allocator, current);
-                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+                try stmts.append(allocator, current);
+                try body_clone.appendSuccessorsInOrder(store, &stack, current, allocator, .{ .switch_edges = .arms_first });
             }
-            try lists.ensureUnusedCapacity(allocator, 1);
-            lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
+            try ends.append(allocator, stmts.items.len);
         }
-        if (only_proc == null) return init(allocator, store, lists.items);
-        const domain = try Domain.create(allocator, store, lists.items);
+        const lists = try allocator.alloc([]const LIR.CFStmtId, ends.items.len);
+        defer allocator.free(lists);
+        var start: usize = 0;
+        for (lists, ends.items) |*list, end_index| {
+            list.* = stmts.items[start..end_index];
+            start = end_index;
+        }
+        if (only_proc == null) return init(allocator, store, lists);
+        const domain = try Domain.create(allocator, store, lists);
         errdefer domain.destroy(allocator);
-        return fromTopology(allocator, try initTopology(allocator, store, lists.items, .{ .compact = domain }));
+        return fromTopology(allocator, try initTopology(allocator, store, lists, .{ .compact = domain }, null, null));
     }
 
     pub fn deinit(self: *UseOrder) void {
@@ -744,15 +878,15 @@ pub const UseOrder = struct {
     /// before `local` is redefined. Marks from the local's reads once and
     /// answers every later query about the same local from those marks.
     pub fn usesAfter(self: *UseOrder, from: u32, local: LIR.LocalId) Allocator.Error!bool {
-        const key: UseQuery = .{ .stmt = @fromBackingInt(@intCast(from)), .local = local };
-        if (self.use_answers) |answers| if (answers.get(key)) |answer| return answer;
+        const from_stmt: LIR.CFStmtId = @fromBackingInt(@intCast(from));
+        if (self.use_answers) |answers| if (answers.get(from_stmt, local)) |answer| return answer;
         if (self.marked_local != @backingInt(local) or !self.marked_uses) {
             try self.markFrom(local, self.topology.reads_of.row(local));
             self.marked_local = @backingInt(local);
             self.marked_uses = true;
         }
         const answer = self.after(from, local);
-        if (self.use_answers) |answers| try answers.put(key, answer);
+        if (self.use_answers) |answers| try answers.put(from_stmt, local, answer);
         return answer;
     }
 
@@ -893,11 +1027,11 @@ pub const UseOrder = struct {
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.topology.store.getCFStmt(@fromBackingInt(@intCast(from)));
-        if (node != .jump) return false;
+        const node = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(from)));
+        if (node.* != .jump) return false;
         const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join;
+        const join = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(join_stmt))).join;
         if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
@@ -909,26 +1043,28 @@ pub const UseOrder = struct {
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
     fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
-        switch (store.getCFStmt(@fromBackingInt(@intCast(stmt)))) {
-            inline .init_uninitialized,
+        const Visitor = struct {
+            ctx: @TypeOf(ctx),
+
+            fn call(self: @This(), successor: LIR.CFStmtId) void {
+                note(self.ctx, @backingInt(successor));
+            }
+        };
+        const node = store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt)));
+        switch (node.*) {
+            .jump => {
+                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
+                if (join_stmt == no_local) return true;
+                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
+            },
+            // A join's body runs only when jumped to; declaring the join
+            // continues with its remainder.
+            .init_uninitialized,
             .assign_ref,
             .assign_literal,
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .assign_call_dict,
             .assign_low_level,
             .assign_list,
             .assign_struct,
@@ -936,141 +1072,28 @@ pub const UseOrder = struct {
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
-            .comptime_branch_taken,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
             .incref,
             .decref,
             .decref_if_initialized,
             .free,
-            => |node| note(ctx, @backingInt(node.next)),
-            .switch_stmt => |node| {
-                if (node.continuation) |continuation| note(ctx, @backingInt(continuation));
-                note(ctx, @backingInt(node.default_branch));
-                const branches = store.getCFSwitchBranches(node.branches);
-                for (0..GuardedList.borrowLen(branches)) |index| {
-                    note(ctx, @backingInt(GuardedList.at(branches, index).body));
-                }
-            },
-            .switch_initialized_payload => |node| {
-                note(ctx, @backingInt(node.initialized_branch));
-                note(ctx, @backingInt(node.uninitialized_branch));
-            },
-            inline .str_match, .boxy_tag_match => |node| {
-                note(ctx, @backingInt(node.on_match));
-                note(ctx, @backingInt(node.on_miss));
-            },
-            .str_match_set => |node| {
-                const arms = store.getStrMatchArms(node.arms);
-                for (0..GuardedList.borrowLen(arms)) |index| {
-                    note(ctx, @backingInt(GuardedList.at(arms, index).on_match));
-                }
-                note(ctx, @backingInt(node.on_miss));
-            },
-            // A join's body runs only when jumped to; declaring the join
-            // continues with its remainder.
-            .join => |node| note(ctx, @backingInt(node.remainder)),
-            .jump => {
-                const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
-                if (join_stmt == no_local) return true;
-                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
-            },
-            .loop_continue, .loop_break => return true,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .expect_err,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .str_match,
+            .str_match_set,
+            .join,
             .ret,
             .crash,
-            => {},
+            => body_clone.forEachSuccessor(store, node.*, .{ .join_body = false }, Visitor{ .ctx = ctx }, Visitor.call),
         }
         return false;
     }
 };
-
-/// Append every structurally owned child, including join bodies and remainders.
-pub fn appendStructuralSuccessors(
-    allocator: Allocator,
-    store: *const LirStore,
-    stack: *std.ArrayList(LIR.CFStmtId),
-    stmt: LIR.CFStmt,
-) Allocator.Error!void {
-    switch (stmt) {
-        .switch_stmt => |switch_stmt| {
-            const branches = store.getCFSwitchBranches(switch_stmt.branches);
-            for (0..GuardedList.borrowLen(branches)) |branch_index| {
-                try stack.append(allocator, GuardedList.at(branches, branch_index).body);
-            }
-            try stack.append(allocator, switch_stmt.default_branch);
-            if (switch_stmt.continuation) |continuation| try stack.append(allocator, continuation);
-        },
-        .switch_initialized_payload => |switch_stmt| {
-            try stack.append(allocator, switch_stmt.initialized_branch);
-            try stack.append(allocator, switch_stmt.uninitialized_branch);
-        },
-        .str_match => |str_match| {
-            try stack.append(allocator, str_match.on_match);
-            try stack.append(allocator, str_match.on_miss);
-        },
-        .str_match_set => |str_match_set| {
-            const arms = store.getStrMatchArms(str_match_set.arms);
-            for (0..GuardedList.borrowLen(arms)) |arm_index| {
-                try stack.append(allocator, GuardedList.at(arms, arm_index).on_match);
-            }
-            try stack.append(allocator, str_match_set.on_miss);
-        },
-        .boxy_tag_match => |tag_match| {
-            try stack.append(allocator, tag_match.on_match);
-            try stack.append(allocator, tag_match.on_miss);
-        },
-        .join => |join_stmt| {
-            try stack.append(allocator, join_stmt.body);
-            try stack.append(allocator, join_stmt.remainder);
-        },
-        inline .assign_ref,
-        .assign_literal,
-        .init_uninitialized,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .store_struct,
-        .store_tag,
-        .set_local,
-        .debug,
-        .expect,
-        .comptime_branch_taken,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        => |linear| try stack.append(allocator, linear.next),
-        .jump,
-        .ret,
-        .crash,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
-        => {},
-    }
-}
 
 test "use order compact procedure domain matches dense queries and excludes unrelated rows" {
     const testing = std.testing;
@@ -1085,7 +1108,7 @@ test "use order compact procedure domain matches dense queries and excludes unre
     const input = try store.addLocal(.{ .layout_idx = .u64 });
     const view = try store.addLocal(.{ .layout_idx = .u64 });
     const done = try store.addCFStmt(.{ .ret = .{ .value = view } }, .test_fixture);
-    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .{ .local = input }, .next = done } }, .test_fixture);
+    const alias = try store.addCFStmt(.{ .assign_ref = .{ .target = view, .op = .local(input), .next = done } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11661),
@@ -1148,7 +1171,7 @@ test "use order block queries agree with a statement-level search on random bodi
                 for (0..self.random.uintLessThan(usize, 4) + 1) |_| {
                     next = try self.store.addCFStmt(.{ .assign_ref = .{
                         .target = self.local(),
-                        .op = .{ .local = self.local() },
+                        .op = .local(self.local()),
                         .next = next,
                     } }, .test_fixture);
                 }

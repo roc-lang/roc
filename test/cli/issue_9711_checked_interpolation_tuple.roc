@@ -1,5 +1,5 @@
 MyType(val) := [A(val), B].{
-    from_interpolation : List(Str) -> Try((List(val) -> MyType(val)), [InvalidInterpolation(Str)])
+    from_interpolation : List(Str) -> Try((Iter(val) -> MyType(val)), [InvalidInterpolation(Str)])
     from_interpolation = |_| Ok(|_| B)
 }
 

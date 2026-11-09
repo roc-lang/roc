@@ -36,7 +36,7 @@ UNUSED VARIABLE - pattern_destructure_nested.md:2:38:2:45
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "zipCode")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_zipCode")

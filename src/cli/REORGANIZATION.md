@@ -33,9 +33,8 @@ src/cli/
 ├── cli_roc_bundle.zig            # rocBundle command implementation
 ├── cli_roc_unbundle.zig          # rocUnbundle command implementation
 │
-├── platform_resolution.zig       # Platform spec parsing, path resolution
-├── platform_cache.zig            # getRocCacheDir, URL platform resolution
-├── platform_validation.zig       # Platform header validation (existing)
+├── platform_cache.zig            # getRocCacheDir, URL bundle resolution
+├── platform_validation.zig       # Platform target validation (existing)
 │
 ├── compile_shared_memory.zig     # POSIX/Windows shared memory
 │
@@ -66,9 +65,11 @@ src/cli/
 1. Create `compile_shared_memory.zig` - SharedMemoryHandle, write functions
 2. Keep compilation and runtime execution split at a viewable LIR image
 
-### Phase 3: Extract Platform Resolution
-1. Create `platform_resolution.zig` - extractPlatformSpecFromApp, resolvePlatformPaths
-2. Create `platform_cache.zig` - getRocCacheDir, resolveUrlPlatform
+### Phase 3: Extract Package Cache Access
+1. Create `platform_cache.zig` - getRocCacheDir, resolveUrlBundle
+
+Apps' platforms are resolved by package resolution in `src/compile`, so the CLI
+has no platform resolution of its own to extract.
 
 ### Phase 4: Extract Commands (Ordered by Complexity)
 1. `cli_roc_format.zig` (simplest)

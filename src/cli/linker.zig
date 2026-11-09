@@ -15,10 +15,12 @@ const DwarfSplice = @import("macho/DwarfSplice.zig");
 const backend = @import("backend");
 const roc_target = @import("roc_target");
 const shim_symbols = @import("builtins").shim_symbols;
+const lir = @import("lir");
 const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
 const Io = cli_ctx.Io;
+const link_artifacts = @import("link_artifacts.zig");
 
 /// Suppress embedded LLD warnings by default. Build the compiler with
 /// `-Dlinker-warnings=true` to surface all LLD diagnostics (including ignored
@@ -28,6 +30,14 @@ const suppress_linker_warnings = !build_options.linker_warnings;
 /// The embedded LLD entrypoints are only linked into LLVM-enabled CLI builds.
 const llvm_available = if (@import("builtin").is_test) false else @import("config").llvm;
 const binaryen_available = if (@import("builtin").is_test) false else @import("config").binaryen;
+
+/// The libSystem stub (src/cli/darwin) every Mach-O link without a platform
+/// sysroot links against. Test builds embed an empty file.
+const libsystem_tbd = if (builtin.is_test) "" else @import("embedded_assets").file("darwin/libSystem.tbd");
+const libsystem_tbd_digest = if (builtin.is_test) blk: {
+    @setEvalBranchQuota(20_000);
+    break :blk link_artifacts.Identity.of("").digest;
+} else @import("embedded_digests").darwin_libsystem_tbd_blake3;
 
 const RocBinaryenOptimizeConfig = extern struct {
     optimize_level: c_int,
@@ -40,7 +50,7 @@ const RocBinaryenOptimizeConfig = extern struct {
     strip_debug: u8,
     strip_producers: u8,
     strip_target_features: u8,
-    simd128: u8,
+    webassembly_1_0: u8,
     validate: u8,
 };
 
@@ -101,8 +111,64 @@ pub const WasmOptimizeMode = enum {
 /// Default WASM stack size: 8MB
 pub const DEFAULT_WASM_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+/// WebAssembly linear memory is at most 4 GiB.
+const wasm_memory_limit: u64 = 1 << 32;
+const wasm_page_size: u64 = 64 * 1024;
+
+/// Where a linked wasm module's stack sits relative to its static data.
+pub const WasmStackLayout = union(enum) {
+    /// The stack occupies the lowest addresses, so an overflow wraps the
+    /// stack pointer below 0 and traps on its first write.
+    stack_first,
+    /// The host owns every address below the payload; static data starts
+    /// there and the stack sits above it, so generated code checks the stack
+    /// bounds wherever the stack can grow without limit.
+    data_first: u32,
+};
+
+/// The layout a platform's `global_base` selects: the stack can occupy
+/// address 0 only when the host reserves none of the low addresses.
+pub fn wasmStackLayout(global_base: ?u32) WasmStackLayout {
+    const reserved = global_base orelse return .stack_first;
+    if (reserved == 0) base.invariant("wasm link invariant violated: a zero global_base passed target configuration", .{});
+    return .{ .data_first = reserved };
+}
+
+/// The largest maximum memory a stack-first module may declare. A stack
+/// pointer that wraps below 0 lands at most `stack_size` bytes below 4 GiB, so
+/// memory must never reach those addresses for the first write to trap.
+pub fn stackFirstMaximumMemory(stack_size: usize) usize {
+    const usable = wasm_memory_limit - @min(@as(u64, stack_size), wasm_memory_limit);
+    return @intCast(usable - usable % wasm_page_size);
+}
+
+/// The names a linked wasm module exports so its host can tell a stack
+/// overflow from any other trap: a trap that leaves the stack pointer outside
+/// `[__stack_low + 128, __stack_high]` overflowed the stack. WebAssembly 1.0
+/// cannot export a mutable global, so there the stack pointer is read and
+/// reset through functions the compiler defines instead.
+pub fn wasmStackExports(cpu_level: roc_target.CpuLevel) []const []const u8 {
+    return switch (cpu_level) {
+        .v1 => &.{ "__stack_low", "__stack_high", shim_symbols.roc_wasm_stack_pointer, shim_symbols.roc_wasm_set_stack_pointer },
+        .default => &.{ "__stack_pointer", "__stack_low", "__stack_high" },
+    };
+}
+
+/// Sequential wall times, not summed LLD worker time.
+pub const Timing = struct {
+    arguments_ns: u64 = 0,
+    lld_ns: u64 = 0,
+    finalization_ns: u64 = 0,
+};
+
+fn now(io: std.Io) i128 {
+    return std.Io.Timestamp.now(io, .awake).nanoseconds;
+}
+
 /// Configuration for the linker, specifying target format, ABI, paths, and linking options.
 pub const LinkConfig = struct {
+    timing: ?*Timing = null,
+    immutable_objects: ?*@import("link_artifacts.zig").Objects = null,
     /// Target format to use for linking
     target_format: TargetFormat = TargetFormat.detectFromSystem(),
 
@@ -185,7 +251,10 @@ pub const LinkConfig = struct {
     /// preserve or introduce while optimizing the linked module.
     wasm_cpu_level: roc_target.CpuLevel = .default,
 
-    /// Optional data/global base for freestanding WASM links.
+    /// The first address the Roc program may use in a freestanding WASM link.
+    /// Every address below it belongs to the host, so the stack cannot occupy
+    /// address 0 and static data starts here instead. Null means the program
+    /// owns all of linear memory.
     wasm_global_base: ?u32 = null,
 
     /// Function exports from the platform host object that are part of the
@@ -210,6 +279,20 @@ pub const LinkConfig = struct {
     /// command space for the extra segment.
     macho_dwarf_object: ?[]const u8 = null,
 };
+
+/// Writes a link input `roc` embeds where this link can read it, and returns
+/// its path: the build's immutable objects when it has them, else the
+/// per-build scratch dir, so parallel `roc build` invocations never race on one
+/// file (a truncated write from one linker can corrupt what another is reading).
+fn embeddedLinkInput(ctx: *CliCtx, config: LinkConfig, bytes: []const u8, digest: [32]u8, filename: []const u8) LinkError![]const u8 {
+    if (config.immutable_objects) |objects| {
+        return objects.materializeKnown(bytes, .{ .digest = digest, .size = bytes.len }) catch LinkError.LinkFailed;
+    }
+    const dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
+    const path = std.fs.path.join(ctx.arena, &.{ dir, filename }) catch return LinkError.OutOfMemory;
+    backend.writeFileWindowsAvSafe(ctx.io.std_io, path, bytes) catch return LinkError.OutOfMemory;
+    return path;
+}
 
 fn appendForceUndefinedSymbol(
     ctx: *CliCtx,
@@ -286,10 +369,82 @@ fn appendSharedLibraryExports(
 /// Errors that can occur during linking
 pub const LinkError = error{
     LinkFailed,
+    /// The link needed symbols in the compiler's own namespace that nothing
+    /// defined: a compiler bug, recorded as a CLI problem by `link` itself.
+    UndefinedCompilerSymbols,
     OutOfMemory,
     InvalidArguments,
     LLVMNotAvailable,
 };
+
+/// The text LLD's frontends put before the name of a symbol nothing defines.
+const undefined_symbol_marker = "undefined symbol: ";
+
+/// The names in the compiler's symbol namespace that `diagnostics` reports as
+/// undefined, in first-mention order without repeats. Mach-O names carry the
+/// platform's leading underscore, which is stripped so the report names the
+/// symbol the compiler spelled.
+fn undefinedCompilerSymbols(arena: std.mem.Allocator, diagnostics: []const u8) std.mem.Allocator.Error![]const []const u8 {
+    var symbols = std.array_list.Managed([]const u8).init(arena);
+    var lines = std.mem.splitScalar(u8, diagnostics, '\n');
+    while (lines.next()) |line| {
+        const marker_at = std.mem.find(u8, line, undefined_symbol_marker) orelse continue;
+        const rest = line[marker_at + undefined_symbol_marker.len ..];
+        const end = std.mem.findAny(u8, rest, " \t\r") orelse rest.len;
+        var name = rest[0..end];
+        if (std.mem.startsWith(u8, name, "_")) name = name[1..];
+        if (!std.mem.startsWith(u8, name, lir.Program.compiler_symbol_namespace)) continue;
+        var seen = false;
+        for (symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) seen = true;
+        }
+        // The diagnostics are released with the link; the report outlives it.
+        if (!seen) try symbols.append(try arena.dupe(u8, name));
+    }
+    return symbols.items;
+}
+
+test "undefined compiler symbols are read from every LLD frontend's wording and host symbols are not" {
+    const diagnostics =
+        "ld.lld: error: undefined symbol: roc__sv0a1b\n" ++
+        ">>> referenced by roc_app_x64musl.o:(roc__sv0a1b__address)\n" ++
+        "ld64.lld: error: undefined symbol: _roc__p9f8e\n" ++
+        ">>> referenced by _main\n" ++
+        "lld-link: error: undefined symbol: roc__h77\n" ++
+        "wasm-ld: error: roc_app.o: undefined symbol: roc__sv0a1b\n" ++
+        "ld.lld: error: undefined symbol: roc_alloc\n" ++
+        "ld.lld: error: undefined symbol: _roc_fx_stdout_line\n" ++
+        "ld.lld: warning: something else\n";
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const symbols = try undefinedCompilerSymbols(arena.allocator(), diagnostics);
+    try std.testing.expectEqual(@as(usize, 3), symbols.len);
+    try std.testing.expectEqualStrings("roc__sv0a1b", symbols[0]);
+    try std.testing.expectEqualStrings("roc__p9f8e", symbols[1]);
+    try std.testing.expectEqualStrings("roc__h77", symbols[2]);
+    try std.testing.expectEqual(@as(usize, 0), (try undefinedCompilerSymbols(arena.allocator(), "ld.lld: error: cannot open crt1.o\n")).len);
+}
+
+/// Prints the linker's diagnostics and classifies a failed link.
+///
+/// A compiler bug is normally caught by a debug-only assertion: release builds
+/// trust the compiler's invariants rather than pay to re-check them. An
+/// undefined symbol in the compiler's own namespace is such a bug too (nothing
+/// but the compiler defines a `roc__` name), but the linker has already done
+/// the work of finding and describing it, so one scan of its diagnostics per
+/// link is the entire cost of telling the user whose bug this is and where to
+/// report it. That is worth paying in release builds.
+fn finishLldLink(ctx: *CliCtx, target_format: TargetFormat, outcome: embedded_lld.Outcome) LinkError!void {
+    ctx.io.stderr().writeAll(outcome.diagnostics) catch {};
+    if (outcome.succeeded) return;
+    const symbols = try undefinedCompilerSymbols(ctx.arena, outcome.diagnostics);
+    if (symbols.len == 0) return LinkError.LinkFailed;
+    ctx.addProblemIgnoreError(.{ .undefined_compiler_symbols = .{
+        .symbols = symbols,
+        .target_format = @tagName(target_format),
+    } });
+    return LinkError.UndefinedCompilerSymbols;
+}
 
 const PatchMachoStackSizeError = std.Io.File.OpenError || std.Io.File.ReadPositionalError || std.Io.File.WritePositionalError || error{
     NotMacho64,
@@ -453,19 +608,21 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append("-S");
             }
 
-            // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
-            // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
-            try args.append("-syslibroot");
-            if (try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir)) |platform_sysroot| {
-                try args.append(platform_sysroot);
+            // A platform-provided sysroot (for cross-compilation with bundled
+            // frameworks) wins. Without one, link roc's own libSystem stub and
+            // nothing from the standard search paths, on any host.
+            const platform_sysroot = try findPlatformSysroot(ctx.arena, ctx.io.std_io, config.platform_files_dir);
+            if (platform_sysroot) |sysroot| {
+                try args.append("-syslibroot");
+                try args.append(sysroot);
 
                 // Add framework search path to help linker resolve framework dependencies
-                const fw_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "System", "Library", "Frameworks" }) catch return LinkError.OutOfMemory;
+                const fw_path = std.fs.path.join(ctx.arena, &.{ sysroot, "System", "Library", "Frameworks" }) catch return LinkError.OutOfMemory;
                 try args.append("-F");
                 try args.append(fw_path);
 
                 // Add library path for libobjc and other usr/lib dependencies
-                const lib_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "usr", "lib" }) catch return LinkError.OutOfMemory;
+                const lib_path = std.fs.path.join(ctx.arena, &.{ sysroot, "usr", "lib" }) catch return LinkError.OutOfMemory;
                 try args.append("-L");
                 try args.append(lib_path);
 
@@ -473,13 +630,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 // This keeps the compiler generic - platforms explicitly control their
                 // dependencies by choosing which frameworks to bundle in their sysroot.
                 try discoverAndLinkFrameworks(ctx.arena, ctx.io.std_io, &args, fw_path);
+                try args.append("-lSystem");
             } else {
-                const darwin_sysroot = embedded_lld.darwin_sysroot.find(ctx.arena, ctx.io.std_io) catch return LinkError.OutOfMemory;
-                try args.append(darwin_sysroot);
+                try args.append("-Z");
+                try args.append(try embeddedLinkInput(ctx, config, libsystem_tbd, libsystem_tbd_digest, "libSystem.tbd"));
             }
-
-            // Link against system libraries on macOS
-            try args.append("-lSystem");
 
             // ELF resolves an undefined weak reference to null; Mach-O needs
             // each one the executable leaves undefined named explicitly.
@@ -508,6 +663,18 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Stamp a build id so stripped copies of the binary can be
             // matched back to their debug info.
             try args.append("--build-id");
+            // Start every loadable segment of an x86-64 executable on its own
+            // page, in the file and in memory. Without this, lld places a
+            // zero-fill segment (e.g. `.bss` in a program with no `.data`)
+            // partway into a page that holds no bytes from the file, and
+            // Rosetta 2's ELF loader rejects that layout with "bss_size
+            // overflow", so the program never starts in an x86-64 Linux
+            // container on Apple Silicon. Padding costs at most one 4 KiB page
+            // per segment.
+            if (target_arch == .x86_64 and !is_shared_lib) {
+                try args.append("-z");
+                try args.append("separate-loadable-segments");
+            }
             // Suppress linker warnings
             if (suppress_linker_warnings) {
                 try args.append("-w");
@@ -620,21 +787,11 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("/ignore:4217"); // Ignore locally defined symbol imported warnings
             try args.append("/ignore:4049"); // Ignore locally defined symbol imported warnings
 
-            // Generate and link stack probe object for ___chkstk_ms
+            // Link the prebuilt stack probe object for ___chkstk_ms.
             // This is needed when linking Zig-compiled code (like platform hosts) that uses
             // the MinGW ABI, which requires ___chkstk_ms for functions with large stack frames.
             if (target_arch == .x86_64) {
-                const stack_probe_obj = stack_probe.generateStackProbeObject(ctx.arena) catch return LinkError.OutOfMemory;
-                // Prefer a per-build scratch dir so parallel `roc build` invocations
-                // don't race on a shared zig-out/bin/stack_probe.obj (truncated
-                // writes from one linker can corrupt what another linker is reading).
-                const probe_dir = config.scratch_dir orelse (std.process.executableDirPathAlloc(ctx.io.std_io, ctx.arena) catch return LinkError.OutOfMemory);
-                const stack_probe_path = std.fs.path.join(ctx.arena, &.{
-                    probe_dir,
-                    "stack_probe.obj",
-                }) catch return LinkError.OutOfMemory;
-                @import("backend").writeFileWindowsAvSafe(ctx.io.std_io, stack_probe_path, stack_probe_obj) catch return LinkError.OutOfMemory;
-                try args.append(stack_probe_path);
+                try args.append(try embeddedLinkInput(ctx, config, &stack_probe.object, stack_probe.digest, "stack_probe.obj"));
             }
         },
         .freebsd, .openbsd, .netbsd => {
@@ -717,14 +874,43 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
                 try args.append(initial_memory_str);
             }
 
-            if (config.wasm_maximum_memory) |maximum_memory| {
-                const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
-                try args.append(maximum_memory_str);
+            switch (wasmStackLayout(config.wasm_global_base)) {
+                // The stack occupies the lowest addresses and grows down
+                // toward 0, with static data and the heap above it. An
+                // overflow wraps the stack pointer below 0 and the first write
+                // traps out of bounds, so detecting it costs nothing at
+                // runtime. The cap on maximum memory keeps the addresses a
+                // wrapped stack pointer reaches outside memory.
+                .stack_first => {
+                    try args.append("--stack-first");
+                    const maximum_memory = config.wasm_maximum_memory orelse stackFirstMaximumMemory(config.wasm_stack_size);
+                    if (maximum_memory > stackFirstMaximumMemory(config.wasm_stack_size)) {
+                        base.invariant("wasm link invariant violated: maximum memory {d} lets a wrapped stack pointer address memory", .{maximum_memory});
+                    }
+                    const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                    try args.append(maximum_memory_str);
+                },
+                // The host owns every address below the global base, so
+                // static data starts there and the stack sits above it.
+                // Generated code checks the stack bounds wherever the stack
+                // can grow without limit.
+                .data_first => |global_base| {
+                    try args.append("--no-stack-first");
+                    const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
+                    try args.append(global_base_str);
+                    if (config.wasm_maximum_memory) |maximum_memory| {
+                        const maximum_memory_str = std.fmt.allocPrint(ctx.arena, "--max-memory={d}", .{maximum_memory}) catch return LinkError.OutOfMemory;
+                        try args.append(maximum_memory_str);
+                    }
+                },
             }
 
-            if (config.wasm_global_base) |global_base| {
-                const global_base_str = std.fmt.allocPrint(ctx.arena, "--global-base={d}", .{global_base}) catch return LinkError.OutOfMemory;
-                try args.append(global_base_str);
+            // Hosts read the stack bounds and the stack pointer after a trap
+            // to tell a stack overflow from any other trap, and reset the
+            // stack pointer before calling in again.
+            for (wasmStackExports(config.wasm_cpu_level)) |export_name| {
+                const export_arg = std.fmt.allocPrint(ctx.arena, "--export={s}", .{export_name}) catch return LinkError.OutOfMemory;
+                try args.append(export_arg);
             }
 
             // Set stack size (configurable, default 8MB)
@@ -882,7 +1068,9 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         return LinkError.LLVMNotAvailable;
     }
 
+    const arguments_start = now(ctx.io.std_io);
     const args = try buildLinkArgs(ctx, config);
+    if (config.timing) |timing| timing.arguments_ns += @intCast(now(ctx.io.std_io) - arguments_start);
 
     // Debug: Print the linker command
     std.log.debug("Linker command:", .{});
@@ -890,13 +1078,18 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         std.log.debug("  {s}", .{arg});
     }
 
-    embedded_lld.link(ctx.arena, config.target_format, args.items, .{
+    const lld_start = now(ctx.io.std_io);
+    const outcome = try embedded_lld.link(ctx.gpa, config.target_format, args.items, .{
         .can_exit_early = config.can_exit_early,
         .disable_output = config.disable_output,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.LinkFailed => return LinkError.LinkFailed,
+    });
+    if (config.timing) |timing| timing.lld_ns += @intCast(now(ctx.io.std_io) - lld_start);
+    const finalization_start = now(ctx.io.std_io);
+    defer if (config.timing) |timing| {
+        timing.finalization_ns += @intCast(now(ctx.io.std_io) - finalization_start);
     };
+    defer ctx.gpa.free(outcome.diagnostics);
+    try finishLldLink(ctx, config.target_format, outcome);
 
     if (config.target_format == .wasm and config.wasm_optimize != .none and !config.disable_output) {
         optimizeWasmOutput(ctx, config) catch |err| {
@@ -930,31 +1123,45 @@ pub fn link(ctx: *CliCtx, config: LinkConfig) LinkError!void {
     }
 }
 
-/// Compose only compiler-owned Wasm objects into one relocatable object.
-/// Platform inputs are categorically excluded by the caller; sealing happens
-/// immediately after this link and before the result reaches a platform link.
+/// How `linkWasmObjectsRelocatable` composes its inputs.
+pub const RelocatableWasmOptions = struct {
+    /// Include every member of an input archive, as the final link of a
+    /// platform's inputs does.
+    whole_archive: bool = false,
+    /// Leave out debug information.
+    strip_debug: bool = false,
+};
+
+/// Compose Wasm objects into one relocatable object: the compiler-owned
+/// objects of a program, which are sealed right after and before the result
+/// reaches a platform link; or, for a fast dev link, either the compiler's
+/// support objects or a platform's host inputs alone, each converted to an
+/// image (`wasm_host_image.zig`).
 pub fn linkWasmObjectsRelocatable(
     ctx: *CliCtx,
     output_path: []const u8,
     input_paths: []const []const u8,
+    options: RelocatableWasmOptions,
 ) LinkError!void {
     if (comptime !llvm_available) return LinkError.LLVMNotAvailable;
 
-    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 4) catch
+    var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, input_paths.len + 7) catch
         return LinkError.OutOfMemory;
     try args.append("wasm-ld");
     try args.append("-r");
+    if (options.strip_debug) try args.append("--strip-debug");
     try args.append("-o");
     try args.append(output_path);
+    if (options.whole_archive) try args.append("--whole-archive");
     try args.appendSlice(input_paths);
+    if (options.whole_archive) try args.append("--no-whole-archive");
 
-    embedded_lld.link(ctx.arena, .wasm, args.items, .{
+    const outcome = try embedded_lld.link(ctx.gpa, .wasm, args.items, .{
         .can_exit_early = false,
         .disable_output = false,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.LinkFailed => return LinkError.LinkFailed,
-    };
+    });
+    defer ctx.gpa.free(outcome.diagnostics);
+    try finishLldLink(ctx, .wasm, outcome);
 }
 
 fn binaryenStatusName(status: c_int) []const u8 {
@@ -988,7 +1195,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         shrink: c_int,
     };
     const levels: Levels = switch (config.wasm_optimize) {
-        .none => unreachable,
+        .none => unreachable, // link calls optimizeWasmOutput only when wasm_optimize is not .none
         .size => .{ .optimize = 2, .shrink = 2 },
         .speed => .{ .optimize = 3, .shrink = 0 },
     };
@@ -1002,7 +1209,7 @@ fn binaryenConfig(config: LinkConfig) RocBinaryenOptimizeConfig {
         .strip_debug = @intFromBool(!config.wasm_debug_info),
         .strip_producers = 1,
         .strip_target_features = @intFromBool(config.wasm_optimize == .size and !config.wasm_debug_info),
-        .simd128 = @intFromBool(config.wasm_cpu_level == .default),
+        .webassembly_1_0 = @intFromBool(config.wasm_cpu_level == .v1),
         .validate = 1,
     };
 }
@@ -1109,10 +1316,10 @@ test "size wasm strips final target feature metadata" {
 
     const speed = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed });
     try std.testing.expectEqual(@as(u8, 0), speed.strip_target_features);
-    try std.testing.expectEqual(@as(u8, 1), speed.simd128);
+    try std.testing.expectEqual(@as(u8, 0), speed.webassembly_1_0);
 
     const v1 = binaryenConfig(.{ .output_path = "out.wasm", .object_files = &.{}, .wasm_optimize = .speed, .wasm_cpu_level = .v1 });
-    try std.testing.expectEqual(@as(u8, 0), v1.simd128);
+    try std.testing.expectEqual(@as(u8, 1), v1.webassembly_1_0);
 }
 
 test "wasm initial memory reaches wasm-ld only when configured" {
@@ -1411,6 +1618,8 @@ test "macOS platform archives use scoped force_load" {
 
     const archive_path = try tmp.dir.realPathFileAlloc(std.testing.io, "libhost.a", std.testing.allocator);
     defer std.testing.allocator.free(archive_path);
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
 
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
@@ -1427,6 +1636,7 @@ test "macOS platform archives use scoped force_load" {
         .output_path = "test_output",
         .object_files = &.{"libroc_interpreter_shim.a"},
         .platform_files_pre = &.{archive_path},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1447,6 +1657,8 @@ test "macOS non-archive platform files are passed directly" {
 
     const object_path = try tmp.dir.realPathFileAlloc(std.testing.io, "host.o", std.testing.allocator);
     defer std.testing.allocator.free(object_path);
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
 
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
@@ -1463,6 +1675,7 @@ test "macOS non-archive platform files are passed directly" {
         .output_path = "test_output",
         .object_files = &.{"libroc_interpreter_shim.a"},
         .platform_files_pre = &.{object_path},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1473,6 +1686,11 @@ test "macOS non-archive platform files are passed directly" {
 }
 
 test "macOS executables leave the in-process recorders undefined" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
+
     var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena_instance.deinit();
 
@@ -1487,6 +1705,7 @@ test "macOS executables leave the in-process recorders undefined" {
         .target_arch = .aarch64,
         .output_path = "test_output",
         .object_files = &.{"app.o"},
+        .scratch_dir = scratch_dir,
     };
 
     const args = try buildLinkArgs(&ctx, config);
@@ -1497,6 +1716,42 @@ test "macOS executables leave the in-process recorders undefined" {
         try std.testing.expect(at > 0);
         try std.testing.expectEqualStrings("-U", args.items[at - 1]);
     }
+}
+
+test "macOS links without a platform sysroot use roc's own libSystem stub and no search paths" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const scratch_dir = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(scratch_dir);
+
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .aarch64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+        .scratch_dir = scratch_dir,
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    // Nothing names a directory on the machine that built `roc`.
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-syslibroot"));
+    try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-lSystem"));
+    _ = findArg(args.items, "-Z") orelse return error.MissingNoStandardSearchPaths;
+    const stub_path = try std.fs.path.join(arena_instance.allocator(), &.{ scratch_dir, "libSystem.tbd" });
+    _ = findArg(args.items, stub_path) orelse return error.MissingLibSystemStub;
+    const written = try tmp.dir.readFileAlloc(std.testing.io, "libSystem.tbd", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(written);
+    try std.testing.expectEqualStrings(libsystem_tbd, written);
 }
 
 test "native glibc executables name the canonical program interpreter" {
@@ -1529,6 +1784,35 @@ test "native glibc executables name the canonical program interpreter" {
         const linker_idx = findArg(args.items, "-dynamic-linker") orelse return error.MissingDynamicLinker;
         try std.testing.expect(linker_idx + 1 < args.items.len);
         try std.testing.expectEqualStrings(case.interpreter, args.items[linker_idx + 1]);
+    }
+}
+
+test "x86-64 Linux executables start every loadable segment on its own page" {
+    // repro for https://github.com/roc-lang/roc/issues/9571
+    const abis = [_]TargetAbi{ .musl, .gnu };
+
+    for (abis) |abi| {
+        var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+        defer arena_instance.deinit();
+
+        var io = Io.create(std.testing.io);
+        var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+        ctx.initIo();
+        defer ctx.deinit();
+
+        const config = LinkConfig{
+            .target_format = .elf,
+            .target_os = .linux,
+            .target_abi = abi,
+            .target_arch = .x86_64,
+            .output_path = "test_output",
+            .object_files = &.{"libroc_interpreter_shim.a"},
+        };
+
+        const args = try buildLinkArgs(&ctx, config);
+
+        const z_idx = findArg(args.items, "separate-loadable-segments") orelse return error.MissingSeparateLoadableSegments;
+        try std.testing.expectEqualStrings("-z", args.items[z_idx - 1]);
     }
 }
 

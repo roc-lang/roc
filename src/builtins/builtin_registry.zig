@@ -16,6 +16,8 @@
 const std = @import("std");
 const dev_wrappers = @import("dev_wrappers.zig");
 const num = @import("num.zig");
+const RocList = @import("list.zig").RocList;
+const RocStr = @import("str.zig").RocStr;
 
 /// Prefix shared by every builtin wrapper linker symbol.
 pub const symbol_prefix = "roc_builtins_";
@@ -26,7 +28,6 @@ pub const BuiltinFn = enum {
     hasher_write_u128,
     simd_store_16,
     simd_append_16,
-    simd_eval,
     hasher_write_f32_bits,
     hasher_write_f64_bits,
     hasher_write_bytes,
@@ -63,6 +64,7 @@ pub const BuiltinFn = enum {
     str_trim_end,
     str_split,
     str_join_with,
+    str_from_parts,
     str_reserve,
     str_release_excess_capacity,
     str_with_capacity,
@@ -116,7 +118,6 @@ pub const BuiltinFn = enum {
     list_decref_with_single_thread,
     list_free_with,
     box_prepare_update,
-    box_unbox_owned,
     box_decref_with,
     box_decref_with_single_thread,
     box_free_with,
@@ -124,6 +125,10 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_repack,
+    native_callable_call,
+    native_callable_defer,
+    native_callable_drive,
+    native_callable_caller_cell,
     erased_callable_free,
     hot_reload_enter,
     hot_reload_leave,
@@ -218,11 +223,7 @@ pub const BuiltinFn = enum {
     dec_from_utf8_prefix,
     float_from_str_prefix,
     float_from_utf8_prefix,
-    list_eq,
-    list_str_eq,
-    list_list_eq,
     list_reverse,
-    list_sort_with,
     i32_mod_by,
     i8_mod_by,
     u8_mod_by,
@@ -238,6 +239,17 @@ pub const BuiltinFn = enum {
             result[@backingInt(builtin)] = symbol_prefix ++ @tagName(builtin);
         }
         break :blk result;
+    };
+
+    /// The builtins through which generated code tracks the loaded image it
+    /// runs in during a hot-reload session. Their behavior belongs to the
+    /// process the code runs in: the machine-code shim defines them to track
+    /// its images, and everywhere else they return at once.
+    pub const image_tracking = [_]BuiltinFn{
+        .hot_reload_enter,
+        .hot_reload_leave,
+        .hot_reload_retain_current,
+        .hot_reload_erased_callable_drop,
     };
 
     /// The linker symbol this builtin is exported and resolved under.
@@ -271,8 +283,6 @@ pub const BuiltinFn = enum {
 
     /// Which linkable builtins payloads carry a builtin's wrapper.
     pub const Payload = enum {
-        /// Resolved only in-process by the dev JIT; exported by no payload.
-        jit_only,
         /// Exported by the full payload only.
         full,
         /// Exported by both the full payload and the minimal core payload.
@@ -288,7 +298,6 @@ pub const BuiltinFn = enum {
             .box_decref_with_single_thread,
             .box_free_with,
             .box_prepare_update,
-            .box_unbox_owned,
             .checked_error_crash_str,
             .checked_error_crashed,
             .crash_str,
@@ -301,6 +310,10 @@ pub const BuiltinFn = enum {
             .erased_callable_free,
             .erased_callable_incref,
             .erased_callable_repack,
+            .native_callable_call,
+            .native_callable_defer,
+            .native_callable_drive,
+            .native_callable_caller_cell,
             .expect_err_str,
             .free_data_ptr,
             .i16_mod_by,
@@ -322,11 +335,9 @@ pub const BuiltinFn = enum {
             .list_decref_with,
             .list_decref_with_single_thread,
             .list_drop_at,
-            .list_eq,
             .list_free_with,
             .list_incref,
             .list_incref_single_thread,
-            .list_list_eq,
             .list_prepend,
             .list_release_excess_capacity,
             .list_replace,
@@ -334,10 +345,8 @@ pub const BuiltinFn = enum {
             .list_reserve,
             .list_reserve_for_append,
             .list_reverse,
-            .list_sort_with,
             .list_slack_unique,
             .list_owned_unique,
-            .list_str_eq,
             .list_sublist,
             .list_sublist_borrowed,
             .list_swap,
@@ -371,6 +380,7 @@ pub const BuiltinFn = enum {
 
             .str_from_utf8_result,
             .str_join_with,
+            .str_from_parts,
             .str_release_excess_capacity,
             .str_repeat,
             .str_reserve,
@@ -392,13 +402,6 @@ pub const BuiltinFn = enum {
             .u8_mod_by,
         }) |builtin| result[@backingInt(builtin)] = .core;
 
-        for ([_]BuiltinFn{
-            .hot_reload_enter,
-            .hot_reload_erased_callable_drop,
-            .hot_reload_leave,
-            .hot_reload_retain_current,
-        }) |builtin| result[@backingInt(builtin)] = .jit_only;
-
         break :blk result;
     };
 
@@ -407,6 +410,89 @@ pub const BuiltinFn = enum {
     /// the right default for a newly added builtin.
     pub fn payload(self: BuiltinFn) Payload {
         return payload_by_builtin[@backingInt(self)];
+    }
+
+    const writes_result_word_triple = blk: {
+        @setEvalBranchQuota(20_000);
+        var result = @as([@typeInfo(BuiltinFn).@"enum".field_names.len]bool, @splat(false));
+        for ([_]BuiltinFn{
+            .simd_store_16,
+            .simd_append_16,
+            .crypto_sha256_hash_bytes,
+            .crypto_sha256_hasher_empty,
+            .crypto_sha256_hasher_write,
+            .crypto_sha256_hasher_finish,
+            .crypto_blake3_hash_bytes,
+            .crypto_blake3_hasher_empty,
+            .crypto_blake3_hasher_write,
+            .crypto_blake3_hasher_finish,
+            .str_to_utf8,
+            .str_concat,
+            .str_substring_unsafe,
+            .str_repeat,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_split,
+            .str_join_with,
+            .str_from_parts,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_with_capacity,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+            .str_from_utf8_lossy,
+            .str_escape_and_quote,
+            .str_from_literal,
+            .list_with_capacity,
+            .list_append_unsafe,
+            .list_concat,
+            .list_append_range_within,
+            .list_copy_range_within,
+            .list_append_range_within_unsafe,
+            .list_append_sublist,
+            .list_append_le_bytes,
+            .list_prepend,
+            .list_sublist,
+            .list_sublist_borrowed,
+            .list_drop_at,
+            .list_replace,
+            .list_set,
+            .list_swap,
+            .list_reserve,
+            .list_reserve_for_append,
+            .list_release_excess_capacity,
+            .list_reverse,
+            .dec_to_str,
+            .int_to_str,
+            .float_to_str,
+        }) |builtin| {
+            const Wrapper = @typeInfo(@TypeOf(@field(dev_wrappers, symbol_prefix ++ @tagName(builtin)))).@"fn";
+            if (Wrapper.return_type != void or Wrapper.param_types.len == 0 or
+                (Wrapper.param_types[0] != *RocList and Wrapper.param_types[0] != *RocStr))
+            {
+                @compileError("BuiltinFn." ++ @tagName(builtin) ++ " is declared to write a list or string result through its first parameter, but its wrapper does not take a *RocList or *RocStr first and return void");
+            }
+            result[@backingInt(builtin)] = true;
+        }
+        break :blk result;
+    };
+
+    /// Whether this builtin's wrapper returns void and writes a list or string
+    /// (three machine words) through its first parameter without ever reading
+    /// what that parameter points to. Code generation relies on the write-only
+    /// guarantee to hand such a builtin a fresh slot and move the result out
+    /// of it, so a wrapper that reads or updates its first parameter in place
+    /// must not be listed.
+    pub fn writesResultWordTriple(self: BuiltinFn) bool {
+        return writes_result_word_triple[@backingInt(self)];
     }
 };
 
@@ -424,7 +510,6 @@ pub fn exportWrappers(comptime set: ExportSet) void {
     @setEvalBranchQuota(100_000);
     inline for (comptime std.enums.values(BuiltinFn)) |f| {
         const included = switch (comptime f.payload()) {
-            .jit_only => false,
             .full => set == .all_linked,
             .core => true,
         };

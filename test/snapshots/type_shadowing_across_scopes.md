@@ -156,7 +156,7 @@ MALFORMED TYPE - type_shadowing_across_scopes.md:9:21:9:28
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "data")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_data")

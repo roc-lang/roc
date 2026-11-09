@@ -33,6 +33,7 @@ pub const builtin_static = @import("can").BuiltinStatic;
 pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 /// Checked-artifact compile-time evaluation finalizer
 pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
+pub const checked_root_graph = @import("checked_root_graph.zig");
 /// Compiler-owned RocOps environment for compile-time evaluation
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation
@@ -45,12 +46,6 @@ pub const FrozenRootTranscode = @import("frozen_root_transcode.zig");
 pub const InterpreterStaticData = @import("interpreter_static_data.zig").InterpreterStaticData;
 pub const buildStaticDataForWidth = @import("static_data").buildStaticDataForWidth;
 pub const deinitStaticData = @import("static_data").deinitStaticData;
-/// Builtin types for type checking
-pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
-/// Crash context for host crash handling
-const crash_context = @import("crash_context.zig");
-pub const CrashContext = crash_context.CrashContext;
-pub const CrashState = crash_context.CrashState;
 
 /// Concrete runtime value for the interpreter
 pub const value = @import("value.zig");
@@ -105,21 +100,17 @@ pub const wasm_runner = if (builtin.target.os.tag == .freestanding) struct {
 pub const Inspected = @import("inspected.zig");
 /// Compatibility name retained for evaluator tests.
 pub const test_helpers = Inspected;
-/// Descriptor-guided boxy value operations shared by the interpreter and
-/// machine-code backends.
-pub const boxy_runtime = @import("boxy_runtime.zig");
-/// C-ABI wrappers over the boxy runtime for machine-code backends.
-pub const boxy_abi = @import("boxy_abi.zig");
 /// Debug-only conformance check between `RcEffect` rows and builtin behavior.
 pub const rc_conformance = @import("rc_conformance.zig");
 
 test "eval tests" {
+    std.testing.refAllDecls(@import("checked_root_graph.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("vendor_relocatable_loader"));
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
-    std.testing.refAllDecls(@import("builtins.zig"));
-    std.testing.refAllDecls(@import("crash_context.zig"));
+    std.testing.refAllDecls(@import("crash_boundary.zig"));
     std.testing.refAllDecls(@import("value.zig"));
+    std.testing.refAllDecls(@import("value_stack.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("host_trampoline.zig"));
     std.testing.refAllDecls(@import("compile_time_finalization.zig"));
@@ -128,9 +119,11 @@ test "eval tests" {
     std.testing.refAllDecls(@import("const_store_writer.zig"));
     std.testing.refAllDecls(@import("native_root_export.zig"));
     std.testing.refAllDecls(@import("frozen_root_transcode.zig"));
+    std.testing.refAllDecls(@import("frozen_graph.zig"));
     std.testing.refAllDecls(@import("inspected_run.zig"));
     std.testing.refAllDecls(@import("rc_conformance.zig"));
     std.testing.refAllDecls(@import("inspected.zig"));
     std.testing.refAllDecls(@import("test/host_trampoline_assembly_test.zig"));
     std.testing.refAllDecls(@import("runtime_host.zig"));
+    std.testing.refAllDecls(@import("test/boxy_dyn_lir_test.zig"));
 }

@@ -5,7 +5,6 @@
 //! as this is more compact, and then when we need to we can calculate the line and column information
 //! using line_starts and the offsets.
 const std = @import("std");
-const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 
@@ -79,11 +78,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     // find all newlines in the source, save their offset
@@ -93,11 +88,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) Allocator.Error!collec
             // next line starts after the newline in the current position
             const expected_idx = line_starts.items.items.len;
             const idx = try line_starts.append(gpa, pos + 1);
-            if (comptime builtin.mode == .debug) {
-                std.debug.assert(@backingInt(idx) == expected_idx);
-            } else if (@backingInt(idx) != expected_idx) {
-                unreachable;
-            }
+            std.debug.assert(@backingInt(idx) == expected_idx);
         }
         pos += 1;
     }
@@ -147,38 +138,22 @@ test "lineIdx" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 30);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     try std.testing.expectEqual(0, RegionInfo.lineIdx(line_starts.items.items, 0));
@@ -215,29 +190,17 @@ test "columnIdx" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     try std.testing.expectEqual(0, RegionInfo.columnIdx(line_starts.items.items, 0, 0));
@@ -258,29 +221,17 @@ test "getLineText" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 6);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 12);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     try std.testing.expectEqualStrings("line0", RegionInfo.getLineText(source, line_starts.items.items, 0, 0));
@@ -299,29 +250,17 @@ test "get" {
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 6);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
     {
         const expected_idx = line_starts.items.items.len;
         const idx = try line_starts.append(gpa, 12);
-        if (comptime builtin.mode == .debug) {
-            std.debug.assert(@backingInt(idx) == expected_idx);
-        } else if (@backingInt(idx) != expected_idx) {
-            unreachable;
-        }
+        std.debug.assert(@backingInt(idx) == expected_idx);
     }
 
     const info1 = try RegionInfo.position(source, line_starts.items.items, 2, 4);

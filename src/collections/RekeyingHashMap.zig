@@ -326,7 +326,7 @@ test "rekeying hash map matches an oracle through repeated collision churn" {
                     try std.testing.expectEqual(@as(?Map.KV, null), removed);
                 }
             },
-            else => unreachable,
+            else => return error.TestUnexpectedResult,
         }
 
         try std.testing.expectEqual(expected_count, map.count());

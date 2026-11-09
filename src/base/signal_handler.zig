@@ -149,6 +149,40 @@ pub const StackOverflowRecovery = struct {
 
 threadlocal var stack_overflow_recovery: ?*const StackOverflowRecovery = null;
 
+/// The program counter, frame pointer, and stack pointer a stack overflow
+/// interrupted.
+pub const FaultFrame = struct {
+    pc: usize,
+    fp: usize,
+    sp: usize,
+};
+
+threadlocal var overflow_frame: ?FaultFrame = null;
+
+/// The frame the last recovered stack overflow on this thread interrupted,
+/// once; null when the platform's fault context does not provide one.
+pub fn takeOverflowFrame() ?FaultFrame {
+    const frame = overflow_frame;
+    overflow_frame = null;
+    return frame;
+}
+
+fn faultFrame(cpu: anytype) ?FaultFrame {
+    const sp: usize = if (comptime builtin.cpu.arch == .x86_64)
+        @intCast(cpu.gprs.get(.rsp))
+    else if (comptime builtin.cpu.arch == .aarch64)
+        @intCast(cpu.sp)
+    else
+        return null;
+    return .{ .pc = cpu.getPc(), .fp = cpu.getFp(), .sp = sp };
+}
+
+fn posixFaultFrame(context: ?*anyopaque) ?FaultFrame {
+    if (comptime std.debug.cpu_context.Native == noreturn) return null;
+    const cpu = std.debug.cpu_context.fromPosixSignalContext(context) orelse return null;
+    return faultFrame(cpu);
+}
+
 /// Install `recovery` as the current thread's stack-overflow escape route and
 /// return the previously installed one so nested boundaries can restore it.
 /// While no recovery is installed, a stack overflow terminates the process
@@ -259,6 +293,27 @@ fn redirectDarwinContextToEscape(context: ?*anyopaque, recovery: *const StackOve
         return true;
     } else {
         return false;
+    }
+}
+
+/// The id of the thread writing a crash report, or 0 while no thread is.
+var crash_reporter: std.atomic.Value(u64) = .init(0);
+
+/// Claim the crash report for the calling thread, which then writes the
+/// report and ends the process. Returns only to the claiming thread. A fault
+/// in the report itself ends the process at once with `exit_code`, the code
+/// the report would have exited with. A thread that faults while another
+/// thread is reporting (every worker of a parallel link hits the same bad
+/// mapping at once) sleeps until that thread ends the process, so the report
+/// is neither interleaved nor cut short, and no thread runs the reporting
+/// code on top of another's run of it.
+fn claimCrashReport(exit_code: u8) void {
+    const me: u64 = std.Thread.getCurrentId();
+    const reporter = crash_reporter.cmpxchgStrong(0, me, .acq_rel, .acquire) orelse return;
+    if (reporter == me) std.process.exit(exit_code);
+    while (true) {
+        const forever: std.c.timespec = .{ .sec = std.math.maxInt(i32), .nsec = 0 };
+        _ = std.c.nanosleep(&forever, null);
     }
 }
 
@@ -455,6 +510,16 @@ pub fn currentThreadStackBoundsForTest() ?StackBounds {
     return thread_stack_bounds;
 }
 
+/// Make `bounds` the stack the fault handler classifies the current thread's
+/// faults against, and return the bounds it replaces. A thread that switches
+/// to another stack passes that stack's bounds while it runs there and
+/// restores the returned bounds when it switches back.
+pub fn swapCurrentThreadStackBounds(bounds: ?StackBounds) ?StackBounds {
+    const previous = thread_stack_bounds;
+    thread_stack_bounds = bounds;
+    return previous;
+}
+
 fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     while (!install_mutex.tryLock()) {}
     defer install_mutex.unlock();
@@ -495,12 +560,12 @@ fn installPosixProcessHandlers(callbacks: Callbacks) bool {
     return true;
 }
 
-// Per-thread guarantee reserved so EXCEPTION_STACK_OVERFLOW can dispatch.
-// Without this, an overflow on a worker thread takes the process down before
-// any handler runs—the OS only reserves a guarantee for the main thread.
-// 32 KB is well below the default 1 MB stack and large enough to host our
-// minimal handler frame.
-const WINDOWS_STACK_GUARANTEE: ULONG = 32 * 1024;
+/// Per-thread (and per-fiber) guarantee reserved so EXCEPTION_STACK_OVERFLOW
+/// can dispatch. Without this, an overflow on a worker thread takes the
+/// process down before any handler runs—the OS only reserves a guarantee for
+/// the main thread. 32 KB is well below the default 1 MB stack and large
+/// enough to host our minimal handler frame.
+pub const windows_stack_guarantee: ULONG = 32 * 1024;
 
 fn installWindows(callbacks: Callbacks) bool {
     while (!install_mutex.tryLock()) {}
@@ -520,7 +585,7 @@ fn installWindows(callbacks: Callbacks) bool {
     }
 
     if (!current_thread_installed) {
-        var guarantee: ULONG = WINDOWS_STACK_GUARANTEE;
+        var guarantee: ULONG = windows_stack_guarantee;
         _ = SetThreadStackGuarantee(&guarantee);
         current_thread_installed = true;
     }
@@ -541,6 +606,9 @@ fn handleExceptionWindows(exception_info: *EXCEPTION_POINTERS) callconv(.winapi)
 
     if (is_stack_overflow) {
         if (takeStackOverflowRecovery()) |recovery| {
+            if (comptime std.debug.cpu_context.Native != noreturn) {
+                overflow_frame = faultFrame(std.debug.cpu_context.fromWindowsContext(@ptrCast(@alignCast(exception_info.ContextRecord))));
+            }
             recovery.escape(recovery.context);
         }
         if (stack_overflow_callback) |callback| callback();
@@ -571,6 +639,7 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
     switch (memory_fault.classifyFault(fault_addr, stack_pointer, thread_stack_bounds)) {
         .stack_overflow => {
             if (takeStackOverflowRecovery()) |recovery| {
+                overflow_frame = posixFaultFrame(context);
                 if (comptime is_darwin) {
                     if (redirectDarwinContextToEscape(context, recovery)) return;
                 }
@@ -581,10 +650,12 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
                 unblockFaultSignals();
                 recovery.escape(recovery.context);
             }
+            claimCrashReport(134);
             if (stack_overflow_callback) |callback| callback();
             std.process.exit(134);
         },
         .access_violation => {
+            claimCrashReport(139);
             if (access_violation_callback) |callback| {
                 if (comptime AccessViolationContext == void) {
                     callback(fault_addr, {});
@@ -599,6 +670,7 @@ fn handleSegvSignal(_: posix.SIG, info: *const posix.siginfo_t, context: ?*anyop
 }
 
 fn handleFpeSignal(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+    claimCrashReport(136);
     if (arithmetic_error_callback) |callback| callback();
     std.process.exit(136);
 }

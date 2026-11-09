@@ -18,8 +18,7 @@ pub const Scope = enum {
     /// data named by content.
     shared,
     /// Meaningful only in the program whose code declared it: the value in a
-    /// static-data slot and the evaluator's cell holding its address, and the
-    /// Boxy runtime, whose calls index this program's descriptor sidecar.
+    /// static-data slot and the evaluator's cell holding its address.
     program,
 };
 
@@ -104,7 +103,7 @@ fn exerciseTable(allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
     std.debug.assert(first != other and table.names.items.len == 2);
     var names: [128][16]u8 = undefined;
     for (&names, 0..) |*buffer, index| {
-        const name = std.fmt.bufPrint(buffer, "symbol_{d}", .{index}) catch unreachable;
+        const name = std.fmt.bufPrint(buffer, "symbol_{d}", .{index}) catch unreachable; // "symbol_" plus an index below 128 fits the 16-byte buffer
         _ = try table.internEmitted(allocator, name);
     }
     std.debug.assert(try table.internEmitted(allocator, "first") == first);

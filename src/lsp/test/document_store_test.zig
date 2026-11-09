@@ -108,3 +108,28 @@ test "document store edits the end of a CRLF line" {
     const doc = store.get("file:///test") orelse return error.MissingDocument;
     try std.testing.expectEqualStrings("abc!\r\ndef", doc.text);
 }
+
+test "document store leaves the document unchanged when a later change in a batch fails" {
+    const allocator = std.testing.allocator;
+    var store = DocumentStore.init(allocator);
+    defer store.deinit();
+
+    try store.upsert("file:///test", 1, "abc\ndef");
+
+    const changes = [_]DocumentStore.ContentChange{
+        .{
+            .text = "XYZ",
+            .range = .{ .start_line = 0, .start_character = 0, .end_line = 0, .end_character = 3 },
+        },
+        .{
+            .text = "!",
+            .range = .{ .start_line = 5, .start_character = 0, .end_line = 5, .end_character = 0 },
+        },
+    };
+
+    try std.testing.expectError(error.InvalidPosition, store.applyContentChanges("file:///test", 2, &changes));
+
+    const doc = store.get("file:///test") orelse return error.MissingDocument;
+    try std.testing.expectEqual(@as(i64, 1), doc.version);
+    try std.testing.expectEqualStrings("abc\ndef", doc.text);
+}

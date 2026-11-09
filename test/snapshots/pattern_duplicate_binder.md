@@ -83,7 +83,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "from")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_from")
@@ -185,7 +185,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "n")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "pattern_duplicate_binder.md") (start 25 22) (end 25 23) (annotation error) (line-text "nested_shadow = |n| |n| n"))
 			(line-break)
@@ -196,7 +196,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 				(file "pattern_duplicate_binder.md")
 				(line 25)
 				(column 18))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "pattern_duplicate_binder.md") (start 25 18) (end 25 19) (annotation dim) (line-text "nested_shadow = |n| |n| n"))))
 	(report
@@ -206,7 +206,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "n")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_n")
@@ -264,7 +264,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "outer")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "pattern_duplicate_binder.md") (start 32 6) (end 32 11) (annotation error) (line-text "    (outer, _) => outer"))
 			(line-break)
@@ -275,7 +275,7 @@ DUPLICATE DEFINITION - pattern_duplicate_binder.md:32:6:32:11
 				(file "pattern_duplicate_binder.md")
 				(line 31)
 				(column 2))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "pattern_duplicate_binder.md") (start 31 2) (end 31 7) (annotation dim) (line-text "(outer, nested) = (1, |pair| match pair {")))))
 ~~~
@@ -486,7 +486,10 @@ nested_shadow = |n| |n| n
 (can-ir
 	(d-let
 		(p-assign (ident "same_tuple"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "pair")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "same_record"))
 		(e-lambda
@@ -495,10 +498,19 @@ nested_shadow = |n| |n| n
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "same_as"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-closure
+			(captures
+				(capture (ident "a")))
+			(e-lambda
+				(args
+					(p-assign (ident "pair")))
+				(e-runtime-error (tag "erroneous_value_expr")))))
 	(d-let
 		(p-assign (ident "same_rest"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "items")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "same_args"))
 		(e-runtime-error (tag "erroneous_value_expr")))
@@ -576,10 +588,10 @@ nested_shadow = |n| |n| n
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Error, Error) -> [False, True]"))
-		(patt (type "{ x: Error, y: Error } -> _ret"))
-		(patt (type "Error -> _ret"))
-		(patt (type "List(Error) -> List(_b)"))
+		(patt (type "_arg -> [False, True]"))
+		(patt (type "_arg -> _ret"))
+		(patt (type "_arg -> _ret"))
+		(patt (type "_arg -> List(_b)"))
 		(patt (type "b, Error -> b"))
 		(patt (type "[Err(b), Ok(b)] -> b"))
 		(patt (type "_arg -> (b -> b)"))
@@ -589,10 +601,10 @@ nested_shadow = |n| |n| n
 		(patt (type "Dec"))
 		(patt (type "(b, _field) -> b")))
 	(expressions
-		(expr (type "(Error, Error) -> [False, True]"))
-		(expr (type "{ x: Error, y: Error } -> _ret"))
-		(expr (type "Error -> _ret"))
-		(expr (type "List(Error) -> List(_b)"))
+		(expr (type "_arg -> [False, True]"))
+		(expr (type "_arg -> _ret"))
+		(expr (type "_arg -> _ret"))
+		(expr (type "_arg -> List(_b)"))
 		(expr (type "b, Error -> b"))
 		(expr (type "[Err(b), Ok(b)] -> b"))
 		(expr (type "_arg -> (b -> b)"))

@@ -62,7 +62,7 @@ EndOfFile,
 ~~~roc
 {
 	x = "hello"
-		x.inspect()
+	x.inspect()
 }
 ~~~
 # CANONICALIZE
@@ -74,7 +74,7 @@ EndOfFile,
 			(e-literal (string "hello"))))
 	(s-expr
 		(e-runtime-error (tag "expr_syntax_error")))
-	(e-dispatch-call (method "inspect") (constraint-fn-var 223)
+	(e-dispatch-call (method "inspect") (constraint-fn-var 228)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "x"))))

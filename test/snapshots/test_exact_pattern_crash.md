@@ -45,7 +45,7 @@ TOO MANY ARGS - test_exact_pattern_crash.md:23:10:23:50
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "p1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_p1")
@@ -275,12 +275,12 @@ main = {
 				(p-assign (ident "g")))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 346)
+					(e-call (constraint-fn-var 351)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
 							(p-assign (ident "x"))))
-					(e-call (constraint-fn-var 347)
+					(e-call (constraint-fn-var 352)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -306,7 +306,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call (constraint-fn-var 376)
+				(e-call (constraint-fn-var 381)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple

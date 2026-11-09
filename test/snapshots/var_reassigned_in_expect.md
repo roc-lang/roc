@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=An expect cannot reassign a var declared outside it, but can reassign vars declared inside it, and for/match binders reusing an outer var's name are not reassignments
+description=An expect cannot reassign a var declared outside it, but can reassign vars declared inside it, and a for binder reusing an outer var's name is rejected rather than a reassignment
 type=snippet
 ~~~
 # SOURCE
@@ -43,6 +43,7 @@ withdraw = |balance, amount| {
 # EXPECTED
 VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:7:3:7:13
 VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
+VAR IN FOR PATTERN - var_reassigned_in_expect.md:26:7:26:13
 # PROBLEMS
 ~~~clojure
 (reports
@@ -55,12 +56,17 @@ VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
 			(annotated code "expect")
 			(reflow " reassigns ")
 			(annotated symbol-unqualified "$remaining")
-			(reflow ", which was declared outside of it:"))
+			(reflow ", which was declared outside of it."))
 		(document
 			(source-region (file "var_reassigned_in_expect.md") (start 7 3) (end 7 13) (annotation error) (line-text "\t\t$remaining = $remaining - amount"))
 			(line-break)
 			(annotated symbol-unqualified "$remaining")
-			(reflow " was declared here:")
+			(reflow " was declared in ")
+			(source-location
+				(file "var_reassigned_in_expect.md")
+				(line 3)
+				(column 6))
+			(reflow ".")
 			(line-break)
 			(source-region (file "var_reassigned_in_expect.md") (start 3 6) (end 3 16) (annotation dim) (line-text "\tvar $remaining = balance"))
 			(line-break)
@@ -80,12 +86,17 @@ VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
 			(annotated code "expect")
 			(reflow " reassigns ")
 			(annotated symbol-unqualified "$count")
-			(reflow ", which was declared outside of it:"))
+			(reflow ", which was declared outside of it."))
 		(document
 			(source-region (file "var_reassigned_in_expect.md") (start 12 4) (end 12 10) (annotation error) (line-text "\t\t($count, extra) = (1, 2)"))
 			(line-break)
 			(annotated symbol-unqualified "$count")
-			(reflow " was declared here:")
+			(reflow " was declared in ")
+			(source-location
+				(file "var_reassigned_in_expect.md")
+				(line 4)
+				(column 6))
+			(reflow ".")
 			(line-break)
 			(source-region (file "var_reassigned_in_expect.md") (start 4 6) (end 4 12) (annotation dim) (line-text "\tvar $count = 0"))
 			(line-break)
@@ -95,7 +106,31 @@ VAR REASSIGNED IN EXPECT - var_reassigned_in_expect.md:12:4:12:10
 			(annotated code "expect")
 			(reflow " must not change variables declared outside of it, or the program would behave differently in optimized builds. Variables declared inside the ")
 			(annotated code "expect")
-			(reflow " can be reassigned freely."))))
+			(reflow " can be reassigned freely.")))
+	(report
+		(severity runtime_error)
+		(title "Var In For Pattern")
+		(region (start 26 7) (end 26 13))
+		(headline
+			(reflow "This for loop pattern binds ")
+			(annotated symbol-unqualified "$count")
+			(reflow ", but a pattern here cannot bind a ")
+			(annotated keyword "var")
+			(reflow "."))
+		(document
+			(source-region (file "var_reassigned_in_expect.md") (start 26 7) (end 26 13) (annotation error) (line-text "\t\tfor $count in [1, 2] {"))
+			(line-break)
+			(reflow "Only an assignment with ")
+			(annotated code "=")
+			(reflow " changes a ")
+			(annotated keyword "var")
+			(reflow ". Bind a name without ")
+			(annotated code "$")
+			(reflow " here, and assign it to the ")
+			(annotated keyword "var")
+			(reflow " with ")
+			(annotated code "=")
+			(reflow " if it should change."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -252,7 +287,7 @@ NO CHANGE
 				(s-expect
 					(e-block
 						(s-runtime-error (tag "var_reassigned_in_expect"))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 315)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 321)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))
@@ -279,7 +314,7 @@ NO CHANGE
 								(p-assign (ident "balance"))))
 						(s-reassign
 							(p-var-assign (ident "$left"))
-							(e-dispatch-call (method "minus") (constraint-fn-var 346)
+							(e-dispatch-call (method "minus") (constraint-fn-var 352)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$left"))))
@@ -295,7 +330,7 @@ NO CHANGE
 							(e-block
 								(s-reassign
 									(p-var-assign (ident "$left"))
-									(e-dispatch-call (method "plus") (constraint-fn-var 410)
+									(e-dispatch-call (method "plus") (constraint-fn-var 416)
 										(receiver
 											(e-lookup-local
 												(p-var-assign (ident "$left"))))
@@ -303,7 +338,7 @@ NO CHANGE
 											(e-lookup-local
 												(p-assign (ident "x"))))))
 								(e-empty_record)))
-						(e-dispatch-call (method "is_gte") (constraint-fn-var 425)
+						(e-dispatch-call (method "is_gte") (constraint-fn-var 431)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$left"))))
@@ -312,7 +347,7 @@ NO CHANGE
 				(s-expect
 					(e-block
 						(s-for
-							(p-var-assign (ident "$count"))
+							(p-runtime-error (tag "var_in_binder_pattern"))
 							(e-list
 								(elems
 									(e-num (value "1"))
@@ -326,15 +361,15 @@ NO CHANGE
 						(e-tag (name "True"))))
 				(s-reassign
 					(p-var-assign (ident "$count"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 487)
+					(e-dispatch-call (method "plus") (constraint-fn-var 476)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "$count"))))
 						(args
 							(e-num (value "1")))))
-				(e-dispatch-call (method "plus") (constraint-fn-var 493)
+				(e-dispatch-call (method "plus") (constraint-fn-var 482)
 					(receiver
-						(e-dispatch-call (method "minus") (constraint-fn-var 489)
+						(e-dispatch-call (method "minus") (constraint-fn-var 478)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "$remaining"))))

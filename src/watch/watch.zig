@@ -60,7 +60,7 @@ fn bumpEventCount(comptime Global: type) void {
     if (comptime builtin.mode == .debug) {
         std.debug.assert(previous != std.math.maxInt(u32));
     } else if (previous == std.math.maxInt(u32)) {
-        unreachable;
+        unreachable; // a test observes a handful of watch events, far below maxInt(u32)
     }
 }
 
@@ -91,7 +91,8 @@ const FSEventStreamContext = extern struct {
     copyDescription: ?*const anyopaque,
 };
 
-// Only declare real externs when we're actually using them
+// Only declare real externs when we're actually using them.
+// These link against the stubs in src/build/darwin/Frameworks; list new symbols there.
 const macos_externs = if (use_real_fsevents) struct {
     // Mark functions as weak so they're optional during cross-compilation
     extern "c" fn FSEventStreamCreate(
@@ -248,7 +249,7 @@ fn getKCFRunLoopDefaultMode() CFStringRef {
     } else if (builtin.os.tag == .macos) {
         return macos_externs.kCFRunLoopDefaultMode;
     } else {
-        unreachable;
+        unreachable; // use_stubs is false only when targeting macOS
     }
 }
 
@@ -879,7 +880,7 @@ pub const Watcher = struct {
             if (comptime builtin.mode == .debug) {
                 std.debug.assert(run_result >= 0);
             } else if (run_result < 0) {
-                unreachable;
+                unreachable; // CFRunLoopRunInMode returns a CFRunLoopRunResult code, all of which are positive
             }
         }
 

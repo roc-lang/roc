@@ -91,7 +91,7 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "person")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_person")
@@ -105,7 +105,7 @@ UNUSED VARIABLE - type_alias_decl.md:39:5:39:10
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "color")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_color")

@@ -666,8 +666,8 @@ test "instantiate - annotation tag closure authority belongs to the definition" 
 
 test "instantiate - rejected nominal positions produce error and unwind partial copies" {
     const Provider = struct {
-        fn position(_: *anyopaque, _: types_mod.NominalType, index: u32, _: types_mod.Polarity) std.mem.Allocator.Error!?types_mod.Polarity {
-            return if (index == 1) null else .pos;
+        fn position(_: *anyopaque, _: types_mod.NominalType, index: u32, _: types_mod.Polarity) std.mem.Allocator.Error!?Instantiator.NominalArgumentPosition {
+            return if (index == 1) null else .{ .at = .pos };
         }
     };
     for ([_]Instantiator.PolarityVarBehavior{ .close, .preserve, .resolve_by_polarity }) |behavior| {
@@ -789,11 +789,12 @@ test "instantiate - markers in interpolation metadata get their own choices" {
         .fn_name = try env.idents.insert(gpa, Ident.for_text("from_interpolation")),
         .fn_var = method,
         .origin = .method_call,
-        .interpolation = .{
+        .interpolation = try env.types.appendInterpolationMetadata(.{
             .expr_region = .some(region),
             .item_var = item_union,
             .interpolated_parts = parts,
-        },
+            .regions = .this_module,
+        }),
     }});
     const source = try env.types.freshFromContentWithRank(.{ .flex = .{ .name = null, .constraints = constraints } }, .generalized);
 
@@ -809,7 +810,7 @@ test "instantiate - markers in interpolation metadata get their own choices" {
     const copy = try instantiator.instantiateVar(source);
     const copied_constraints = env.types.resolveVar(copy).desc.content.flex.constraints;
     try std.testing.expectEqual(@as(usize, 1), copied_constraints.len());
-    const metadata = env.types.static_dispatch_constraints.items.items[@backingInt(copied_constraints.start)].interpolation;
+    const metadata = env.types.getInterpolationMetadata(env.types.static_dispatch_constraints.items.items[@backingInt(copied_constraints.start)].interpolation);
     try std.testing.expect(metadata.isPresent());
     const copied_part = env.types.resolveVar(env.types.getInterpolationPartAt(metadata.interpolated_parts, 0).var_).desc.content.structure.tag_union;
     const copied_item = env.types.resolveVar(metadata.item_var).desc.content.structure.tag_union;

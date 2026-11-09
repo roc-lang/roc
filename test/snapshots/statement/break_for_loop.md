@@ -110,24 +110,26 @@ NO CHANGE
 						(e-tag (name "True"))
 						(e-tag (name "True"))))
 				(e-block
-					(e-if
-						(if-branches
-							(if-branch
-								(e-structural-eq (negated "false")
-									(lhs
-										(e-lookup-local
-											(p-assign (ident "b"))))
-									(rhs
-										(e-tag (name "False"))))
+					(s-expr
+						(e-if
+							(if-branches
+								(if-branch
+									(e-structural-eq (negated "false")
+										(lhs
+											(e-lookup-local
+												(p-assign (ident "b"))))
+										(rhs
+											(e-tag (name "False"))))
+									(e-block
+										(s-reassign
+											(p-var-assign (ident "$allTrue"))
+											(e-tag (name "False")))
+										(s-break)
+										(e-empty_record))))
+							(if-else
 								(e-block
-									(s-reassign
-										(p-var-assign (ident "$allTrue"))
-										(e-tag (name "False")))
-									(s-break)
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
+									(e-empty_record)))))
+					(e-empty_record)))
 			(e-lookup-local
 				(p-var-assign (ident "$allTrue"))))
 		(annotation

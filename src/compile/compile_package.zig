@@ -15,6 +15,38 @@ const CheckedModules = check.TypedCIR.Modules;
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
+
+/// Completed frontend work, counted at its execution sites independently of clocks.
+pub const CheckingWork = struct {
+    fresh_checks: u64 = 0,
+    typing_hits: u64 = 0,
+    artifact_hits: u64 = 0,
+    publications: u64 = 0,
+    /// checkFile includes checking-interface publication and sealing.
+    fresh_check_ns: u64 = 0,
+    /// Checked-artifact publication; the coordinator subtracts local CTFE.
+    publication_ns: u64 = 0,
+
+    pub fn add(self: *CheckingWork, other: CheckingWork) void {
+        inline for (@typeInfo(CheckingWork).@"struct".field_names) |field| {
+            @field(self, field) += @field(other, field);
+        }
+    }
+};
+
+const CheckingTimer = struct {
+    const freestanding = @import("builtin").os.tag == .freestanding;
+    started: if (freestanding) void else std.Io.Timestamp,
+
+    fn start(io: std.Io) CheckingTimer {
+        return .{ .started = if (freestanding) {} else std.Io.Timestamp.now(io, .awake) };
+    }
+
+    fn read(self: CheckingTimer, io: std.Io) u64 {
+        if (comptime freestanding) return 0;
+        return @intCast(@max(0, self.started.untilNow(io, .awake).nanoseconds));
+    }
+};
 /// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
 pub const TimingInfo = struct {
@@ -22,6 +54,7 @@ pub const TimingInfo = struct {
     canonicalize_ns: u64 = 0,
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
+    checking_work: CheckingWork = .{},
     check_diagnostics_ns: u64 = 0,
     /// Compile-time evaluation run inside individual module checks, summed
     /// across the worker threads that ran those checks.
@@ -35,7 +68,90 @@ pub const TimingInfo = struct {
     /// Deterministic lowering and emission counters from all compile-time
     /// evaluation, whether run inside module checks or program finalization.
     compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// The modules whose type checking took longest.
+    slowest_type_checks: SlowestTypeChecks = .{},
 };
+
+/// One module's type-checking time: checking and checked-artifact
+/// publication, excluding compile-time evaluation run inside the check.
+/// The name is stored inline because the timing outlives the coordinator.
+pub const ModuleTypeCheckTiming = struct {
+    pub const max_name_len = 256;
+
+    name_buf: [max_name_len]u8 = undefined,
+    name_len: u16 = 0,
+    /// Bytes of `name_buf` holding the package label.
+    package_len: u16 = 0,
+    ns: u64,
+
+    /// `package.Module`, cut to `max_name_len` bytes.
+    pub fn init(package: []const u8, module: []const u8, ns: u64) ModuleTypeCheckTiming {
+        var result: ModuleTypeCheckTiming = .{ .ns = ns };
+        const written = std.fmt.bufPrint(&result.name_buf, "{s}.{s}", .{ package, module }) catch |err| switch (err) {
+            error.NoSpaceLeft => result.name_buf[0..],
+        };
+        result.name_len = @intCast(written.len);
+        result.package_len = @intCast(@min(package.len, written.len));
+        return result;
+    }
+
+    pub fn name(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.name_len];
+    }
+
+    /// The package label: a shorthand, or the identity of a package that has
+    /// none, which for a local package is its path.
+    pub fn packageLabel(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[0..self.package_len];
+    }
+
+    /// The module name, after the package label and its `.` separator.
+    pub fn moduleName(self: *const ModuleTypeCheckTiming) []const u8 {
+        return self.name_buf[@min(self.package_len + 1, self.name_len)..self.name_len];
+    }
+};
+
+/// The `capacity` slowest module type checks, slowest first. Ties keep the
+/// module that was offered first.
+pub const SlowestTypeChecks = struct {
+    pub const capacity = 10;
+
+    items: [capacity]ModuleTypeCheckTiming = undefined,
+    len: usize = 0,
+
+    pub fn offer(self: *SlowestTypeChecks, package: []const u8, module: []const u8, ns: u64) void {
+        var index = self.len;
+        while (index > 0 and self.items[index - 1].ns < ns) index -= 1;
+        if (index == capacity) return;
+        const last = @min(self.len, capacity - 1);
+        var shift = last;
+        while (shift > index) : (shift -= 1) self.items[shift] = self.items[shift - 1];
+        self.items[index] = .init(package, module, ns);
+        self.len = last + 1;
+    }
+
+    pub fn slice(self: *const SlowestTypeChecks) []const ModuleTypeCheckTiming {
+        return self.items[0..self.len];
+    }
+};
+
+test "SlowestTypeChecks keeps the slowest modules in descending order" {
+    var slowest: SlowestTypeChecks = .{};
+    var ns: u64 = 0;
+    while (ns < 2 * SlowestTypeChecks.capacity) : (ns += 1) {
+        // Interleave fast and slow modules so insertion order is not sorted.
+        const value = if (ns % 2 == 0) ns else 100 + ns;
+        slowest.offer("pkg", "Mod", value);
+    }
+    const items = slowest.slice();
+    try std.testing.expectEqual(@as(usize, SlowestTypeChecks.capacity), items.len);
+    try std.testing.expectEqual(@as(u64, 119), items[0].ns);
+    for (items[1..], items[0 .. items.len - 1]) |current, previous| {
+        try std.testing.expect(current.ns <= previous.ns);
+    }
+    try std.testing.expectEqual(@as(u64, 101), items[items.len - 1].ns);
+    try std.testing.expectEqualStrings("pkg.Mod", items[0].name());
+}
 const Allocator = std.mem.Allocator;
 
 const CoreCtx = @import("ctx").CoreCtx;
@@ -79,13 +195,26 @@ pub const SemanticModuleData = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
+/// Output of a module that completed successfully, which always includes its
+/// checked artifact.
+pub const CheckedModuleData = struct {
+    env: *ModuleEnv,
+    checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
+};
+
+const checked_cache_entry = @import("checked_cache_entry.zig");
+
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
+    checking_work: CheckingWork = .{},
+    typing_metadata: ?checked_cache_entry.Metadata = null,
+    typing_reused: bool = false,
     checker: Check,
     publication: CheckedArtifact.CheckedModuleArtifact,
     publication_owned: bool = true,
 
     pub fn deinit(self: *TypeCheckOutput) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.publication.canonical_names.allocator);
         if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
         self.checker.deinit();
     }
@@ -112,11 +241,10 @@ pub const ArtifactPublicationInputs = struct {
     relation_artifacts: []const CheckedArtifact.ImportedModuleView = &.{},
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey = null,
     platform_app_relation: ?CheckedArtifact.PlatformAppRelation = null,
-    platform_requirement_solutions: []const check.RequirementSolution.SolutionInput = &.{},
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
-    hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
-    promoted_local_procedures: []const check.HoistRoots.PromotedLocalProcedure = &.{},
     problem_store: ?*check.problem.Store = null,
+    /// Waits on the published module's key slots.
+    io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
     evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
     /// How this module's compile-time roots were established. Part of the
@@ -163,7 +291,7 @@ pub fn buildCheckOwnerEnvs(
         }
     }
 
-    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void).init(allocator);
+    var seen_public_dependencies = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void).init(allocator);
     defer seen_public_dependencies.deinit();
 
     for (imported_artifacts) |imported_artifact| {
@@ -183,7 +311,7 @@ fn appendCheckOwnerEnvPublicDependencies(
     allocator: Allocator,
     owner_envs: *std.ArrayList(*const ModuleEnv),
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleArtifactKey, void),
+    seen_public_dependencies: *std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, void),
     view: CheckedArtifact.ImportedModuleView,
 ) Allocator.Error!void {
     for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
@@ -228,7 +356,7 @@ fn moduleEnvIdentitiesMatch(a: *const ModuleEnv, b: *const ModuleEnv) bool {
 
 fn availableArtifactByKey(
     available_artifacts: []const CheckedArtifact.ImportedModuleView,
-    key: CheckedArtifact.CheckedModuleArtifactKey,
+    key: CheckedArtifact.ModuleId,
 ) ?CheckedArtifact.ImportedModuleView {
     for (available_artifacts) |artifact| {
         if (std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) return artifact;
@@ -309,7 +437,7 @@ pub fn canonicalizeAndTypeCheckModule(
 
     try checker.checkFile();
 
-    _ = try checker.problems.flushAllPendingStaticExhaustiveness(gpa);
+    _ = try checker.problems.flushAllPendingStaticExhaustiveness();
 
     return checker;
 }
@@ -405,8 +533,11 @@ pub fn typeCheckModule(
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
+    io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
+    missing_public_types: []const []const u8,
+    typing_context: ?*checked_cache_entry.Context,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -422,14 +553,14 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(
+    const owner_envs = if (typing_context) |context| context.owner_envs else try buildCheckOwnerEnvs(
         check_alloc,
         imported_envs,
         imported_artifacts,
         available_artifacts,
         platform_requirements,
     );
-    defer check_alloc.free(owner_envs);
+    defer if (typing_context == null) check_alloc.free(owner_envs);
 
     // Resolve this module's deferred references into its imports before any
     // checking reads them. The imports have completed and the checked-module
@@ -437,7 +568,10 @@ pub fn typeCheckModule(
     try can.resolveDeferredImports(env, .{
         .imports = deferred_imports,
         .reachable_envs = owner_envs,
+        .missing_public_types = missing_public_types,
     });
+
+    const restored = if (typing_context) |context| try checked_cache_entry.restoreTyping(context, env) else null;
 
     var checker = try Check.initWithOwnerModules(
         check_alloc,
@@ -458,7 +592,23 @@ pub fn typeCheckModule(
     // until after platform requirements are checked, so numeric literals can be
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-    try checker.checkFile();
+    var work: CheckingWork = .{};
+    if (restored) |metadata| {
+        try metadata.install(&checker, &typing_context.?.scope);
+        env.types.seal();
+        work.typing_hits += 1;
+    } else {
+        const timer = CheckingTimer.start(io);
+        try checker.checkFile();
+        work.fresh_check_ns = timer.read(io);
+        work.fresh_checks += 1;
+    }
+
+    const typing_metadata = if (typing_context) |context|
+        try checked_cache_entry.captureMetadata(artifact_alloc, &checker, &context.scope)
+    else
+        null;
+    errdefer if (typing_metadata) |metadata| metadata.deinit(artifact_alloc);
 
     module_envs_map.deinit();
 
@@ -466,6 +616,7 @@ pub fn typeCheckModule(
         base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
+    const publication_timer = CheckingTimer.start(io);
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
         artifact_alloc,
         env,
@@ -474,22 +625,25 @@ pub fn typeCheckModule(
         .{
             .platform_requirement_context = platform_requirement_context,
             .platform_app_relation = null,
-            .platform_requirement_solutions = checker.platformRequirementSolutions(),
             .explicit_roots = explicit_roots,
-            .hoisted_roots = checker.selectedHoistedRoots(),
-            .promoted_local_procedures = checker.promotedLocalProcedures(),
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
+            .io = io,
             .ctfe_options = ctfe_options,
             .evaluation_phase = .post_frontend,
             .validation = validation,
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
+    work.publication_ns = publication_timer.read(io);
+    work.publications += 1;
 
     return .{
+        .checking_work = work,
         .checker = checker,
         .publication = checked_artifact,
+        .typing_metadata = typing_metadata,
+        .typing_reused = restored != null,
     };
 }
 
@@ -501,6 +655,9 @@ pub fn publishCheckedArtifactFromCheckedModule(
     imported_artifacts: []const CheckedArtifact.PublishImportArtifact,
     publication: ArtifactPublicationInputs,
 ) PublishError!CheckedArtifact.CheckedModuleArtifact {
+    if (std.debug.runtime_safety and !env.types.isSealed()) {
+        base.invariant("a checked artifact was published from a module whose type store checking never sealed", .{});
+    }
     return publishCheckedArtifactFromCheckedModuleWithStorage(
         gpa,
         env,
@@ -544,15 +701,13 @@ pub fn publishFromPrebuiltModules(
         module_idx,
         .{
             .module_env_storage = module_env_storage,
+            .io = publication.io,
             .imports = imported_artifacts,
             .available_artifacts = publication.available_artifacts,
             .relation_artifacts = publication.relation_artifacts,
             .platform_requirement_context = publication.platform_requirement_context,
             .platform_app_relation = publication.platform_app_relation,
-            .platform_requirement_solutions = publication.platform_requirement_solutions,
             .explicit_roots = publication.explicit_roots,
-            .hoisted_roots = publication.hoisted_roots,
-            .promoted_local_procedures = publication.promoted_local_procedures,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,

@@ -38,7 +38,7 @@ test "ScopeMap.isVisibleAt returns true for offset within range" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 50,
-        .is_parameter = false,
+        .owner = .binder,
     };
 
     // Inside the range
@@ -53,7 +53,7 @@ test "ScopeMap.isVisibleAt returns false for offset outside range" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 50,
-        .is_parameter = false,
+        .owner = .binder,
     };
 
     // Outside the range
@@ -69,7 +69,7 @@ test "ScopeMap.isVisibleAt handles zero-width binding" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 10, // Zero width
-        .is_parameter = false,
+        .owner = .binder,
     };
 
     // Zero-width binding should not be visible at any offset
@@ -78,13 +78,13 @@ test "ScopeMap.isVisibleAt handles zero-width binding" {
     try std.testing.expect(!ScopeMap.isVisibleAt(binding, 11));
 }
 
-test "ScopeMap.isVisibleAt handles parameter flag correctly" {
+test "ScopeMap.isVisibleAt ignores the binding's owner" {
     const param_binding = Binding{
         .ident = testIdent(0),
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
-        .is_parameter = true,
+        .owner = .parameter,
     };
 
     const local_binding = Binding{
@@ -92,14 +92,14 @@ test "ScopeMap.isVisibleAt handles parameter flag correctly" {
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 0,
         .visible_to = 100,
-        .is_parameter = false,
+        .owner = .binder,
     };
 
-    // Both should be visible - is_parameter doesn't affect visibility
+    // Both should be visible - the owner doesn't affect visibility
     try std.testing.expect(ScopeMap.isVisibleAt(param_binding, 50));
     try std.testing.expect(ScopeMap.isVisibleAt(local_binding, 50));
-    try std.testing.expect(param_binding.is_parameter);
-    try std.testing.expect(!local_binding.is_parameter);
+    try std.testing.expect(param_binding.owner == .parameter);
+    try std.testing.expect(local_binding.owner == .binder);
 }
 
 test "ScopeMap.isVisibleAt handles max offset" {
@@ -108,7 +108,7 @@ test "ScopeMap.isVisibleAt handles max offset" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = std.math.maxInt(u32),
-        .is_parameter = false,
+        .owner = .binder,
     };
 
     // Should be visible at large offsets
@@ -136,7 +136,7 @@ test "ScopeMap manually added bindings are queryable" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
-        .is_parameter = false,
+        .owner = .binder,
     });
 
     try sm.bindings.append(allocator, .{
@@ -144,7 +144,7 @@ test "ScopeMap manually added bindings are queryable" {
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 50,
         .visible_to = 100,
-        .is_parameter = false,
+        .owner = .binder,
     });
 
     // At offset 25, only first binding should be visible
@@ -182,14 +182,14 @@ test "Binding struct has expected fields" {
         .pattern_idx = @fromBackingInt(@intCast(7)),
         .visible_from = 100,
         .visible_to = 200,
-        .is_parameter = true,
+        .owner = .parameter,
     };
 
     try std.testing.expectEqual(@as(u29, 42), binding.ident.idx);
     try std.testing.expectEqual(@as(u32, 7), @backingInt(binding.pattern_idx));
     try std.testing.expectEqual(@as(u32, 100), binding.visible_from);
     try std.testing.expectEqual(@as(u32, 200), binding.visible_to);
-    try std.testing.expect(binding.is_parameter);
+    try std.testing.expect(binding.owner == .parameter);
 }
 
 test "ScopeMap bindings can track nested scopes" {
@@ -211,7 +211,7 @@ test "ScopeMap bindings can track nested scopes" {
         .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
-        .is_parameter = false,
+        .owner = .binder,
     });
 
     // Inner scope variables
@@ -220,7 +220,7 @@ test "ScopeMap bindings can track nested scopes" {
         .pattern_idx = @fromBackingInt(@intCast(1)),
         .visible_from = 20,
         .visible_to = 80,
-        .is_parameter = false,
+        .owner = .binder,
     });
 
     try sm.bindings.append(allocator, .{
@@ -228,7 +228,7 @@ test "ScopeMap bindings can track nested scopes" {
         .pattern_idx = @fromBackingInt(@intCast(2)),
         .visible_from = 40,
         .visible_to = 80,
-        .is_parameter = false,
+        .owner = .binder,
     });
 
     // At offset 10: only x visible

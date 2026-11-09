@@ -74,7 +74,7 @@ passthrough : Iter(U64) -> Iter(U64)
 passthrough = |source|
 	Iter.custom(
 		source,
-		Unknown,
+		Err(Unknown),
 		|src|
 			match Iter.next(src) {
 				Done => Err(NoMore)
@@ -87,7 +87,7 @@ counting : U64, U64 -> Iter(U64)
 counting = |from, to|
 	Iter.custom(
 		from,
-		Unknown,
+		Err(Unknown),
 		|i| if i < to { Ok((i, i + 1)) } else { Err(NoMore) },
 	)
 
@@ -96,7 +96,7 @@ record_passthrough = |source| {
 	base = { source: source, marker: 0 }
 	Iter.custom(
 		{ ..base, marker: 1 },
-		Unknown,
+		Err(Unknown),
 		|state|
 			match Iter.next(state.source) {
 				Done => Err(NoMore)
@@ -110,7 +110,7 @@ with_index : Iter(a) -> Iter((U64, a))
 with_index = |source|
 	Iter.custom(
 		(0, source),
-		Iter.size_hint(source),
+		Iter.len_if_known(source),
 		|(i, src)| advance_indexed(i, src),
 	)
 

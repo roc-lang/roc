@@ -43,6 +43,9 @@ const imports = symbols.runtime_set ++ .{
     symbols.roc_shim_hosted_fns,
     symbols.roc_shim_hosted_count,
     symbols.roc_shim_hosted_names,
+    symbols.roc_shim_package_fns,
+    symbols.roc_shim_package_names,
+    symbols.roc_shim_package_count,
     // Referenced weakly by the builtins; a platform executable leaves it
     // undefined and the `?`-in-expect region goes unrecorded.
     symbols.roc_expect_err_region,
@@ -67,6 +70,8 @@ const darwin_imports = [_][]const u8{
     "openat",                "os_unfair_lock_lock",  "os_unfair_lock_trylock", "os_unfair_lock_unlock", "pread",
     "pthread_threadid_np",   "read",                 "sigaction",              "sigemptyset",           "write",
     "sys_icache_invalidate",
+    // The support image's system library calls are resolved by name.
+    "dlsym",
 };
 const windows_imports = c_imports ++ .{
     // Kernel32/ntdll APIs used by the mapping and minimal std.Io implementations.
@@ -76,8 +81,15 @@ const windows_imports = c_imports ++ .{
     "RtlTryAcquireSRWLockExclusive",     "RtlWaitOnAddress",           "RtlWakeAddressAll",       "RtlWakeAddressSingle",
     "UnmapViewOfFile",                   "VirtualProtect",             "WriteFile",               "MapViewOfFileEx",
     "RtlRemoveVectoredExceptionHandler",
+    // The support image's system library calls are resolved by name.
+    "GetModuleHandleW",           "GetProcAddress",
     // The Windows CRT initializes the module's native TLS index.
-    "_tls_index",                 "_fltused",
+             "_tls_index",
+    "_fltused",
+} ++ .{
+    // A composed run image's function table is registered with the process.
+    "RtlAddFunctionTable",
+    "RtlDeleteFunctionTable",
 };
 const Check = struct {
     os: Os,

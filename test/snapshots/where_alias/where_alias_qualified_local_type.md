@@ -63,12 +63,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-Holder := {}.{
-	a.Show :  where [a.to_str : a -> Str]
-}
-
-describe : a -> Str where [a.Holder.Show]
-describe = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -78,7 +73,7 @@ describe = |value| value.to_str()
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 249)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 254)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))

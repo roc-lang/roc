@@ -156,13 +156,18 @@ fn serializeBuiltinArtifact(
     });
     defer typed_modules.deinit();
 
+    // The baked artifact serves either strategy's programs and no
+    // compilation reopens it, so its evaluation completes every root.
+    const finalizer_options: comptime_finalizer.Options = .{ .complete_baked_module = true };
     var artifact = try check.CheckedArtifact.publishFromTypedModule(
         gpa,
         &typed_modules,
         0,
         .{
             .module_env_storage = .{ .checked_source = builtin_env },
-            .compile_time_finalizer = comptime_finalizer.finalizer(),
+            .hoisted_roots = .none,
+            .io = io,
+            .compile_time_finalizer = comptime_finalizer.finalizerWithOptions(&finalizer_options),
         },
     );
     defer artifact.deinitRetainingModuleEnv(gpa);
@@ -209,7 +214,7 @@ fn findBuiltinTypeDeclaration(gpa: Allocator, env: *const ModuleEnv, spec: CIR.B
 }
 
 fn expectBuiltinIdent(env: *const ModuleEnv, text: []const u8) base.Ident.Idx {
-    return env.common.findIdent(text) orelse unreachable;
+    return env.common.findIdent(text) orelse base.invariant("builtin compiler invariant violated: the Builtin module env has no ident \"{s}\"", .{text});
 }
 
 fn installBuiltinNodeIndices(gpa: Allocator, env: *ModuleEnv, indices: BuiltinIndices) !void {

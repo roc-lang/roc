@@ -58,7 +58,15 @@ TYPE MISMATCH - test_instantiated_return_crash.md:6:24:6:24
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "To get a representation of this value for debugging, use")
+			(reflow " ")
+			(annotated code "Str.inspect")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -139,7 +147,7 @@ EndOfFile,
 					(elems
 						(e-string
 							(e-literal (string "hello"))))))))
-	(e-call (constraint-fn-var 264)
+	(e-call (constraint-fn-var 269)
 		(e-lookup-local
 			(p-assign (ident "needs_string")))
 		(e-lookup-local

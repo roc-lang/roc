@@ -13,14 +13,14 @@ f = |x| match x {
 }
 ~~~
 # EXPECTED
-REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:2:14
+REDUNDANT PATTERN - match_redundant_exact_numeral.md:4:5:4:10
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity warning)
 		(title "Redundant Pattern")
-		(region (start 2 9) (end 2 14))
+		(region (start 4 5) (end 4 10))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -32,7 +32,7 @@ REDUNDANT PATTERN - match_redundant_exact_numeral.md:2:9:2:14
 			(reflow " ")
 			(reflow "is redundant."))
 		(document
-			(source-region (file "match_redundant_exact_numeral.md") (start 2 9) (end 2 14) (annotation error) (line-text "f = |x| match x {"))
+			(source-region (file "match_redundant_exact_numeral.md") (start 4 5) (end 4 10) (annotation warning) (line-text "    1e-40 => 2"))
 			(line-break)
 			(reflow "This pattern can never match because earlier patterns already cover all the values it would match."))))
 ~~~

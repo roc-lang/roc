@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const base = @import("base");
+const can = @import("can");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
@@ -102,7 +103,8 @@ pub const Primitive = @import("checked_artifact.zig").CheckedPrimitive;
 pub const IteratorTopology = struct {
     len_field: names.RecordFieldNameId,
     step_field: names.RecordFieldNameId,
-    known_tag: names.TagNameId,
+    ok_tag: names.TagNameId,
+    err_tag: names.TagNameId,
     unknown_tag: names.TagNameId,
     done_tag: names.TagNameId,
     one_tag: names.TagNameId,
@@ -290,42 +292,123 @@ pub const ConstFnCallableInstantiation = struct {
 pub const ConstFnStructuralEvidence = struct {
     callable_contracts: u32 = 0,
     derivation: static_dispatch.StructuralDerivation,
-    checked: ?struct {
-        view: names.CheckedModuleDigest,
-        dispatcher_key: names.CanonicalTypeKey,
-        dispatcher_ty: checked_ids.CheckedTypeId,
-        callable_key: names.CanonicalTypeKey,
-        callable_ty: checked_ids.CheckedTypeId,
-        generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
-        generated_codec_identity: ?static_dispatch.GeneratedCodecDerivationId,
-    } = null,
+    checked: ?CheckedStructuralEdge = null,
 
     pub fn identityEql(left: ConstFnStructuralEvidence, right: ConstFnStructuralEvidence) bool {
         if (left.callable_contracts != right.callable_contracts) return false;
         if (!std.meta.eql(left.derivation, right.derivation) or (left.checked == null) != (right.checked == null)) return false;
         const a = left.checked orelse return true;
         const b = right.checked.?;
-        return std.meta.eql(a.view, b.view) and
-            std.meta.eql(a.dispatcher_key, b.dispatcher_key) and
-            std.meta.eql(a.callable_key, b.callable_key) and
-            a.generated_codec_identity == b.generated_codec_identity;
+        const a_content = a.codecContent();
+        const b_content = b.codecContent();
+        if ((a_content == null) != (b_content == null)) return false;
+        const same_origin = if (a_content) |content|
+            std.meta.eql(content, b_content.?)
+        else
+            std.meta.eql(a.recorded.view, b.recorded.view);
+        return same_origin and
+            std.meta.eql(a.dispatcherKey(), b.dispatcherKey()) and
+            std.meta.eql(a.callableKey(), b.callableKey());
+    }
+
+    /// The form a `ConstStore` keeps. A codec edge names its contract by the
+    /// contract's identity across checked modules, never by the module that
+    /// recorded it: a specialization shared by equal contracts keeps the
+    /// first recording module's edge, which a program reusing the storing
+    /// module's values need not hold.
+    pub fn storedForm(self: ConstFnStructuralEvidence) ConstFnStructuralEvidence {
+        var stored = self;
+        const checked = self.checked orelse return stored;
+        switch (checked) {
+            .recorded => |recorded| if (recorded.generated_codec_content) |content| {
+                stored.checked = .{ .codec = .{
+                    .content = content,
+                    .dispatcher_key = recorded.dispatcher_key,
+                    .callable_key = recorded.callable_key,
+                } };
+            },
+            .codec => {},
+        }
+        return stored;
     }
 };
 
-/// Dispatch evidence selected for a stored compile-time function value. Target
-/// module identities make every checked id explicitly relative to its owning
-/// checked module when the function is restored in another compilation.
+/// The checked side of a retained structural edge.
+pub const CheckedStructuralEdge = union(enum(u8)) {
+    /// An edge read from the module that recorded it.
+    recorded: RecordedStructuralEdge,
+    /// A codec edge of a function stored in a `ConstStore`
+    /// (`ConstFnStructuralEvidence.storedForm`). Restoration reads it from
+    /// a module of the storing module's import closure that holds an equal
+    /// contract.
+    codec: StoredCodecEdge,
+
+    pub fn codecContent(self: CheckedStructuralEdge) ?static_dispatch.GeneratedCodecContentDigest {
+        return switch (self) {
+            .recorded => |recorded| recorded.generated_codec_content,
+            .codec => |codec| codec.content,
+        };
+    }
+
+    pub fn dispatcherKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.dispatcher_key,
+            .codec => |codec| codec.dispatcher_key,
+        };
+    }
+
+    pub fn callableKey(self: CheckedStructuralEdge) names.CanonicalTypeKey {
+        return switch (self) {
+            .recorded => |recorded| recorded.callable_key,
+            .codec => |codec| codec.callable_key,
+        };
+    }
+};
+
+/// A structural edge as the module that recorded it holds it.
+pub const RecordedStructuralEdge = struct {
+    /// The module that recorded the edge. Restoration reads the edge's
+    /// checked types and contract from it; a codec edge's identity is its
+    /// contract's content instead, so equal contracts recorded by different
+    /// modules are one specialization.
+    view: names.CheckedModuleDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    dispatcher_ty: checked_ids.CheckedTypeId,
+    callable_key: names.CanonicalTypeKey,
+    callable_ty: checked_ids.CheckedTypeId,
+    generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
+};
+
+/// A codec edge named by its contract's identity across checked modules and
+/// the checked keys of its dispatcher and callable types.
+pub const StoredCodecEdge = struct {
+    content: static_dispatch.GeneratedCodecContentDigest,
+    dispatcher_key: names.CanonicalTypeKey,
+    callable_key: names.CanonicalTypeKey,
+};
+
+/// Exact checked method edge retained by a stored function. Target module
+/// identities make every checked id explicitly relative to its owning checked
+/// module when the function is restored in another compilation.
+pub const ConstFnTargetEvidence = struct {
+    view: names.CheckedModuleDigest,
+    method: static_dispatch.MethodTarget,
+    /// Stable checked identity of `method.callable_ty`.
+    method_callable_key: names.CanonicalTypeKey,
+    instantiation: ?ConstFnCallableInstantiation,
+    nested: ConstFnNestedEvidence,
+    callable_contracts: u32 = 0,
+};
+
+/// Dispatch evidence selected for a stored compile-time function value. The
+/// two large payloads live in their vector's own columns
+/// (`ConstFnEvidenceVector`), so an entry takes a few words.
 pub const ConstFnEvidence = union(enum(u8)) {
-    target: struct {
-        view: names.CheckedModuleDigest,
-        method: static_dispatch.MethodTarget,
-        /// Stable checked identity of `method.callable_ty`.
-        method_callable_key: names.CanonicalTypeKey,
-        instantiation: ?ConstFnCallableInstantiation,
-        nested: ConstFnNestedEvidence,
-        callable_contracts: u32 = 0,
-    },
-    structural: ConstFnStructuralEvidence,
+    /// Index of the entry's payload in its vector's `targets`.
+    target: u32,
+    /// Index of the entry's payload in its vector's `structurals`.
+    structural: u32,
     /// A callable-reachable requirement that must be resolved from the
     /// concrete function type when this stored function is restored. Its
     /// position in its evidence vector selects the owning schema parameter,
@@ -339,6 +422,106 @@ pub const ConstFnEvidence = union(enum(u8)) {
     unreachable_value,
     checked_error,
 };
+
+/// One stored function's flattened evidence entries with the target and
+/// structural payloads they index. Entry indexes are relative to this
+/// vector's own payload columns, so a vector copies as three plain slices.
+pub const ConstFnEvidenceVector = struct {
+    nodes: []const ConstFnEvidence = &.{},
+    targets: []const ConstFnTargetEvidence = &.{},
+    structurals: []const ConstFnStructuralEvidence = &.{},
+
+    /// The target payload of a `.target` entry.
+    pub fn target(self: ConstFnEvidenceVector, index: u32) *const ConstFnTargetEvidence {
+        return &self.targets[index];
+    }
+
+    /// The structural payload of a `.structural` entry.
+    pub fn structural(self: ConstFnEvidenceVector, index: u32) *const ConstFnStructuralEvidence {
+        return &self.structurals[index];
+    }
+
+    /// How many callable-contract trees follow `entry`'s nested evidence.
+    pub fn callableContracts(self: ConstFnEvidenceVector, entry: ConstFnEvidence) u32 {
+        return switch (entry) {
+            .target => |index| self.targets[index].callable_contracts,
+            .structural => |index| self.structurals[index].callable_contracts,
+            .from_callable => |use| use.callable_contracts,
+            .from_scheme, .unreachable_value, .checked_error => 0,
+        };
+    }
+};
+
+/// Growable `ConstFnEvidenceVector`.
+pub const ConstFnEvidenceBuilder = struct {
+    nodes: std.ArrayList(ConstFnEvidence) = .empty,
+    targets: std.ArrayList(ConstFnTargetEvidence) = .empty,
+    structurals: std.ArrayList(ConstFnStructuralEvidence) = .empty,
+
+    /// Release every column.
+    pub fn deinit(self: *ConstFnEvidenceBuilder, allocator: Allocator) void {
+        self.nodes.deinit(allocator);
+        self.targets.deinit(allocator);
+        self.structurals.deinit(allocator);
+    }
+
+    /// The entries so far; invalidated by the next append.
+    pub fn vector(self: *const ConstFnEvidenceBuilder) ConstFnEvidenceVector {
+        return .{ .nodes = self.nodes.items, .targets = self.targets.items, .structurals = self.structurals.items };
+    }
+
+    /// Append a `.target` entry with its payload.
+    pub fn appendTarget(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnTargetEvidence) Allocator.Error!void {
+        try self.targets.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .target = @intCast(self.targets.items.len - 1) });
+    }
+
+    /// Append a `.structural` entry with its payload.
+    pub fn appendStructural(self: *ConstFnEvidenceBuilder, allocator: Allocator, payload: ConstFnStructuralEvidence) Allocator.Error!void {
+        try self.structurals.append(allocator, payload);
+        try self.nodes.append(allocator, .{ .structural = @intCast(self.structurals.items.len - 1) });
+    }
+
+    /// Append an entry with no out-of-line payload.
+    pub fn appendSmall(self: *ConstFnEvidenceBuilder, allocator: Allocator, entry: ConstFnEvidence) Allocator.Error!void {
+        switch (entry) {
+            .target, .structural => constStoreInvariant("evidence payload entries are appended with their payload"),
+            .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+        }
+        try self.nodes.append(allocator, entry);
+    }
+
+    /// Set the callable-contract count of the entry at `node_index`.
+    pub fn setCallableContracts(self: *ConstFnEvidenceBuilder, node_index: usize, count: u32) void {
+        switch (self.nodes.items[node_index]) {
+            .target => |index| self.targets.items[index].callable_contracts = count,
+            .structural => |index| self.structurals.items[index].callable_contracts = count,
+            .from_callable => |*use| use.callable_contracts = count,
+            .from_scheme, .unreachable_value, .checked_error => constStoreInvariant("evidence entry without callable contracts was given some"),
+        }
+    }
+
+    /// Copy the columns into `allocator`-owned slices.
+    pub fn dupe(self: *const ConstFnEvidenceBuilder, allocator: Allocator) Allocator.Error!ConstFnEvidenceVector {
+        return dupeVector(allocator, self.vector());
+    }
+};
+
+/// Copy `source`'s columns into `allocator`-owned slices.
+pub fn dupeVector(allocator: Allocator, source: ConstFnEvidenceVector) Allocator.Error!ConstFnEvidenceVector {
+    const nodes = try allocator.dupe(ConstFnEvidence, source.nodes);
+    errdefer allocator.free(nodes);
+    const targets = try allocator.dupe(ConstFnTargetEvidence, source.targets);
+    errdefer allocator.free(targets);
+    return .{ .nodes = nodes, .targets = targets, .structurals = try allocator.dupe(ConstFnStructuralEvidence, source.structurals) };
+}
+
+/// Free a vector made by `dupeVector`.
+pub fn freeVector(allocator: Allocator, vector: ConstFnEvidenceVector) void {
+    allocator.free(vector.nodes);
+    allocator.free(vector.targets);
+    allocator.free(vector.structurals);
+}
 
 /// Stable checked dispatch scope identity stored without depending on checked
 /// artifact implementation types.
@@ -369,16 +552,21 @@ pub const ConstFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    /// For a nested function, the function type of the template specialization
+    /// that built it. A variable of that template can reach neither this
+    /// function's type nor its captures, such as the format of an encoder a
+    /// generic method returned.
+    owner_fn_ty: ?ConstTypeId = null,
     captures: []const ConstCapture = &.{},
-    evidence: []const ConstFnEvidence = &.{},
+    evidence: ConstFnEvidenceVector = .{},
     evidence_frames: []const ConstFnEvidenceFrame = &.{},
     evidence_frame_head: ?u32 = null,
 };
 
 /// Named type owner for a stored nominal constant.
 pub const NamedType = struct {
+    /// The checked module that declares the type.
     module: names.CheckedModuleDigest,
-    ty: checked_ids.CheckedTypeId,
 };
 
 /// Checked function definition referenced by a stored function value.
@@ -409,28 +597,22 @@ pub const FnDef = union(enum) {
     checked_generated: names.ProcTemplate,
     parser_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked_ids.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
     encoder_for_runtime: struct {
         owner: names.ProcTemplate,
-        expr: checked_ids.CheckedExprId,
+        expr: can.CIR.Expr.Idx,
     },
 };
 
-/// A view into immutable bytes shared by strings and packed lists.
-pub const ConstBlob = struct {
-    data: ConstBlobDataId,
-    offset: u32,
-    len: u32,
-};
-
-/// String view into immutable shared backing bytes.
-pub const ConstStr = ConstBlob;
+/// A string's bytes: one content-interned blob holding exactly those bytes,
+/// so equal strings share it and no string is a view into a longer one.
+pub const ConstStr = ConstBlobDataId;
 
 /// Packed list with little-endian scalar leaves in semantic field order.
-/// Product bytes omit padding. `bytes.len == len * byteWidth()`.
+/// Product bytes omit padding. `blobData(bytes).len == len * byteWidth()`.
 pub const ConstPackedList = struct {
-    bytes: ConstBlob,
+    bytes: ConstBlobDataId,
     len: u32,
     /// Null for products; the stored checked type supplies their field structure.
     element: ?ConstPackedScalar,
@@ -478,6 +660,13 @@ pub const ConstValue = union(enum) {
         backing: ConstNodeId,
     },
     fn_value: ConstFnId,
+    /// A function value a `.boxy` compile-time program evaluated to: its
+    /// worker and descriptors' types (`recipe`, which `postcheck.Boxy.StoredFn`
+    /// reads) and its captured values and dictionaries.
+    boxy_fn: struct {
+        recipe: ConstStr,
+        captures: []const ConstNodeId,
+    },
 };
 
 /// Internal, relocation-invariant (POD) form of `ConstValue`: variant slices are
@@ -501,6 +690,7 @@ const StoredValue = union(enum) {
     tag: struct { tag_name: ConstRange, payloads: ConstRange },
     nominal: struct { named_type: NamedType, backing: ConstNodeId },
     fn_value: ConstFnId,
+    boxy_fn: struct { recipe: ConstStr, captures: ConstRange },
 };
 
 /// POD form of `ConstFn`: captures slice → range into `capture_pool`.
@@ -508,16 +698,41 @@ const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
+    owner_fn_ty: ?ConstTypeId = null,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
+    evidence_targets: ConstRange = .{},
+    evidence_structurals: ConstRange = .{},
     evidence_frames: ConstRange = .{},
     evidence_frame_head: ?u32 = null,
 };
 
+/// A type node as `ConstTypeStore` keeps it: `ConstType` with its two large
+/// payloads, `named` and `erased`, held out of line by index, so a node takes
+/// a few words rather than the size of the largest payload.
+pub const StoredConstType = union(enum) {
+    primitive: Primitive,
+    named: u32,
+    record: ConstRange,
+    tuple: ConstRange,
+    tag_union: ConstRange,
+    list: ConstTypeId,
+    box: ConstTypeId,
+    func: @FieldType(ConstType, "func"),
+    erased: u32,
+    zst,
+};
+
+/// Payload of a `named` const type node.
+pub const ConstNamedType = @FieldType(ConstType, "named");
+
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
     allocator: Allocator,
-    types: std.ArrayList(ConstType),
+    types: std.ArrayList(StoredConstType),
+    /// Out-of-line payloads of `named` and `erased` nodes.
+    named_pool: std.ArrayList(ConstNamedType),
+    erased_pool: std.ArrayList(names.TypeDigest),
     /// Flat pool of `ConstTypeId`s for tuple/function args and tag payloads.
     type_pool: std.ArrayList(ConstTypeId),
     /// Flat pool of record fields.
@@ -533,6 +748,8 @@ pub const ConstTypeStore = struct {
         return .{
             .allocator = allocator,
             .types = .empty,
+            .named_pool = .empty,
+            .erased_pool = .empty,
             .type_pool = .empty,
             .field_pool = .empty,
             .tag_pool = .empty,
@@ -546,14 +763,31 @@ pub const ConstTypeStore = struct {
         return id;
     }
 
-    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) void {
-        self.types.items[@backingInt(id)] = ty;
+    /// Install the content of a node `reserve` returned.
+    pub fn fill(self: *ConstTypeStore, id: ConstTypeId, ty: ConstType) Allocator.Error!void {
+        self.types.items[@backingInt(id)] = switch (ty) {
+            .named => |named| blk: {
+                const index: u32 = @intCast(self.named_pool.items.len);
+                try self.named_pool.append(self.allocator, named);
+                break :blk .{ .named = index };
+            },
+            .erased => |digest| blk: {
+                const index: u32 = @intCast(self.erased_pool.items.len);
+                try self.erased_pool.append(self.allocator, digest);
+                break :blk .{ .erased = index };
+            },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(StoredConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn append(self: *ConstTypeStore, ty: ConstType) Allocator.Error!ConstTypeId {
         const id = try self.reserve();
-        self.fill(id, ty);
+        try self.fill(id, ty);
         return id;
+    }
+
+    pub fn typeCount(self: *const ConstTypeStore) usize {
+        return self.types.items.len;
     }
 
     pub fn appendTypeSpan(self: *ConstTypeStore, ids: []const ConstTypeId) Allocator.Error!ConstRange {
@@ -573,7 +807,11 @@ pub const ConstTypeStore = struct {
     }
 
     pub fn get(self: *const ConstTypeStore, id: ConstTypeId) ConstType {
-        return self.types.items[@backingInt(id)];
+        return switch (self.types.items[@backingInt(id)]) {
+            .named => |index| .{ .named = self.named_pool.items[index] },
+            .erased => |index| .{ .erased = self.erased_pool.items[index] },
+            inline .primitive, .record, .tuple, .tag_union, .list, .box, .func, .zst => |payload, tag| @unionInit(ConstType, @tagName(tag), payload),
+        };
     }
 
     pub fn typeSpan(self: *const ConstTypeStore, range: ConstRange) []const ConstTypeId {
@@ -708,15 +946,15 @@ pub const ConstTypeStore = struct {
         const ops = &frame.ops;
         switch (source.get(ty)) {
             .primitive => |primitive| {
-                self.fill(out, .{ .primitive = primitive });
+                try self.fill(out, .{ .primitive = primitive });
                 return out;
             },
             .zst => {
-                self.fill(out, .zst);
+                try self.fill(out, .zst);
                 return out;
             },
             .erased => |erased| {
-                self.fill(out, .{ .erased = erased });
+                try self.fill(out, .{ .erased = erased });
                 return out;
             },
             .list, .box => |elem| try ops.append(self.allocator, .{ .child = elem }),
@@ -765,7 +1003,7 @@ pub const ConstTypeStore = struct {
     fn finishClone(self: *ConstTypeStore, source: *const ConstTypeStore, frame: *const CloneFrame) Allocator.Error!void {
         const types = frame.types.items;
         const cloned: ConstType = switch (source.get(frame.source_ty)) {
-            .primitive, .zst, .erased => unreachable,
+            .primitive, .zst, .erased => unreachable, // startClone fills leaf types directly and pushes no frame for them
             .list => .{ .list = types[0] },
             .box => .{ .box = types[0] },
             .tuple => .{ .tuple = try self.appendTypeSpan(types) },
@@ -836,7 +1074,7 @@ pub const ConstTypeStore = struct {
                 } };
             },
         };
-        self.fill(frame.out, cloned);
+        try self.fill(frame.out, cloned);
     }
 
     fn translateRecordFieldName(name_translation: ?NameTranslation, id: names.RecordFieldNameId) Allocator.Error!names.RecordFieldNameId {
@@ -871,7 +1109,8 @@ pub const ConstTypeStore = struct {
             .iterator_topology = if (def.iterator_topology) |topology| .{
                 .len_field = try translateRecordFieldName(name_translation, topology.len_field),
                 .step_field = try translateRecordFieldName(name_translation, topology.step_field),
-                .known_tag = try translateTagName(name_translation, topology.known_tag),
+                .ok_tag = try translateTagName(name_translation, topology.ok_tag),
+                .err_tag = try translateTagName(name_translation, topology.err_tag),
                 .unknown_tag = try translateTagName(name_translation, topology.unknown_tag),
                 .done_tag = try translateTagName(name_translation, topology.done_tag),
                 .one_tag = try translateTagName(name_translation, topology.one_tag),
@@ -883,14 +1122,16 @@ pub const ConstTypeStore = struct {
     }
 
     pub const Serialized = extern struct {
-        types: artifact_serialize.SerializedSlice(ConstType) = .{},
+        types: artifact_serialize.SerializedSlice(StoredConstType) = .{},
+        named_pool: artifact_serialize.SerializedSlice(ConstNamedType) = .{},
+        erased_pool: artifact_serialize.SerializedSlice(names.TypeDigest) = .{},
         type_pool: artifact_serialize.SerializedSlice(ConstTypeId) = .{},
         field_pool: artifact_serialize.SerializedSlice(TypeField) = .{},
         tag_pool: artifact_serialize.SerializedSlice(TypeTag) = .{},
         declared_field_pool: artifact_serialize.SerializedSlice(TypeDeclaredField) = .{},
 
         comptime {
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 5);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 7);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstTypeStore, @This());
@@ -902,6 +1143,8 @@ pub const ConstTypeStore = struct {
     pub fn deinit(self: *ConstTypeStore) void {
         if (!self.serialized) {
             self.types.deinit(self.allocator);
+            self.named_pool.deinit(self.allocator);
+            self.erased_pool.deinit(self.allocator);
             self.type_pool.deinit(self.allocator);
             self.field_pool.deinit(self.allocator);
             self.tag_pool.deinit(self.allocator);
@@ -928,20 +1171,55 @@ pub const ConstStore = struct {
     capture_pool: std.ArrayList(ConstCapture),
     /// Flat evidence vectors referenced by stored functions.
     evidence_pool: std.ArrayList(ConstFnEvidence),
+    evidence_target_pool: std.ArrayList(ConstFnTargetEvidence),
+    evidence_structural_pool: std.ArrayList(ConstFnStructuralEvidence),
     evidence_frame_pool: std.ArrayList(ConstFnEvidenceFrame),
     /// Flat pool of immutable backing bytes shared by strings and packed lists.
     blob_backing: std.ArrayList(u8),
     /// `ConstBlobDataId` -> range into `blob_backing`.
     blob_views: std.ArrayList(ConstRange),
-    /// Build-only content index. Keys own separate bytes because `blob_backing`
-    /// may move while the store is being built.
-    blob_index: std.StringHashMap(ConstBlobDataId),
-    blob_index_keys: std.ArrayList([]u8) = .empty,
+    /// Build-only content index over the blobs' backing int ids. Entries hash
+    /// and compare by their bytes in `blob_backing`, read afresh on every
+    /// lookup, so the backing may move while the store is being built.
+    blob_index: std.HashMapUnmanaged(u32, void, BlobIndexContext, std.hash_map.default_max_load_percentage) = .empty,
     /// True for a store reconstructed from a serialized buffer (pools point into
     /// buffer-owned memory and must not be freed).
     serialized: bool = false,
 
-    pub const serde_transient_fields = .{ "blob_index", "blob_index_keys" };
+    pub const serde_transient_fields = .{"blob_index"};
+
+    /// Hashes an indexed blob by its bytes. Indexed blobs have distinct
+    /// bytes, so two entries are equal exactly when their ids are.
+    const BlobIndexContext = struct {
+        store: *const ConstStore,
+
+        pub fn hash(self: BlobIndexContext, id: u32) u64 {
+            return std.hash.Wyhash.hash(0, self.store.blobData(@fromBackingInt(id)));
+        }
+
+        pub fn eql(_: BlobIndexContext, a: u32, b: u32) bool {
+            return a == b;
+        }
+    };
+
+    /// Looks indexed blobs up by candidate bytes.
+    const BlobBytesContext = struct {
+        store: *const ConstStore,
+
+        pub fn hash(_: BlobBytesContext, bytes: []const u8) u64 {
+            return std.hash.Wyhash.hash(0, bytes);
+        }
+
+        pub fn eql(self: BlobBytesContext, bytes: []const u8, id: u32) bool {
+            // Local byte compare: `std.mem.eql` is banned in src/check.
+            const stored = self.store.blobData(@fromBackingInt(id));
+            if (stored.len != bytes.len) return false;
+            for (stored, bytes) |x, y| {
+                if (x != y) return false;
+            }
+            return true;
+        }
+    };
 
     pub fn init(allocator: Allocator) ConstStore {
         return .{
@@ -953,10 +1231,11 @@ pub const ConstStore = struct {
             .type_store = ConstTypeStore.init(allocator),
             .capture_pool = .empty,
             .evidence_pool = .empty,
+            .evidence_target_pool = .empty,
+            .evidence_structural_pool = .empty,
             .evidence_frame_pool = .empty,
             .blob_backing = .empty,
             .blob_views = .empty,
-            .blob_index = std.StringHashMap(ConstBlobDataId).init(allocator),
         };
     }
 
@@ -965,7 +1244,7 @@ pub const ConstStore = struct {
     }
 
     pub fn reserve(self: *ConstStore) Allocator.Error!ConstNodeId {
-        const id: ConstNodeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.values.items.len))));
+        const id: ConstNodeId = @fromBackingInt(std.math.cast(u32, self.values.items.len) orelse return error.OutOfMemory);
         try self.values.append(self.allocator, .pending);
         return id;
     }
@@ -991,6 +1270,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = try self.appendNodes(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |items| .{ .nodes = try self.appendNodes(items) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1016,16 +1296,24 @@ pub const ConstStore = struct {
     /// retains ownership of the input `captures` slice and frees it.
     pub fn appendFn(self: *ConstStore, fn_value: ConstFn) Allocator.Error!ConstFnId {
         try validateEvidenceFrames(self.allocator, fn_value);
-        const id: ConstFnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.items.len))));
+        const id: ConstFnId = @fromBackingInt(std.math.cast(u32, self.fns.items.len) orelse return error.OutOfMemory);
         const captures_range = try artifact_serialize.appendSpan(ConstRange, ConstCapture, &self.capture_pool, self.allocator, fn_value.captures);
-        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence);
+        const evidence_range = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidence, &self.evidence_pool, self.allocator, fn_value.evidence.nodes);
+        const evidence_targets = try artifact_serialize.appendSpan(ConstRange, ConstFnTargetEvidence, &self.evidence_target_pool, self.allocator, fn_value.evidence.targets);
+        const stored_structurals = try self.allocator.alloc(ConstFnStructuralEvidence, fn_value.evidence.structurals.len);
+        defer self.allocator.free(stored_structurals);
+        for (stored_structurals, fn_value.evidence.structurals) |*stored, structural| stored.* = structural.storedForm();
+        const evidence_structurals = try artifact_serialize.appendSpan(ConstRange, ConstFnStructuralEvidence, &self.evidence_structural_pool, self.allocator, stored_structurals);
         const evidence_frames = try artifact_serialize.appendSpan(ConstRange, ConstFnEvidenceFrame, &self.evidence_frame_pool, self.allocator, fn_value.evidence_frames);
         try self.fns.append(self.allocator, .{
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
+            .owner_fn_ty = fn_value.owner_fn_ty,
             .captures = captures_range,
             .evidence = evidence_range,
+            .evidence_targets = evidence_targets,
+            .evidence_structurals = evidence_structurals,
             .evidence_frames = evidence_frames,
             .evidence_frame_head = fn_value.evidence_frame_head,
         });
@@ -1041,7 +1329,7 @@ pub const ConstStore = struct {
     fn evidenceFramesValid(allocator: Allocator, fn_value: ConstFn) Allocator.Error!bool {
         if (fn_value.evidence_frames.len == 0) {
             return switch (fn_value.fn_def) {
-                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.len == 0,
+                .parser_runtime, .encoder_for_runtime => fn_value.evidence_frame_head == null and fn_value.evidence.nodes.len == 0,
                 .local_template,
                 .imported_template,
                 .nested,
@@ -1051,12 +1339,16 @@ pub const ConstStore = struct {
                 => false,
             };
         }
+        // Frames `0..=head` are the function's own lexical chain. Any frames
+        // after the head are a second chain, rooted right after it: the
+        // evidence of the template that declares the local procedures of
+        // another template the function reaches.
         const head = fn_value.evidence_frame_head orelse return false;
-        if (head != fn_value.evidence_frames.len - 1) return false;
+        if (head >= fn_value.evidence_frames.len) return false;
 
         var cursor: usize = 0;
         for (fn_value.evidence_frames, 0..) |frame, index| {
-            if (index == 0) {
+            if (index == 0 or index == head + 1) {
                 if (frame.scope() != .root or frame.parent != null) return false;
             } else {
                 switch (frame.scope()) {
@@ -1068,13 +1360,15 @@ pub const ConstStore = struct {
             if (frame.roots_start != cursor) return false;
             cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
         }
-        return cursor == fn_value.evidence.len;
+        return cursor == fn_value.evidence.nodes.len;
     }
 
     /// The end of a vector of `count` evidence trees starting at `start`, or
     /// null when a nested vector's declared subtree length disagrees with its
     /// entries. Open nested vectors are kept on an explicit stack.
-    fn evidenceVectorEnd(allocator: Allocator, nodes: []const ConstFnEvidence, start: usize, count: u32) Allocator.Error!?usize {
+    /// Callers validate node target/structural indices before this topology walk.
+    pub fn evidenceVectorEnd(allocator: Allocator, evidence: ConstFnEvidenceVector, start: usize, count: u32) Allocator.Error!?usize {
+        const nodes = evidence.nodes;
         const Open = struct {
             remaining: u32,
             /// Where a nested vector's entries start, and how many nodes they
@@ -1100,14 +1394,11 @@ pub const ConstStore = struct {
             cursor += 1;
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
-            const contracts = switch (node) {
-                inline .target, .structural, .from_callable => |target| target.callable_contracts,
-                .from_scheme, .unreachable_value, .checked_error => 0,
-            };
+            const contracts = evidence.callableContracts(node);
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
             switch (node) {
                 .target => |target| {
-                    switch (target.nested) {
+                    switch (evidence.target(target).nested) {
                         .resolved => |nested| try open.append(allocator, .{
                             .remaining = nested.count,
                             .nested = .{ .start = cursor, .subtree_len = nested.subtree_len },
@@ -1122,14 +1413,15 @@ pub const ConstStore = struct {
     }
 
     test "callable-derived function evidence has no flattened child vector" {
-        const evidence = [_]ConstFnEvidence{.{ .target = .{
+        const targets = [_]ConstFnTargetEvidence{.{
             .view = .{},
             .method = undefined,
             .method_callable_key = .{},
             .instantiation = null,
             .nested = .from_callable,
-        } }};
-        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, &evidence, 0, 1));
+        }};
+        const nodes = [_]ConstFnEvidence{.{ .target = 0 }};
+        try std.testing.expectEqual(@as(?usize, 1), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes, .targets = &targets }, 0, 1));
     }
 
     test "issue 11737: stored evidence validates callable contract topology" {
@@ -1139,25 +1431,68 @@ pub const ConstStore = struct {
             .checked_error,
             .unreachable_value,
         };
-        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 2));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, nodes[0..2], 0, 1));
-        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, &nodes, 0, 3));
+        try std.testing.expectEqual(@as(?usize, 4), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 2));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = nodes[0..2] }, 0, 1));
+        try std.testing.expectEqual(@as(?usize, null), try evidenceVectorEnd(std.testing.allocator, .{ .nodes = &nodes }, 0, 3));
+    }
+
+    /// Writable space for `len` candidate blob bytes at the end of the blob
+    /// backing. `commitBlobData` interns what the caller writes there exactly
+    /// as `addBlobData` interns a copy of it; nothing else may touch the blob
+    /// table in between.
+    pub fn reserveBlobData(self: *ConstStore, len: usize) Allocator.Error![]u8 {
+        if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
+        return self.blob_backing.addManyAsSlice(self.allocator, len);
+    }
+
+    /// Intern the `len` bytes written into the space `reserveBlobData`
+    /// returned, releasing that space when equal bytes are already interned.
+    pub fn commitBlobData(self: *ConstStore, len: usize) Allocator.Error!ConstBlobDataId {
+        const start = self.blob_backing.items.len - len;
+        errdefer self.blob_backing.shrinkRetainingCapacity(start);
+        const bytes = self.blob_backing.items[start..];
+        const entry = try self.blob_index.getOrPutContextAdapted(
+            self.allocator,
+            bytes,
+            BlobBytesContext{ .store = self },
+            BlobIndexContext{ .store = self },
+        );
+        if (entry.found_existing) {
+            self.blob_backing.shrinkRetainingCapacity(start);
+            return @fromBackingInt(entry.key_ptr.*);
+        }
+        errdefer self.blob_index.removeByPtr(entry.key_ptr);
+
+        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
+        // An empty blob owns no backing, as `artifact_serialize.appendSpan`
+        // records it.
+        const view: ConstRange = if (len == 0) .{ .start = 0, .len = 0 } else .{
+            .start = std.math.cast(u32, start) orelse return error.OutOfMemory,
+            .len = std.math.cast(u32, len) orelse return error.OutOfMemory,
+        };
+        try self.blob_views.append(self.allocator, view);
+        entry.key_ptr.* = raw_id;
+        return @fromBackingInt(raw_id);
     }
 
     pub fn addBlobData(self: *ConstStore, bytes: []const u8) Allocator.Error!ConstBlobDataId {
         if (self.serialized) constStoreInvariant("cannot add blob data to a serialized const store");
-        if (self.blob_index.get(bytes)) |existing| return existing;
+        const entry = try self.blob_index.getOrPutContextAdapted(
+            self.allocator,
+            bytes,
+            BlobBytesContext{ .store = self },
+            BlobIndexContext{ .store = self },
+        );
+        if (entry.found_existing) return @fromBackingInt(entry.key_ptr.*);
+        errdefer self.blob_index.removeByPtr(entry.key_ptr);
 
-        const id: ConstBlobDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.blob_views.items.len))));
+        const raw_id = std.math.cast(u32, self.blob_views.items.len) orelse return error.OutOfMemory;
+        const backing_len = self.blob_backing.items.len;
         const view = try artifact_serialize.appendSpan(ConstRange, u8, &self.blob_backing, self.allocator, bytes);
+        errdefer self.blob_backing.shrinkRetainingCapacity(backing_len);
         try self.blob_views.append(self.allocator, view);
-
-        const key = try self.allocator.dupe(u8, bytes);
-        errdefer self.allocator.free(key);
-        try self.blob_index_keys.append(self.allocator, key);
-        errdefer _ = self.blob_index_keys.pop();
-        try self.blob_index.put(key, id);
-        return id;
+        entry.key_ptr.* = raw_id;
+        return @fromBackingInt(raw_id);
     }
 
     fn nodeSlice(self: *const ConstStore, range: ConstRange) []const ConstNodeId {
@@ -1175,6 +1510,7 @@ pub const ConstStore = struct {
             .box => |n| .{ .box = n },
             .nominal => |n| .{ .nominal = .{ .named_type = n.named_type, .backing = n.backing } },
             .fn_value => |f| .{ .fn_value = f },
+            .boxy_fn => |function| .{ .boxy_fn = .{ .recipe = function.recipe, .captures = self.nodeSlice(function.captures) } },
             .list => |list| .{ .list = switch (list) {
                 .nodes => |r| .{ .nodes = self.nodeSlice(r) },
                 .packed_bytes => |packed_list| .{ .packed_bytes = packed_list },
@@ -1195,8 +1531,13 @@ pub const ConstStore = struct {
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
+            .owner_fn_ty = stored.owner_fn_ty,
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
-            .evidence = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+            .evidence = .{
+                .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
+                .targets = self.evidence_target_pool.items[stored.evidence_targets.start .. stored.evidence_targets.start + stored.evidence_targets.len],
+                .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
+            },
             .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
             .evidence_frame_head = stored.evidence_frame_head,
         };
@@ -1221,13 +1562,15 @@ pub const ConstStore = struct {
         type_store: ConstTypeStore.Serialized = .{},
         capture_pool: artifact_serialize.SerializedSlice(ConstCapture) = .{},
         evidence_pool: artifact_serialize.SerializedSlice(ConstFnEvidence) = .{},
+        evidence_target_pool: artifact_serialize.SerializedSlice(ConstFnTargetEvidence) = .{},
+        evidence_structural_pool: artifact_serialize.SerializedSlice(ConstFnStructuralEvidence) = .{},
         evidence_frame_pool: artifact_serialize.SerializedSlice(ConstFnEvidenceFrame) = .{},
         blob_backing: artifact_serialize.SerializedSlice(u8) = .{},
         blob_views: artifact_serialize.SerializedSlice(ConstRange) = .{},
 
         comptime {
-            // 9 value/function side lists + 5 nested type-store lists.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 14);
+            // 11 value/function side lists + 7 nested type-store lists.
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 18);
         }
 
         const Serde = artifact_serialize.SliceStoreSerde(ConstStore, @This());
@@ -1237,17 +1580,94 @@ pub const ConstStore = struct {
     };
 
     pub fn strBytes(self: *const ConstStore, str: ConstStr) []const u8 {
-        return self.blobBytes(str);
+        return self.blobData(str);
     }
 
-    pub fn blobBytes(self: *const ConstStore, blob: ConstBlob) []const u8 {
-        const backing = self.blobData(blob.data);
-        const offset: usize = blob.offset;
-        const len: usize = blob.len;
-        if (@import("builtin").mode == .debug and (offset > backing.len or len > backing.len - offset)) {
-            constStoreInvariant("blob view is outside backing data");
+    /// The modules a stored function's recipe names, by checked key: the
+    /// recipe begins with their table (`postcheck.Boxy.StoredFn`).
+    pub fn recipeModuleKeys(recipe: []const u8) []const [32]u8 {
+        const count = std.mem.readInt(u32, recipe[0..4], .little);
+        return @as([*]const [32]u8, @ptrCast(recipe[4..].ptr))[0..count];
+    }
+
+    /// The bytes of a stored function's recipe after its table of modules.
+    pub fn recipeBody(recipe: []const u8) []const u8 {
+        return recipe[4 + recipeModuleKeys(recipe).len * 32 ..];
+    }
+
+    /// Feed `root`'s value into `hasher`, shared nodes once each. Equal
+    /// values built the same way feed equal bytes whatever their node ids.
+    /// `context.moduleDigest` gives the bytes naming a nominal type's module,
+    /// and `context.fnValueDigest` the bytes naming a stored function.
+    pub fn hashGraph(
+        self: *const ConstStore,
+        root: ConstNodeId,
+        hasher: *base.Sha256,
+        context: anytype,
+    ) Allocator.Error!void {
+        var ordinals = collections.DenseMap(ConstNodeId, u32).init(self.allocator);
+        defer ordinals.deinit();
+        var next_ordinal: u32 = 0;
+        var pending = std.ArrayList(ConstNodeId).empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |node| {
+            const entry = try ordinals.getOrPut(node);
+            if (entry.found_existing) {
+                hasher.update("seen");
+                hasher.update(std.mem.asBytes(&entry.value_ptr.*));
+                continue;
+            }
+            entry.value_ptr.* = next_ordinal;
+            next_ordinal += 1;
+            const value = self.get(node);
+            hasher.update(@tagName(std.meta.activeTag(value)));
+            hasher.update(&[_]u8{0});
+            switch (value) {
+                .pending, .zst => {},
+                .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
+                .scalar => |scalar| hashScalar(hasher, scalar),
+                inline .str, .crash, .checked_error => |str| hashBytes(hasher, self.blobData(str)),
+                .box => |payload| try pending.append(self.allocator, payload),
+                .nominal => |nominal| {
+                    hasher.update(&context.moduleDigest(nominal.named_type.module));
+                    try pending.append(self.allocator, nominal.backing);
+                },
+                .list => |list| switch (list) {
+                    .nodes => |items| {
+                        hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                        try pending.appendSlice(self.allocator, items);
+                    },
+                    .packed_bytes => |packed_list| {
+                        hasher.update(std.mem.asBytes(&packed_list.len));
+                        hasher.update(std.mem.asBytes(&packed_list.product_width));
+                        hasher.update(if (packed_list.element) |element| @tagName(element) else "product");
+                        hashBytes(hasher, self.blobData(packed_list.bytes));
+                    },
+                    .empty => |capacity| hasher.update(std.mem.asBytes(&capacity)),
+                },
+                inline .tuple, .record => |items| {
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(items.len))));
+                    try pending.appendSlice(self.allocator, items);
+                },
+                .boxy_fn => |function| {
+                    // The recipe names its modules by checked key; the
+                    // identity names them as `context` does.
+                    const recipe = self.blobData(function.recipe);
+                    const keys = recipeModuleKeys(recipe);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(keys.len))));
+                    for (keys) |key| hasher.update(&context.moduleDigest(.{ .bytes = key }));
+                    hashBytes(hasher, recipeBody(recipe));
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(function.captures.len))));
+                    try pending.appendSlice(self.allocator, function.captures);
+                },
+                .tag => |tag| {
+                    hashBytes(hasher, tag.tag_name);
+                    hasher.update(std.mem.asBytes(&@as(u32, @intCast(tag.payloads.len))));
+                    try pending.appendSlice(self.allocator, tag.payloads);
+                },
+            }
         }
-        return backing[offset..][0..len];
     }
 
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
@@ -1290,9 +1710,7 @@ pub const ConstStore = struct {
 
     pub fn deinit(self: *ConstStore) void {
         self.type_store.deinit();
-        for (self.blob_index_keys.items) |key| self.allocator.free(key);
-        self.blob_index_keys.deinit(self.allocator);
-        self.blob_index.deinit();
+        self.blob_index.deinit(self.allocator);
         if (!self.serialized) {
             self.values.deinit(self.allocator);
             self.fns.deinit(self.allocator);
@@ -1300,6 +1718,8 @@ pub const ConstStore = struct {
             self.tag_name_pool.deinit(self.allocator);
             self.capture_pool.deinit(self.allocator);
             self.evidence_pool.deinit(self.allocator);
+            self.evidence_target_pool.deinit(self.allocator);
+            self.evidence_structural_pool.deinit(self.allocator);
             self.evidence_frame_pool.deinit(self.allocator);
             self.blob_backing.deinit(self.allocator);
             self.blob_views.deinit(self.allocator);
@@ -1367,13 +1787,17 @@ pub const ConstStore = struct {
                             try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                         },
                         .packed_bytes => |packed_list| {
-                            const bytes = self.blobBytes(packed_list.bytes);
+                            const bytes = self.blobData(packed_list.bytes);
                             const expected_len = @as(u64, packed_list.len) * packed_list.byteWidth();
                             if (bytes.len != expected_len) {
                                 constStoreInvariant("packed list byte length differs from its element encoding");
                             }
                         },
                         .empty => {},
+                    },
+                    .boxy_fn => |function| {
+                        _ = self.strBytes(function.recipe);
+                        for (function.captures) |child| try pending.append(self.allocator, .{ .value = .{ .id = child, .delayed_depth = node.delayed_depth } });
                     },
                     .tuple,
                     .record,
@@ -1403,7 +1827,7 @@ pub const ConstStore = struct {
                 try pending.append(self.allocator, .{ .exit_fn = index });
                 const mark = pending.items.len;
                 for (self.getFn(node.id).captures) |capture| {
-                    if (@backingInt(capture.ty) >= self.type_store.types.items.len) {
+                    if (@backingInt(capture.ty) >= self.type_store.typeCount()) {
                         constStoreInvariant("completed store contains an out-of-range capture type id");
                     }
                     try pending.append(self.allocator, .{ .value = .{ .id = capture.value, .delayed_depth = node.delayed_depth + 1 } });
@@ -1415,10 +1839,7 @@ pub const ConstStore = struct {
 };
 
 fn constStoreInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) {
-        base.invariant("const store invariant violated: {s}", .{message});
-    }
-    unreachable;
+    base.invariant("const store invariant violated: {s}", .{message});
 }
 
 test "const store declarations are referenced" {
@@ -1448,14 +1869,15 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // Strings and packed lists share one content-deduplicated blob backing.
     const sd = try store.addBlobData("hello world");
     try std.testing.expectEqual(sd, try store.addBlobData("hello world"));
-    const str = try store.append(.{ .str = .{ .data = sd, .offset = 0, .len = 5 } });
+    const hello = try store.addBlobData("hello");
+    const str = try store.append(.{ .str = hello });
     const packed_list = try store.append(.{ .list = .{ .packed_bytes = .{
-        .bytes = .{ .data = sd, .offset = 0, .len = 11 },
+        .bytes = sd,
         .len = 11,
         .element = .u8,
     } } });
     const product_list = try store.append(.{ .list = .{ .packed_bytes = .{
-        .bytes = .{ .data = sd, .offset = 1, .len = 10 },
+        .bytes = try store.addBlobData("ello world"),
         .len = 2,
         .element = null,
         .product_width = 5,
@@ -1465,7 +1887,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const capture_ty = try store.type_store.append(.{ .primitive = .u64 });
     const private_backing_ty = try store.type_store.append(.{ .record = .{} });
     const private_named_ty = try store.type_store.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) },
+        .named_type = .{ .module = .{} },
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},
@@ -1491,8 +1913,8 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     method_callable_key.bytes[0] = 0xC3;
     var instantiation_callable_key: names.CanonicalTypeKey = .{};
     instantiation_callable_key.bytes[0] = 0xD4;
-    const evidence = [_]ConstFnEvidence{
-        .{ .target = .{
+    const evidence_targets = [_]ConstFnTargetEvidence{
+        .{
             .view = target_view,
             .method = .{
                 .module_idx = 4,
@@ -1511,8 +1933,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
                 .callable_ty = @fromBackingInt(@intCast(7)),
             },
             .nested = .{ .resolved = .{ .count = 1, .subtree_len = 1 } },
-        } },
-        .{ .structural = .{ .derivation = .equality } },
+        },
+    };
+    const evidence_structurals = [_]ConstFnStructuralEvidence{.{ .derivation = .equality }};
+    const evidence = [_]ConstFnEvidence{
+        .{ .target = 0 },
+        .{ .structural = 0 },
         .checked_error,
         .{ .from_callable = .{ .independent_callable = true } },
         .{ .from_scheme = 3 },
@@ -1528,13 +1954,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .source_fn_ty = @fromBackingInt(@intCast(3)),
         .source_fn_key = .{},
         .captures = caps,
-        .evidence = &evidence,
+        .evidence = .{ .nodes = &evidence, .targets = &evidence_targets, .structurals = &evidence_structurals },
         .evidence_frames = &evidence_frames,
         .evidence_frame_head = 1,
     });
 
     // Serialize → aligned buffer → deserialize.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1561,14 +1987,14 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     // String backing
     try std.testing.expectEqualStrings("hello", loaded.strBytes(loaded.get(str).str));
     const loaded_packed = loaded.get(packed_list).list.packed_bytes;
-    try std.testing.expectEqual(sd, loaded_packed.bytes.data);
-    try std.testing.expectEqualStrings("hello world", loaded.blobBytes(loaded_packed.bytes));
+    try std.testing.expectEqual(sd, loaded_packed.bytes);
+    try std.testing.expectEqualStrings("hello world", loaded.blobData(loaded_packed.bytes));
     const loaded_product = loaded.get(product_list).list.packed_bytes;
     try std.testing.expectEqual(@as(?ConstPackedScalar, null), loaded_product.element);
     try std.testing.expectEqual(@as(u32, 5), loaded_product.byteWidth());
     try std.testing.expectEqual(@as(u64, 4096), loaded.get(empty_list).list.empty);
     try std.testing.expectEqual(@as(u32, 2), loaded_product.len);
-    try std.testing.expectEqualStrings("ello world", loaded.blobBytes(loaded_product.bytes));
+    try std.testing.expectEqualStrings("ello world", loaded.blobData(loaded_product.bytes));
     // Function captures
     const loaded_fn = loaded.getFn(fn_id);
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
@@ -1580,12 +2006,12 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));
     try std.testing.expect(loaded_fn.captures[1].kind.eql(recursive_kind));
     try loaded.verifyComplete();
-    try std.testing.expectEqual(evidence.len, loaded_fn.evidence.len);
-    const loaded_target = loaded_fn.evidence[0].target;
+    try std.testing.expectEqualSlices(ConstFnEvidence, &evidence, loaded_fn.evidence.nodes);
+    const loaded_target = loaded_fn.evidence.target(loaded_fn.evidence.nodes[0].target);
     try std.testing.expectEqualSlices(u8, &target_view.bytes, &loaded_target.view.bytes);
     try std.testing.expectEqual(@as(u32, 4), loaded_target.method.module_idx);
     try std.testing.expectEqual(@as(u32, 5), @backingInt(loaded_target.method.def_idx));
-    try std.testing.expectEqual(evidence[0].target.method.kind, loaded_target.method.kind);
+    try std.testing.expectEqual(evidence_targets[0].method.kind, loaded_target.method.kind);
     try std.testing.expectEqual(@as(checked_ids.CheckedTypeId, @fromBackingInt(@intCast(6))), loaded_target.method.callable_ty);
     try std.testing.expectEqual(method_callable_key, loaded_target.method_callable_key);
     const loaded_instantiation = loaded_target.instantiation.?;
@@ -1595,10 +2021,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     const loaded_nested = loaded_target.nested.resolved;
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.count);
     try std.testing.expectEqual(@as(u32, 1), loaded_nested.subtree_len);
-    try std.testing.expectEqual(ConstFnEvidence{ .structural = .{ .derivation = .equality } }, loaded_fn.evidence[1]);
-    try std.testing.expectEqual(ConstFnEvidence.checked_error, loaded_fn.evidence[2]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_callable = .{ .independent_callable = true } }, loaded_fn.evidence[3]);
-    try std.testing.expectEqual(ConstFnEvidence{ .from_scheme = 3 }, loaded_fn.evidence[4]);
+    try std.testing.expectEqual(ConstFnStructuralEvidence{ .derivation = .equality }, loaded_fn.evidence.structural(loaded_fn.evidence.nodes[1].structural).*);
     try std.testing.expectEqualSlices(ConstFnEvidenceFrame, &evidence_frames, loaded_fn.evidence_frames);
     try std.testing.expectEqual(@as(?u32, 1), loaded_fn.evidence_frame_head);
     try std.testing.expectEqual(ConstFnEvidenceScope{ .generalized = 9 }, loaded_fn.evidence_frames[1].scope());
@@ -1609,13 +2032,13 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         ConstFnEvidenceFrame.init(.{ .generalized = 4 }, 1, 0, 0),
     };
     var empty_chain = loaded_fn;
-    empty_chain.evidence = &.{};
+    empty_chain.evidence = .{};
     empty_chain.evidence_frames = &empty_frames;
     empty_chain.evidence_frame_head = 2;
     try std.testing.expect(try ConstStore.evidenceFramesValid(std.testing.allocator, empty_chain));
 
     var absent_chain = loaded_fn;
-    absent_chain.evidence = &.{};
+    absent_chain.evidence = .{};
     absent_chain.evidence_frames = &.{};
     absent_chain.evidence_frame_head = null;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, absent_chain));
@@ -1673,7 +2096,7 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     store.fill(fn_node, .{ .fn_value = fn_id });
     try store.verifyComplete();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);
@@ -1723,4 +2146,18 @@ test "ConstStore.appendFn: no leak or double-free under allocation failure" {
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Helper.run, .{});
+}
+
+/// Whether two byte strings stored in different stores hold the same bytes.
+fn hashBytes(hasher: *base.Sha256, bytes: []const u8) void {
+    hasher.update(std.mem.asBytes(&@as(u64, bytes.len)));
+    hasher.update(bytes);
+}
+
+fn hashScalar(hasher: *base.Sha256, scalar: ConstScalar) void {
+    hasher.update(@tagName(std.meta.activeTag(scalar)));
+    hasher.update(&[_]u8{0});
+    switch (scalar) {
+        inline .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64, .u128, .f32_bits, .f64_bits, .dec_bits => |value| hasher.update(std.mem.asBytes(&value)),
+    }
 }

@@ -65,6 +65,7 @@ const build_options = @import("build_options");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const debug_print = @import("debug_print.zig");
+const body_clone = @import("body_clone.zig");
 
 const LIR = core.LIR;
 const LirStore = core.LirStore;
@@ -85,7 +86,7 @@ pub const Report = struct {
 /// Intern worker-required layouts before freezing the phase's shared store.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@fromBackingInt(@intCast(index)));
+        const proc = store.getProcSpecImmediate(@fromBackingInt(@intCast(index)));
         // Only a procedure that calls itself can be rewritten to thread a
         // pointer to its result.
         if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
@@ -98,10 +99,20 @@ pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) Resour
 
 /// Rewrite one proc without mutating layouts or emitting unordered diagnostics.
 pub fn runProc(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch_allocator: Allocator) ResourceError!?Report {
-    std.debug.assert(store.tail_call_builder == null);
     var scratch = Scratch.init(scratch_allocator);
     defer scratch.deinit();
-    return transformProc(store, layouts, proc_id, &scratch);
+    return runProcWithScratch(store, layouts, proc_id, &scratch);
+}
+
+/// Detection and rewrite storage one executor lane retains across
+/// procedures; only empty storage survives a procedure.
+pub const LaneScratch = Scratch;
+
+/// `runProc` with lane-retained storage.
+pub fn runProcWithScratch(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) ResourceError!?Report {
+    std.debug.assert(store.tail_call_builder == null);
+    defer scratch.release();
+    return transformProc(store, layouts, proc_id, scratch);
 }
 
 /// Apply TRMC/TCE to every eligible proc in the store.
@@ -109,11 +120,13 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     std.debug.assert(store.tail_call_builder == null);
     try prepareLayouts(store, layouts);
 
+    var scratch = Scratch.init(store.allocator);
+    defer scratch.deinit();
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
-        if (try runProc(store, layouts, proc_id, store.allocator)) |report| {
+        if (try runProcWithScratch(store, layouts, proc_id, &scratch)) |report| {
             reportProc(store, layouts, proc_id, report);
         }
     }
@@ -125,7 +138,7 @@ fn transformProc(
     proc_id: LIR.LirProcSpecId,
     scratch: *Scratch,
 ) ResourceError!?Report {
-    const proc = store.getProcSpec(proc_id);
+    const proc = store.getProcSpecImmediate(proc_id);
     if (proc.body == null or proc.hosted != null or proc.abi != .roc) return null;
 
     var detection = Detection.init(store, layouts, proc_id, scratch);
@@ -148,7 +161,7 @@ fn transformProc(
     var tail_site: ?CFStmtId = if (proc.tail_calls) |sites| sites.head else null;
     while (tail_site) |id| {
         tail_count += 1;
-        tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
+        tail_site = store.getCFStmtImmediate(id).assign_call.tail_call.next();
     }
     if (construct_count == 0 and tail_count == 0) return null;
     if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
@@ -172,7 +185,7 @@ fn transformProc(
 /// Emit diagnostics on the coordinator, after committing the proc in order.
 pub fn reportProc(store: *const LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, report: Report) void {
     if (build_options.print_trmc) {
-        const transformed = store.getProcSpec(proc_id);
+        const transformed = store.getProcSpecImmediate(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
             @backingInt(proc_id),
@@ -229,7 +242,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
         if (per_proc) {
-            var scratch = std.heap.ArenaAllocator.init(allocator);
+            var scratch = collections.SingleThreadArena.init(allocator);
             defer scratch.deinit();
             const report = (try runProc(&store, &layouts, proc_id, scratch.allocator())).?;
             try std.testing.expectEqual(@as(usize, 0), report.construct_count);
@@ -243,9 +256,9 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         const proc = store.getProcSpec(proc_id);
         try std.testing.expectEqual(LIR.TailTransform.tce, proc.tail_transform);
         try std.testing.expect(proc.tail_calls == null);
-        const join = store.getCFStmt(proc.body.?).join;
+        const join = store.getCFStmtImmediate(proc.body.?).join;
         try std.testing.expectEqual(call, join.body);
-        try std.testing.expectEqual(join.id, store.getCFStmt(call).jump.target);
+        try std.testing.expectEqual(join.id, store.getCFStmtImmediate(call).jump.target);
     }
 }
 
@@ -267,8 +280,6 @@ const Edge = union(enum) {
     switch_branch: struct { stmt: CFStmtId, index: u32 },
     switch_default: CFStmtId,
     switch_continuation: CFStmtId,
-    boxy_tag_on_match: CFStmtId,
-    boxy_tag_on_miss: CFStmtId,
     initialized_payload_branch: struct { stmt: CFStmtId, initialized: bool },
 };
 
@@ -362,6 +373,8 @@ const Scratch = struct {
     /// Bumped by 3 in beginProc so all stamp values are fresh.
     generation: u32 = 0,
     work: std.ArrayList(WorkItem) = .empty,
+    /// Statements still to stamp while propagating shared tails.
+    shared_work: std.ArrayList(CFStmtId) = .empty,
     candidates: std.ArrayList(Candidate) = .empty,
     /// Heads of shared tails discovered during the walk.
     shared_heads: std.ArrayList(CFStmtId) = .empty,
@@ -372,14 +385,21 @@ const Scratch = struct {
     new_locals: std.ArrayList(LocalId) = .empty,
     moves: std.ArrayList(LoopMove) = .empty,
     ready_moves: std.ArrayList(usize) = .empty,
+    /// The current procedure's join declarations, for `Detection`.
+    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    /// The current rewrite's moved parameters, for `Transform`.
+    move_targets: collections.DenseMap(LocalId, usize),
 
-    fn init(gpa: Allocator) Scratch {
-        return .{ .gpa = gpa, .stamps = .init(gpa) };
+    pub fn init(gpa: Allocator) Scratch {
+        return .{ .gpa = gpa, .stamps = .init(gpa), .joins = .init(gpa), .move_targets = .init(gpa) };
     }
 
-    fn deinit(self: *Scratch) void {
+    pub fn deinit(self: *Scratch) void {
         self.stamps.deinit();
+        self.joins.deinit();
+        self.move_targets.deinit();
         self.work.deinit(self.gpa);
+        self.shared_work.deinit(self.gpa);
         self.candidates.deinit(self.gpa);
         self.shared_heads.deinit(self.gpa);
         self.rets.deinit(self.gpa);
@@ -389,7 +409,18 @@ const Scratch = struct {
         self.ready_moves.deinit(self.gpa);
     }
 
+    /// Empty every table after a procedure, keeping capacity, so no stamp,
+    /// candidate or join reaches the next one.
+    fn release(self: *Scratch) void {
+        self.beginProc();
+        self.stamps.clearRetainingCapacity();
+        self.generation = 0;
+        self.shared_work.clearRetainingCapacity();
+    }
+
     fn beginProc(self: *Scratch) void {
+        self.joins.clearRetainingCapacity();
+        self.move_targets.clearRetainingCapacity();
         self.work.clearRetainingCapacity();
         self.candidates.clearRetainingCapacity();
         self.shared_heads.clearRetainingCapacity();
@@ -417,7 +448,7 @@ const Detection = struct {
     eligible_trmc: bool = false,
     /// Set when the proc exceeds a pass limit; the proc is left untouched.
     bail: bool = false,
-    joins: collections.DenseMap(JoinPointId, JoinInfo),
+    joins: *collections.DenseMap(JoinPointId, JoinInfo),
     max_join_id: u32 = 0,
 
     fn init(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LIR.LirProcSpecId, scratch: *Scratch) Detection {
@@ -427,12 +458,12 @@ const Detection = struct {
             .layouts = layouts,
             .proc_id = proc_id,
             .scratch = scratch,
-            .joins = collections.DenseMap(JoinPointId, JoinInfo).init(scratch.gpa),
+            .joins = &scratch.joins,
         };
     }
 
     fn deinit(self: *Detection) void {
-        self.joins.deinit();
+        self.joins.clearRetainingCapacity();
     }
 
     fn detect(self: *Detection) ResourceError!void {
@@ -456,9 +487,9 @@ const Detection = struct {
         while (steps < limit) : (steps += 1) {
             const params = self.store.getLocalSpan(join.params);
             if (params.len != 1 or GuardedList.at(params, 0) != local) return false;
-            const stmt = self.store.getCFStmt(join.body);
-            if (stmt == .ret) return stmt.ret.value == local;
-            if (stmt != .jump) return false;
+            const stmt = self.store.getCFStmtImmediate(join.body);
+            if (stmt.* == .ret) return stmt.ret.value == local;
+            if (stmt.* != .jump) return false;
             join = self.joins.get(stmt.jump.target) orelse return false;
         }
         return false;
@@ -553,12 +584,8 @@ const Detection = struct {
                         try work.append(gpa, .{ .stmt = GuardedList.at(arms, i).on_match, .edge = .{ .switch_branch = .{ .stmt = item.stmt, .index = @intCast(i) } } });
                     }
                 },
-                .boxy_tag_match => |s| {
-                    try work.append(gpa, .{ .stmt = s.on_miss, .edge = .{ .boxy_tag_on_miss = item.stmt } });
-                    try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .boxy_tag_on_match = item.stmt } });
-                },
-                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -571,61 +598,18 @@ const Detection = struct {
     /// changes both branch paths even though only `a` points directly at `b`.
     fn propagateSharedTails(self: *Detection) ResourceError!void {
         const gpa = self.scratch.gpa;
-        const work = &self.scratch.work;
+        const work = &self.scratch.shared_work;
         const stamps = &self.scratch.stamps;
         const gen = self.scratch.generation;
 
         work.clearRetainingCapacity();
-        for (self.scratch.shared_heads.items) |shared_head| {
-            try work.append(gpa, .{ .stmt = shared_head, .edge = .proc_body });
-        }
+        try work.appendSlice(gpa, self.scratch.shared_heads.items);
 
-        while (work.pop()) |item| {
-            const stamp = stamps.getPtr(item.stmt).?;
+        while (work.pop()) |stmt_id| {
+            const stamp = stamps.getPtr(stmt_id).?;
             if (stamp.* == gen + 2) continue;
             stamp.* = gen + 2;
-
-            const stmt = self.store.getCFStmt(item.stmt);
-            try self.appendSuccessorsForSharedPropagation(work, stmt);
-        }
-    }
-
-    fn appendSharedSuccessor(self: *Detection, work: *std.ArrayList(WorkItem), stmt_id: CFStmtId) ResourceError!void {
-        if (self.scratch.stamps.get(stmt_id) == self.scratch.generation + 2) return;
-        try work.append(self.scratch.gpa, .{ .stmt = stmt_id, .edge = .proc_body });
-    }
-
-    fn appendSuccessorsForSharedPropagation(self: *Detection, work: *std.ArrayList(WorkItem), stmt: LIR.CFStmt) ResourceError!void {
-        switch (stmt) {
-            .join => |s| {
-                try self.appendSharedSuccessor(work, s.remainder);
-                try self.appendSharedSuccessor(work, s.body);
-            },
-            .switch_stmt => |s| {
-                if (s.continuation) |continuation| {
-                    try self.appendSharedSuccessor(work, continuation);
-                }
-                try self.appendSharedSuccessor(work, s.default_branch);
-                const branches = self.store.getCFSwitchBranches(s.branches);
-                for (0..branches.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(branches, index).body);
-            },
-            .switch_initialized_payload => |s| {
-                try self.appendSharedSuccessor(work, s.initialized_branch);
-                try self.appendSharedSuccessor(work, s.uninitialized_branch);
-            },
-            inline .str_match, .boxy_tag_match => |s| {
-                try self.appendSharedSuccessor(work, s.on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
-            .str_match_set => |s| {
-                const arms = self.store.getStrMatchArms(s.arms);
-                for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
-            .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
-                try self.appendSharedSuccessor(work, s.next);
-            },
+            try body_clone.appendSuccessors(self.store, work, stmt_id, gpa);
         }
     }
 
@@ -650,7 +634,7 @@ const Detection = struct {
 
         // A self-call starts a new candidate (after the use checks above, so
         // its arguments invalidate any candidate locals they mention).
-        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and stmt.assign_call.tail_call == null) {
+        if (stmt == .assign_call and stmt.assign_call.proc == self.proc_id and !stmt.assign_call.tail_call.isSite()) {
             if (self.scratch.candidates.items.len == max_candidates) {
                 self.bail = true;
                 return;
@@ -734,12 +718,12 @@ const Detection = struct {
             },
             .assign_ref => |s| {
                 if (candidate.state != .tagged) return false;
-                const source = if (s.op == .local)
-                    s.op.local
-                else if (s.op == .nominal)
-                    s.op.nominal.backing_ref
-                else if (s.op == .list_reinterpret)
-                    s.op.list_reinterpret.backing_ref
+                const source = if (s.op.kind == .local)
+                    s.op.source
+                else if (s.op.kind == .nominal)
+                    s.op.source
+                else if (s.op.kind == .list_reinterpret)
+                    s.op.source
                 else
                     return false;
                 if (source != candidate.current()) return false;
@@ -765,30 +749,16 @@ const Detection = struct {
             .assign_call,
             .assign_call_erased,
             .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
             .assign_list,
             .store_struct,
             .store_tag,
             .set_local,
+            .dyn,
             .debug,
             .expect,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
             .incref,
             .decref,
             .decref_if_initialized,
@@ -797,8 +767,6 @@ const Detection = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .crash,
             => return false,
@@ -833,97 +801,69 @@ const Detection = struct {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
         if (local_layout.tag != .box) return false;
         const inner = self.layouts.getLayout(local_layout.getIdx());
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return inner.eql(ret_layout);
     }
 
     fn isRetLayoutLocal(self: *const Detection, local: LocalId) bool {
         const local_layout = self.layouts.getLayout(self.store.getLocal(local).layout_idx);
-        const ret_layout = self.layouts.getLayout(self.store.getProcSpec(self.proc_id).ret_layout);
+        const ret_layout = self.layouts.getLayout(self.store.getProcSpecImmediate(self.proc_id).ret_layout);
         return local_layout.eql(ret_layout);
     }
 
     /// Any read of a chain local (or write over one mid-chain) outside the
     /// blessed transitions permanently invalidates the candidate.
     fn stmtTouchesChain(self: *const Detection, stmt: LIR.CFStmt, candidate: *const Candidate) bool {
-        const c = candidate;
-        return switch (stmt) {
-            .assign_ref => |s| switch (s.op) {
-                .local => |src| c.chainContains(src),
-                .discriminant => |d| c.chainContains(d.source),
-                .field => |f| c.chainContains(f.source),
-                inline .tag_payload, .tag_payload_struct => |t| c.chainContains(t.source),
-                .list_reinterpret => |l| c.chainContains(l.backing_ref),
-                .nominal => |n| c.chainContains(n.backing_ref),
-            },
-            .assign_literal => false,
-            .assign_packed_erased_fn => |s| (s.capture != null and c.chainContains(s.capture.?)) or
-                (s.reuse != null and c.chainContains(s.reuse.?)) or
-                (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
-            .init_uninitialized => |s| c.chainContains(s.target),
-            inline .assign_call, .assign_low_level => |s| self.spanTouchesChain(s.args, c),
-            .assign_call_erased => |s| c.chainContains(s.closure) or
-                (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
-                self.spanTouchesChain(s.args, c),
-            .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
-                (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
-                self.spanTouchesChain(s.captures, c),
-            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.captures, c),
-            .assign_boxy_box => |s| c.chainContains(s.payload) or if (s.payload_desc) |desc| self.descRefTouchesChain(desc, c) else false,
-            .assign_boxy_record_update => |s| c.chainContains(s.base) or c.chainContains(s.fields) or
-                self.descRefTouchesChain(s.base_desc, c) or self.descRefTouchesChain(s.fields_desc, c),
-            .assign_boxy_reuse_box => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_unbox => |s| c.chainContains(s.source) or
-                self.descRefTouchesChain(s.source_desc, c) or
-                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
-            .assign_boxy_adapt => |s| c.chainContains(s.source) or
-                (s.source_desc != null and self.descRefTouchesChain(s.source_desc.?, c)) or
-                (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
-            .assign_boxy_inspect => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .assign_boxy_eq => |s| c.chainContains(s.lhs) or c.chainContains(s.rhs) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_hash => |s| c.chainContains(s.value) or c.chainContains(s.hasher) or self.descRefTouchesChain(s.desc, c),
-            .assign_boxy_tag => |s| self.descRefTouchesChain(s.target_desc, c) or
-                (s.payload != null and c.chainContains(s.payload.?)) or
-                (s.payload_desc != null and self.descRefTouchesChain(s.payload_desc.?, c)),
-            .assign_boxy_tag_payload => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .boxy_tag_match => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .assign_call_dict => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.args, c) or self.spanTouchesChain(s.arg_descs, c) or self.spanTouchesChain(s.hidden_args, c),
-            .assign_list => |s| self.spanTouchesChain(s.elems, c),
-            .assign_struct => |s| self.spanTouchesChain(s.fields, c),
-            .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
-                (if (s.payload) |payload| c.chainContains(payload) else false),
-            .store_struct => |s| c.chainContains(s.dest) or self.spanTouchesChain(s.fields, c),
-            .store_tag => |s| c.chainContains(s.dest) or if (s.payload) |payload| c.chainContains(payload) else false,
-            // Reading the value is a use; overwriting a tracked local would
-            // corrupt the chain, so treat that as disqualifying too.
-            .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
-            inline .debug, .expect_err => |s| c.chainContains(s.message),
-            .expect => |s| c.chainContains(s.condition),
-            inline .incref, .decref, .free, .ret => |s| c.chainContains(s.value),
-            .decref_if_initialized => |s| c.chainContains(s.cond) or c.chainContains(s.value),
-            .switch_stmt => |s| c.chainContains(s.cond),
-            .switch_initialized_payload => |s| c.chainContains(s.cond) or c.chainContains(s.payload),
-            .str_match, .str_match_set => true,
-            .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
-            .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
-        };
+        switch (stmt) {
+            // Initializing or overwriting a tracked local would corrupt the
+            // chain, so those writes disqualify like reads do.
+            .init_uninitialized => |s| if (candidate.chainContains(s.target)) return true,
+            .set_local => |s| if (candidate.chainContains(s.target)) return true,
+            // A string match binds views into its source and its arms are
+            // not blessed transitions, so it always ends the candidate.
+            .str_match, .str_match_set => return true,
+            .assign_ref,
+            .assign_literal,
+            .assign_call,
+            .assign_call_erased,
+            .assign_packed_erased_fn,
+            .assign_low_level,
+            .assign_list,
+            .dyn,
+            .assign_struct,
+            .assign_tag,
+            .store_struct,
+            .store_tag,
+            .debug,
+            .expect,
+            .expect_err,
+            .runtime_error,
+            .comptime_exhaustiveness_failed,
+            .incref,
+            .decref,
+            .decref_if_initialized,
+            .free,
+            .switch_stmt,
+            .switch_initialized_payload,
+            .join,
+            .jump,
+            .ret,
+            .crash,
+            => {},
+        }
+        var probe: ChainProbe = .{ .candidate = candidate };
+        body_clone.forEachStmtRead(self.store, stmt, &probe, ChainProbe.note);
+        return probe.hit;
     }
 
-    fn spanTouchesChain(self: *const Detection, span: LIR.LocalSpan, candidate: *const Candidate) bool {
-        const locals = self.store.getLocalSpan(span);
-        for (0..locals.len) |index| if (candidate.chainContains(GuardedList.at(locals, index))) return true;
-        return false;
-    }
+    const ChainProbe = struct {
+        candidate: *const Candidate,
+        hit: bool = false,
 
-    fn descRefTouchesChain(_: *const Detection, desc: LIR.BoxyDescRef, candidate: *const Candidate) bool {
-        const local = desc.localOrNull() orelse return false;
-        return candidate.chainContains(local);
-    }
-
-    fn dictRefTouchesChain(_: *const Detection, dict: LIR.BoxyDictRef, candidate: *const Candidate) bool {
-        const local = dict.localOrNull() orelse return false;
-        return candidate.chainContains(local);
-    }
+        fn note(probe: *ChainProbe, local: LocalId) void {
+            if (probe.candidate.chainContains(local)) probe.hit = true;
+        }
+    };
 
     fn invalidateSharedRewriteCandidates(self: *Detection) void {
         for (self.scratch.candidates.items) |*candidate| {
@@ -965,8 +905,6 @@ const Detection = struct {
             inline .switch_branch, .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
             .switch_default => |stmt| self.isSharedPath(stmt),
             .switch_continuation => |stmt| self.isSharedPath(stmt),
-            .boxy_tag_on_match => |stmt| self.isSharedPath(stmt),
-            .boxy_tag_on_miss => |stmt| self.isSharedPath(stmt),
         };
     }
 
@@ -1017,7 +955,7 @@ const Transform = struct {
     old_args: []const LocalId,
     join_id: JoinPointId,
     /// Movement state is indexed only for parameters of this procedure.
-    move_targets: collections.DenseMap(LocalId, usize),
+    move_targets: *collections.DenseMap(LocalId, usize),
     moves: *std.ArrayList(LoopMove),
     ready_moves: *std.ArrayList(usize),
     hole: LocalId = undefined,
@@ -1034,8 +972,8 @@ const Transform = struct {
             .moves = &detection.scratch.moves,
             .ready_moves = &detection.scratch.ready_moves,
             .old_args = &.{},
-            .move_targets = .init(gpa),
-            .join_id = if (store.getProcSpec(proc_id).tail_calls) |sites|
+            .move_targets = &detection.scratch.move_targets,
+            .join_id = if (store.getProcSpecImmediate(proc_id).tail_calls) |sites|
                 sites.loop
             else
                 @fromBackingInt(@intCast(detection.max_join_id + 1)),
@@ -1043,7 +981,7 @@ const Transform = struct {
     }
 
     fn deinit(self: *Transform) void {
-        self.move_targets.deinit();
+        self.move_targets.clearRetainingCapacity();
     }
 
     fn copyArgs(self: *Transform, span: LIR.LocalSpan) ResourceError!void {
@@ -1115,7 +1053,7 @@ const Transform = struct {
 
     /// `ret v` becomes: write v through the hole, load the head, return it.
     fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
-        const value = self.store.getCFStmt(ret_stmt).ret.value;
+        const value = self.store.getCFStmtImmediate(ret_stmt).ret.value;
         const origin = trmcOrigin(self.store.stmtOrigin(ret_stmt));
 
         const final = try self.addLocal(ret_layout);
@@ -1126,7 +1064,7 @@ const Transform = struct {
         try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = load,
         } }, origin);
@@ -1141,9 +1079,9 @@ const Transform = struct {
         const empty_args = try self.store.addLocalSpan(&.{});
         const box_origin = trmcOrigin(self.store.stmtOrigin(candidate.box_stmt));
         const cell = blk: {
-            var alloc = self.store.getCFStmt(candidate.box_stmt).assign_low_level;
+            var alloc = self.store.getCFStmtImmediate(candidate.box_stmt).assign_low_level;
             alloc.op = .box_alloc_zeroed;
-            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.rc_effect = try self.store.addRcEffect(LowLevelOp.box_alloc_zeroed.rcEffect());
             alloc.args = empty_args;
             try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
             break :blk alloc.target;
@@ -1156,7 +1094,7 @@ const Transform = struct {
         const cast = try self.store.addCFStmt(.{ .assign_low_level = .{
             .target = next_hole,
             .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_cast.rcEffect()),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
         } }, box_origin);
@@ -1181,17 +1119,17 @@ const Transform = struct {
         try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
-            .rc_effect = LowLevelOp.ptr_store.rcEffect(),
+            .rc_effect = try self.store.addRcEffect(LowLevelOp.ptr_store.rcEffect()),
             .args = store_args,
             .next = loop_back,
         } }, terminal_origin);
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
-        var site: ?CFStmtId = if (self.store.getProcSpec(self.proc_id).tail_calls) |sites| sites.head else null;
+        var site: ?CFStmtId = if (self.store.getProcSpecImmediate(self.proc_id).tail_calls) |sites| sites.head else null;
         while (site) |id| {
-            const call = self.store.getCFStmt(id).assign_call;
-            site = call.tail_call.?.next;
+            const call = self.store.getCFStmtImmediate(id).assign_call;
+            site = call.tail_call.next();
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
             const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));
@@ -1271,7 +1209,7 @@ const Transform = struct {
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
             try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
-                .op = .{ .local = move.target },
+                .op = .local(move.target),
                 .next = undefined,
             } });
             var index = start;
@@ -1312,7 +1250,7 @@ const Transform = struct {
     /// Wrap the (rewritten) body in the loop join and re-point the proc at
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
-        const old_body = self.store.getProcSpec(self.proc_id).body.?;
+        const old_body = self.store.getProcSpecImmediate(self.proc_id).body.?;
         const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
@@ -1412,7 +1350,7 @@ const Transform = struct {
     /// frame_locals must stay complete, unique, and sorted: the interpreter
     /// binary-searches it for every local in the proc.
     fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
-        const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
+        const old_span = self.store.getProcSpecImmediate(self.proc_id).frame_locals;
         const old = self.store.getLocalSpan(old_span);
         if (builtin.mode == .debug) {
             var previous: ?LocalId = null;
@@ -1437,48 +1375,11 @@ const Transform = struct {
     }
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
-        return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => unreachable,
-        };
+        return body_clone.linearNext(self.store.getCFStmt(stmt_id));
     }
 
     fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
-        const ptr = self.store.getCFStmtPtr(stmt_id);
-        switch (ptr.*) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => unreachable,
-        }
+        body_clone.setLinearNext(self.store.getCFStmtPtr(stmt_id), next);
     }
 
     fn unlink(self: *Transform, edge: Edge, replacement: CFStmtId) void {
@@ -1488,13 +1389,11 @@ const Transform = struct {
             .join_body => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.body = replacement,
             .join_remainder => |join_stmt| self.store.getCFStmtPtr(join_stmt).join.remainder = replacement,
             .switch_branch => |info| {
-                const span = self.store.getCFStmt(info.stmt).switch_stmt.branches;
+                const span = self.store.getCFStmtImmediate(info.stmt).switch_stmt.branches;
                 GuardedList.atPtr(self.store.getCFSwitchBranchesMut(span), info.index).body = replacement;
             },
             .switch_default => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.default_branch = replacement,
             .switch_continuation => |switch_id| self.store.getCFStmtPtr(switch_id).switch_stmt.continuation = replacement,
-            .boxy_tag_on_match => |stmt| self.store.getCFStmtPtr(stmt).boxy_tag_match.on_match = replacement,
-            .boxy_tag_on_miss => |stmt| self.store.getCFStmtPtr(stmt).boxy_tag_match.on_miss = replacement,
             .initialized_payload_branch => |info| {
                 const switch_stmt = &self.store.getCFStmtPtr(info.stmt).switch_initialized_payload;
                 if (info.initialized) {

@@ -124,11 +124,21 @@ test "evidence params enumerate in signature order" {
     try std.testing.expect(params.items[0].dispatcher_var != params.items[1].dispatcher_var);
 }
 
-test "independent same-name method uses share one evidence target" {
+test "same-name method uses at incompatible types on a generalized type are a method conflict" {
     const source =
         \\f1 = |list| list.map(|item| U32.to_u64(item))
         \\f2 = |list| list.map(|item| U32.to_u128(item))
         \\g = |list| (f1(list), f2(list))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "same-name method uses on a generalized type share one evidence target" {
+    const source =
+        \\f1 = |list| list.map(|item| U32.to_u64(item))
+        \\g = |list| (f1(list), f1(list))
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -171,7 +181,7 @@ test "evidence params reach vars bound only inside constraint fn types" {
 }
 
 test "record-tail evidence path is normalized to its logical row field" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;
@@ -210,7 +220,7 @@ test "record-tail evidence path is normalized to its logical row field" {
 }
 
 test "tag-tail evidence path is normalized to its logical tag payload" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;
@@ -252,7 +262,7 @@ test "tag-tail evidence path is normalized to its logical tag payload" {
 // the sum of all the depths, quadratic in nesting depth (a literal tens of
 // thousands of levels deep exhausted memory publishing its scheme).
 test "deeply nested evidence paths cost one node per distinct prefix" {
-    var test_env = try TestEnv.init("Test", "");
+    var test_env = try TestEnv.initOpen("Test", "");
     defer test_env.deinit();
 
     const gpa = std.testing.allocator;

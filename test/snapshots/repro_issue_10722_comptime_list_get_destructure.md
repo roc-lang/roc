@@ -129,7 +129,7 @@ NO CHANGE
 		(e-block
 			(s-let
 				(p-applied-tag)
-				(e-call (constraint-fn-var 283)
+				(e-call (constraint-fn-var 288)
 					(e-lookup-external
 						(builtin))
 					(e-list
@@ -144,7 +144,7 @@ NO CHANGE
 		(e-block
 			(s-let
 				(p-applied-tag)
-				(e-call (constraint-fn-var 312)
+				(e-call (constraint-fn-var 317)
 					(e-lookup-external
 						(builtin))
 					(e-list
@@ -160,7 +160,7 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-applied-tag)
-					(e-call (constraint-fn-var 336)
+					(e-call (constraint-fn-var 341)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -177,7 +177,7 @@ NO CHANGE
 			(e-block
 				(s-let
 					(p-applied-tag)
-					(e-call (constraint-fn-var 360)
+					(e-call (constraint-fn-var 365)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -193,11 +193,11 @@ NO CHANGE
 	(defs
 		(patt (type "[Ok({})]"))
 		(patt (type "[Ok({})]"))
-		(patt (type "({}) -> [Ok({})]"))
-		(patt (type "({}) -> [Ok({})]")))
+		(patt (type "() -> [Ok({})]"))
+		(patt (type "() -> [Ok({})]")))
 	(expressions
 		(expr (type "[Ok({})]"))
 		(expr (type "[Ok({})]"))
-		(expr (type "({}) -> [Ok({})]"))
-		(expr (type "({}) -> [Ok({})]"))))
+		(expr (type "() -> [Ok({})]"))
+		(expr (type "() -> [Ok({})]"))))
 ~~~

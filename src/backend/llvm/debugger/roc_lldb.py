@@ -9,7 +9,14 @@
 
 import lldb
 
-DEC_ONE = 10**18
+# Runtime representation constants. A test in
+# src/backend/llvm/debugger_constants.zig renders this block from the
+# canonical definitions in src/builtins and requires it verbatim.
+DEC_FRACTION_DIGITS = 18
+DEC_ONE = 10**DEC_FRACTION_DIGITS
+STR_WORD_COUNT = 3
+SMALL_STR_FLAG = 0x80
+SMALL_STR_LEN_MASK = 0x7F
 
 
 def _word_bytes(valobj):
@@ -20,16 +27,16 @@ def roc_str_summary(valobj, _internal_dict):
     err = lldb.SBError()
     word = _word_bytes(valobj)
     length = valobj.GetChildMemberWithName("length").GetValueAsUnsigned()
-    small_bit = 1 << (word * 8 - 1)
+    small_bit = SMALL_STR_FLAG << (word * 8 - 8)
     if length & small_bit:
-        # Small string: all three words are inline UTF-8; the final byte
+        # Small string: every word is inline UTF-8; the final byte
         # holds the length with its high bit set.
-        size = word * 3
+        size = word * STR_WORD_COUNT
         data = valobj.GetData()
         raw = bytearray(data.ReadRawData(err, 0, size))
         if err.Fail():
             return "<unreadable Str>"
-        n = raw[size - 1] & 0x7F
+        n = raw[size - 1] & SMALL_STR_LEN_MASK
         return '"' + bytes(raw[:n]).decode("utf-8", "replace") + '"'
     if length == 0:
         return '""'
@@ -57,7 +64,7 @@ def roc_dec_summary(valobj, _internal_dict):
     v = int.from_bytes(bytes(raw), "little", signed=True)
     sign = "-" if v < 0 else ""
     whole, frac = divmod(abs(v), DEC_ONE)
-    digits = ("%018d" % frac).rstrip("0")
+    digits = ("%0*d" % (DEC_FRACTION_DIGITS, frac)).rstrip("0")
     if digits:
         return "%s%d.%s" % (sign, whole, digits)
     return "%s%d" % (sign, whole)

@@ -11,6 +11,8 @@ const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
 const RegisterWidth = Registers.RegisterWidth;
+const SystemV = @import("SystemV.zig");
+const WindowsFastcall = @import("WindowsFastcall.zig");
 
 const Relocation = @import("../Relocation.zig").IndexedRelocation;
 
@@ -35,14 +37,14 @@ pub fn Emit(comptime target: RocTarget) type {
         /// Calling convention constants derived from target
         pub const CC = struct {
             pub const PARAM_REGS = if (target.isWindows())
-                [_]Registers.GeneralReg{ .RCX, .RDX, .R8, .R9 }
+                WindowsFastcall.GENERAL_PARAM_REGS
             else
-                [_]Registers.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
+                SystemV.GENERAL_PARAM_REGS;
 
             pub const FLOAT_PARAM_REGS = if (target.isWindows())
-                [_]Registers.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3 }
+                WindowsFastcall.FLOAT_PARAM_REGS
             else
-                [_]Registers.FloatReg{ .XMM0, .XMM1, .XMM2, .XMM3, .XMM4, .XMM5, .XMM6, .XMM7 };
+                SystemV.FLOAT_PARAM_REGS;
 
             pub const RETURN_REGS = if (target.isWindows())
                 [_]Registers.GeneralReg{.RAX}
@@ -625,12 +627,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(rel)));
         }
 
-        /// Jcc rel8 (conditional jump short)
-        pub fn jccRel8(self: *Self, cond: Condition, rel: i8) Allocator.Error!void {
-            try self.buf.append(self.allocator, 0x70 + @as(u8, @backingInt(cond)));
-            try self.buf.append(self.allocator, @bitCast(rel));
-        }
-
         /// JNE rel32 (jump if not equal)
         pub fn jne(self: *Self, rel: i32) Allocator.Error!void {
             try self.jccRel32(.not_equal, rel);
@@ -1000,6 +996,26 @@ pub fn Emit(comptime target: RocTarget) type {
                 byte3,
                 opcode,
                 modRM(0b11, digit, src.enc()),
+                imm,
+            });
+        }
+
+        /// Packed shift by immediate in the legacy SSE encoding. ModR/M.reg
+        /// selects the shift operation, and `dst` is both the shifted source
+        /// and the destination.
+        pub fn ssePackedShiftImm8(
+            self: *Self,
+            opcode: u8,
+            digit: u3,
+            dst: FloatReg,
+            imm: u8,
+        ) Allocator.Error!void {
+            try self.buf.append(self.allocator, 0x66);
+            if (dst.rexB() == 1) try self.buf.append(self.allocator, rex(0, 0, 0, 1));
+            try self.buf.appendSlice(self.allocator, &.{
+                0x0F,
+                opcode,
+                modRM(0b11, digit, dst.enc()),
                 imm,
             });
         }
@@ -1402,15 +1418,6 @@ test "cmp reg, reg" {
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x39, 0xD8 }, asm_buf.buf.items);
 }
 
-test "conditional jump" {
-    var asm_buf = LinuxEmit.init(std.testing.allocator);
-    defer asm_buf.deinit();
-
-    // je +0x10 (short form: 74 10)
-    try asm_buf.jccRel8(.equal, 0x10);
-    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x74, 0x10 }, asm_buf.buf.items);
-}
-
 test "addsd xmm, xmm" {
     var asm_buf = LinuxEmit.init(std.testing.allocator);
     defer asm_buf.deinit();
@@ -1553,25 +1560,6 @@ test "push/pop - all registers" {
         } else {
             try std.testing.expect(emit.buf.items.len == 1);
         }
-    }
-}
-
-test "jcc rel8 - all conditions" {
-    var emit = LinuxEmit.init(std.testing.allocator);
-    defer emit.deinit();
-
-    const conditions = [_]LinuxEmit.Condition{
-        .overflow, .not_overflow,     .below,          .above_or_equal,
-        .equal,    .not_equal,        .below_or_equal, .above,
-        .sign,     .not_sign,         .parity_even,    .parity_odd,
-        .less,     .greater_or_equal, .less_or_equal,  .greater,
-    };
-
-    for (conditions, 0..) |cond, i| {
-        emit.buf.clearRetainingCapacity();
-        try emit.jccRel8(cond, 0x10);
-        try std.testing.expectEqual(@as(u8, 0x70 + @as(u8, @intCast(i))), emit.buf.items[0]);
-        try std.testing.expectEqual(@as(u8, 0x10), emit.buf.items[1]);
     }
 }
 
@@ -1803,6 +1791,25 @@ test "sse2 packed mask ops" {
     emit.buf.clearRetainingCapacity();
     try emit.pslldRegImm8(.XMM0, 31);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x72, 0xF0, 31 }, emit.buf.items);
+}
+
+test "legacy SSE2 shuffles and immediate packed shifts" {
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    // psrldq xmm9, 8
+    try emit.ssePackedShiftImm8(0x73, 3, .XMM9, 8);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x41, 0x0F, 0x73, 0xD9, 8 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // psraw xmm2, 15
+    try emit.ssePackedShiftImm8(0x71, 4, .XMM2, 15);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x71, 0xE2, 15 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    // pshuflw xmm1, xmm10, 0x1b: the mandatory prefix precedes REX.
+    try emit.sseRegRegImm8(.map_0f, .pf2, 0x70, .XMM1, .XMM10, 0x1B);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x41, 0x0F, 0x70, 0xCA, 0x1B }, emit.buf.items);
 }
 
 test "function prologue sequence" {

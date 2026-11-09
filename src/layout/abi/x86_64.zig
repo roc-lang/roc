@@ -98,10 +98,10 @@ pub fn classifyWindows(store: *const Store, start: Idx) Class {
                 .vector => return .win_i128,
             }
         },
-        .box, .box_of_zst, .erased_box, .ptr => return .integer, // single pointer
+        .box, .box_of_zst, .ptr, .dynamic => return .integer, // single pointer
         .list, .list_of_zst => return .memory, // 24-byte aggregate
         .struct_, .tag_union, .closure, .erased_callable => {},
-        .zst => unreachable,
+        .zst, .hole => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
     }
 
     if (size == 1 or size == 2 or size == 4 or size == 8) return .integer;
@@ -140,7 +140,7 @@ pub fn classifySystemV(allocator: std.mem.Allocator, store: *const Store, idx: I
         // exactly like a box. Classifying it as an aggregate would recurse
         // forever: classifyAggregateSysV has no case for it and would route
         // it right back here.
-        .box, .box_of_zst, .erased_box, .ptr, .erased_callable => return Class.one_integer,
+        .box, .box_of_zst, .ptr, .dynamic, .erased_callable => return Class.one_integer,
         .list, .list_of_zst => return integerAggregateSysV(size),
         .struct_, .tag_union, .closure => {
             if (size > 64) return Class.stack;
@@ -148,7 +148,7 @@ pub fn classifySystemV(allocator: std.mem.Allocator, store: *const Store, idx: I
             try classifyAggregateSysV(allocator, store, &result, 0, idx);
             return finishSystemV(result, size);
         },
-        .zst => unreachable,
+        .zst, .hole => unreachable, // the size assertion above holds: callers never pass zero-sized values across the C ABI
     }
 }
 
@@ -166,9 +166,13 @@ fn integerAggregateSysV(size: u32) [8]Class {
 /// an explicit worklist and aggregate nesting never becomes native call depth.
 fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, result: *[8]Class, base_offset: u32, idx: Idx) std.mem.Allocator.Error!void {
     const Member = struct { offset: u32, idx: Idx };
+    // Aggregates classify in a few members, so the worklist starts on the stack.
+    var pending_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var pending_state = std.heap.BufferFirstAllocator.init(&pending_buffer, allocator);
+    const pending_allocator = pending_state.allocator();
     var pending: std.ArrayList(Member) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, .{ .offset = base_offset, .idx = idx });
+    defer pending.deinit(pending_allocator);
+    try pending.append(pending_allocator, .{ .offset = base_offset, .idx = idx });
     while (pending.pop()) |member| {
         const lay = store.getLayout(member.idx);
         switch (lay.tag) {
@@ -185,7 +189,7 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                         classifyPaddingBytesSysV(result, field_off, store.getStructFieldSize(struct_idx, i));
                         continue;
                     }
-                    try pending.append(allocator, .{ .offset = field_off, .idx = store.getStructFieldLayout(struct_idx, i) });
+                    try pending.append(pending_allocator, .{ .offset = field_off, .idx = store.getStructFieldLayout(struct_idx, i) });
                 }
             },
             .tag_union => {
@@ -197,7 +201,7 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                 while (v < variants.len) : (v += 1) {
                     const payload_idx = variants.get(v).payload_layout;
                     if (store.getLayout(payload_idx).tag == .zst) continue;
-                    try pending.append(allocator, .{ .offset = member.offset, .idx = payload_idx });
+                    try pending.append(pending_allocator, .{ .offset = member.offset, .idx = payload_idx });
                 }
                 // The discriminant is an integer placed at its offset.
                 if (data.discriminant_size > 0) {
@@ -205,18 +209,18 @@ fn classifyAggregateSysV(allocator: std.mem.Allocator, store: *const Store, resu
                     combineInto(result, disc_off / 8, .integer);
                 }
             },
-            .closure => try pending.append(allocator, .{ .offset = member.offset, .idx = lay.getClosure().captures_layout_idx }),
+            .closure => try pending.append(pending_allocator, .{ .offset = member.offset, .idx = lay.getClosure().captures_layout_idx }),
             // A zero-sized member occupies no bytes, so it contributes no eightbyte class.
-            .zst => {},
+            .zst, .hole => {},
             // A leaf member combines its own eightbyte classes.
             .scalar,
             .box,
             .box_of_zst,
-            .erased_box,
             .list,
             .list_of_zst,
             .erased_callable,
             .ptr,
+            .dynamic,
             => {
                 const classes = try classifySystemV(allocator, store, member.idx, .other);
                 var j: usize = 0;

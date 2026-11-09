@@ -158,7 +158,6 @@ const CompilerStageData = struct {
     parse_ast: ?*parse.AST = null,
     solver: ?Check = null,
     bool_stmt: ?can.CIR.Statement.Idx = null,
-    builtin_types: ?eval.BuiltinTypes = null,
     imported_modules: ?[]const *const ModuleEnv = null,
     auto_imported_types: ?*std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType) = null,
 
@@ -1001,6 +1000,8 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         1,
         .{
             .module_env_storage = .{ .static_builtin = builtin_module.env },
+            .hoisted_roots = .none,
+            .io = @as(std.Io, undefined),
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
         },
     );
@@ -1026,6 +1027,8 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
         0,
         .{
             .module_env_storage = .{ .checked_source = checked_module.module_env },
+            .hoisted_roots = .none,
+            .io = @as(std.Io, undefined),
             .imports = &publish_imports,
             .explicit_roots = &explicit_roots,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizer(),
@@ -1034,7 +1037,7 @@ fn compileReplInspectedModule(source: []const u8) PlaygroundCompileError!ReplCom
     errdefer root_artifact.deinitRetainingModuleEnv(allocator);
 
     var import_artifacts = [_]check.CheckedArtifact.CheckedModuleArtifact{builtin_artifact};
-    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32);
+    const lowered = try eval.Inspected.lowerCheckedModuleSetToLir(allocator, @as(std.Io, undefined), &root_artifact, &import_artifacts, .u32, .{});
 
     root_artifact.deinitRetainingModuleEnv(allocator);
     import_artifacts[0].deinitRetainingModuleEnv(allocator);
@@ -1352,9 +1355,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@backingInt(try_stmt_in_builtin_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
-    // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
+    // Store bool_stmt in result for later use (e.g., in test runner)
     result.bool_stmt = bool_stmt_in_builtin_module;
-    result.builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
 
     const str_stmt_in_builtin_module = builtin_indices.str_type;
 
@@ -1794,11 +1796,12 @@ fn argLayoutsForProc(
 }
 
 fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError![]u8 {
-    var resources = try eval.Inspected.parseAndCanonicalizeProgramPublishedRoots(
+    var resources = try eval.Inspected.parseProgram(
         allocator,
         .module,
         data.module_env.common.source,
         &.{},
+        .{ .io = @as(std.Io, undefined), .roots = .published_only },
     );
     defer eval.Inspected.cleanupParseAndCanonical(allocator, resources);
 
@@ -1840,11 +1843,10 @@ fn buildEvaluateTestsHtml(data: CompilerStageData) PlaygroundEvaluateTestsError!
 
     var static_strings = try eval.LirInterpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
-    var interpreter = try eval.LirInterpreter.initWithBoxyTables(
+    var interpreter = try eval.LirInterpreter.init(
         allocator,
         &lowered.lir_result.store,
         &lowered.lir_result.layouts,
-        eval.LirInterpreter.BoxyTables.fromResult(&lowered.lir_result),
         static_strings.view(),
         runtime_env.get_ops(),
     );
@@ -2222,7 +2224,7 @@ export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]
             .invalid_state_for_message => "Invalid state for message",
             .response_buffer_too_small => "Response buffer too small",
             .internal_error => "Internal WASM error during processing",
-            .success => unreachable,
+            .success => unreachable, // success is code 0, which the enclosing check excludes
         };
         return createSimpleErrorJson(error_message);
     }

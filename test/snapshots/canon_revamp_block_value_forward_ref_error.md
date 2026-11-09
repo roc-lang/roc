@@ -36,7 +36,7 @@ UNUSED VARIABLE - canon_revamp_block_value_forward_ref_error.md:3:5:3:6
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "y")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_y")

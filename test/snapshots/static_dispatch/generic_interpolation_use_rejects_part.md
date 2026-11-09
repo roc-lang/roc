@@ -42,7 +42,19 @@ TYPE MISMATCH - generic_interpolation_use_rejects_part.md:1:22:1:26
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -100,7 +112,7 @@ NO CHANGE
 					(p-assign (ident "#interp_0"))
 					(e-lookup-local
 						(p-assign (ident "name"))))
-				(e-interpolation (constraint-fn-var 248) (dispatcher-var 9)
+				(e-interpolation (constraint-fn-var 256) (dispatcher-var 9)
 					(first
 						(e-literal (string "hi ")))
 					(parts
@@ -109,7 +121,7 @@ NO CHANGE
 						(e-literal (string "")))))))
 	(d-let
 		(p-assign (ident "ok"))
-		(e-call (constraint-fn-var 267)
+		(e-call (constraint-fn-var 296)
 			(e-lookup-local
 				(p-assign (ident "greet")))
 			(e-string
@@ -118,7 +130,7 @@ NO CHANGE
 			(ty-lookup (name "Str") (builtin))))
 	(d-let
 		(p-assign (ident "bad"))
-		(e-call (constraint-fn-var 277)
+		(e-call (constraint-fn-var 306)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-typed-int (value "42") (type "U64")))
 		(annotation
@@ -128,11 +140,11 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(patt (type "item -> a where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(patt (type "Str"))
 		(patt (type "Str")))
 	(expressions
-		(expr (type "a -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
+		(expr (type "item -> a where [a.from_interpolation : List(Str) -> Try(Iter(item) -> a, [InvalidInterpolation(Str)])]"))
 		(expr (type "Str"))
 		(expr (type "Str"))))
 ~~~

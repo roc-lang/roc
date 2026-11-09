@@ -10,28 +10,20 @@ if bool {
 } else 2
 ~~~
 # EXPECTED
-MISSING METHOD - if_then_else_simple_block_formatting.md:3:8:3:9
+TYPE MISMATCH - if_then_else_simple_block_formatting.md:3:8:3:9
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Mismatch")
 		(region (start 3 8) (end 3 9))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "This number is being used where a non-number type is needed."))
 		(document
 			(source-region (file "if_then_else_simple_block_formatting.md") (start 3 8) (end 3 9) (annotation error) (line-text "} else 2"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Other code expects this to have the type:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)

@@ -11,6 +11,9 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
         reader: ReaderType,
         writer: WriterType,
         log_file: ?std.Io.File = null,
+        /// Messages are read on the server's reader task and written on its
+        /// main task, and both log to `log_file`.
+        log_mutex: std.Io.Mutex = .init,
 
         pub const ReadMessageError = std.mem.Allocator.Error || error{
             EndOfStream,
@@ -80,6 +83,18 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             return payload;
         }
 
+        /// Whether input the reader already received is waiting to be read,
+        /// so the next read will not wait for the client.
+        pub fn hasBufferedInput(self: *Self) bool {
+            if (@hasDecl(ReaderType, "bufferedLen")) {
+                return self.reader.bufferedLen() != 0;
+            } else if (@hasField(ReaderType, "interface")) {
+                return self.reader.interface.bufferedLen() != 0;
+            } else {
+                @compileError("ReaderType must provide either a bufferedLen method or expose an interface field");
+            }
+        }
+
         pub fn sendBytes(self: *Self, payload: []const u8) WriteMessageError!void {
             var header_buffer: [64]u8 = undefined;
             const header = std.fmt.bufPrint(&header_buffer, "Content-Length: {d}\r\n\r\n", .{payload.len}) catch return error.WriteFailed;
@@ -124,14 +139,15 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             return buffer.items;
         }
 
+        /// A `std.Io.Writer` write may return 0 without reaching the end of the stream, e.g. when it
+        /// only drained its buffer, which `std.Io.File.Writer` does on Windows. `writeAll` retries.
         fn writeAll(self: *Self, bytes: []const u8) WriteMessageError!void {
-            var offset: usize = 0;
-            while (offset < bytes.len) {
-                const written = try self.writeSome(bytes[offset..]);
-                if (written == 0) {
-                    std.debug.panic("writer returned 0 bytes without error", .{});
-                }
-                offset += written;
+            if (@hasDecl(WriterType, "writeAll")) {
+                self.writer.writeAll(bytes) catch return error.WriteFailed;
+            } else if (@hasField(WriterType, "interface")) {
+                (&self.writer.interface).writeAll(bytes) catch return error.WriteFailed;
+            } else {
+                @compileError("WriterType must provide either a writeAll method or expose an interface field");
             }
         }
 
@@ -147,16 +163,6 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
             }
         }
 
-        fn writeSome(self: *Self, bytes: []const u8) WriteMessageError!usize {
-            if (@hasDecl(WriterType, "write")) {
-                return self.writer.write(bytes) catch return error.WriteFailed;
-            } else if (@hasField(WriterType, "interface")) {
-                return (&self.writer.interface).write(bytes) catch return error.WriteFailed;
-            } else {
-                @compileError("WriterType must provide either a write method or expose an interface field");
-            }
-        }
-
         fn flushWriter(self: *Self) WriteMessageError!void {
             if (@hasDecl(WriterType, "flush")) {
                 self.writer.flush() catch return error.WriteFailed;
@@ -167,6 +173,8 @@ pub fn Transport(comptime ReaderType: type, comptime WriterType: type) type {
 
         fn logMessage(self: *Self, direction: []const u8, payload: []const u8) void {
             var log_file = self.log_file orelse return;
+            self.log_mutex.lockUncancelable(self.std_io);
+            defer self.log_mutex.unlock(self.std_io);
             var header_buffer: [128]u8 = undefined;
             const header = std.fmt.bufPrint(
                 &header_buffer,

@@ -600,7 +600,7 @@ Builtin :: [].{
 
 			normalize_json_dec_digits : Bool, Str, I64 -> Try(Str, [BadNumStr])
 			normalize_json_dec_digits = |negative, digits, point| {
-				sign = if negative "-" else ""
+				sign = if (negative) "-" else ""
 
 				if point <= 0 {
 					zero_count = point.negate().to_u64_wrap()
@@ -1148,14 +1148,14 @@ Builtin :: [].{
 
 			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json({}))
+				if (count == 0) Ok(state) else Err(Json.invalid_json({}))
 
 			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_string_tag_payload = |_, _, _| Err(Json.invalid_json({}))
 
 			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json({}))
+				if (count == 0) Ok(state) else Err(Json.invalid_json({}))
 
 			## A multi-payload tag writes its payloads as a JSON array, which is
 			## a fixed-arity sequence, so it reads back through the tuple
@@ -1798,7 +1798,7 @@ Builtin :: [].{
 			encode_bool = |value, state|
 				Ok(
 					JsonEncodeState.{
-						output: Json.append_json_string_bytes(state.output, if value "true" else "false"),
+						output: Json.append_json_string_bytes(state.output, if (value) "true" else "false"),
 					},
 				)
 
@@ -1986,7 +1986,7 @@ Builtin :: [].{
 			encode_key_str = |_, key, state| JsonEncoding.encode_str(key, state)
 
 			encode_key_bool : JsonEncoding, Bool, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
-			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if key "true" else "false", state)
+			encode_key_bool = |_, key, state| JsonEncoding.encode_str(if (key) "true" else "false", state)
 
 			encode_key_u8 : JsonEncoding, U8, JsonEncodeState -> Try(JsonEncodeState, _never_fails)
 			encode_key_u8 = |_, key, state| JsonEncoding.encode_str(json_u8_to_str(key), state)
@@ -2551,7 +2551,7 @@ Builtin :: [].{
 				byte_count = Str.count_utf8_bytes(str)
 
 				iter_from_step(
-					Known(byte_count - index),
+					Ok(byte_count - index),
 					||
 						if index == byte_count {
 							Done
@@ -2748,6 +2748,10 @@ Builtin :: [].{
 		## expect Str.from_utf8([255]).is_err()
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
+		from_utf8 = |bytes| match str_from_utf8_raw(bytes) {
+			Ok(str) => Ok(str)
+			Err(problem) => Err(BadUtf8(problem))
+		}
 
 		## Decodes little-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
 		## Returns the first malformed sequence's zero-based byte offset and problem.
@@ -2895,17 +2899,17 @@ Builtin :: [].{
 		##
 		## The compiler calls this at compile time with the literal's segments: the
 		## text before the first interpolation, then the text after each one. It
-		## returns the function the compiler calls at runtime with the interpolated
-		## values, in order, to assemble the string.
+		## returns the function the compiler calls at runtime with an iterator over
+		## the interpolated values, in order, to assemble the string.
 		## ```roc
-		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"])) == Ok("abc")
+		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"].iter())) == Ok("abc")
 		## ```
-		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
+		from_interpolation : List(Str) -> Try((Iter(Str) -> Str), [InvalidInterpolation(Str)])
 		from_interpolation = |segments|
 			Ok(
 				|values| {
 					first = List.first(segments).ok_or("")
-					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+					values.with_index().fold(first, |acc, (index, value)| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
 				},
 			)
 
@@ -3199,17 +3203,17 @@ Builtin :: [].{
 
 	Iter(item) :: {
 		# The sequence being iterated, or e.g. a range, is captured in the step thunk.
-		len_if_known : [Known(U64), Unknown],
+		len_if_known : Try(U64, [Unknown]),
 		step : () -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done],
 	}.{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
-		# `Known(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
-		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
-		custom = |seed, len_if_known, advance|
+		# `Ok(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
+		custom : state, Try(U64, [Unknown]), (state -> Try((item, state), [NoMore])) -> Iter(item)
+		custom = |seed, known_len, advance|
 			iter_from_step(
-				len_if_known,
+				known_len,
 				||
 					match advance(seed) {
 						Ok((item, next_seed)) =>
@@ -3217,14 +3221,14 @@ Builtin :: [].{
 								item,
 								rest: Iter.custom(
 									next_seed,
-									# A source that outlives its `Known` count crashes on this
+									# A source that outlives its `Ok` count crashes on this
 									# subtraction, before the extra item reaches the unchecked
 									# append in `List.from_iter`. No extra branch here: ranges
 									# are built on `custom`, and loops rely on this step
 									# optimizing away completely.
-									match len_if_known {
-										Known(l) => Known(l - 1)
-										Unknown => Unknown
+									match known_len {
+										Ok(l) => Ok(l - 1)
+										Err(Unknown) => Err(Unknown)
 									},
 									advance,
 								),
@@ -3248,9 +3252,9 @@ Builtin :: [].{
 			make = |pending|
 				iter_from_step(
 					if pending {
-						Known(1)
+						Ok(1)
 					} else {
-						Known(0)
+						Ok(0)
 					},
 					||
 						if pending {
@@ -3265,9 +3269,6 @@ Builtin :: [].{
 
 		## Returns an iterator that yields the given item first, followed by
 		## everything the given iterator yields.
-		##
-		## The compiler uses this to assemble the iterator it passes to
-		## `from_interpolation` when checking an interpolated string literal.
 		## ```roc
 		## expect Iter.fold([2, 3].iter().prepended(1), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -3275,8 +3276,8 @@ Builtin :: [].{
 		prepended = |rest, item|
 			iter_from_step(
 				match rest.len_if_known {
-					Known(n) => Known(n + 1)
-					Unknown => Unknown
+					Ok(n) => Ok(n + 1)
+					Err(Unknown) => Err(Unknown)
 				},
 				|| One({ item, rest }),
 			)
@@ -3291,15 +3292,15 @@ Builtin :: [].{
 			make = |remaining_first, remaining_second|
 				iter_from_step(
 					match remaining_first.len_if_known {
-						Known(first_len) => match remaining_second.len_if_known {
-							Known(second_len) => if second_len > 18446744073709551615 - first_len {
-								Unknown
+						Ok(first_len) => match remaining_second.len_if_known {
+							Ok(second_len) => if second_len > 18446744073709551615 - first_len {
+								Err(Unknown)
 							} else {
-								Known(first_len + second_len)
+								Ok(first_len + second_len)
 							}
-							Unknown => Unknown
+							Err(Unknown) => Err(Unknown)
 						}
-						Unknown => Unknown
+						Err(Unknown) => Err(Unknown)
 					},
 					||
 						# Once `remaining_first` is exhausted it is kept (not swapped
@@ -3324,6 +3325,9 @@ Builtin :: [].{
 
 		## Returns an iterator that yields everything from the given iterator,
 		## followed by the given item.
+		##
+		## The compiler builds the iterator it passes to a `from_interpolation`
+		## assembler with this, appending each interpolated value in order.
 		## ```roc
 		## expect Iter.fold([1.I64, 2].iter().append(3), [], |acc, item| acc.append(item)) == [1, 2, 3]
 		## ```
@@ -3333,16 +3337,16 @@ Builtin :: [].{
 				iter_from_step(
 					if pending_last {
 						match current.len_if_known {
-							Known(len) =>
+							Ok(len) =>
 								if len == 18446744073709551615 {
-									Unknown
+									Err(Unknown)
 								} else {
-									Known(len + 1)
+									Ok(len + 1)
 								}
-							Unknown => Unknown
+							Err(Unknown) => Err(Unknown)
 						}
 					} else {
-						Known(0)
+						Ok(0)
 					},
 					||
 						if pending_last {
@@ -3365,9 +3369,9 @@ Builtin :: [].{
 		map : Iter(a), (a -> b) -> Iter(b)
 		map = |iterator, transform|
 			match iterator {
-				{ len_if_known, .. } =>
+				{ len_if_known: known_len, .. } =>
 					iter_from_step(
-						len_if_known,
+						known_len,
 						||
 							match Iter.next(iterator) {
 								Done => Done
@@ -3391,7 +3395,7 @@ Builtin :: [].{
 		keep_if : Iter(a), (a -> Bool) -> Iter(a)
 		keep_if = |iterator, predicate|
 			iter_from_step(
-				Unknown,
+				Err(Unknown),
 				||
 					match Iter.next(iterator) {
 						Done => Done
@@ -3408,7 +3412,7 @@ Builtin :: [].{
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
 		drop_if = |iterator, predicate|
 			iter_from_step(
-				Unknown,
+				Err(Unknown),
 				||
 					match Iter.next(iterator) {
 						Done => Done
@@ -3516,9 +3520,9 @@ Builtin :: [].{
 
 		## Returns the iterator's length if it is known up front, so collections
 		## can pre-size their allocation.
-		size_hint : Iter(item) -> [Known(U64), Unknown]
-		size_hint = |iterator| match iterator {
-			{ len_if_known, .. } => len_if_known
+		len_if_known : Iter(item) -> Try(U64, [Unknown])
+		len_if_known = |iterator| match iterator {
+			{ len_if_known: known_len, .. } => known_len
 		}
 
 		## Collect this iterator into any output type that provides `from_iter`.
@@ -3545,20 +3549,20 @@ Builtin :: [].{
 		take_first : Iter(item), U64 -> Iter(item)
 		take_first = |iterator, n|
 			match iterator {
-				{ len_if_known, .. } =>
+				{ len_if_known: known_len, .. } =>
 					iter_from_step(
-						match len_if_known {
-							Known(len) => Known(
+						match known_len {
+							Ok(len) => Ok(
 								if len < n {
 									len
 								} else {
 									n
 								},
 							)
-							Unknown => if n == 0 {
-								Known(0)
+							Err(Unknown) => if n == 0 {
+								Ok(0)
 							} else {
-								Unknown
+								Err(Unknown)
 							}
 						},
 						||
@@ -3584,17 +3588,17 @@ Builtin :: [].{
 		drop_first : Iter(item), U64 -> Iter(item)
 		drop_first = |iterator, n|
 			match iterator {
-				{ len_if_known, .. } =>
+				{ len_if_known: known_len, .. } =>
 					iter_from_step(
-						match len_if_known {
-							Known(len) => Known(
+						match known_len {
+							Ok(len) => Ok(
 								if len < n {
 									0
 								} else {
 									len - n
 								},
 							)
-							Unknown => Unknown
+							Err(Unknown) => Err(Unknown)
 						},
 						||
 							match Iter.next(iterator) {
@@ -3628,7 +3632,7 @@ Builtin :: [].{
 	## source via [Stream.custom], and consumed by a `for!` loop, [Stream.fold!],
 	## [Stream.for_each!], or [Stream.collect!].
 	Stream(item) :: {
-		len_if_known : [Known(U64), Unknown],
+		len_if_known : Try(U64, [Unknown]),
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
 	}.{
 
@@ -3638,7 +3642,7 @@ Builtin :: [].{
 		from_iter : Iter(item) -> Stream(item)
 		from_iter = |iterator|
 			stream_from_step(
-				Iter.size_hint(iterator),
+				Iter.len_if_known(iterator),
 				||
 					match Iter.next(iterator) {
 						Done => Done
@@ -3650,17 +3654,17 @@ Builtin :: [].{
 		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
 		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
 		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
-		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
-		## is only discovered by reading (files, stdin, sockets) use `Unknown`. A source that
-		## yields more items than its `Known` count reports `Unknown` from then on.
+		## stream runs no effects. `Ok(n)` promises exactly n items; sources whose length
+		## is only discovered by reading (files, stdin, sockets) use `Err(Unknown)`. A source that
+		## yields more items than its `Ok` count reports `Err(Unknown)` from then on.
 		##
 		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
 		## error, yield it paired with a terminal state that holds no resource, so the
 		## resource is released rather than retained by the rest of the stream.
-		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
-		custom = |seed, len_if_known, advance!|
+		custom : state, Try(U64, [Unknown]), (state => Try((item, state), [NoMore])) -> Stream(item)
+		custom = |seed, known_len, advance!|
 			stream_from_step(
-				len_if_known,
+				known_len,
 				||
 					match advance!(seed) {
 						Ok((item, next_seed)) =>
@@ -3668,12 +3672,12 @@ Builtin :: [].{
 								item,
 								rest: Stream.custom(
 									next_seed,
-									# A source that outlives its `Known` count degrades to
-									# `Unknown` instead of underflowing the countdown.
-									match len_if_known {
-										Known(0) => Unknown
-										Known(l) => Known(l - 1)
-										Unknown => Unknown
+									# A source that outlives its `Ok` count degrades to
+									# `Err(Unknown)` instead of underflowing the countdown.
+									match known_len {
+										Ok(0) => Err(Unknown)
+										Ok(l) => Ok(l - 1)
+										Err(Unknown) => Err(Unknown)
 									},
 									advance!,
 								),
@@ -3688,9 +3692,9 @@ Builtin :: [].{
 		map : Stream(a), (a => b) -> Stream(b)
 		map = |source, transform!|
 			match source {
-				{ len_if_known, .. } =>
+				{ len_if_known: known_len, .. } =>
 					stream_from_step(
-						len_if_known,
+						known_len,
 						||
 							match Stream.next!(source) {
 								Done => Done
@@ -3715,7 +3719,7 @@ Builtin :: [].{
 		keep_if : Stream(a), (a => Bool) -> Stream(a)
 		keep_if = |source, predicate!|
 			stream_from_step(
-				Unknown,
+				Err(Unknown),
 				||
 					match Stream.next!(source) {
 						Done => Done
@@ -3734,7 +3738,7 @@ Builtin :: [].{
 		drop_if : Stream(a), (a => Bool) -> Stream(a)
 		drop_if = |source, predicate!|
 			stream_from_step(
-				Unknown,
+				Err(Unknown),
 				||
 					match Stream.next!(source) {
 						Done => Done
@@ -3753,19 +3757,19 @@ Builtin :: [].{
 		take_first : Stream(item), U64 -> Stream(item)
 		take_first = |source, n|
 			match source {
-				{ len_if_known, .. } => stream_from_step(
-					match len_if_known {
-						Known(len) => Known(
+				{ len_if_known: known_len, .. } => stream_from_step(
+					match known_len {
+						Ok(len) => Ok(
 							if len < n {
 								len
 							} else {
 								n
 							},
 						)
-						Unknown => if n == 0 {
-							Known(0)
+						Err(Unknown) => if n == 0 {
+							Ok(0)
 						} else {
-							Unknown
+							Err(Unknown)
 						}
 					},
 					||
@@ -3786,16 +3790,16 @@ Builtin :: [].{
 		drop_first : Stream(item), U64 -> Stream(item)
 		drop_first = |source, n|
 			match source {
-				{ len_if_known, .. } => stream_from_step(
-					match len_if_known {
-						Known(len) => Known(
+				{ len_if_known: known_len, .. } => stream_from_step(
+					match known_len {
+						Ok(len) => Ok(
 							if len < n {
 								0
 							} else {
 								len - n
 							},
 						)
-						Unknown => Unknown
+						Err(Unknown) => Err(Unknown)
 					},
 					||
 						match Stream.next!(source) {
@@ -3840,24 +3844,24 @@ Builtin :: [].{
 		}
 
 		## Returns the stream's length if it is known up front.
-		size_hint : Stream(item) -> [Known(U64), Unknown]
-		size_hint = |source| match source {
-			{ len_if_known, .. } => len_if_known
+		len_if_known : Stream(item) -> Try(U64, [Unknown])
+		len_if_known = |source| match source {
+			{ len_if_known: known_len, .. } => known_len
 		}
 
 		## Drive the stream to completion with an explicit loop, collecting its items
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
 		collect! = |source| {
-			# `Known(n)` promises n items (count-changing combinators report
-			# `Unknown`), so reserve up front and use the unchecked append while
+			# `Ok(n)` promises n items (count-changing combinators report
+			# `Err(Unknown)`), so reserve up front and use the unchecked append while
 			# the reservation lasts. `Stream.custom` hints come from the caller and
 			# may undercount, so past `cap` use the reserving append instead: the
 			# unchecked append would write past the list's capacity.
-			length = Stream.size_hint(source)
+			length = Stream.len_if_known(source)
 			cap = match length {
-				Known(n) => n
-				Unknown => 0
+				Ok(n) => n
+				Err(Unknown) => 0
 			}
 			var $list = List.with_capacity(cap)
 			var $rest = source
@@ -3887,7 +3891,7 @@ Builtin :: [].{
 	## `order_relative_to : item, item -> [Before, Same, After]`.
 	## These tags say which argument comes first; they deliberately do not tie
 	## sorting to "less than" or to the `<` and `>` operators.
-	item.Sort :  where [item.order_relative_to : item, item -> [Before, Same, After]]
+	item.Sort : where [item.order_relative_to : item, item -> [Before, Same, After]]
 
 	List(_item) :: [ProvidedByCompiler].{
 		parser_for : _
@@ -3920,7 +3924,7 @@ Builtin :: [].{
 				len = List.len(list)
 
 				iter_from_step(
-					Known(len - index),
+					Ok(len - index),
 					||
 						if index == len {
 							Done
@@ -3948,7 +3952,7 @@ Builtin :: [].{
 			# just past the next one, so the length stays exact as it counts down.
 			make = |remaining|
 				iter_from_step(
-					Known(remaining),
+					Ok(remaining),
 					||
 						if remaining == 0 {
 							Done
@@ -3965,15 +3969,15 @@ Builtin :: [].{
 		## that [Iter.collect] dispatches to.
 		from_iter : Iter(item) -> List(item)
 		from_iter = |iterator| {
-			# `Known(n)` guarantees the iterator yields exactly n items: every
-			# combinator that can change the count (e.g. keep_if) reports `Unknown`.
+			# `Ok(n)` guarantees the iterator yields exactly n items: every
+			# combinator that can change the count (e.g. keep_if) reports `Err(Unknown)`.
 			# So when the length is known we reserve the whole allocation up front
 			# and write each item with the unchecked append; when it is unknown we
 			# start empty and grow with the reserving append instead.
 			length = iterator.len_if_known
 			cap = match length {
-				Known(n) => n
-				Unknown => 0
+				Ok(n) => n
+				Err(Unknown) => 0
 			}
 
 			var $list = List.with_capacity(cap)
@@ -3989,8 +3993,8 @@ Builtin :: [].{
 					}
 					One({ item, rest }) => {
 						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
+							Ok(_) => list_append_unsafe($list, item)
+							Err(Unknown) => List.append($list, item)
 						}
 						$rest = rest
 					}
@@ -4501,7 +4505,7 @@ Builtin :: [].{
 				prepared_list = list_map_prepare_reuse(list)
 				match list_map_can_reuse(prepared_list, func) {
 					1 => {
-						item = list_map_extract_unsafe(prepared_list, index)
+						item = list_move_out_unsafe(prepared_list, index)
 						Ok(list_map_write_unsafe(prepared_list, index, func(item)))
 					}
 					_ => Ok(list_replace_unsafe(prepared_list, index, func(list_get_unsafe(prepared_list, index))).list)
@@ -4590,7 +4594,7 @@ Builtin :: [].{
 					var $out = list_map_cast_unsafe(prepared_list)
 					var $index = 0
 					while $index < len {
-						item = list_map_extract_unsafe($out, $index)
+						item = list_map_extract_unsafe($out, $index, transform)
 						$out = list_map_write_unsafe($out, $index, transform(item))
 						$index = $index + 1
 					}
@@ -4713,20 +4717,57 @@ Builtin :: [].{
 		## If given a unique list, [List.keep_if] will mutate it in place to assemble the appropriate list.
 		## If that happens, this function will not allocate any new memory on the heap.
 		## If all items in the list end up being kept, Roc will return the original
-		## list unaltered.
+		## list unaltered. Otherwise, a shared list is copied into one new list with
+		## the original's length as its capacity.
 		##
 		keep_if : List(a), (a -> Bool) -> List(a)
-		keep_if = |list, predicate|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					if predicate(item) {
-						List.concat(acc, [item])
+		keep_if = |list, predicate| {
+			prepared = list_map_prepare_reuse(list)
+			len = prepared.len()
+			match list_owned_unique(prepared) {
+				1 => {
+					# Swap each kept item down to the end of the kept prefix, so the
+					# kept items stay in order and the dropped ones collect behind
+					# them for drop_last to release.
+					var $out = prepared
+					var $kept = 0
+					var $index = 0
+					while $index < len {
+						if predicate(list_get_unsafe($out, $index)) {
+							if $kept != $index {
+								$out = list_swap_unsafe($out, $kept, $index)
+							}
+							$kept = $kept + 1
+						}
+						$index = $index + 1
+					}
+					List.drop_last($out, len - $kept)
+				}
+				_ => {
+					# A shared list is returned as it is when every item is kept.
+					var $first_dropped = 0
+					while $first_dropped < len and predicate(list_get_unsafe(prepared, $first_dropped)) {
+						$first_dropped = $first_dropped + 1
+					}
+					if $first_dropped == len {
+						prepared
 					} else {
-						acc
-					},
-			)
+						# The items before $first_dropped were already tested and kept,
+						# so copy them in one step and test only the items after it.
+						var $new_list = list_append_sublist(List.with_capacity(len), prepared, 0, $first_dropped)
+						var $index = $first_dropped + 1
+						while $index < len {
+							item = list_get_unsafe(prepared, $index)
+							if predicate(item) {
+								$new_list = list_append_unsafe($new_list, item)
+							}
+							$index = $index + 1
+						}
+						$new_list
+					}
+				}
+			}
+		}
 
 		## Run the given function on each item of a list, and return all the
 		## items for which the function returned `Bool.False`.
@@ -4738,17 +4779,52 @@ Builtin :: [].{
 		## `List.drop_if` has the same performance characteristics as [List.keep_if].
 		## See its documentation for details on those characteristics!
 		drop_if : List(a), (a -> Bool) -> List(a)
-		drop_if = |list, predicate|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					if predicate(item) {
-						acc
-					} else {
-						List.concat(acc, [item])
-					},
-			)
+		drop_if = |list, predicate| List.keep_if(list, |item| !predicate(item))
+
+		## Return the items before the first one for which the given function
+		## returns `Bool.True`, or the whole list if it never does.
+		##
+		## The function isn't called on any item after that one, so those items are
+		## dropped even if it would have returned `Bool.False` for them. Use
+		## [List.drop_if] to test every item instead.
+		## ```roc
+		## expect [1, 2, 3].keep_until(|item| item == 2) == [1]
+		## expect [1, 5, 2].keep_until(|item| item > 3) == [1]
+		## expect [1, 2, 3].keep_until(|item| item > 3) == [1, 2, 3]
+		## expect [1, 2, 3].keep_until(|item| item > 0) == []
+		## ```
+		## ## Performance Details
+		##
+		## The result is a prefix of the original list, so no items are copied and
+		## no new list is allocated. Because the result uses the original list's
+		## memory, that memory stays allocated for as long as the result is alive,
+		## even if the result is much shorter.
+		keep_until : List(item), (item -> Bool) -> List(item)
+		keep_until = |items, predicate| {
+			match List.find_first_index(items, predicate) {
+				Ok(index) => List.take_first(items, index)
+				Err(NotFound) => items
+			}
+		}
+
+		## Return the items before the first one for which the given function
+		## returns `Bool.False`, or the whole list if it never does.
+		##
+		## The function isn't called on any item after that one, so those items are
+		## dropped even if it would have returned `Bool.True` for them. Use
+		## [List.keep_if] to test every item instead.
+		## ```roc
+		## expect [1, 2, 3].keep_while(|item| item == 1) == [1]
+		## expect [1, 5, 2].keep_while(|item| item < 3) == [1]
+		## expect [1, 2, 3].keep_while(|item| item < 4) == [1, 2, 3]
+		## expect [1, 2, 3].keep_while(|item| item < 1) == []
+		## ```
+		## ## Performance Details
+		##
+		## `List.keep_while` has the same performance characteristics as [List.keep_until].
+		## See its documentation for details on those characteristics!
+		keep_while : List(item), (item -> Bool) -> List(item)
+		keep_while = |items, predicate| List.keep_until(items, |item| !predicate(item))
 
 		## Run the given function on each item of a list, and return a list of
 		## the values it wrapped in `Ok`. Items the function maps to `Err` are
@@ -4757,16 +4833,25 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3, 4].keep_oks(|n| if n.is_even() { Ok(n) } else { Err({}) }) == [2, 4]
 		## ```
 		keep_oks : List(before), (before -> Try(after, _err)) -> List(after)
-		keep_oks = |list, transform|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					match transform(item) {
-						Ok(after) => List.concat(acc, [after])
-						Err(_) => acc
-					},
-			)
+		keep_oks = |list, transform| {
+			# Allocated when the first Ok value needs a place, so a list with no
+			# Ok value allocates nothing.
+			var $out = []
+			for item in list {
+				$out = match transform(item) {
+					Ok(after) => {
+						reserved = if $out.is_empty() {
+							List.with_capacity(list.len())
+						} else {
+							$out
+						}
+						list_append_unsafe(reserved, after)
+					}
+					Err(_) => $out
+				}
+			}
+			$out
+		}
 
 		## Run the given function on each item of a list, and return a list of
 		## the values it wrapped in `Err`. Items the function maps to `Ok` are
@@ -4775,16 +4860,25 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3, 4].keep_errs(|n| if n.is_even() { Ok(n) } else { Err(n) }) == [1, 3]
 		## ```
 		keep_errs : List(before), (before -> Try(_ok, after)) -> List(after)
-		keep_errs = |list, transform|
-			List.fold(
-				list,
-				[],
-				|acc, item|
-					match transform(item) {
-						Err(after) => List.concat(acc, [after])
-						Ok(_) => acc
-					},
-			)
+		keep_errs = |list, transform| {
+			# Allocated when the first Err value needs a place, so a list with no
+			# Err value allocates nothing.
+			var $out = []
+			for item in list {
+				$out = match transform(item) {
+					Err(after) => {
+						reserved = if $out.is_empty() {
+							List.with_capacity(list.len())
+						} else {
+							$out
+						}
+						list_append_unsafe(reserved, after)
+					}
+					Ok(_) => $out
+				}
+			}
+			$out
+		}
 
 		## Run the given function on each item of a list, and return the
 		## number of items for which the function returned `Bool.True`.
@@ -5318,7 +5412,7 @@ Builtin :: [].{
 		split_at = |list, idx| {
 			before = list.sublist({ start: 0, len: idx })
 			len = list.len()
-			others = if idx > len
+			others = if (idx > len)
 				[]
 			else
 				list.sublist({ start: idx, len: len - idx })
@@ -6257,8 +6351,8 @@ Builtin :: [].{
 			where [k.is_eq : k, k -> Bool, k.to_hash : k, Hasher -> Hasher]
 		from_iter = |iterator| {
 			var $dict = match iterator.len_if_known {
-				Known(n) => Dict.with_capacity(n)
-				Unknown => Dict.empty()
+				Ok(n) => Dict.with_capacity(n)
+				Err(Unknown) => Dict.empty()
 			}
 			var $rest = iterator
 			while Bool.True {
@@ -6776,8 +6870,8 @@ Builtin :: [].{
 			where [item.is_eq : item, item -> Bool, item.to_hash : item, Hasher -> Hasher]
 		from_iter = |iterator| {
 			initial = match iterator.len_if_known {
-				Known(n) => Set.with_capacity(n)
-				Unknown => Set.empty()
+				Ok(n) => Set.with_capacity(n)
+				Err(Unknown) => Set.empty()
 			}
 			Iter.fold(iterator, initial, |set, item| Set.insert(set, item))
 		}
@@ -6795,6 +6889,12 @@ Builtin :: [].{
 
 	Num :: {}.{
 
+		# The result of the compiler's numeric comparison (design.md "Builtins
+		# Build Their Own Tag Unions"). A nominal union, so its tags' runtime
+		# order is this declaration's own; `order_relative_to` converts it in
+		# Roc.
+		RawOrder := [After, Before, Same]
+
 		## A reusable numeric range description. Range syntax constructs one of these
 		## values; call [Range.iter] to iterate it, or use it directly in a `for` loop.
 		##
@@ -6807,18 +6907,18 @@ Builtin :: [].{
 			step : num,
 			upper_bound : [Exclusive, Inclusive],
 			direction : [To, From],
-			len_if_known : [Known(U64), Unknown],
+			len_if_known : Try(U64, [Unknown]),
 		}.{
 
 			## Construct a range description for a builtin or third-party numeric type.
-			## A `Known` length must be the exact number of values the range will yield.
+			## An `Ok` length must be the exact number of values the range will yield.
 			custom : {
 				lower : num,
 				upper : num,
 				step : num,
 				upper_bound : [Exclusive, Inclusive],
 				direction : [To, From],
-				len_if_known : [Known(U64), Unknown],
+				len_if_known : Try(U64, [Unknown]),
 			} -> Range(num)
 			custom = |config|
 				Range.{
@@ -6831,13 +6931,13 @@ Builtin :: [].{
 				}
 
 			## Return the exact range length when it fits in a [U64].
-			size_hint : Range(num) -> [Known(U64), Unknown]
-			size_hint = |Range.{ len_if_known, .. }| len_if_known
+			len_if_known : Range(num) -> Try(U64, [Unknown])
+			len_if_known = |Range.{ len_if_known: known_len, .. }| known_len
 
 			## Replace this range's absolute step. The new step is expressed in the
 			## range's numeric type so third-party numbers need no [U64] conversion.
 			step_by : Range(num), num -> Range(num)
-				where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+				where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> Try(U64, [Unknown])]
 			step_by = |Range.{ lower, upper, upper_bound, direction, .. }, new_step|
 				Range.{
 					lower,
@@ -6850,9 +6950,9 @@ Builtin :: [].{
 
 			## Iterate this range in its stored direction.
 			iter : Range(num) -> Iter(num)
-				where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)]
-			iter = |Range.{ lower, upper, step, upper_bound, direction, len_if_known }|
-				lower.range_iter(upper, step, upper_bound, direction, len_if_known)
+				where [num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(num)]
+			iter = |Range.{ lower, upper, step, upper_bound, direction, len_if_known: known_len }|
+				lower.range_iter(upper, step, upper_bound, direction, known_len)
 
 			## Iterate this range in the opposite direction. Reversal reconstructs the
 			## corresponding range through the numeric type's `_to`/`_from` methods,
@@ -6864,8 +6964,8 @@ Builtin :: [].{
 					num.range_inclusive_to : num, num -> Range(num),
 					num.range_exclusive_from : num, num -> Range(num),
 					num.range_inclusive_from : num, num -> Range(num),
-					num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown],
-					num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num),
+					num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> Try(U64, [Unknown]),
+					num.range_iter : num, num, num, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(num),
 				]
 			iter_rev = |Range.{ lower, upper, step, upper_bound, direction, .. }| {
 				reversed = match (direction, upper_bound) {
@@ -7018,6 +7118,7 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u8_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7055,7 +7156,7 @@ Builtin :: [].{
 			## ```
 			max : U8, U8 -> U8
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -7066,7 +7167,7 @@ Builtin :: [].{
 			## ```
 			min : U8, U8 -> U8
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -7091,15 +7192,15 @@ Builtin :: [].{
 			plus_try : U8, U8 -> Try(U8, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : U8, U8, U8, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
 				}
 
-			range_iter : U8, U8, U8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U8)
+			range_iter : U8, U8, U8, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(U8)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : U8, U8 -> Range(U8)
@@ -7121,11 +7222,7 @@ Builtin :: [].{
 			## expect U8.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U8, U8 -> U8
-			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U8.highest, a, b)
 
 			## Subtract the second [U8] from the first.
 			## ```roc
@@ -7433,6 +7530,7 @@ Builtin :: [].{
 			## expect U8.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr])
+			from_str = |str| u8_from_str(str)
 
 			## Parse a [U8] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -7508,9 +7606,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U8.to_u64(end) - U8.to_u64(start) + 1)
+						Ok(U8.to_u64(end) - U8.to_u64(start) + 1)
 					},
 					||
 						if start <= end {
@@ -7545,9 +7643,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U8.to_u64(end) - U8.to_u64(start))
+						Ok(U8.to_u64(end) - U8.to_u64(start))
 					},
 					|current|
 						if current < end {
@@ -7581,6 +7679,7 @@ Builtin :: [].{
 			## expect U8.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U8 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u8_to_i8_try_raw(num))
 
 			## Convert a [U8] to an [I16]. This widening conversion preserves
 			## every [U8] value exactly.
@@ -7770,6 +7869,7 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i8_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7811,7 +7911,7 @@ Builtin :: [].{
 			## ```
 			max : I8, I8 -> I8
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -7824,7 +7924,7 @@ Builtin :: [].{
 			## ```
 			min : I8, I8 -> I8
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -7866,15 +7966,15 @@ Builtin :: [].{
 			plus_try : I8, I8 -> Try(I8, [Overflow])
 			plus_try = |a, b| signed_plus_try(a, b)
 
-			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : I8, I8, I8, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
-			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I8)
+			range_iter : I8, I8, I8, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(I8)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : I8, I8 -> Range(I8)
@@ -7899,8 +7999,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I8, I8 -> I8
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -8266,9 +8366,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
+						Ok(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start) + 1))
 					},
 					||
 						if start <= end {
@@ -8303,9 +8403,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
+						Ok(I64.to_u64_wrap(I8.to_i64(end) - I8.to_i64(start)))
 					},
 					|current|
 						if current < end {
@@ -8347,6 +8447,7 @@ Builtin :: [].{
 			## expect I8.from_str("200") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I8, [BadNumStr])
+			from_str = |str| i8_from_str(str)
 
 			## Parse a [I8] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -8458,6 +8559,7 @@ Builtin :: [].{
 			## expect I8.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I8 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i8_to_u8_try_raw(num))
 
 			## Convert an [I8] to a [U16], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8479,6 +8581,7 @@ Builtin :: [].{
 			## expect I8.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I8 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i8_to_u16_try_raw(num))
 
 			## Convert an [I8] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8500,6 +8603,7 @@ Builtin :: [].{
 			## expect I8.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I8 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i8_to_u32_try_raw(num))
 
 			## Convert an [I8] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8521,6 +8625,7 @@ Builtin :: [].{
 			## expect I8.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I8 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i8_to_u64_try_raw(num))
 
 			## Convert an [I8] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -8540,6 +8645,7 @@ Builtin :: [].{
 			## expect I8.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I8 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i8_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I8] to an [F32]. Every [I8] value is exactly
@@ -8664,6 +8770,7 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u16_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8701,7 +8808,7 @@ Builtin :: [].{
 			## ```
 			max : U16, U16 -> U16
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -8712,7 +8819,7 @@ Builtin :: [].{
 			## ```
 			min : U16, U16 -> U16
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -8737,15 +8844,15 @@ Builtin :: [].{
 			plus_try : U16, U16 -> Try(U16, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : U16, U16, U16, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
 				}
 
-			range_iter : U16, U16, U16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U16)
+			range_iter : U16, U16, U16, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(U16)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : U16, U16 -> Range(U16)
@@ -8767,11 +8874,7 @@ Builtin :: [].{
 			## expect U16.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U16, U16 -> U16
-			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U16.highest, a, b)
 
 			## Subtract the second [U16] from the first.
 			## ```roc
@@ -9065,15 +9168,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 2` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 2`.
-				if len < 2 or index > len.minus_wrap(2) {
+				# 2 items starting at `index` fit when `index < len - 1`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(1) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u16_from_le_bytes_unchecked(bytes, index))
@@ -9094,9 +9194,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U16.to_u64(end) - U16.to_u64(start) + 1)
+						Ok(U16.to_u64(end) - U16.to_u64(start) + 1)
 					},
 					||
 						if start <= end {
@@ -9131,9 +9231,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U16.to_u64(end) - U16.to_u64(start))
+						Ok(U16.to_u64(end) - U16.to_u64(start))
 					},
 					|current|
 						if current < end {
@@ -9171,6 +9271,7 @@ Builtin :: [].{
 			## expect U16.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U16, [BadNumStr])
+			from_str = |str| u16_from_str(str)
 
 			## Parse a [U16] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -9253,6 +9354,7 @@ Builtin :: [].{
 			## expect U16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U16 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u16_to_i8_try_raw(num))
 
 			## Convert a [U16] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; values from `32768` to `65535` wrap into the
@@ -9274,6 +9376,7 @@ Builtin :: [].{
 			## expect U16.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U16 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u16_to_i16_try_raw(num))
 
 			## Convert a [U16] to an [I32]. This widening conversion preserves
 			## every [U16] value exactly.
@@ -9308,6 +9411,7 @@ Builtin :: [].{
 			## expect U16.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U16 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u16_to_u8_try_raw(num))
 
 			## No-op: leave a [U16] unchanged as a [U16].
 			to_u16 : U16 -> U16
@@ -9475,6 +9579,7 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i16_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9516,7 +9621,7 @@ Builtin :: [].{
 			## ```
 			max : I16, I16 -> I16
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -9529,7 +9634,7 @@ Builtin :: [].{
 			## ```
 			min : I16, I16 -> I16
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -9571,15 +9676,15 @@ Builtin :: [].{
 			plus_try : I16, I16 -> Try(I16, [Overflow])
 			plus_try = |a, b| signed_plus_try(a, b)
 
-			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : I16, I16, I16, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
-			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I16)
+			range_iter : I16, I16, I16, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(I16)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : I16, I16 -> Range(I16)
@@ -9604,8 +9709,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I16, I16 -> I16
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -9968,15 +10073,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I16, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 2` and `len - 2` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 2` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 2`.
-				if len < 2 or index > len.minus_wrap(2) {
+				# 2 items starting at `index` fit when `index < len - 1`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(1) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i16_from_le_bytes_unchecked(bytes, index))
@@ -9997,9 +10099,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
+						Ok(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start) + 1))
 					},
 					||
 						if start <= end {
@@ -10034,9 +10136,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
+						Ok(I64.to_u64_wrap(I16.to_i64(end) - I16.to_i64(start)))
 					},
 					|current|
 						if current < end {
@@ -10078,6 +10180,7 @@ Builtin :: [].{
 			## expect I16.from_str("40000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I16, [BadNumStr])
+			from_str = |str| i16_from_str(str)
 
 			## Parse a [I16] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -10160,6 +10263,7 @@ Builtin :: [].{
 			## expect I16.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I16 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i16_to_i8_try_raw(num))
 
 			## No-op: leave an [I16] unchanged as an [I16].
 			to_i16 : I16 -> I16
@@ -10206,6 +10310,7 @@ Builtin :: [].{
 			## expect I16.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I16 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i16_to_u8_try_raw(num))
 
 			## Convert an [I16] to a [U16], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -10226,6 +10331,7 @@ Builtin :: [].{
 			## expect I16.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I16 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i16_to_u16_try_raw(num))
 
 			## Convert an [I16] to a [U32], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10247,6 +10353,7 @@ Builtin :: [].{
 			## expect I16.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I16 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i16_to_u32_try_raw(num))
 
 			## Convert an [I16] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10268,6 +10375,7 @@ Builtin :: [].{
 			## expect I16.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I16 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i16_to_u64_try_raw(num))
 
 			## Convert an [I16] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -10287,6 +10395,7 @@ Builtin :: [].{
 			## expect I16.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I16 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i16_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I16] to an [F32]. Every [I16] value is exactly
@@ -10410,6 +10519,7 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u32_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10447,7 +10557,7 @@ Builtin :: [].{
 			## ```
 			max : U32, U32 -> U32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -10458,7 +10568,7 @@ Builtin :: [].{
 			## ```
 			min : U32, U32 -> U32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -10483,15 +10593,15 @@ Builtin :: [].{
 			plus_try : U32, U32 -> Try(U32, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : U32, U32, U32, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.to_u64(), upper_bound)
 				}
 
-			range_iter : U32, U32, U32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U32)
+			range_iter : U32, U32, U32, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(U32)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : U32, U32 -> Range(U32)
@@ -10513,11 +10623,7 @@ Builtin :: [].{
 			## expect U32.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U32, U32 -> U32
-			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U32.highest, a, b)
 
 			## Subtract the second [U32] from the first.
 			## ```roc
@@ -10811,15 +10917,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 4` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 4`.
-				if len < 4 or index > len.minus_wrap(4) {
+				# 4 items starting at `index` fit when `index < len - 3`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u32_from_le_bytes_unchecked(bytes, index))
@@ -10840,9 +10943,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U32.to_u64(end) - U32.to_u64(start) + 1)
+						Ok(U32.to_u64(end) - U32.to_u64(start) + 1)
 					},
 					||
 						if start <= end {
@@ -10877,9 +10980,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(U32.to_u64(end) - U32.to_u64(start))
+						Ok(U32.to_u64(end) - U32.to_u64(start))
 					},
 					|current|
 						if current < end {
@@ -10917,6 +11020,7 @@ Builtin :: [].{
 			## expect U32.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U32, [BadNumStr])
+			from_str = |str| u32_from_str(str)
 
 			## Parse a [U32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -10999,6 +11103,7 @@ Builtin :: [].{
 			## expect U32.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U32 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u32_to_i8_try_raw(num))
 
 			## Convert a [U32] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -11019,6 +11124,7 @@ Builtin :: [].{
 			## expect U32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U32 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u32_to_i16_try_raw(num))
 
 			## Convert a [U32] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; values from `2147483648` to `4294967295`
@@ -11040,6 +11146,7 @@ Builtin :: [].{
 			## expect U32.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U32 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u32_to_i32_try_raw(num))
 
 			## Convert a [U32] to an [I64]. This widening conversion preserves
 			## every [U32] value exactly.
@@ -11070,6 +11177,7 @@ Builtin :: [].{
 			## expect U32.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U32 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u32_to_u8_try_raw(num))
 
 			## Convert a [U32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -11090,6 +11198,7 @@ Builtin :: [].{
 			## expect U32.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U32 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u32_to_u16_try_raw(num))
 
 			## No-op: leave a [U32] unchanged as a [U32].
 			to_u32 : U32 -> U32
@@ -11253,6 +11362,7 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i32_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11294,7 +11404,7 @@ Builtin :: [].{
 			## ```
 			max : I32, I32 -> I32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -11307,7 +11417,7 @@ Builtin :: [].{
 			## ```
 			min : I32, I32 -> I32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -11349,15 +11459,15 @@ Builtin :: [].{
 			plus_try : I32, I32 -> Try(I32, [Overflow])
 			plus_try = |a, b| signed_plus_try(a, b)
 
-			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : I32, I32, I32, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper).to_u64(), step.abs_diff(0).to_u64(), upper_bound)
 				}
 
-			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I32)
+			range_iter : I32, I32, I32, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(I32)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : I32, I32 -> Range(I32)
@@ -11382,8 +11492,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I32, I32 -> I32
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -11746,15 +11856,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I32, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 4` and `len - 4` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 4` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 4`.
-				if len < 4 or index > len.minus_wrap(4) {
+				# 4 items starting at `index` fit when `index < len - 3`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i32_from_le_bytes_unchecked(bytes, index))
@@ -11775,9 +11882,9 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
+						Ok(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start) + 1))
 					},
 					||
 						if start <= end {
@@ -11812,9 +11919,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
+						Ok(I64.to_u64_wrap(I32.to_i64(end) - I32.to_i64(start)))
 					},
 					|current|
 						if current < end {
@@ -11856,6 +11963,7 @@ Builtin :: [].{
 			## expect I32.from_str("3000000000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I32, [BadNumStr])
+			from_str = |str| i32_from_str(str)
 
 			## Parse a [I32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -11938,6 +12046,7 @@ Builtin :: [].{
 			## expect I32.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I32 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i32_to_i8_try_raw(num))
 
 			## Convert an [I32] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -11958,6 +12067,7 @@ Builtin :: [].{
 			## expect I32.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I32 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i32_to_i16_try_raw(num))
 
 			## No-op: leave an [I32] unchanged as an [I32].
 			to_i32 : I32 -> I32
@@ -12000,6 +12110,7 @@ Builtin :: [].{
 			## expect I32.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I32 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i32_to_u8_try_raw(num))
 
 			## Convert an [I32] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -12020,6 +12131,7 @@ Builtin :: [].{
 			## expect I32.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I32 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i32_to_u16_try_raw(num))
 
 			## Convert an [I32] to a [U32], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -12040,6 +12152,7 @@ Builtin :: [].{
 			## expect I32.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I32 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i32_to_u32_try_raw(num))
 
 			## Convert an [I32] to a [U64], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -12061,6 +12174,7 @@ Builtin :: [].{
 			## expect I32.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I32 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i32_to_u64_try_raw(num))
 
 			## Convert an [I32] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -12080,6 +12194,7 @@ Builtin :: [].{
 			## expect I32.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I32 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i32_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I32] to an [F32]. This conversion may round because
@@ -12205,6 +12320,7 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u64_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12242,7 +12358,7 @@ Builtin :: [].{
 			## ```
 			max : U64, U64 -> U64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -12253,7 +12369,7 @@ Builtin :: [].{
 			## ```
 			min : U64, U64 -> U64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -12278,15 +12394,15 @@ Builtin :: [].{
 			plus_try : U64, U64 -> Try(U64, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : U64, U64, U64, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper), step, upper_bound)
 				}
 
-			range_iter : U64, U64, U64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U64)
+			range_iter : U64, U64, U64, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(U64)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : U64, U64 -> Range(U64)
@@ -12308,11 +12424,7 @@ Builtin :: [].{
 			## expect U64.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U64, U64 -> U64
-			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U64.highest, a, b)
 
 			## Subtract the second [U64] from the first.
 			## ```roc
@@ -12606,15 +12718,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 8` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 8`.
-				if len < 8 or index > len.minus_wrap(8) {
+				# 8 items starting at `index` fit when `index < len - 7`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u64_from_le_bytes_unchecked(bytes, index))
@@ -12659,11 +12768,11 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
 						match U64.plus_try(end - start, 1) {
-							Ok(len) => Known(len)
-							Err(Overflow) => Unknown
+							Ok(len) => Ok(len)
+							Err(Overflow) => Err(Unknown)
 						}
 					},
 					||
@@ -12699,9 +12808,9 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
-						Known(end - start)
+						Ok(end - start)
 					},
 					|current|
 						if current < end {
@@ -12739,6 +12848,7 @@ Builtin :: [].{
 			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr])
+			from_str = |str| u64_from_str(str)
 
 			## Parse a [U64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -12821,6 +12931,7 @@ Builtin :: [].{
 			## expect U64.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U64 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u64_to_i8_try_raw(num))
 
 			## Convert a [U64] to an [I16], wrapping on overflow. Values from `0` to
 			## `32767` are preserved; larger values wrap by truncating to the low 16
@@ -12841,6 +12952,7 @@ Builtin :: [].{
 			## expect U64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U64 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u64_to_i16_try_raw(num))
 
 			## Convert a [U64] to an [I32], wrapping on overflow. Values from `0` to
 			## `2147483647` are preserved; larger values wrap by truncating to the
@@ -12861,6 +12973,7 @@ Builtin :: [].{
 			## expect U64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U64 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u64_to_i32_try_raw(num))
 
 			## Convert a [U64] to an [I64], wrapping on overflow. Values from `0` to
 			## `9223372036854775807` are preserved; values from `9223372036854775808`
@@ -12883,6 +12996,7 @@ Builtin :: [].{
 			## expect U64.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U64 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(u64_to_i64_try_raw(num))
 
 			## Convert a [U64] to an [I128]. This widening conversion preserves
 			## every [U64] value exactly.
@@ -12909,6 +13023,7 @@ Builtin :: [].{
 			## expect U64.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U64 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u64_to_u8_try_raw(num))
 
 			## Convert a [U64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -12929,6 +13044,7 @@ Builtin :: [].{
 			## expect U64.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U64 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u64_to_u16_try_raw(num))
 
 			## Convert a [U64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -12949,6 +13065,7 @@ Builtin :: [].{
 			## expect U64.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U64 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(u64_to_u32_try_raw(num))
 
 			## No-op: leave a [U64] unchanged as a [U64].
 			to_u64 : U64 -> U64
@@ -13110,6 +13227,7 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i64_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13151,7 +13269,7 @@ Builtin :: [].{
 			## ```
 			max : I64, I64 -> I64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -13164,7 +13282,7 @@ Builtin :: [].{
 			## ```
 			min : I64, I64 -> I64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -13207,15 +13325,15 @@ Builtin :: [].{
 			plus_try : I64, I64 -> Try(I64, [Overflow])
 			plus_try = |a, b| signed_plus_try(a, b)
 
-			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : I64, I64, I64, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u64(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
 				}
 
-			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I64)
+			range_iter : I64, I64, I64, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(I64)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : I64, I64 -> Range(I64)
@@ -13240,8 +13358,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I64, I64 -> I64
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -13604,15 +13722,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I64, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 8` and `len - 8` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 8` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 8`.
-				if len < 8 or index > len.minus_wrap(8) {
+				# 8 items starting at `index` fit when `index < len - 7`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i64_from_le_bytes_unchecked(bytes, index))
@@ -13633,14 +13748,14 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
 						match I64.minus_try(end, start) {
 							Ok(diff) => match I64.plus_try(diff, 1) {
-								Ok(d1) => Known(I64.to_u64_wrap(d1))
-								Err(Overflow) => Unknown
+								Ok(d1) => Ok(I64.to_u64_wrap(d1))
+								Err(Overflow) => Err(Unknown)
 							}
-							Err(Overflow) => Unknown
+							Err(Overflow) => Err(Unknown)
 						}
 					},
 					||
@@ -13676,11 +13791,11 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
 						match I64.minus_try(end, start) {
-							Ok(diff) => Known(I64.to_u64_wrap(diff))
-							Err(Overflow) => Unknown
+							Ok(diff) => Ok(I64.to_u64_wrap(diff))
+							Err(Overflow) => Err(Unknown)
 						}
 					},
 					|current|
@@ -13721,6 +13836,7 @@ Builtin :: [].{
 			## expect I64.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I64, [BadNumStr])
+			from_str = |str| i64_from_str(str)
 
 			## Parse a [I64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -13803,6 +13919,7 @@ Builtin :: [].{
 			## expect I64.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I64 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i64_to_i8_try_raw(num))
 
 			## Convert an [I64] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -13823,6 +13940,7 @@ Builtin :: [].{
 			## expect I64.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I64 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i64_to_i16_try_raw(num))
 
 			## Convert an [I64] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -13844,6 +13962,7 @@ Builtin :: [].{
 			## expect I64.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I64 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(i64_to_i32_try_raw(num))
 
 			## No-op: leave an [I64] unchanged as an [I64].
 			to_i64 : I64 -> I64
@@ -13882,6 +14001,7 @@ Builtin :: [].{
 			## expect I64.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I64 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i64_to_u8_try_raw(num))
 
 			## Convert an [I64] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; other values wrap by truncating to the low 16
@@ -13902,6 +14022,7 @@ Builtin :: [].{
 			## expect I64.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I64 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i64_to_u16_try_raw(num))
 
 			## Convert an [I64] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; other values wrap by truncating to the
@@ -13922,6 +14043,7 @@ Builtin :: [].{
 			## expect I64.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I64 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i64_to_u32_try_raw(num))
 
 			## Convert an [I64] to a [U64], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of the
@@ -13942,6 +14064,7 @@ Builtin :: [].{
 			## expect I64.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I64 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i64_to_u64_try_raw(num))
 
 			## Convert an [I64] to a [U128], sign-extending the bits on overflow.
 			## Non-negative values are preserved; negative values wrap into the
@@ -13961,6 +14084,7 @@ Builtin :: [].{
 			## expect I64.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I64 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i64_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I64] to an [F32]. This conversion may round because
@@ -14085,6 +14209,7 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(u128_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14122,7 +14247,7 @@ Builtin :: [].{
 			## ```
 			max : U128, U128 -> U128
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -14133,7 +14258,7 @@ Builtin :: [].{
 			## ```
 			min : U128, U128 -> U128
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -14158,15 +14283,15 @@ Builtin :: [].{
 			plus_try : U128, U128 -> Try(U128, [Overflow])
 			plus_try = |a, b| unsigned_plus_try(a, b)
 
-			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : U128, U128, U128, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step == 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u128(lower.abs_diff(upper), step, upper_bound)
 				}
 
-			range_iter : U128, U128, U128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(U128)
+			range_iter : U128, U128, U128, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(U128)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : U128, U128 -> Range(U128)
@@ -14188,11 +14313,7 @@ Builtin :: [].{
 			## expect U128.plus_saturated(2, 3) == 5
 			## ```
 			plus_saturated : U128, U128 -> U128
-			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					highest
-				else
-					a.plus_wrap(b)
+			plus_saturated = |a, b| unsigned_plus_saturated(U128.highest, a, b)
 
 			## Subtract the second [U128] from the first.
 			## ```roc
@@ -14486,15 +14607,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(U128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(u128_from_le_bytes_unchecked(bytes, index))
@@ -14515,14 +14633,14 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
 						match U128.to_u64_try(end - start) {
 							Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
-								Ok(len) => Known(len)
-								Err(Overflow) => Unknown
+								Ok(len) => Ok(len)
+								Err(Overflow) => Err(Unknown)
 							}
-							Err(OutOfRange) => Unknown
+							Err(OutOfRange) => Err(Unknown)
 						}
 					},
 					||
@@ -14558,11 +14676,11 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
 						match U128.to_u64_try(end - start) {
-							Ok(len) => Known(len)
-							Err(OutOfRange) => Unknown
+							Ok(len) => Ok(len)
+							Err(OutOfRange) => Err(Unknown)
 						}
 					},
 					|current|
@@ -14602,6 +14720,7 @@ Builtin :: [].{
 			## expect U128.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U128, [BadNumStr])
+			from_str = |str| u128_from_str(str)
 
 			## Parse a [U128] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -14684,6 +14803,7 @@ Builtin :: [].{
 			## expect U128.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : U128 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(u128_to_i8_try_raw(num))
 
 			## Convert a [U128] to an [I16], wrapping on overflow. Values from `0`
 			## to `32767` are preserved; larger values wrap by truncating to the
@@ -14704,6 +14824,7 @@ Builtin :: [].{
 			## expect U128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : U128 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(u128_to_i16_try_raw(num))
 
 			## Convert a [U128] to an [I32], wrapping on overflow. Values from `0`
 			## to `2147483647` are preserved; larger values wrap by truncating to
@@ -14724,6 +14845,7 @@ Builtin :: [].{
 			## expect U128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : U128 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(u128_to_i32_try_raw(num))
 
 			## Convert a [U128] to an [I64], wrapping on overflow. Values from `0`
 			## to `9223372036854775807` are preserved; larger values wrap by
@@ -14745,6 +14867,7 @@ Builtin :: [].{
 			## expect U128.to_i64_try(10000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i64_try : U128 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(u128_to_i64_try_raw(num))
 
 			## Convert a [U128] to an [I128], wrapping on overflow. Values from `0`
 			## to `170141183460469231731687303715884105727` are preserved; larger
@@ -14766,6 +14889,7 @@ Builtin :: [].{
 			## expect U128.to_i128_try(200000000000000000000000000000000000000) == Err(OutOfRange)
 			## ```
 			to_i128_try : U128 -> Try(I128, [OutOfRange])
+			to_i128_try = |num| out_of_range(u128_to_i128_try_raw(num))
 
 			# Conversions to unsigned integers
 
@@ -14788,6 +14912,7 @@ Builtin :: [].{
 			## expect U128.to_u8_try(300) == Err(OutOfRange)
 			## ```
 			to_u8_try : U128 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(u128_to_u8_try_raw(num))
 
 			## Convert a [U128] to a [U16], wrapping on overflow. Values from `0` to
 			## `65535` are preserved; larger values wrap by truncating to the low 16
@@ -14808,6 +14933,7 @@ Builtin :: [].{
 			## expect U128.to_u16_try(70000) == Err(OutOfRange)
 			## ```
 			to_u16_try : U128 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(u128_to_u16_try_raw(num))
 
 			## Convert a [U128] to a [U32], wrapping on overflow. Values from `0` to
 			## `4294967295` are preserved; larger values wrap by truncating to the
@@ -14828,6 +14954,7 @@ Builtin :: [].{
 			## expect U128.to_u32_try(5000000000) == Err(OutOfRange)
 			## ```
 			to_u32_try : U128 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(u128_to_u32_try_raw(num))
 
 			## Convert a [U128] to a [U64], wrapping on overflow. Values from `0` to
 			## `18446744073709551615` are preserved; larger values wrap by truncating
@@ -14844,6 +14971,7 @@ Builtin :: [].{
 			## expect U128.to_u64_try(42) == Ok(42)
 			## ```
 			to_u64_try : U128 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(u128_to_u64_try_raw(num))
 
 			## No-op: leave a [U128] unchanged as a [U128].
 			to_u128 : U128 -> U128
@@ -15003,6 +15131,7 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(i128_order_raw(a, b))
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -15044,7 +15173,7 @@ Builtin :: [].{
 			## ```
 			max : I128, I128 -> I128
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -15057,7 +15186,7 @@ Builtin :: [].{
 			## ```
 			min : I128, I128 -> I128
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -15101,15 +15230,15 @@ Builtin :: [].{
 			plus_try : I128, I128 -> Try(I128, [Overflow])
 			plus_try = |a, b| signed_plus_try(a, b)
 
-			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : I128, I128, I128, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
 				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) {
-					Known(0)
+					Ok(0)
 				} else {
 					range_len_u128(lower.abs_diff(upper), step.abs_diff(0), upper_bound)
 				}
 
-			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(I128)
+			range_iter : I128, I128, I128, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(I128)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : I128, I128 -> Range(I128)
@@ -15134,8 +15263,8 @@ Builtin :: [].{
 			## ```
 			plus_saturated : I128, I128 -> I128
 			plus_saturated = |a, b|
-				if a.plus_overflows(b)
-					if b > 0
+				if (a.plus_overflows(b))
+					if (b > 0)
 						highest
 					else
 						lowest
@@ -15499,15 +15628,12 @@ Builtin :: [].{
 			from_le_bytes : List(U8), U64 -> Try(I128, [OutOfBounds])
 			from_le_bytes = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(i128_from_le_bytes_unchecked(bytes, index))
@@ -15528,17 +15654,17 @@ Builtin :: [].{
 			to = |start, end|
 				iter_from_step(
 					if start > end {
-						Known(0)
+						Ok(0)
 					} else {
 						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
 								Ok(diff_u64) => match U64.plus_try(diff_u64, 1) {
-									Ok(len) => Known(len)
-									Err(Overflow) => Unknown
+									Ok(len) => Ok(len)
+									Err(Overflow) => Err(Unknown)
 								}
-								Err(OutOfRange) => Unknown
+								Err(OutOfRange) => Err(Unknown)
 							}
-							Err(Overflow) => Unknown
+							Err(Overflow) => Err(Unknown)
 						}
 					},
 					||
@@ -15574,14 +15700,14 @@ Builtin :: [].{
 				Iter.custom(
 					start,
 					if start >= end {
-						Known(0)
+						Ok(0)
 					} else {
 						match I128.minus_try(end, start) {
 							Ok(diff) => match I128.to_u64_try(diff) {
-								Ok(len) => Known(len)
-								Err(OutOfRange) => Unknown
+								Ok(len) => Ok(len)
+								Err(OutOfRange) => Err(Unknown)
 							}
-							Err(Overflow) => Unknown
+							Err(Overflow) => Err(Unknown)
 						}
 					},
 					|current|
@@ -15624,6 +15750,7 @@ Builtin :: [].{
 			## expect I128.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I128, [BadNumStr])
+			from_str = |str| i128_from_str(str)
 
 			## Parse a [I128] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -15706,6 +15833,7 @@ Builtin :: [].{
 			## expect I128.to_i8_try(200) == Err(OutOfRange)
 			## ```
 			to_i8_try : I128 -> Try(I8, [OutOfRange])
+			to_i8_try = |num| out_of_range(i128_to_i8_try_raw(num))
 
 			## Convert an [I128] to an [I16], wrapping on overflow. Values from
 			## `-32768` to `32767` are preserved; other values wrap by truncating
@@ -15726,6 +15854,7 @@ Builtin :: [].{
 			## expect I128.to_i16_try(40000) == Err(OutOfRange)
 			## ```
 			to_i16_try : I128 -> Try(I16, [OutOfRange])
+			to_i16_try = |num| out_of_range(i128_to_i16_try_raw(num))
 
 			## Convert an [I128] to an [I32], wrapping on overflow. Values from
 			## `-2147483648` to `2147483647` are preserved; other values wrap by
@@ -15747,6 +15876,7 @@ Builtin :: [].{
 			## expect I128.to_i32_try(3000000000) == Err(OutOfRange)
 			## ```
 			to_i32_try : I128 -> Try(I32, [OutOfRange])
+			to_i32_try = |num| out_of_range(i128_to_i32_try_raw(num))
 
 			## Convert an [I128] to an [I64], wrapping on overflow. Values from
 			## `-9223372036854775808` to `9223372036854775807` are preserved; other
@@ -15764,6 +15894,7 @@ Builtin :: [].{
 			## expect I128.to_i64_try(42) == Ok(42)
 			## ```
 			to_i64_try : I128 -> Try(I64, [OutOfRange])
+			to_i64_try = |num| out_of_range(i128_to_i64_try_raw(num))
 
 			## No-op: leave an [I128] unchanged as an [I128].
 			to_i128 : I128 -> I128
@@ -15798,6 +15929,7 @@ Builtin :: [].{
 			## expect I128.to_u8_try(-1) == Err(OutOfRange)
 			## ```
 			to_u8_try : I128 -> Try(U8, [OutOfRange])
+			to_u8_try = |num| out_of_range(i128_to_u8_try_raw(num))
 
 			## Convert an [I128] to a [U16], wrapping on overflow. Values from `0`
 			## to `65535` are preserved; other values wrap by truncating to the low
@@ -15818,6 +15950,7 @@ Builtin :: [].{
 			## expect I128.to_u16_try(-1) == Err(OutOfRange)
 			## ```
 			to_u16_try : I128 -> Try(U16, [OutOfRange])
+			to_u16_try = |num| out_of_range(i128_to_u16_try_raw(num))
 
 			## Convert an [I128] to a [U32], wrapping on overflow. Values from `0`
 			## to `4294967295` are preserved; other values wrap by truncating to
@@ -15838,6 +15971,7 @@ Builtin :: [].{
 			## expect I128.to_u32_try(-1) == Err(OutOfRange)
 			## ```
 			to_u32_try : I128 -> Try(U32, [OutOfRange])
+			to_u32_try = |num| out_of_range(i128_to_u32_try_raw(num))
 
 			## Convert an [I128] to a [U64], wrapping on overflow. Values from `0`
 			## to `18446744073709551615` are preserved; other values wrap by
@@ -15859,6 +15993,7 @@ Builtin :: [].{
 			## expect I128.to_u64_try(-1) == Err(OutOfRange)
 			## ```
 			to_u64_try : I128 -> Try(U64, [OutOfRange])
+			to_u64_try = |num| out_of_range(i128_to_u64_try_raw(num))
 
 			## Convert an [I128] to a [U128], wrapping on overflow. Non-negative
 			## values are preserved; negative values wrap into the upper end of
@@ -15879,6 +16014,7 @@ Builtin :: [].{
 			## expect I128.to_u128_try(-1) == Err(OutOfRange)
 			## ```
 			to_u128_try : I128 -> Try(U128, [OutOfRange])
+			to_u128_try = |num| out_of_range(i128_to_u128_try_raw(num))
 
 			# Conversions to floating point (all safe)
 			## Convert an [I128] to an [F32]. This conversion may round because
@@ -16066,6 +16202,7 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
+			order_relative_to = |a, b| order_from_raw(dec_order_raw(a, b))
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -16075,7 +16212,7 @@ Builtin :: [].{
 			## ```
 			max : Dec, Dec -> Dec
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -16088,7 +16225,7 @@ Builtin :: [].{
 			## ```
 			min : Dec, Dec -> Dec
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -16123,7 +16260,7 @@ Builtin :: [].{
 				if a == b {
 					True
 				} else {
-					diff_result = if a > b Dec.minus_try(a, b) else Dec.minus_try(b, a)
+					diff_result = if (a > b) Dec.minus_try(a, b) else Dec.minus_try(b, a)
 					match diff_result {
 						Ok(diff) => {
 							magnitude = if a == Dec.lowest or b == Dec.lowest {
@@ -16175,10 +16312,10 @@ Builtin :: [].{
 				}
 			}
 
-			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : Dec, Dec, Dec, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = range_len_dec
 
-			range_iter : Dec, Dec, Dec, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(Dec)
+			range_iter : Dec, Dec, Dec, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(Dec)
 			range_iter = range_iter_standard
 
 			range_exclusive_to : Dec, Dec -> Range(Dec)
@@ -16785,6 +16922,7 @@ Builtin :: [].{
 			## expect Dec.from_str("not a number") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(Dec, [BadNumStr])
+			from_str = |str| dec_from_str(str)
 
 			## Parse a [Dec] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -17097,7 +17235,7 @@ Builtin :: [].{
 			to : Dec, Dec -> Iter(Dec)
 			to = |start, end|
 				iter_from_step(
-					Unknown,
+					Err(Unknown),
 					||
 						if start <= end {
 							One({
@@ -17132,7 +17270,7 @@ Builtin :: [].{
 			until = |start, end|
 				Iter.custom(
 					start,
-					Unknown,
+					Err(Unknown),
 					|current|
 						if current < end {
 							match Dec.plus_try(current, 1.0) {
@@ -17423,7 +17561,7 @@ Builtin :: [].{
 			## ```
 			max : F32, F32 -> F32
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -17436,7 +17574,7 @@ Builtin :: [].{
 			## ```
 			min : F32, F32 -> F32
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -17866,11 +18004,11 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f32_from_str(str))
 
-			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : F32, F32, F32, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
-				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
+				if (step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive)) Ok(0) else Err(Unknown)
 
-			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F32)
+			range_iter : F32, F32, F32, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(F32)
 			range_iter = range_iter_float
 
 			range_exclusive_to : F32, F32 -> Range(F32)
@@ -17890,6 +18028,7 @@ Builtin :: [].{
 			## expect Try.is_err(F32.from_str("not a number"))
 			## ```
 			from_str : Str -> Try(F32, [BadNumStr])
+			from_str = |str| f32_from_str(str)
 
 			## Parse a [F32] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -18437,7 +18576,7 @@ Builtin :: [].{
 			## ```
 			max : F64, F64 -> F64
 			max = |a, b|
-				if a > b
+				if (a > b)
 					a
 				else
 					b
@@ -18450,7 +18589,7 @@ Builtin :: [].{
 			## ```
 			min : F64, F64 -> F64
 			min = |a, b|
-				if a < b
+				if (a < b)
 					a
 				else
 					b
@@ -18880,11 +19019,11 @@ Builtin :: [].{
 			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str)])
 			from_numeral = |numeral| from_numeral_with(numeral, |str| f64_from_str(str))
 
-			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+			range_len_if_known : F64, F64, F64, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 			range_len_if_known = |lower, upper, step, upper_bound|
-				if step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive) Known(0) else Unknown
+				if (step <= 0 or lower > upper or (lower == upper and upper_bound == Exclusive)) Ok(0) else Err(Unknown)
 
-			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(F64)
+			range_iter : F64, F64, F64, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(F64)
 			range_iter = range_iter_float
 
 			range_exclusive_to : F64, F64 -> Range(F64)
@@ -18904,6 +19043,7 @@ Builtin :: [].{
 			## expect Try.is_err(F64.from_str("not a number"))
 			## ```
 			from_str : Str -> Try(F64, [BadNumStr])
+			from_str = |str| f64_from_str(str)
 
 			## Parse a [F64] from the start of a [Str], returning the parsed value
 			## and the rest of the string after it.
@@ -19743,15 +19883,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_load_16_unchecked(bytes, index))
@@ -19768,15 +19905,12 @@ Builtin :: [].{
 			store : U8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u8x16_store_16_unchecked(vector, bytes, index))
@@ -19796,21 +19930,19 @@ Builtin :: [].{
 				chunk_count = len / 16
 				chunks = Iter.custom(
 					0.U64,
-					Known(chunk_count),
-					|start|
-						# Compare the index against a limit rather than subtracting from it.
-						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-						# reads repeatedly hoists them out and keeps just the one comparison of
-						# `start` against a precomputed bound. Subtracting the other way round --
-						# `len - start < 16` -- reads the same but depends on `start`, so all of it
-						# stays in the loop.
-						#
-						# Wrapping is safe because the first check has already ruled out `len < 16`.
-						if len >= 16 and start <= len.minus_wrap(16) {
+					Ok(chunk_count),
+					|start| {
+						# 16 items starting at `start` fit when `start < len - 15`. That
+						# limit depends only on the list, so a loop that reads repeatedly hoists
+						# it and keeps just the one comparison of `start` against it. The
+						# subtraction saturates, so a list shorter than that has a limit of
+						# zero, which no index is below.
+						if start < len.minus_saturated(15) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
 							Err(NoMore)
-						},
+						}
+					},
 				)
 				{ chunks, tail: List.drop_first(bytes, chunk_count * 16) }
 			}
@@ -20341,15 +20473,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I8x16, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_load_16_unchecked(bytes, index))
@@ -20366,15 +20495,12 @@ Builtin :: [].{
 			store : I8x16, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i8x16_store_16_unchecked(vector, bytes, index))
@@ -20903,15 +21029,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
@@ -20924,7 +21047,7 @@ Builtin :: [].{
 			load_units : List(U16), U64 -> Try(U16x8, [OutOfBounds])
 			load_units = |units, index| {
 				len = List.len(units)
-				if len < 8 or index > len.minus_wrap(8) {
+				if index >= len.minus_saturated(7) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_units_unchecked(units, index))
@@ -20941,15 +21064,12 @@ Builtin :: [].{
 			store : U16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_store_16_unchecked(vector, bytes, index))
@@ -21550,15 +21670,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I16x8, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_load_16_unchecked(bytes, index))
@@ -21575,15 +21692,12 @@ Builtin :: [].{
 			store : I16x8, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i16x8_store_16_unchecked(vector, bytes, index))
@@ -22063,15 +22177,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
@@ -22084,7 +22195,7 @@ Builtin :: [].{
 			load_units : List(U32), U64 -> Try(U32x4, [OutOfBounds])
 			load_units = |units, index| {
 				len = List.len(units)
-				if len < 4 or index > len.minus_wrap(4) {
+				if index >= len.minus_saturated(3) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_units_unchecked(units, index))
@@ -22101,15 +22212,12 @@ Builtin :: [].{
 			store : U32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_store_16_unchecked(vector, bytes, index))
@@ -22643,15 +22751,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I32x4, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_load_16_unchecked(bytes, index))
@@ -22668,15 +22773,12 @@ Builtin :: [].{
 			store : I32x4, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i32x4_store_16_unchecked(vector, bytes, index))
@@ -23085,15 +23187,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(U64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_load_16_unchecked(bytes, index))
@@ -23110,15 +23209,12 @@ Builtin :: [].{
 			store : U64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u64x2_store_16_unchecked(vector, bytes, index))
@@ -23552,15 +23648,12 @@ Builtin :: [].{
 			load : List(U8), U64 -> Try(I64x2, [OutOfBounds])
 			load = |bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_load_16_unchecked(bytes, index))
@@ -23577,15 +23670,12 @@ Builtin :: [].{
 			store : I64x2, List(U8), U64 -> Try(List(U8), [OutOfBounds])
 			store = |vector, bytes, index| {
 				len = List.len(bytes)
-				# Compare the index against a limit rather than subtracting from it.
-				# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-				# reads repeatedly hoists them out and keeps just the one comparison of
-				# `index` against a precomputed bound. Subtracting the other way round --
-				# `len - index < 16` -- reads the same but depends on `index`, so all of it
-				# stays in the loop.
-				#
-				# Wrapping is safe because the first check has already ruled out `len < 16`.
-				if len < 16 or index > len.minus_wrap(16) {
+				# 16 items starting at `index` fit when `index < len - 15`. That
+				# limit depends only on the list, so a loop that reads repeatedly hoists
+				# it and keeps just the one comparison of `index` against it. The
+				# subtraction saturates, so a list shorter than that has a limit of
+				# zero, which no index is below.
+				if index >= len.minus_saturated(15) {
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_i64x2_store_16_unchecked(vector, bytes, index))
@@ -24056,30 +24146,69 @@ dict_place_and_shift_up = |buckets, bucket, bucket_index| {
 }
 
 u8_from_str : Str -> Try(U8, [BadNumStr])
+u8_from_str = |str| bad_num_str(u8_from_str_raw(str))
+
+u8_from_str_raw : Str -> Try(U8, {})
 
 i8_from_str : Str -> Try(I8, [BadNumStr])
+i8_from_str = |str| bad_num_str(i8_from_str_raw(str))
+
+i8_from_str_raw : Str -> Try(I8, {})
 
 u16_from_str : Str -> Try(U16, [BadNumStr])
+u16_from_str = |str| bad_num_str(u16_from_str_raw(str))
+
+u16_from_str_raw : Str -> Try(U16, {})
 
 i16_from_str : Str -> Try(I16, [BadNumStr])
+i16_from_str = |str| bad_num_str(i16_from_str_raw(str))
+
+i16_from_str_raw : Str -> Try(I16, {})
 
 u32_from_str : Str -> Try(U32, [BadNumStr])
+u32_from_str = |str| bad_num_str(u32_from_str_raw(str))
+
+u32_from_str_raw : Str -> Try(U32, {})
 
 i32_from_str : Str -> Try(I32, [BadNumStr])
+i32_from_str = |str| bad_num_str(i32_from_str_raw(str))
+
+i32_from_str_raw : Str -> Try(I32, {})
 
 u64_from_str : Str -> Try(U64, [BadNumStr])
+u64_from_str = |str| bad_num_str(u64_from_str_raw(str))
+
+u64_from_str_raw : Str -> Try(U64, {})
 
 i64_from_str : Str -> Try(I64, [BadNumStr])
+i64_from_str = |str| bad_num_str(i64_from_str_raw(str))
+
+i64_from_str_raw : Str -> Try(I64, {})
 
 u128_from_str : Str -> Try(U128, [BadNumStr])
+u128_from_str = |str| bad_num_str(u128_from_str_raw(str))
+
+u128_from_str_raw : Str -> Try(U128, {})
 
 i128_from_str : Str -> Try(I128, [BadNumStr])
+i128_from_str = |str| bad_num_str(i128_from_str_raw(str))
+
+i128_from_str_raw : Str -> Try(I128, {})
 
 dec_from_str : Str -> Try(Dec, [BadNumStr])
+dec_from_str = |str| bad_num_str(dec_from_str_raw(str))
+
+dec_from_str_raw : Str -> Try(Dec, {})
 
 f32_from_str : Str -> Try(F32, [BadNumStr])
+f32_from_str = |str| bad_num_str(f32_from_str_raw(str))
+
+f32_from_str_raw : Str -> Try(F32, {})
 
 f64_from_str : Str -> Try(F64, [BadNumStr])
+f64_from_str = |str| bad_num_str(f64_from_str_raw(str))
+
+f64_from_str_raw : Str -> Try(F64, {})
 
 u8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U8 }
 
@@ -24715,8 +24844,1972 @@ reverse_order = |order|
 		After => Before
 	}
 
+# ---------------------------------------------------------------------------
+# List sorting
+#
+# `sort_impl` is Fluxsort written in Roc: a stable sort that partitions large
+# lists around a pivot and finishes the pieces with quadsort, a merge sort
+# built from branchless parity merges. Every call site's comparator is a
+# direct call here, so the backend can inline it into the loops.
+#
+# The sort works on two lists. `items` is the list being sorted: it is unique
+# (either `list_owned_unique` said so or `sort_impl` copied it), so it is
+# rearranged in place. `swap` is scratch: a list with capacity for every item
+# that stays at length zero for the whole sort, so freeing it never releases
+# an item. Items travel between slots of these two lists through
+# `list_move_out_unsafe` and `list_move_in_unsafe`, which copy an item's bytes
+# and do no refcount work. A slot an item was moved out of keeps its bytes
+# until something overwrites it, and the algorithm decides which slot holds
+# the live copy; every path through the sort ends with `items` holding
+# exactly one copy of each item it started with, however the comparator
+# answers, so the sort never duplicates or drops a refcounted item. Merges
+# count how many items each run still holds instead of trusting the
+# comparator to stop at a run's end, and partitions move every item back
+# into `items` before they return.
+#
+# Pivots are read with `list_get_unsafe`, so they own nothing, and the extra
+# copies of sampled items that pivot selection makes in a dead stretch of a
+# buffer are left behind as dead bytes.
+#
+# Index arithmetic in the per-item loops uses `plus_infallible` and
+# `minus_infallible`, which carry no overflow check. Every such sum is a slot
+# index or an item count that is at most the length of a list (the slot it
+# names exists, or it counts items that exist), and every such difference is
+# guarded by a comparison in the enclosing condition or by a count that the
+# loop has not yet exhausted; a comment at each site that is not obvious from
+# its guard names the bound. Arithmetic that runs once per merge, block, or
+# pivot rather than once per item stays checked.
+# ---------------------------------------------------------------------------
+
+# Lists shorter than this are sorted in place with no scratch list.
+sort_scratchless_len : U64
+sort_scratchless_len = 32
+
+# Lists shorter than this are quadsorted instead of partitioned.
+sort_quadsort_len : U64
+sort_quadsort_len = 132
+
+# A partition this short is finished with quadsort.
+flux_out : U64
+flux_out = 96
+
+# Partitions whose quarters exceed this many items always quadsort, to stay
+# within cache.
+quad_cache : U64
+quad_cache = 262144
+
 sort_impl : List(item), (item, item -> [Before, Same, After]) -> List(item)
-sort_impl = |list, compare_items| list_sort_with(list, Box.box(compare_items))
+sort_impl = |list, compare_items| {
+	len = List.len(list)
+	if len < 2 {
+		return list
+	}
+	prepared = list_map_prepare_reuse(list)
+	items = match list_owned_unique(prepared) {
+		1 => prepared
+		_ => {
+			var $copy = List.with_capacity(len)
+			for item in prepared {
+				$copy = list_append_unsafe($copy, item)
+			}
+			$copy
+		}
+	}
+	# Items wider than 96 bytes are sorted through a list of their indices, so
+	# the sort moves indices instead of the items and moves each item once at
+	# the end. The bound is a literal so that lowering can decide this match
+	# from the item layout and keep only the arm it selects.
+	match list_item_size_at_most(items, 96) {
+		0 => sort_wide(items, compare_items)
+		_ => sort_direct(items, compare_items)
+	}
+}
+
+# Sorts a unique list of narrow items.
+sort_direct : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_direct = |items, compare_items| {
+	len = List.len(items)
+	if len < sort_scratchless_len {
+		sort_insertion(items, compare_items)
+	} else {
+		swap = List.with_capacity(len)
+		(sorted, _) = if len < sort_quadsort_len {
+			quadsort(items, swap, compare_items)
+		} else {
+			flux_sort(items, swap, compare_items)
+		}
+		sorted
+	}
+}
+
+# Sorts a unique list of wide items by sorting their indices and then
+# permuting the items once.
+sort_wide : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_wide = |items, compare_items| {
+	len = List.len(items)
+	var $order = List.with_capacity(len)
+	var $index = 0
+	while $index < len {
+		$order = list_append_unsafe($order, $index)
+		$index = plus_infallible($index, 1)
+	}
+	sorted_order = sort_direct($order, |left, right| compare_items(list_get_unsafe(items, left), list_get_unsafe(items, right)))
+	sort_apply_order(items, sorted_order)
+}
+
+# Rearranges `items` so that slot `k` holds the item that was at `order[k]`,
+# following each cycle of the permutation and marking visited slots in `order`.
+sort_apply_order : List(item), List(U64) -> List(item)
+sort_apply_order = |items, order| {
+	len = List.len(order)
+	var $items = items
+	var $order = order
+	var $cycle_start = 0
+	while $cycle_start < len {
+		first_source = list_get_unsafe($order, $cycle_start)
+		if first_source != $cycle_start {
+			displaced = list_move_out_unsafe($items, $cycle_start)
+			var $dest = $cycle_start
+			var $source = first_source
+			while $source != $cycle_start {
+				$items = list_move_in_unsafe($items, $dest, list_move_out_unsafe($items, $source))
+				$order = list_move_in_unsafe($order, $dest, $dest)
+				$dest = $source
+				$source = list_get_unsafe($order, $dest)
+			}
+			$items = list_move_in_unsafe($items, $dest, displaced)
+			$order = list_move_in_unsafe($order, $dest, $dest)
+		}
+		$cycle_start = plus_infallible($cycle_start, 1)
+	}
+	$items
+}
+
+# Stable binary insertion sort, in place with no scratch.
+sort_insertion : List(item), (item, item -> [Before, Same, After]) -> List(item)
+sort_insertion = |items, compare_items| {
+	len = List.len(items)
+	var $items = items
+	var $index = 1
+	while $index < len {
+		before = minus_infallible($index, 1)
+		if sort_after($items, before, $index, compare_items) {
+			item = list_move_out_unsafe($items, $index)
+			# The item at index - 1 is known to order after `item`; find the
+			# first slot before it that does too, so equal items keep their
+			# order.
+			var $low = 0
+			var $high = before
+			while $low < $high {
+				mid = plus_infallible($low, minus_infallible($high, $low) // 2)
+				if compare_items(list_get_unsafe($items, mid), item) == After {
+					$high = mid
+				} else {
+					$low = plus_infallible(mid, 1)
+				}
+			}
+			var $slot = $index
+			while $slot > $low {
+				$items = sort_copy($items, $slot, minus_infallible($slot, 1))
+				$slot = minus_infallible($slot, 1)
+			}
+			$items = list_move_in_unsafe($items, $low, item)
+		}
+		$index = plus_infallible($index, 1)
+	}
+	$items
+}
+
+# Whether the item at `left` orders after the item at `right`.
+sort_after : List(item), U64, U64, (item, item -> [Before, Same, After]) -> Bool
+sort_after = |list, left, right, compare_items|
+	compare_items(list_get_unsafe(list, left), list_get_unsafe(list, right)) == After
+
+# Whether `left[left_index]` orders after `right[right_index]`.
+sort_after_across : List(item), U64, List(item), U64, (item, item -> [Before, Same, After]) -> Bool
+sort_after_across = |left, left_index, right, right_index, compare_items|
+	compare_items(list_get_unsafe(left, left_index), list_get_unsafe(right, right_index)) == After
+
+# Copies the item at `from` into slot `to` of the same list.
+sort_copy : List(item), U64, U64 -> List(item)
+sort_copy = |list, to, from| list_move_in_unsafe(list, to, list_move_out_unsafe(list, from))
+
+# Copies `count` items from `src[from..]` into `dest[to..]`. Both ranges lie
+# within their lists, so every offset names an existing slot.
+sort_copy_range : List(item), U64, List(item), U64, U64 -> List(item)
+sort_copy_range = |dest, to, src, from, count| {
+	var $dest = dest
+	var $offset = 0
+	while $offset < count {
+		$dest = list_move_in_unsafe($dest, plus_infallible(to, $offset), list_move_out_unsafe(src, plus_infallible(from, $offset)))
+		$offset = plus_infallible($offset, 1)
+	}
+	$dest
+}
+
+# Copies `count` items from `list[from..]` into `list[to..]`; the ranges may
+# overlap. Both lie within the list, so every offset names an existing slot.
+sort_copy_range_within : List(item), U64, U64, U64 -> List(item)
+sort_copy_range_within = |list, to, from, count| {
+	var $list = list
+	var $offset = 0
+	if to <= from {
+		while $offset < count {
+			$list = sort_copy($list, plus_infallible(to, $offset), plus_infallible(from, $offset))
+			$offset = plus_infallible($offset, 1)
+		}
+	} else {
+		$offset = count
+		while $offset > 0 {
+			$offset = minus_infallible($offset, 1)
+			$list = sort_copy($list, plus_infallible(to, $offset), plus_infallible(from, $offset))
+		}
+	}
+	$list
+}
+
+# Swaps the items at `index` and `index + 1` (both exist) when the first orders
+# after the second, without branching on the comparison. Returns 1 when it
+# swapped.
+sort_swap_if_after : List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), U64)
+sort_swap_if_after = |list, index, compare_items| {
+	next = plus_infallible(index, 1)
+	swapped = if (sort_after(list, index, next, compare_items)) 1 else 0
+	later = list_move_out_unsafe(list, minus_infallible(next, swapped))
+	shifted = sort_copy(list, index, plus_infallible(index, swapped))
+	(list_move_in_unsafe(shifted, next, later), swapped)
+}
+
+# Exchanges the items at `start + 1` and `start + 2` (both exist).
+swap_middle_pair : List(item), U64 -> List(item)
+swap_middle_pair = |items, start| {
+	second = plus_infallible(start, 1)
+	third = plus_infallible(start, 2)
+	middle = list_move_out_unsafe(items, second)
+	shifted = sort_copy(items, second, third)
+	list_move_in_unsafe(shifted, third, middle)
+}
+
+# ---- Merges ----------------------------------------------------------------
+#
+# Each merge reads two adjacent sorted runs from `src` and writes the merged
+# run to `dest`, a different list. A merge that scans from both ends shares
+# one pair of remaining-item counts between the scans and never takes from a
+# run the counts say is empty, so a comparator that contradicts itself cannot
+# make a scan run past its run's end.
+
+# Takes one item from the head of the left or right run into `dest[dest_index]`.
+# At least one run must still have items.
+sort_merge_head : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item -> [Before, Same, After]) -> { dest : List(item), took_left : Bool }
+sort_merge_head = |dest, dest_index, src, left_head, right_head, left_available, right_available, compare_items| {
+	# A spent run's head is past its end, so compare the live run against
+	# itself and ignore the answer.
+	probe_left = if (left_available) left_head else right_head
+	probe_right = if (right_available) right_head else left_head
+	lte = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) != After
+	took_left = if (!right_available) True else if (!left_available) False else lte
+	from = if (took_left) left_head else right_head
+	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
+}
+
+# Takes one item from the tail of the left or right run into `dest[dest_index]`.
+# `left_end` and `right_end` are exclusive. At least one run must still have items.
+sort_merge_tail : List(item), U64, List(item), U64, U64, Bool, Bool, (item, item -> [Before, Same, After]) -> { dest : List(item), took_left : Bool }
+sort_merge_tail = |dest, dest_index, src, left_end, right_end, left_available, right_available, compare_items| {
+	# A run that has items ends after at least one slot, so its end is at
+	# least one; a spent run's end is never used.
+	probe_left = if (left_available) minus_infallible(left_end, 1) else minus_infallible(right_end, 1)
+	probe_right = if (right_available) minus_infallible(right_end, 1) else minus_infallible(left_end, 1)
+	gt = compare_items(list_get_unsafe(src, probe_left), list_get_unsafe(src, probe_right)) == After
+	took_left = if (!right_available) True else if (!left_available) False else gt
+	from = if (took_left) probe_left else probe_right
+	{ dest: list_move_in_unsafe(dest, dest_index, list_move_out_unsafe(src, from)), took_left }
+}
+
+# Merges the runs `src[src_start..][..left_len]` and the `right_len` items after
+# it into `dest[dest_start..]`, scanning from both ends at once. The runs'
+# lengths are equal or differ by one.
+parity_merge : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_items| {
+	var $dest = dest
+	var $left_head = src_start
+	var $right_head = plus_infallible(src_start, left_len)
+	var $left_end = $right_head
+	var $right_end = plus_infallible($right_head, right_len)
+	var $dest_head = dest_start
+	var $dest_end = plus_infallible(dest_start, plus_infallible(left_len, right_len))
+	var $left_remaining = left_len
+	var $right_remaining = right_len
+	# The two scans write every slot of the merged run exactly once. When the
+	# left run is shorter, the head scan covers the middle slot by itself, and
+	# the extra step is one of the right run's slots.
+	var $head_steps = if (left_len < right_len) plus_infallible(left_len, 1) else left_len
+	var $tail_steps = minus_infallible(plus_infallible(left_len, right_len), $head_steps)
+	# Each step takes from a run that still has items: `took` is 1 only when
+	# the left run does and 0 only when the right run does.
+	while $head_steps > 0 {
+		step = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, $left_remaining != 0, $right_remaining != 0, compare_items)
+		$dest = step.dest
+		took = if (step.took_left) 1 else 0
+		not_took = minus_infallible(1, took)
+		$left_head = plus_infallible($left_head, took)
+		$right_head = plus_infallible($right_head, not_took)
+		$left_remaining = minus_infallible($left_remaining, took)
+		$right_remaining = minus_infallible($right_remaining, not_took)
+		$dest_head = plus_infallible($dest_head, 1)
+		$head_steps = minus_infallible($head_steps, 1)
+		if $tail_steps > 0 {
+			$dest_end = minus_infallible($dest_end, 1)
+			tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, $left_remaining != 0, $right_remaining != 0, compare_items)
+			$dest = tail.dest
+			took_tail = if (tail.took_left) 1 else 0
+			not_took_tail = minus_infallible(1, took_tail)
+			$left_end = minus_infallible($left_end, took_tail)
+			$right_end = minus_infallible($right_end, not_took_tail)
+			$left_remaining = minus_infallible($left_remaining, took_tail)
+			$right_remaining = minus_infallible($right_remaining, not_took_tail)
+			$tail_steps = minus_infallible($tail_steps, 1)
+		}
+	}
+	($dest, src)
+}
+
+# Merges two adjacent sorted runs from `src` into `dest`, moving stretches
+# of items that all order one way in blocks of eight.
+cross_merge : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+cross_merge = |dest, dest_start, src, src_start, left_len, right_len, compare_items| {
+	var $dest = dest
+	var $left_head = src_start
+	var $right_head = plus_infallible(src_start, left_len)
+	var $left_end = $right_head
+	var $right_end = plus_infallible($right_head, right_len)
+
+	# Similar lengths and random-looking data merge best with the branchless
+	# parity merge. Both runs then have at least 31 items, so the probes
+	# sixteen in from each end exist.
+	if left_len + 1 >= right_len and right_len + 1 >= left_len and left_len >= 32 {
+		if sort_after(src, plus_infallible($left_head, 15), $right_head, compare_items) and !sort_after(src, $left_head, plus_infallible($right_head, 15), compare_items) and sort_after(src, minus_infallible($left_end, 1), minus_infallible($right_end, 16), compare_items) and !sort_after(src, minus_infallible($left_end, 16), minus_infallible($right_end, 1), compare_items) {
+			return parity_merge(dest, dest_start, src, src_start, left_len, right_len, compare_items)
+		}
+	}
+
+	var $dest_head = dest_start
+	var $dest_end = plus_infallible(dest_start, plus_infallible(left_len, right_len))
+	pairs_per_batch : U64
+	pairs_per_batch = 8
+
+	# Throughout, each run's head is at or before its end, and the unwritten
+	# slots of `dest` between `dest_head` and `dest_end` are exactly the items
+	# the two runs still hold.
+	while $left_head < $left_end and $right_head < $right_end {
+		# A block move that leaves a run with at most nine items starts the
+		# loop over.
+		var $restart = False
+		if minus_infallible($left_end, $left_head) > 9 {
+			# Eight items at the left head all order before the right head.
+			while !$restart and !sort_after(src, plus_infallible($left_head, 7), $right_head, compare_items) {
+				$dest = sort_copy_range($dest, $dest_head, src, $left_head, 8)
+				$dest_head = plus_infallible($dest_head, 8)
+				$left_head = plus_infallible($left_head, 8)
+				if minus_infallible($left_end, $left_head) <= 9 {
+					$restart = True
+				}
+			}
+			# Eight items at the left tail all order after the right tail.
+			while !$restart and sort_after(src, minus_infallible($left_end, 8), minus_infallible($right_end, 1), compare_items) {
+				$dest_end = minus_infallible($dest_end, 8)
+				$left_end = minus_infallible($left_end, 8)
+				$dest = sort_copy_range($dest, $dest_end, src, $left_end, 8)
+				if minus_infallible($left_end, $left_head) <= 9 {
+					$restart = True
+				}
+			}
+		}
+		if !$restart and minus_infallible($right_end, $right_head) > 9 {
+			# Eight items at the right head all order before the left head.
+			while !$restart and sort_after(src, $left_head, plus_infallible($right_head, 7), compare_items) {
+				$dest = sort_copy_range($dest, $dest_head, src, $right_head, 8)
+				$dest_head = plus_infallible($dest_head, 8)
+				$right_head = plus_infallible($right_head, 8)
+				if minus_infallible($right_end, $right_head) <= 9 {
+					$restart = True
+				}
+			}
+			# Eight items at the right tail all order after the left tail.
+			while !$restart and !sort_after(src, minus_infallible($left_end, 1), minus_infallible($right_end, 8), compare_items) {
+				$dest_end = minus_infallible($dest_end, 8)
+				$right_end = minus_infallible($right_end, 8)
+				$dest = sort_copy_range($dest, $dest_end, src, $right_end, 8)
+				if minus_infallible($right_end, $right_head) <= 9 {
+					$restart = True
+				}
+			}
+		}
+		if !$restart {
+			if minus_infallible($dest_end, $dest_head) < 16 {
+				break
+			}
+			# Sixteen items from both ends at once. Both runs have items at
+			# each step, so `took` names a run that can give one.
+			var $pair = 0
+			while $pair < pairs_per_batch and $left_head < $left_end and $right_head < $right_end {
+				head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
+				$dest = head.dest
+				took = if (head.took_left) 1 else 0
+				$left_head = plus_infallible($left_head, took)
+				$right_head = plus_infallible($right_head, minus_infallible(1, took))
+				$dest_head = plus_infallible($dest_head, 1)
+				if $left_head < $left_end and $right_head < $right_end {
+					$dest_end = minus_infallible($dest_end, 1)
+					tail = sort_merge_tail($dest, $dest_end, src, $left_end, $right_end, True, True, compare_items)
+					$dest = tail.dest
+					took_tail = if (tail.took_left) 1 else 0
+					$left_end = minus_infallible($left_end, took_tail)
+					$right_end = minus_infallible($right_end, minus_infallible(1, took_tail))
+				}
+				$pair = plus_infallible($pair, 1)
+			}
+		}
+	}
+
+	# One run is spent, or fewer than sixteen items remain.
+	while $left_head < $left_end and $right_head < $right_end {
+		head = sort_merge_head($dest, $dest_head, src, $left_head, $right_head, True, True, compare_items)
+		$dest = head.dest
+		took = if (head.took_left) 1 else 0
+		$left_head = plus_infallible($left_head, took)
+		$right_head = plus_infallible($right_head, minus_infallible(1, took))
+		$dest_head = plus_infallible($dest_head, 1)
+	}
+	left_rest = minus_infallible($left_end, $left_head)
+	$dest = sort_copy_range($dest, $dest_head, src, $left_head, left_rest)
+	$dest_head = plus_infallible($dest_head, left_rest)
+	$dest = sort_copy_range($dest, $dest_head, src, $right_head, minus_infallible($right_end, $right_head))
+	($dest, src)
+}
+
+# One tail merge step with the left run in `items` (ending before `left_end`)
+# and the right run in `swap` (ending before `right_end`); both runs have an
+# item. Writes the later of the two tails to `items[dest_index]`.
+sort_merge_tail_across : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> { items : List(item), took_left : Bool }
+sort_merge_tail_across = |items, dest_index, left_end, swap, right_end, compare_items| {
+	left_last = minus_infallible(left_end, 1)
+	right_last = minus_infallible(right_end, 1)
+	took_left = sort_after_across(items, left_last, swap, right_last, compare_items)
+	if took_left {
+		{ items: sort_copy(items, dest_index, left_last), took_left }
+	} else {
+		{ items: list_move_in_unsafe(items, dest_index, list_move_out_unsafe(swap, right_last)), took_left }
+	}
+}
+
+# One head merge step with the left run in `swap` (starting at `left_head`)
+# and the right run in `items` (starting at `right_head`); both runs have an
+# item. Writes the earlier of the two heads to `items[dest_index]`.
+sort_merge_head_across : List(item), U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> { items : List(item), took_left : Bool }
+sort_merge_head_across = |items, dest_index, swap, left_head, right_head, compare_items| {
+	took_left = !sort_after_across(swap, left_head, items, right_head, compare_items)
+	if took_left {
+		{ items: list_move_in_unsafe(items, dest_index, list_move_out_unsafe(swap, left_head)), took_left }
+	} else {
+		{ items: sort_copy(items, dest_index, right_head), took_left }
+	}
+}
+
+# ---- Small sorts -----------------------------------------------------------
+
+# Sorts `items[start..][..len]` for `len < 8`.
+tiny_sort : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tiny_sort = |items, start, len, swap, compare_items| {
+	match len {
+		2 => {
+			(sorted, _) = sort_swap_if_after(items, start, compare_items)
+			(sorted, swap)
+		}
+		3 => {
+			(first, _) = sort_swap_if_after(items, start, compare_items)
+			(second, _) = sort_swap_if_after(first, plus_infallible(start, 1), compare_items)
+			(third, _) = sort_swap_if_after(second, start, compare_items)
+			(third, swap)
+		}
+		4 => (parity_swap_four(items, start, compare_items), swap)
+		5 => (parity_swap_five(items, start, compare_items), swap)
+		6 => parity_swap_six(items, start, swap, compare_items)
+		7 => parity_swap_seven(items, start, swap, compare_items)
+		_ => (items, swap)
+	}
+}
+
+parity_swap_four : List(item), U64, (item, item -> [Before, Same, After]) -> List(item)
+parity_swap_four = |items, start, compare_items| {
+	at = |k| plus_infallible(start, k)
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, at(2), compare_items)
+	if sort_after(second, at(1), at(2), compare_items) {
+		third = swap_middle_pair(second, start)
+		(fourth, _) = sort_swap_if_after(third, start, compare_items)
+		(fifth, _) = sort_swap_if_after(fourth, at(2), compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, at(1), compare_items)
+		sixth
+	} else {
+		second
+	}
+}
+
+parity_swap_five : List(item), U64, (item, item -> [Before, Same, After]) -> List(item)
+parity_swap_five = |items, start, compare_items| {
+	at = |k| plus_infallible(start, k)
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, at(2), compare_items)
+	(third, swapped_a) = sort_swap_if_after(second, at(1), compare_items)
+	(fourth, swapped_b) = sort_swap_if_after(third, at(3), compare_items)
+	if swapped_a != 0 or swapped_b != 0 {
+		(fifth, _) = sort_swap_if_after(fourth, start, compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, at(2), compare_items)
+		(seventh, _) = sort_swap_if_after(sixth, at(1), compare_items)
+		(eighth, _) = sort_swap_if_after(seventh, at(3), compare_items)
+		(ninth, _) = sort_swap_if_after(eighth, start, compare_items)
+		(tenth, _) = sort_swap_if_after(ninth, at(2), compare_items)
+		tenth
+	} else {
+		fourth
+	}
+}
+
+parity_swap_six : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_swap_six = |items, start, swap, compare_items| {
+	at = |k| plus_infallible(start, k)
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, at(1), compare_items)
+	(third, _) = sort_swap_if_after(second, at(4), compare_items)
+	(fourth, _) = sort_swap_if_after(third, at(3), compare_items)
+	if !sort_after(fourth, at(2), at(3), compare_items) {
+		(fifth, _) = sort_swap_if_after(fourth, start, compare_items)
+		(sixth, _) = sort_swap_if_after(fifth, at(4), compare_items)
+		return (sixth, swap)
+	}
+	# Order each half of three in swap, then merge the halves back. Each `gt`
+	# is 0 or 1, so the slots it selects between are the pair's own.
+	first_gt = if (sort_after(fourth, start, at(1), compare_items)) 1 else 0
+	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(fourth, at(first_gt)))
+	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(fourth, at(minus_infallible(1, first_gt))))
+	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(fourth, at(2)))
+	second_gt = if (sort_after(fourth, at(4), at(5), compare_items)) 1 else 0
+	swap_d = list_move_in_unsafe(swap_c, 4, list_move_out_unsafe(fourth, at(plus_infallible(4, second_gt))))
+	swap_e = list_move_in_unsafe(swap_d, 5, list_move_out_unsafe(fourth, at(minus_infallible(5, second_gt))))
+	swap_f = list_move_in_unsafe(swap_e, 3, list_move_out_unsafe(fourth, at(3)))
+	parity_merge(fourth, start, swap_f, 0, 3, 3, compare_items)
+}
+
+parity_swap_seven : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+parity_swap_seven = |items, start, swap, compare_items| {
+	at = |k| plus_infallible(start, k)
+	(first, _) = sort_swap_if_after(items, start, compare_items)
+	(second, _) = sort_swap_if_after(first, at(2), compare_items)
+	(third, _) = sort_swap_if_after(second, at(4), compare_items)
+	(fourth, swapped_a) = sort_swap_if_after(third, at(1), compare_items)
+	(fifth, swapped_b) = sort_swap_if_after(fourth, at(3), compare_items)
+	(sixth, swapped_c) = sort_swap_if_after(fifth, at(5), compare_items)
+	if swapped_a == 0 and swapped_b == 0 and swapped_c == 0 {
+		return (sixth, swap)
+	}
+	(seventh, _) = sort_swap_if_after(sixth, at(4), compare_items)
+	# Order a run of three and a run of four in swap, then merge them back.
+	# Each `gt` is 0 or 1, so the slots it selects between are the pair's own.
+	first_gt = if (sort_after(seventh, start, at(1), compare_items)) 1 else 0
+	swap_a = list_move_in_unsafe(swap, 0, list_move_out_unsafe(seventh, at(first_gt)))
+	swap_b = list_move_in_unsafe(swap_a, 1, list_move_out_unsafe(seventh, at(minus_infallible(1, first_gt))))
+	swap_c = list_move_in_unsafe(swap_b, 2, list_move_out_unsafe(seventh, at(2)))
+	second_gt = if (sort_after(seventh, at(3), at(4), compare_items)) 1 else 0
+	swap_d = list_move_in_unsafe(swap_c, 3, list_move_out_unsafe(seventh, at(plus_infallible(3, second_gt))))
+	swap_e = list_move_in_unsafe(swap_d, 4, list_move_out_unsafe(seventh, at(minus_infallible(4, second_gt))))
+	third_gt = if (sort_after(seventh, at(5), at(6), compare_items)) 1 else 0
+	swap_f = list_move_in_unsafe(swap_e, 5, list_move_out_unsafe(seventh, at(plus_infallible(5, third_gt))))
+	swap_g = list_move_in_unsafe(swap_f, 6, list_move_out_unsafe(seventh, at(minus_infallible(6, third_gt))))
+	parity_merge(seventh, start, swap_g, 0, 3, 4, compare_items)
+}
+
+# Sorts `items[start..][..len]` for `len < 96` using `swap[0..][..len]` as scratch.
+tail_swap : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tail_swap = |items, start, len, swap, compare_items| {
+	if len < 8 {
+		return tiny_sort(items, start, len, swap, compare_items)
+	}
+	half1 = len // 2
+	quad1 = half1 // 2
+	quad2 = half1 - quad1
+	half2 = len - half1
+	quad3 = half2 // 2
+	quad4 = half2 - quad3
+	# The quarters' starts are slots of the range, and each quarter has at
+	# least two items, so the slot before each start is in the range too.
+	second = plus_infallible(start, quad1)
+	third = plus_infallible(start, half1)
+	fourth = plus_infallible(third, quad3)
+	(items_a, swap_a) = tail_swap(items, start, quad1, swap, compare_items)
+	(items_b, swap_b) = tail_swap(items_a, second, quad2, swap_a, compare_items)
+	(items_c, swap_c) = tail_swap(items_b, third, quad3, swap_b, compare_items)
+	(items_d, swap_d) = tail_swap(items_c, fourth, quad4, swap_c, compare_items)
+	if !sort_after(items_d, minus_infallible(second, 1), second, compare_items) and !sort_after(items_d, minus_infallible(third, 1), third, compare_items) and !sort_after(items_d, minus_infallible(fourth, 1), fourth, compare_items) {
+		return (items_d, swap_d)
+	}
+	(swap_e, items_e) = parity_merge(swap_d, 0, items_d, start, quad1, quad2, compare_items)
+	(swap_f, items_f) = parity_merge(swap_e, half1, items_e, third, quad3, quad4, compare_items)
+	parity_merge(items_f, start, swap_f, 0, half1, half2, compare_items)
+}
+
+# Reverses `items[start..=end]`.
+quad_reversal : List(item), U64, U64 -> List(item)
+quad_reversal = |items, start, end| {
+	var $items = items
+	var $low = start
+	var $high = end
+	while $low < $high {
+		low_item = list_move_out_unsafe($items, $low)
+		$items = sort_copy($items, $low, $high)
+		$items = list_move_in_unsafe($items, $high, low_item)
+		$low = plus_infallible($low, 1)
+		$high = minus_infallible($high, 1)
+	}
+	$items
+}
+
+# ---- Quadsort --------------------------------------------------------------
+
+# Merges the four sorted pairs in `items[start..][..8]` into one sorted run of
+# eight, through `swap[0..][..8]`.
+quad_swap_merge : List(item), U64, List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quad_swap_merge = |items, start, swap, compare_items| {
+	(swap_a, items_a) = parity_merge(swap, 0, items, start, 2, 2, compare_items)
+	(swap_b, items_b) = parity_merge(swap_a, 4, items_a, plus_infallible(start, 4), 2, 2, compare_items)
+	parity_merge(items_b, start, swap_b, 0, 4, 4, compare_items)
+}
+
+# Orders the four pairs in `items[start..][..8]`; `v1`..`v4` are 1 for a pair
+# whose first item orders after its second, so each selects between the
+# pair's own two slots.
+quad_swap_pairs : List(item), U64, U64, U64, U64, U64 -> List(item)
+quad_swap_pairs = |items, start, v1, v2, v3, v4| {
+	at = |k| plus_infallible(start, k)
+	a = list_move_out_unsafe(items, at(minus_infallible(1, v1)))
+	items_a = list_move_in_unsafe(sort_copy(items, start, at(v1)), at(1), a)
+	b = list_move_out_unsafe(items_a, at(minus_infallible(3, v2)))
+	items_b = list_move_in_unsafe(sort_copy(items_a, at(2), at(plus_infallible(2, v2))), at(3), b)
+	c = list_move_out_unsafe(items_b, at(minus_infallible(5, v3)))
+	items_c = list_move_in_unsafe(sort_copy(items_b, at(4), at(plus_infallible(4, v3))), at(5), c)
+	d = list_move_out_unsafe(items_c, at(minus_infallible(7, v4)))
+	list_move_in_unsafe(sort_copy(items_c, at(6), at(plus_infallible(6, v4))), at(7), d)
+}
+
+# Turns `items[start..][..len]` into sorted runs of 32 items (and a sorted tail),
+# recognizing already ordered and reversed stretches. Returns `sorted` when the
+# whole range was one reversed run and is now sorted.
+quad_swap : List(item), U64, U64, List(item), (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), sorted : Bool }
+quad_swap = |items, start, len, swap, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block = start
+	var $reverse_head = start
+	var $count = len // 8
+	var $skip_tail_swap = False
+	# The run the previous block of eight continued, if any.
+	var $run = NoRun
+	var $done = False
+	# `$count` blocks of eight remain from `$block` on, so while it is not
+	# zero the eight slots from `$block` exist; in the `Reversed` state a
+	# block came before this one, so the slot before `$block` exists too.
+	while !$done {
+		block = $block
+		at = |k| plus_infallible(block, k)
+		match $run {
+			NoRun => {
+				if $count == 0 {
+					$done = True
+				} else {
+					$count = minus_infallible($count, 1)
+					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
+					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
+					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
+					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
+					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
+					if pairs == 0 {
+						if !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
+							$run = Ordered
+						} else {
+							(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
+							$items = merged
+							$swap = scratch
+						}
+					} else if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+						$reverse_head = block
+						$run = Reversed
+					} else {
+						(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, block, v1, v2, v3, v4), block, $swap, compare_items)
+						$items = merged
+						$swap = scratch
+					}
+					$block = at(8)
+				}
+			}
+			Ordered => {
+				# The previous block was ordered; see whether this one continues it.
+				if $count == 0 {
+					$done = True
+				} else {
+					$count = minus_infallible($count, 1)
+					v1 = if (sort_after($items, block, at(1), compare_items)) 1 else 0
+					v2 = if (sort_after($items, at(2), at(3), compare_items)) 1 else 0
+					v3 = if (sort_after($items, at(4), at(5), compare_items)) 1 else 0
+					v4 = if (sort_after($items, at(6), at(7), compare_items)) 1 else 0
+					pairs = plus_infallible(plus_infallible(v1, v2), plus_infallible(v3, v4))
+					if pairs != 0 {
+						if pairs == 4 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+							$reverse_head = block
+							$run = Reversed
+						} else {
+							(merged, scratch) = quad_swap_merge(quad_swap_pairs($items, block, v1, v2, v3, v4), block, $swap, compare_items)
+							$items = merged
+							$swap = scratch
+							$run = NoRun
+						}
+					} else if (!sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items)) {
+						# Still ordered.
+					} else {
+						(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
+						$items = merged
+						$swap = scratch
+						$run = NoRun
+					}
+					$block = at(8)
+				}
+			}
+			Reversed => {
+				# The previous block was reversed; see whether this one continues it.
+				before = minus_infallible(block, 1)
+				if $count == 0 {
+					# Reverse the run, including the tail if it continues it. The
+					# tail holds `rem` items, so each probe exists when its `rem`
+					# test lets it run.
+					rem = len % 8
+					tail_reversed = (rem < 7 or sort_after($items, at(5), at(6), compare_items)) and (rem < 6 or sort_after($items, at(4), at(5), compare_items)) and (rem < 5 or sort_after($items, at(3), at(4), compare_items)) and (rem < 4 or sort_after($items, at(2), at(3), compare_items)) and (rem < 3 or sort_after($items, at(1), at(2), compare_items)) and (rem < 2 or sort_after($items, block, at(1), compare_items)) and (rem < 1 or sort_after($items, before, block, compare_items))
+					if tail_reversed {
+						$items = quad_reversal($items, $reverse_head, minus_infallible(at(rem), 1))
+						if $reverse_head == start {
+							return { items: $items, swap: $swap, sorted: True }
+						}
+						$skip_tail_swap = True
+					} else {
+						$items = quad_reversal($items, $reverse_head, before)
+					}
+					$done = True
+				} else {
+					$count = minus_infallible($count, 1)
+					# 1 for a pair that is in order, so not reversed.
+					u1 = if (sort_after($items, block, at(1), compare_items)) 0 else 1
+					u2 = if (sort_after($items, at(2), at(3), compare_items)) 0 else 1
+					u3 = if (sort_after($items, at(4), at(5), compare_items)) 0 else 1
+					u4 = if (sort_after($items, at(6), at(7), compare_items)) 0 else 1
+					ordered_pairs = plus_infallible(plus_infallible(u1, u2), plus_infallible(u3, u4))
+					if (ordered_pairs == 0 and sort_after($items, before, block, compare_items) and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items)) {
+						# Still reversed, across the block boundary too.
+					} else {
+						$items = quad_reversal($items, $reverse_head, before)
+						if ordered_pairs == 4 and !sort_after($items, at(1), at(2), compare_items) and !sort_after($items, at(3), at(4), compare_items) and !sort_after($items, at(5), at(6), compare_items) {
+							$run = Ordered
+						} else if ordered_pairs == 0 and sort_after($items, at(1), at(2), compare_items) and sort_after($items, at(3), at(4), compare_items) and sort_after($items, at(5), at(6), compare_items) {
+							$reverse_head = block
+						} else {
+							# An unordered block: order its pairs in place, then
+							# merge them unless they already form a sorted run.
+							$items = quad_swap_pairs($items, block, minus_infallible(1, u1), minus_infallible(1, u2), minus_infallible(1, u3), minus_infallible(1, u4))
+							if sort_after($items, at(1), at(2), compare_items) or sort_after($items, at(3), at(4), compare_items) or sort_after($items, at(5), at(6), compare_items) {
+								(merged, scratch) = quad_swap_merge($items, block, $swap, compare_items)
+								$items = merged
+								$swap = scratch
+							}
+							$run = NoRun
+						}
+					}
+					$block = at(8)
+				}
+			}
+		}
+	}
+	if !$skip_tail_swap {
+		(tail_items, tail_scratch) = tail_swap($items, $block, len % 8, $swap, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+	}
+
+	# Merge runs of eight into runs of 32; `$count` blocks of 32 remain from
+	# `$block` on.
+	$block = start
+	$count = len // 32
+	while $count > 0 {
+		$count = minus_infallible($count, 1)
+		run = $block
+		run_at = |k| plus_infallible(run, k)
+		if sort_after($items, run_at(7), run_at(8), compare_items) or sort_after($items, run_at(15), run_at(16), compare_items) or sort_after($items, run_at(23), run_at(24), compare_items) {
+			(swap_a, items_a) = parity_merge($swap, 0, $items, run, 8, 8, compare_items)
+			(swap_b, items_b) = parity_merge(swap_a, 16, items_a, run_at(16), 8, 8, compare_items)
+			(items_c, swap_c) = parity_merge(items_b, run, swap_b, 0, 16, 16, compare_items)
+			$items = items_c
+			$swap = swap_c
+		}
+		$block = run_at(32)
+	}
+	# A tail of more than eight items holds several runs to merge.
+	if len % 32 > 8 {
+		(tail_items, tail_scratch) = tail_merge($items, $block, len % 32, $swap, 32, 8, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+	}
+	{ items: $items, swap: $swap, sorted: False }
+}
+
+# Merges `items[start..][..len]`, made of sorted runs of `block_len` items,
+# into runs four times as long while they fit in `swap[0..][..swap_len]`.
+# Returns the length of the sorted runs left behind.
+quad_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), block_len : U64 }
+quad_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len * 4
+	end = start + len
+	while $block_len <= len and $block_len <= swap_len {
+		var $block = start
+		var $more = True
+		while $more {
+			(merged, scratch) = quad_merge_block($items, $block, $swap, $block_len // 4, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len
+			if $block + $block_len > end {
+				$more = False
+			}
+		}
+		(tail_items, tail_scratch) = tail_merge($items, $block, end - $block, $swap, swap_len, $block_len // 4, compare_items)
+		$items = tail_items
+		$swap = tail_scratch
+		$block_len = $block_len * 4
+	}
+	(final_items, final_swap) = tail_merge($items, start, len, $swap, swap_len, $block_len // 4, compare_items)
+	{ items: final_items, swap: final_swap, block_len: $block_len // 2 }
+}
+
+# Merges four adjacent sorted runs of `block_len` items at `items[start..]`.
+quad_merge_block : List(item), U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quad_merge_block = |items, start, swap, block_len, compare_items| {
+	block2 = start + block_len
+	block3 = block2 + block_len
+	block4 = block3 + block_len
+	in_order_1_2 = !sort_after(items, block2 - 1, block2, compare_items)
+	in_order_3_4 = !sort_after(items, block4 - 1, block4, compare_items)
+	if in_order_1_2 and in_order_3_4 {
+		if !sort_after(items, block3 - 1, block3, compare_items) {
+			return (items, swap)
+		}
+		swap_all = sort_copy_range(swap, 0, items, start, block_len * 4)
+		return cross_merge(items, start, swap_all, 0, block_len * 2, block_len * 2, compare_items)
+	}
+	(swap_a, items_a) = if in_order_1_2 {
+		(sort_copy_range(swap, 0, items, start, block_len * 2), items)
+	} else {
+		cross_merge(swap, 0, items, start, block_len, block_len, compare_items)
+	}
+	(swap_b, items_b) = if in_order_3_4 {
+		(sort_copy_range(swap_a, block_len * 2, items_a, block3, block_len * 2), items_a)
+	} else {
+		cross_merge(swap_a, block_len * 2, items_a, block3, block_len, block_len, compare_items)
+	}
+	cross_merge(items_b, start, swap_b, 0, block_len * 2, block_len * 2, compare_items)
+}
+
+# Merges the sorted runs of `block_len` items in `items[start..][..len]` into
+# longer and longer runs while they fit in `swap[0..][..swap_len]`.
+tail_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+tail_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len
+	end = start + len
+	while $block_len < len and $block_len <= swap_len {
+		var $block = start
+		while $block + $block_len < end {
+			merge_len = if ($block + $block_len * 2 < end) $block_len * 2 else end - $block
+			(merged, scratch) = partial_backwards_merge($items, $block, merge_len, $swap, swap_len, $block_len, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len * 2
+		}
+		$block_len = $block_len * 2
+	}
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..block_len]` with the sorted run after
+# it (ending at `start + len`), at most as long as the first, from the tail back
+# to the head. The right run moves to swap first.
+partial_backwards_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+partial_backwards_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	if len == block_len {
+		return (items, swap)
+	}
+	if !sort_after(items, start + block_len - 1, start + block_len, compare_items) {
+		return (items, swap)
+	}
+	right_len = len - block_len
+	if len <= swap_len and right_len >= 64 {
+		# Plenty of scratch: merge into swap and copy back.
+		(merged_swap, source) = cross_merge(swap, 0, items, start, block_len, right_len, compare_items)
+		return (sort_copy_range(source, start, merged_swap, 0, len), merged_swap)
+	}
+
+	var $swap = sort_copy_range(swap, 0, items, start + block_len, right_len)
+	var $items = items
+	# Exclusive ends of the unmerged part of each run; the left run starts at
+	# `start`, the right run (now in swap) at 0. The unwritten slots before
+	# `$dest_end` are exactly the items the two runs still hold, so a step
+	# that takes items from the runs has that many slots to move back by.
+	var $left_end = start + block_len
+	var $right_end = right_len
+	var $dest_end = start + len
+	pairs_per_batch : U64
+	pairs_per_batch = 8
+
+	# Blocks of sixteen while both runs have more than seventeen items left.
+	var $exit = False
+	while !$exit and minus_infallible($left_end, start) > 17 and $right_end > 17 {
+		# Sixteen items at the right tail all order at or after the left tail.
+		while !$exit and !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 16), compare_items) {
+			$dest_end = minus_infallible($dest_end, 16)
+			$right_end = minus_infallible($right_end, 16)
+			$items = sort_copy_range($items, $dest_end, $swap, $right_end, 16)
+			if $right_end <= 17 {
+				$exit = True
+			}
+		}
+		# Sixteen items at the left tail all order after the right tail.
+		while !$exit and sort_after_across($items, minus_infallible($left_end, 16), $swap, minus_infallible($right_end, 1), compare_items) {
+			$dest_end = minus_infallible($dest_end, 16)
+			$left_end = minus_infallible($left_end, 16)
+			$items = sort_copy_range_within($items, $dest_end, $left_end, 16)
+			if minus_infallible($left_end, start) <= 17 {
+				$exit = True
+			}
+		}
+		if !$exit {
+			# Up to eight rounds taking two items from whichever run can give
+			# them, or one from each. Each run has more than seventeen items
+			# here and a round takes at most two from it, so both runs keep at
+			# least two items through the eighth round.
+			var $loops = pairs_per_batch
+			while $loops > 0 {
+				$loops = minus_infallible($loops, 1)
+				if !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 2), compare_items) {
+					$dest_end = minus_infallible($dest_end, 2)
+					$right_end = minus_infallible($right_end, 2)
+					$items = sort_copy_range($items, $dest_end, $swap, $right_end, 2)
+				} else if sort_after_across($items, minus_infallible($left_end, 2), $swap, minus_infallible($right_end, 1), compare_items) {
+					$dest_end = minus_infallible($dest_end, 2)
+					$left_end = minus_infallible($left_end, 2)
+					$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
+				} else {
+					lte = !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 1), compare_items)
+					right_slot = if (lte) minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
+					left_slot = if (lte) minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
+					$right_end = minus_infallible($right_end, 1)
+					$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end))
+					$left_end = minus_infallible($left_end, 1)
+					$items = sort_copy($items, left_slot, $left_end)
+					$dest_end = minus_infallible($dest_end, 3)
+					step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
+					$items = step.items
+					took = if (step.took_left) 1 else 0
+					$left_end = minus_infallible($left_end, took)
+					$right_end = minus_infallible($right_end, minus_infallible(1, took))
+				}
+			}
+		}
+	}
+
+	# Two at a time while both runs have more than two items left.
+	while $right_end > 2 and minus_infallible($left_end, start) > 2 {
+		if !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 2), compare_items) {
+			$dest_end = minus_infallible($dest_end, 2)
+			$right_end = minus_infallible($right_end, 2)
+			$items = sort_copy_range($items, $dest_end, $swap, $right_end, 2)
+		} else if sort_after_across($items, minus_infallible($left_end, 2), $swap, minus_infallible($right_end, 1), compare_items) {
+			$dest_end = minus_infallible($dest_end, 2)
+			$left_end = minus_infallible($left_end, 2)
+			$items = sort_copy_range_within($items, $dest_end, $left_end, 2)
+		} else {
+			lte = !sort_after_across($items, minus_infallible($left_end, 1), $swap, minus_infallible($right_end, 1), compare_items)
+			right_slot = if (lte) minus_infallible($dest_end, 1) else minus_infallible($dest_end, 2)
+			left_slot = if (lte) minus_infallible($dest_end, 2) else minus_infallible($dest_end, 1)
+			$right_end = minus_infallible($right_end, 1)
+			$items = list_move_in_unsafe($items, right_slot, list_move_out_unsafe($swap, $right_end))
+			$left_end = minus_infallible($left_end, 1)
+			$items = sort_copy($items, left_slot, $left_end)
+			$dest_end = minus_infallible($dest_end, 3)
+			step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
+			$items = step.items
+			took = if (step.took_left) 1 else 0
+			$left_end = minus_infallible($left_end, took)
+			$right_end = minus_infallible($right_end, minus_infallible(1, took))
+		}
+	}
+
+	# The tail, one item at a time; `took` names a run that has an item.
+	while $right_end > 0 and $left_end > start {
+		$dest_end = minus_infallible($dest_end, 1)
+		step = sort_merge_tail_across($items, $dest_end, $left_end, $swap, $right_end, compare_items)
+		$items = step.items
+		took = if (step.took_left) 1 else 0
+		$left_end = minus_infallible($left_end, took)
+		$right_end = minus_infallible($right_end, minus_infallible(1, took))
+	}
+	# Whatever remains of the right run goes back; the left run is already in
+	# place.
+	$items = sort_copy_range($items, start, $swap, 0, $right_end)
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..block_len]` with the sorted run after
+# it (ending at `start + len`), from the head forward. The left run moves to
+# swap first.
+partial_forward_merge : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+partial_forward_merge = |items, start, len, swap, block_len, compare_items| {
+	if len == block_len {
+		return (items, swap)
+	}
+	if !sort_after(items, start + block_len - 1, start + block_len, compare_items) {
+		return (items, swap)
+	}
+	var $swap = sort_copy_range(swap, 0, items, start, block_len)
+	var $items = items
+	var $left_head = 0
+	left_end = block_len
+	var $right_head = start + block_len
+	right_end = start + len
+	var $dest_head = start
+
+	# Two at a time while both runs have more than two items left. Each head
+	# is at or before its run's end, and the unwritten slots from `$dest_head`
+	# on are exactly the items the two runs still hold.
+	while minus_infallible(left_end, $left_head) > 2 and minus_infallible(right_end, $right_head) > 2 {
+		if sort_after_across($swap, $left_head, $items, plus_infallible($right_head, 1), compare_items) {
+			$items = sort_copy_range_within($items, $dest_head, $right_head, 2)
+			$dest_head = plus_infallible($dest_head, 2)
+			$right_head = plus_infallible($right_head, 2)
+		} else if !sort_after_across($swap, plus_infallible($left_head, 1), $items, $right_head, compare_items) {
+			$items = sort_copy_range($items, $dest_head, $swap, $left_head, 2)
+			$dest_head = plus_infallible($dest_head, 2)
+			$left_head = plus_infallible($left_head, 2)
+		} else {
+			lte = !sort_after_across($swap, $left_head, $items, $right_head, compare_items)
+			right_slot = if (lte) plus_infallible($dest_head, 1) else $dest_head
+			left_slot = if (lte) $dest_head else plus_infallible($dest_head, 1)
+			$items = sort_copy($items, right_slot, $right_head)
+			$right_head = plus_infallible($right_head, 1)
+			$items = list_move_in_unsafe($items, left_slot, list_move_out_unsafe($swap, $left_head))
+			$left_head = plus_infallible($left_head, 1)
+			$dest_head = plus_infallible($dest_head, 2)
+			step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
+			$items = step.items
+			took = if (step.took_left) 1 else 0
+			$left_head = plus_infallible($left_head, took)
+			$right_head = plus_infallible($right_head, minus_infallible(1, took))
+			$dest_head = plus_infallible($dest_head, 1)
+		}
+	}
+
+	# One at a time; `took` names a run that has an item.
+	while $left_head < left_end and $right_head < right_end {
+		step = sort_merge_head_across($items, $dest_head, $swap, $left_head, $right_head, compare_items)
+		$items = step.items
+		took = if (step.took_left) 1 else 0
+		$left_head = plus_infallible($left_head, took)
+		$right_head = plus_infallible($right_head, minus_infallible(1, took))
+		$dest_head = plus_infallible($dest_head, 1)
+	}
+	# Whatever remains of the left run goes back; the right run is already in
+	# place.
+	$items = sort_copy_range($items, $dest_head, $swap, $left_head, minus_infallible(left_end, $left_head))
+	($items, $swap)
+}
+
+# Merges the sorted runs of `block_len` items in `items[start..][..len]` into
+# one sorted run, using `swap[0..][..swap_len]` and in-place rotations when a
+# merge does not fit in swap.
+rotate_merge : List(item), U64, U64, List(item), U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+rotate_merge = |items, start, len, swap, swap_len, block_len, compare_items| {
+	if block_len <= len and len <= block_len * 2 and len - block_len <= swap_len {
+		return partial_backwards_merge(items, start, len, swap, swap_len, block_len, compare_items)
+	}
+	var $items = items
+	var $swap = swap
+	var $block_len = block_len
+	end = start + len
+	while $block_len < len {
+		var $block = start
+		while $block + $block_len < end {
+			right_len = if ($block + $block_len * 2 < end) $block_len else end - $block - $block_len
+			(merged, scratch) = rotate_merge_block($items, $block, $swap, swap_len, $block_len, right_len, compare_items)
+			$items = merged
+			$swap = scratch
+			$block = $block + $block_len * 2
+		}
+		$block_len = $block_len * 2
+	}
+	($items, $swap)
+}
+
+# Merges the sorted run `items[start..][..left_block]` with the sorted run of
+# `right` items after it, with only `swap[0..][..swap_len]` as scratch.
+rotate_merge_block : List(item), U64, List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+rotate_merge_block = |items, start, swap, swap_len, initial_left_block, initial_right, compare_items| {
+	if !sort_after(items, start + initial_left_block - 1, start + initial_left_block, compare_items) {
+		return (items, swap)
+	}
+	right_block = initial_left_block // 2
+	left_block = initial_left_block - right_block
+	# How many items of the right run order before the first item of the
+	# left run's second half.
+	left = monobound_binary_first(items, start + left_block + right_block, initial_right, list_get_unsafe(items, start + left_block), compare_items)
+	right = initial_right - left
+
+	var $items = items
+	var $swap = swap
+	if left != 0 {
+		if left_block + left <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start, left_block)
+			$swap = sort_copy_range($swap, left_block, $items, start + left_block + right_block, left)
+			$items = sort_copy_range_within($items, start + left + left_block, start + left_block, right_block)
+			(merged, scratch) = cross_merge($items, start, $swap, 0, left_block, left, compare_items)
+			$items = merged
+			$swap = scratch
+		} else {
+			(rotated, scratch) = trinity_rotation($items, start + left_block, right_block + left, $swap, swap_len, right_block)
+			$items = rotated
+			$swap = scratch
+			unbalanced = left * 2 < left_block or left_block * 2 < left
+			(merged, merged_swap) = if unbalanced and left <= swap_len {
+				partial_backwards_merge($items, start, left_block + left, $swap, swap_len, left_block, compare_items)
+			} else if unbalanced and left_block <= swap_len {
+				partial_forward_merge($items, start, left_block + left, $swap, left_block, compare_items)
+			} else {
+				rotate_merge_block($items, start, $swap, swap_len, left_block, left, compare_items)
+			}
+			$items = merged
+			$swap = merged_swap
+		}
+	}
+	if right != 0 {
+		unbalanced = right * 2 < right_block or right_block * 2 < right
+		(merged, merged_swap) = if (unbalanced and right <= swap_len) or right + right_block <= swap_len {
+			partial_backwards_merge($items, start + left_block + left, right_block + right, $swap, swap_len, right_block, compare_items)
+		} else if unbalanced and left_block <= swap_len {
+			partial_forward_merge($items, start + left_block + left, right_block + right, $swap, right_block, compare_items)
+		} else {
+			rotate_merge_block($items, start + left_block + left, $swap, swap_len, right_block, right, compare_items)
+		}
+		$items = merged
+		$swap = merged_swap
+	}
+	($items, $swap)
+}
+
+# The number of items in the sorted run `items[start..][..len]` that order
+# before `value`, found by a cache-friendly binary search.
+monobound_binary_first : List(item), U64, U64, item, (item, item -> [Before, Same, After]) -> U64
+monobound_binary_first = |items, start, len, value, compare_items| {
+	# `$top` items of the run lie before `$end`, so `$end` stays at least
+	# `start + $top`.
+	var $top = len
+	var $end = start + len
+	while $top > 1 {
+		mid = $top // 2
+		if compare_items(value, list_get_unsafe(items, minus_infallible($end, mid))) != After {
+			$end = minus_infallible($end, mid)
+		}
+		$top = minus_infallible($top, mid)
+	}
+	if $top > 0 and compare_items(value, list_get_unsafe(items, minus_infallible($end, 1))) != After {
+		$end = minus_infallible($end, 1)
+	}
+	minus_infallible($end, start)
+}
+
+# Exchanges the adjacent ranges `items[start..][..left_len]` and the
+# `len - left_len` items after it, using at most `swap_len` items of swap.
+trinity_rotation : List(item), U64, U64, List(item), U64, U64 -> (List(item), List(item))
+trinity_rotation = |items, start, len, swap, full_swap_len, left_len| {
+	right_len = len - left_len
+	swap_len = if (full_swap_len > 65536) 65536 else full_swap_len
+	var $items = items
+	var $swap = swap
+	if left_len < right_len {
+		if left_len <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start, left_len)
+			$items = sort_copy_range_within($items, start, start + left_len, right_len)
+			$items = sort_copy_range($items, start + right_len, $swap, 0, left_len)
+		} else {
+			bridge = right_len - left_len
+			if bridge <= swap_len and bridge > 3 {
+				# Move the middle of the range aside, exchange the two
+				# equal-length ends, and put the middle back.
+				$swap = sort_copy_range($swap, 0, $items, start + left_len, bridge)
+				# Each cursor moves back `left_len` slots from a position at
+				# least `left_len` past `start`.
+				var $b = start + left_len
+				var $c = start + right_len
+				var $d = $c + left_len
+				var $remaining = left_len
+				while $remaining > 0 {
+					$remaining = minus_infallible($remaining, 1)
+					$c = minus_infallible($c, 1)
+					$d = minus_infallible($d, 1)
+					$items = sort_copy($items, $c, $d)
+					$b = minus_infallible($b, 1)
+					$items = sort_copy($items, $d, $b)
+				}
+				$items = sort_copy_range($items, start, $swap, 0, bridge)
+			} else {
+				$items = rotate_in_place($items, start, left_len, right_len)
+			}
+		}
+	} else if right_len < left_len {
+		if right_len <= swap_len {
+			$swap = sort_copy_range($swap, 0, $items, start + left_len, right_len)
+			$items = sort_copy_range_within($items, start + right_len, start, left_len)
+			$items = sort_copy_range($items, start, $swap, 0, right_len)
+		} else {
+			bridge = left_len - right_len
+			if bridge <= swap_len and bridge > 3 {
+				$swap = sort_copy_range($swap, 0, $items, start + right_len, bridge)
+				# Each cursor moves forward `right_len` slots and ends at or
+				# before `start + len`.
+				var $a = start
+				var $b = start + left_len
+				var $c = start + right_len
+				var $remaining = right_len
+				while $remaining > 0 {
+					$remaining = minus_infallible($remaining, 1)
+					$items = sort_copy($items, $c, $a)
+					$c = plus_infallible($c, 1)
+					$items = sort_copy($items, $a, $b)
+					$a = plus_infallible($a, 1)
+					$b = plus_infallible($b, 1)
+				}
+				$items = sort_copy_range($items, start + len - bridge, $swap, 0, bridge)
+			} else {
+				$items = rotate_in_place($items, start, left_len, right_len)
+			}
+		}
+	} else {
+		# Both cursors move forward `left_len` slots and end at or before
+		# `start + len`.
+		var $left = start
+		var $right = start + left_len
+		var $remaining = left_len
+		while $remaining > 0 {
+			$remaining = minus_infallible($remaining, 1)
+			moved = list_move_out_unsafe($items, $left)
+			$items = sort_copy($items, $left, $right)
+			$items = list_move_in_unsafe($items, $right, moved)
+			$left = plus_infallible($left, 1)
+			$right = plus_infallible($right, 1)
+		}
+	}
+	($items, $swap)
+}
+
+# Exchanges adjacent ranges with no scratch at all: reverse both, then
+# reverse the whole.
+rotate_in_place : List(item), U64, U64, U64 -> List(item)
+rotate_in_place = |items, start, left_len, right_len| {
+	len = left_len + right_len
+	reversed_left = if left_len > 1 {
+		quad_reversal(items, start, start + left_len - 1)
+	} else {
+		items
+	}
+	reversed_right = if right_len > 1 {
+		quad_reversal(reversed_left, start + left_len, start + len - 1)
+	} else {
+		reversed_left
+	}
+	quad_reversal(reversed_right, start, start + len - 1)
+}
+
+# Quadsort for `items[start..][..len]` with `swap[0..][..swap_len]` as scratch.
+quadsort_swap : List(item), U64, U64, List(item), U64, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quadsort_swap = |items, start, len, swap, swap_len, compare_items| {
+	if len < 96 {
+		return tail_swap(items, start, len, swap, compare_items)
+	}
+	swapped = quad_swap(items, start, len, swap, compare_items)
+	if swapped.sorted {
+		return (swapped.items, swapped.swap)
+	}
+	merged = quad_merge(swapped.items, start, len, swapped.swap, swap_len, 32, compare_items)
+	rotate_merge(merged.items, start, len, merged.swap, swap_len, merged.block_len, compare_items)
+}
+
+# Quadsort for a whole list of at least 32 items.
+quadsort : List(item), List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+quadsort = |items, swap, compare_items| {
+	len = List.len(items)
+	swapped = quad_swap(items, 0, len, swap, compare_items)
+	if swapped.sorted {
+		return (swapped.items, swapped.swap)
+	}
+	merged = quad_merge(swapped.items, 0, len, swapped.swap, len, 32, compare_items)
+	rotate_merge(merged.items, 0, len, merged.swap, len, merged.block_len, compare_items)
+}
+
+# ---- Fluxsort --------------------------------------------------------------
+
+# Sorts a whole list of at least 132 items: measures how ordered its four
+# quarters are, partitions or quadsorts each accordingly, and merges them.
+flux_sort : List(item), List(item), (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_sort = |items, swap, compare_items| {
+	len = List.len(items)
+	half1 = len // 2
+	quad1 = half1 // 2
+	quad2 = half1 - quad1
+	half2 = len - half1
+	quad3 = half2 // 2
+	quad4 = half2 - quad3
+
+	var $items = items
+	var $swap = swap
+	# Cursors walking each quarter in step; each ends on its quarter's last item.
+	var $a = 0
+	var $b = quad1
+	var $c = half1
+	var $d = half1 + quad3
+
+	var $streaks_a = 0
+	var $streaks_b = 0
+	var $streaks_c = 0
+	var $streaks_d = 0
+	var $balance_a = 0
+	var $balance_b = 0
+	var $balance_c = 0
+	var $balance_d = 0
+
+	if quad1 < quad2 {
+		$balance_b = $balance_b + (if (sort_after($items, $b, $b + 1, compare_items)) 1 else 0)
+		$b = $b + 1
+	}
+	if quad1 < quad3 {
+		$balance_c = $balance_c + (if (sort_after($items, $c, $c + 1, compare_items)) 1 else 0)
+		$c = $c + 1
+	}
+	if quad1 < quad4 {
+		$balance_d = $balance_d + (if (sort_after($items, $d, $d + 1, compare_items)) 1 else 0)
+		$d = $d + 1
+	}
+
+	# `$count` is the number of items the four cursors have yet to pass over
+	# between them, so a cursor never steps past the last item of its quarter
+	# and the slot after it exists. Each balance counts out-of-order pairs of
+	# its quarter, so it stays below the quarter's length.
+	var $count = len
+	while $count > 132 {
+		var $sum_a = 0
+		var $sum_b = 0
+		var $sum_c = 0
+		var $sum_d = 0
+		var $step = 0
+		while $step < 32 {
+			$sum_a = plus_infallible($sum_a, (if (sort_after($items, $a, plus_infallible($a, 1), compare_items)) 1 else 0))
+			$a = plus_infallible($a, 1)
+			$sum_b = plus_infallible($sum_b, (if (sort_after($items, $b, plus_infallible($b, 1), compare_items)) 1 else 0))
+			$b = plus_infallible($b, 1)
+			$sum_c = plus_infallible($sum_c, (if (sort_after($items, $c, plus_infallible($c, 1), compare_items)) 1 else 0))
+			$c = plus_infallible($c, 1)
+			$sum_d = plus_infallible($sum_d, (if (sort_after($items, $d, plus_infallible($d, 1), compare_items)) 1 else 0))
+			$d = plus_infallible($d, 1)
+			$step = plus_infallible($step, 1)
+		}
+		$balance_a = plus_infallible($balance_a, $sum_a)
+		$balance_b = plus_infallible($balance_b, $sum_b)
+		$balance_c = plus_infallible($balance_c, $sum_c)
+		$balance_d = plus_infallible($balance_d, $sum_d)
+		streak_a = $sum_a == 0 or $sum_a == 32
+		streak_b = $sum_b == 0 or $sum_b == 32
+		streak_c = $sum_c == 0 or $sum_c == 32
+		streak_d = $sum_d == 0 or $sum_d == 32
+		$streaks_a = plus_infallible($streaks_a, (if (streak_a) 1 else 0))
+		$streaks_b = plus_infallible($streaks_b, (if (streak_b) 1 else 0))
+		$streaks_c = plus_infallible($streaks_c, (if (streak_c) 1 else 0))
+		$streaks_d = plus_infallible($streaks_d, (if (streak_d) 1 else 0))
+		if $count > 516 and !streak_a and !streak_b and !streak_c and !streak_d {
+			# Random-looking everywhere: skip ahead, assuming half the pairs
+			# are out of order.
+			$balance_a = plus_infallible($balance_a, 48)
+			$a = plus_infallible($a, 96)
+			$balance_b = plus_infallible($balance_b, 48)
+			$b = plus_infallible($b, 96)
+			$balance_c = plus_infallible($balance_c, 48)
+			$c = plus_infallible($c, 96)
+			$balance_d = plus_infallible($balance_d, 48)
+			$d = plus_infallible($d, 96)
+			$count = minus_infallible($count, 384)
+		}
+		$count = minus_infallible($count, 128)
+	}
+	while $count > 7 {
+		$balance_a = plus_infallible($balance_a, (if (sort_after($items, $a, plus_infallible($a, 1), compare_items)) 1 else 0))
+		$a = plus_infallible($a, 1)
+		$balance_b = plus_infallible($balance_b, (if (sort_after($items, $b, plus_infallible($b, 1), compare_items)) 1 else 0))
+		$b = plus_infallible($b, 1)
+		$balance_c = plus_infallible($balance_c, (if (sort_after($items, $c, plus_infallible($c, 1), compare_items)) 1 else 0))
+		$c = plus_infallible($c, 1)
+		$balance_d = plus_infallible($balance_d, (if (sort_after($items, $d, plus_infallible($d, 1), compare_items)) 1 else 0))
+		$d = plus_infallible($d, 1)
+		$count = minus_infallible($count, 4)
+	}
+
+	if $balance_a + $balance_b + $balance_c + $balance_d == 0 {
+		# Every quarter is ordered; if the boundaries are too, so is the list.
+		if !sort_after($items, $a, $a + 1, compare_items) and !sort_after($items, $b, $b + 1, compare_items) and !sort_after($items, $c, $c + 1, compare_items) {
+			return ($items, $swap)
+		}
+	}
+
+	reversed_a = quad1 - $balance_a == 1
+	reversed_b = quad2 - $balance_b == 1
+	reversed_c = quad3 - $balance_c == 1
+	reversed_d = quad4 - $balance_d == 1
+	if reversed_a or reversed_b or reversed_c or reversed_d {
+		# Reverse runs that span whole quarters, including across quarter
+		# boundaries that continue the run.
+		span1 = reversed_a and reversed_b and sort_after($items, $a, $a + 1, compare_items)
+		span2 = reversed_b and reversed_c and sort_after($items, $b, $b + 1, compare_items)
+		span3 = reversed_c and reversed_d and sort_after($items, $c, $c + 1, compare_items)
+		if span1 and span2 and span3 {
+			return (quad_reversal($items, 0, $d), $swap)
+		}
+		if span1 and span2 {
+			$items = quad_reversal($items, 0, $c)
+			$balance_a = 0
+			$balance_b = 0
+			$balance_c = 0
+		} else if span2 and span3 {
+			$items = quad_reversal($items, $a + 1, $d)
+			$balance_b = 0
+			$balance_c = 0
+			$balance_d = 0
+		} else {
+			if span1 {
+				$items = quad_reversal($items, 0, $b)
+				$balance_a = 0
+				$balance_b = 0
+			}
+			if span2 {
+				$items = quad_reversal($items, $a + 1, $c)
+				$balance_b = 0
+				$balance_c = 0
+			}
+			if span3 {
+				$items = quad_reversal($items, $b + 1, $d)
+				$balance_c = 0
+				$balance_d = 0
+			}
+		}
+		if reversed_a and $balance_a != 0 {
+			$items = quad_reversal($items, 0, $a)
+			$balance_a = 0
+		}
+		if reversed_b and $balance_b != 0 {
+			$items = quad_reversal($items, $a + 1, $b)
+			$balance_b = 0
+		}
+		if reversed_c and $balance_c != 0 {
+			$items = quad_reversal($items, $b + 1, $c)
+			$balance_c = 0
+		}
+		if reversed_d and $balance_d != 0 {
+			$items = quad_reversal($items, $c + 1, $d)
+			$balance_d = 0
+		}
+	}
+
+	# A quarter that is at least a quarter ordered is quadsorted; the rest are
+	# partitioned. Quarters too large for the cache are always quadsorted.
+	streak_threshold = len // 512
+	ordered_a = $streaks_a > streak_threshold or quad1 > quad_cache
+	ordered_b = $streaks_b > streak_threshold or quad1 > quad_cache
+	ordered_c = $streaks_c > streak_threshold or quad1 > quad_cache
+	ordered_d = $streaks_d > streak_threshold or quad1 > quad_cache
+
+	if !ordered_a and !ordered_b and !ordered_c and !ordered_d {
+		return flux_partition($items, $swap, 0, len, False, compare_items)
+	}
+	# Adjacent unordered quarters are partitioned together.
+	if !ordered_a and !ordered_b and !ordered_c {
+		(items_abc, swap_abc) = flux_partition($items, $swap, 0, half1 + quad3, False, compare_items)
+		(items_d, swap_d) = if $balance_d != 0 {
+			quadsort_swap(items_abc, $c + 1, quad4, swap_abc, len, compare_items)
+		} else {
+			(items_abc, swap_abc)
+		}
+		$items = items_d
+		$swap = swap_d
+	} else if !ordered_b and !ordered_c and !ordered_d {
+		(items_a, swap_a) = if $balance_a != 0 {
+			quadsort_swap($items, 0, quad1, $swap, len, compare_items)
+		} else {
+			($items, $swap)
+		}
+		(items_bcd, swap_bcd) = flux_partition(items_a, swap_a, $a + 1, quad2 + half2, False, compare_items)
+		$items = items_bcd
+		$swap = swap_bcd
+	} else if !ordered_a and !ordered_b {
+		(items_ab, swap_ab) = flux_partition($items, $swap, 0, half1, False, compare_items)
+		(items_c, swap_c) = if ordered_c {
+			if $balance_c != 0 {
+				quadsort_swap(items_ab, $b + 1, quad3, swap_ab, len, compare_items)
+			} else {
+				(items_ab, swap_ab)
+			}
+		} else {
+			flux_partition(items_ab, swap_ab, $b + 1, quad3, False, compare_items)
+		}
+		(items_d, swap_d) = if ordered_d {
+			if $balance_d != 0 {
+				quadsort_swap(items_c, $c + 1, quad4, swap_c, len, compare_items)
+			} else {
+				(items_c, swap_c)
+			}
+		} else {
+			flux_partition(items_c, swap_c, $c + 1, quad4, False, compare_items)
+		}
+		$items = items_d
+		$swap = swap_d
+	} else if !ordered_c and !ordered_d {
+		(items_a, swap_a) = if ordered_a {
+			if $balance_a != 0 {
+				quadsort_swap($items, 0, quad1, $swap, len, compare_items)
+			} else {
+				($items, $swap)
+			}
+		} else {
+			flux_partition($items, $swap, 0, quad1, False, compare_items)
+		}
+		(items_b, swap_b) = if ordered_b {
+			if $balance_b != 0 {
+				quadsort_swap(items_a, $a + 1, quad2, swap_a, len, compare_items)
+			} else {
+				(items_a, swap_a)
+			}
+		} else {
+			flux_partition(items_a, swap_a, $a + 1, quad2, False, compare_items)
+		}
+		(items_cd, swap_cd) = flux_partition(items_b, swap_b, $b + 1, half2, False, compare_items)
+		$items = items_cd
+		$swap = swap_cd
+	} else if !ordered_b and !ordered_c {
+		(items_a, swap_a) = if $balance_a != 0 {
+			quadsort_swap($items, 0, quad1, $swap, len, compare_items)
+		} else {
+			($items, $swap)
+		}
+		(items_bc, swap_bc) = flux_partition(items_a, swap_a, $a + 1, quad2 + quad3, False, compare_items)
+		(items_d, swap_d) = if $balance_d != 0 {
+			quadsort_swap(items_bc, $c + 1, quad4, swap_bc, len, compare_items)
+		} else {
+			(items_bc, swap_bc)
+		}
+		$items = items_d
+		$swap = swap_d
+	} else {
+		(items_a, swap_a) = if ordered_a {
+			if $balance_a != 0 {
+				quadsort_swap($items, 0, quad1, $swap, len, compare_items)
+			} else {
+				($items, $swap)
+			}
+		} else {
+			flux_partition($items, $swap, 0, quad1, False, compare_items)
+		}
+		(items_b, swap_b) = if ordered_b {
+			if $balance_b != 0 {
+				quadsort_swap(items_a, $a + 1, quad2, swap_a, len, compare_items)
+			} else {
+				(items_a, swap_a)
+			}
+		} else {
+			flux_partition(items_a, swap_a, $a + 1, quad2, False, compare_items)
+		}
+		(items_c, swap_c) = if ordered_c {
+			if $balance_c != 0 {
+				quadsort_swap(items_b, $b + 1, quad3, swap_b, len, compare_items)
+			} else {
+				(items_b, swap_b)
+			}
+		} else {
+			flux_partition(items_b, swap_b, $b + 1, quad3, False, compare_items)
+		}
+		(items_d, swap_d) = if ordered_d {
+			if $balance_d != 0 {
+				quadsort_swap(items_c, $c + 1, quad4, swap_c, len, compare_items)
+			} else {
+				(items_c, swap_c)
+			}
+		} else {
+			flux_partition(items_c, swap_c, $c + 1, quad4, False, compare_items)
+		}
+		$items = items_d
+		$swap = swap_d
+	}
+
+	# Merge the four sorted quarters: pairs into swap, then halves back.
+	if !sort_after($items, $a, $a + 1, compare_items) {
+		if !sort_after($items, $c, $c + 1, compare_items) {
+			if !sort_after($items, $b, $b + 1, compare_items) {
+				return ($items, $swap)
+			}
+			$swap = sort_copy_range($swap, 0, $items, 0, len)
+		} else {
+			(swap_cd, items_cd) = cross_merge($swap, half1, $items, half1, quad3, quad4, compare_items)
+			$items = items_cd
+			$swap = sort_copy_range(swap_cd, 0, $items, 0, half1)
+		}
+	} else {
+		if !sort_after($items, $c, $c + 1, compare_items) {
+			$swap = sort_copy_range($swap, half1, $items, half1, half2)
+			(swap_ab, items_ab) = cross_merge($swap, 0, $items, 0, quad1, quad2, compare_items)
+			$items = items_ab
+			$swap = swap_ab
+		} else {
+			(swap_cd, items_cd) = cross_merge($swap, half1, $items, half1, quad3, quad4, compare_items)
+			(swap_ab, items_ab) = cross_merge(swap_cd, 0, items_cd, 0, quad1, quad2, compare_items)
+			$items = items_ab
+			$swap = swap_ab
+		}
+	}
+	cross_merge($items, 0, $swap, 0, half1, half2, compare_items)
+}
+
+# Sorts `len` items by partitioning around successive pivots. The items are
+# in `items[start..][..len]`, or in `swap[0..][..len]` when `x_in_swap` is
+# set; either way they end up sorted in `items[start..][..len]`.
+flux_partition : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_partition = |items, swap, start, initial_len, x_in_swap, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $len = initial_len
+	var $x_in_swap = x_in_swap
+	var $first = True
+	# Only read once `$first` is False, so this placeholder is never compared.
+	var $prev_pivot = if x_in_swap {
+		list_get_unsafe(swap, 0)
+	} else {
+		list_get_unsafe(items, start)
+	}
+	while True {
+		(pivot, generic, items_m, swap_m) = if $len <= 2048 {
+			(median_of_nine_pivot($items, $swap, start, $len, $x_in_swap, compare_items), False, $items, $swap)
+		} else {
+			median_of_cube_root($items, $swap, start, $len, $x_in_swap, compare_items)
+		}
+		$items = items_m
+		$swap = swap_m
+		if generic {
+			# Mostly identical items: quadsort handles those well.
+			if $x_in_swap {
+				$items = sort_copy_range($items, start, $swap, 0, $len)
+			}
+			return quadsort_swap($items, start, $len, $swap, $len, compare_items)
+		}
+		if !$first and compare_items($prev_pivot, pivot) != After {
+			# The pivot equals the previous one, so everything left is between
+			# the two: a reverse partition finishes the job.
+			return flux_reverse_partition($items, $swap, start, $len, pivot, compare_items)
+		}
+		partitioned = flux_default_partition($items, $swap, start, $len, $x_in_swap, pivot, compare_items)
+		$items = partitioned.items
+		$swap = partitioned.swap
+		if partitioned.sorted {
+			return ($items, $swap)
+		}
+		kept = partitioned.kept
+		moved = $len - kept
+		# The `moved` items after the pivot are in swap; the `kept` items at
+		# or before it are in place.
+		if kept <= moved // 32 or moved <= flux_out {
+			if moved == 0 {
+				return flux_reverse_partition($items, $swap, start, kept, pivot, compare_items)
+			}
+			$items = sort_copy_range($items, start + kept, $swap, 0, moved)
+			(sorted_tail, swap_tail) = quadsort_swap($items, start + kept, moved, $swap, moved, compare_items)
+			$items = sorted_tail
+			$swap = swap_tail
+		} else {
+			(sorted_tail, swap_tail) = flux_partition($items, $swap, start + kept, moved, True, compare_items)
+			$items = sorted_tail
+			$swap = swap_tail
+		}
+		if moved <= kept // 32 or kept <= flux_out {
+			if kept <= flux_out {
+				return quadsort_swap($items, start, kept, $swap, kept, compare_items)
+			}
+			return flux_reverse_partition($items, $swap, start, kept, pivot, compare_items)
+		}
+		$len = kept
+		$x_in_swap = False
+		$first = False
+		$prev_pivot = pivot
+	}
+}
+
+# Moves the items of `x` (see `flux_partition`) that do not order after the
+# pivot into `items[start..]`, in order, and the rest into `swap[0..]`, in
+# order. When the data looks mostly sorted it finishes with quadsort instead
+# and reports `sorted`; otherwise `kept` is the number of items in `items`.
+flux_default_partition : List(item), List(item), U64, U64, Bool, item, (item, item -> [Before, Same, After]) -> { items : List(item), swap : List(item), kept : U64, sorted : Bool }
+flux_default_partition = |items, swap, start, len, x_in_swap, pivot, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $kept = start
+	var $moved = 0
+	var $x = if (x_in_swap) 0 else start
+	var $run = 0
+	# Each item is written to both destinations and only the right one's
+	# cursor advances, so the comparison never has to be branched on. The
+	# stray copy lands in a slot the sort no longer reads. `$done` counts the
+	# items partitioned so far, so every cursor stays within the `len` items.
+	var $done = 0
+	while minus_infallible(len, $done) >= 8 {
+		var $step = 0
+		while $step < 8 {
+			item = if x_in_swap {
+				list_move_out_unsafe($swap, $x)
+			} else {
+				list_move_out_unsafe($items, $x)
+			}
+			keep = if (compare_items(item, pivot) != After) 1 else 0
+			$items = list_move_in_unsafe($items, $kept, item)
+			$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+			$kept = plus_infallible($kept, keep)
+			$moved = plus_infallible($moved, minus_infallible(1, keep))
+			$x = plus_infallible($x, 1)
+			$step = plus_infallible($step, 1)
+		}
+		$done = plus_infallible($done, 8)
+		if $kept == start or $moved == 0 {
+			$run = $done
+		}
+	}
+	var $rest = minus_infallible(len, $done)
+	while $rest > 0 {
+		item = if x_in_swap {
+			list_move_out_unsafe($swap, $x)
+		} else {
+			list_move_out_unsafe($items, $x)
+		}
+		keep = if (compare_items(item, pivot) != After) 1 else 0
+		$items = list_move_in_unsafe($items, $kept, item)
+		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+		$kept = plus_infallible($kept, keep)
+		$moved = plus_infallible($moved, minus_infallible(1, keep))
+		$x = plus_infallible($x, 1)
+		$rest = minus_infallible($rest, 1)
+	}
+	kept = minus_infallible($kept, start)
+	if $run <= len // 4 or kept == len {
+		# Not very ordered (keep partitioning), or a pivot nothing ordered
+		# after.
+		return { items: $items, swap: $swap, kept, sorted: False }
+	}
+	# Mostly ordered: put the moved items back and quadsort both parts.
+	$items = sort_copy_range($items, start + kept, $swap, 0, $moved)
+	(items_tail, swap_tail) = quadsort_swap($items, start + kept, $moved, $swap, $moved, compare_items)
+	(items_head, swap_head) = quadsort_swap(items_tail, start, kept, swap_tail, kept, compare_items)
+	{ items: items_head, swap: swap_head, kept, sorted: True }
+}
+
+# Partitions `items[start..][..len]`, all of which order at or before the
+# pivot, into the items the pivot orders after (kept in place) and the rest
+# (equal to the pivot), then sorts the first group.
+flux_reverse_partition : List(item), List(item), U64, U64, item, (item, item -> [Before, Same, After]) -> (List(item), List(item))
+flux_reverse_partition = |items, swap, start, len, pivot, compare_items| {
+	var $items = items
+	var $swap = swap
+	var $kept = start
+	var $moved = 0
+	var $x = start
+	end = start + len
+	while $x < end {
+		item = list_move_out_unsafe($items, $x)
+		keep = if (compare_items(pivot, item) == After) 1 else 0
+		$items = list_move_in_unsafe($items, $kept, item)
+		$swap = list_move_in_unsafe($swap, $moved, list_move_out_unsafe($items, $kept))
+		$kept = plus_infallible($kept, keep)
+		$moved = plus_infallible($moved, minus_infallible(1, keep))
+		$x = plus_infallible($x, 1)
+	}
+	kept = minus_infallible($kept, start)
+	$items = sort_copy_range($items, $kept, $swap, 0, $moved)
+	if $moved <= kept // 16 or kept <= flux_out {
+		return quadsort_swap($items, start, kept, $swap, kept, compare_items)
+	}
+	flux_partition($items, $swap, start, kept, False, compare_items)
+}
+
+# ---- Pivot selection -------------------------------------------------------
+
+# The item that orders in the middle of nine evenly spaced items of `x`.
+median_of_nine_pivot : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> item
+median_of_nine_pivot = |items, swap, start, len, x_in_swap, compare_items| {
+	x_start = if (x_in_swap) 0 else start
+	offset = len // 9
+	sample = |k| if x_in_swap {
+		list_get_unsafe(swap, x_start + k * offset)
+	} else {
+		list_get_unsafe(items, x_start + k * offset)
+	}
+	(low_a, high_a) = sort_trim_four(sample(0), sample(1), sample(2), sample(3), compare_items)
+	(low_b, high_b) = sort_trim_four(sample(4), sample(5), sample(6), sample(7), compare_items)
+	(low_c, high_c) = sort_trim_four(low_b, low_a, high_a, sample(8), compare_items)
+	sort_median_of_three(high_b, low_c, high_c, compare_items)
+}
+
+# The second- and third-ordered of four items.
+sort_trim_four : item, item, item, item, (item, item -> [Before, Same, After]) -> (item, item)
+sort_trim_four = |a, b, c, d, compare_items| {
+	(low_ab, high_ab) = if compare_items(a, b) == After {
+		(b, a)
+	} else {
+		(a, b)
+	}
+	(low_cd, high_cd) = if compare_items(c, d) == After {
+		(d, c)
+	} else {
+		(c, d)
+	}
+	high_of_lows = if compare_items(low_ab, low_cd) == After {
+		low_ab
+	} else {
+		low_cd
+	}
+	low_of_highs = if compare_items(high_ab, high_cd) == After {
+		high_cd
+	} else {
+		high_ab
+	}
+	(low_of_highs, high_of_lows)
+}
+
+sort_median_of_three : item, item, item, (item, item -> [Before, Same, After]) -> item
+sort_median_of_three = |a, b, c, compare_items| {
+	a_after_b = compare_items(a, b) == After
+	a_after_c = compare_items(a, c) == After
+	if a_after_b != a_after_c {
+		# `a` is between the other two.
+		return a
+	}
+	# `a` is the greatest or the least, so the median is the greater of the
+	# other two when `a` is the least and the lesser when it is the greatest.
+	b_after_c = compare_items(b, c) == After
+	if b_after_c == a_after_b {
+		b
+	} else {
+		c
+	}
+}
+
+# Chooses a pivot for a large partition from about the cube root of its items,
+# copied into the free part of whichever list does not hold them and sorted
+# there. `generic` is set when every sample is equal to every other, which
+# signals a list of mostly identical items.
+median_of_cube_root : List(item), List(item), U64, U64, Bool, (item, item -> [Before, Same, After]) -> (item, Bool, List(item), List(item))
+median_of_cube_root = |items, swap, start, len, x_in_swap, compare_items| {
+	var $samples = 32
+	while len > $samples * $samples * $samples {
+		$samples = $samples * 2
+	}
+	samples = $samples
+	stride = len // samples
+	# The samples are copied into the other list, whose first `len` slots are
+	# free: when the items are in swap, their old slots in `items` are dead,
+	# and when they are in `items`, swap holds nothing yet.
+	if x_in_swap {
+		var $items = items
+		var $k = 0
+		while $k < samples {
+			$items = list_move_in_unsafe($items, start + $k, list_move_out_unsafe(swap, stride // 2 + $k * stride))
+			$k = $k + 1
+		}
+		sorted = sort_within($items, start, samples, start + samples, compare_items)
+		generic = !sort_after(sorted, start + samples - 1, start, compare_items)
+		(list_get_unsafe(sorted, start + samples // 2), generic, sorted, swap)
+	} else {
+		var $swap = swap
+		var $k = 0
+		while $k < samples {
+			$swap = list_move_in_unsafe($swap, $k, list_move_out_unsafe(items, start + stride // 2 + $k * stride))
+			$k = $k + 1
+		}
+		sorted = sort_within($swap, 0, samples, samples, compare_items)
+		generic = !sort_after(sorted, samples - 1, 0, compare_items)
+		(list_get_unsafe(sorted, samples // 2), generic, items, sorted)
+	}
+}
+
+# Stable merge sort of `list[start..][..count]` using `list[scratch..][..count]`
+# as scratch, for the pivot samples.
+sort_within : List(item), U64, U64, U64, (item, item -> [Before, Same, After]) -> List(item)
+sort_within = |list, start, count, scratch, compare_items| {
+	var $list = list
+	var $run = 1
+	var $from = start
+	var $to = scratch
+	while $run < count {
+		var $offset = 0
+		while $offset < count {
+			left_len = if ($offset + $run < count) $run else count - $offset
+			right_len = if ($offset + $run * 2 < count) $run else count - $offset - left_len
+			$list = merge_runs_within($list, $to + $offset, $from + $offset, left_len, right_len, compare_items)
+			$offset = $offset + $run * 2
+		}
+		swapped_from = $to
+		$to = $from
+		$from = swapped_from
+		$run = $run * 2
+	}
+	if $from != start {
+		$list = sort_copy_range_within($list, start, $from, count)
+	}
+	$list
+}
+
+# Merges two adjacent sorted runs at `list[from..]` into `list[to..]`.
+merge_runs_within : List(item), U64, U64, U64, U64, (item, item -> [Before, Same, After]) -> List(item)
+merge_runs_within = |list, to, from, left_len, right_len, compare_items| {
+	var $list = list
+	var $left = from
+	left_end = from + left_len
+	var $right = left_end
+	right_end = left_end + right_len
+	var $dest = to
+	while $left < left_end and $right < right_end {
+		take_left = !sort_after($list, $left, $right, compare_items)
+		source = if (take_left) $left else $right
+		$list = sort_copy($list, $dest, source)
+		$left = $left + (if (take_left) 1 else 0)
+		$right = $right + (if (take_left) 0 else 1)
+		$dest = $dest + 1
+	}
+	$list = sort_copy_range_within($list, $dest, $left, left_end - $left)
+	$dest = $dest + left_end - $left
+	sort_copy_range_within($list, $dest, $right, right_end - $right)
+}
 
 unsigned_plus_try : item, item -> Try(item, [Overflow])
 	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
@@ -25040,6 +27133,15 @@ list_prepend_if_ok = |list, maybe_item|
 		Err(_) => list
 	}
 
+unsigned_plus_saturated : item, item, item -> item
+	where [item.plus_overflows : item, item -> Bool, item.plus_wrap : item, item -> item]
+unsigned_plus_saturated = |highest, a, b|
+	if a.plus_overflows(b) {
+		highest
+	} else {
+		a.plus_wrap(b)
+	}
+
 unsigned_minus_saturated : item, item, item -> item
 	where [item.minus_overflows : item, item -> Bool, item.minus_wrap : item, item -> item]
 unsigned_minus_saturated = |zero, a, b|
@@ -25143,7 +27245,7 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 	}
 
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
-	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
+	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> Try(U64, [Unknown])]
 range_with_step = |lower, upper, step, upper_bound, direction|
 	Num.Range.custom({
 		lower,
@@ -25154,49 +27256,49 @@ range_with_step = |lower, upper, step, upper_bound, direction|
 		len_if_known: lower.range_len_if_known(upper, step, upper_bound),
 	})
 
-range_len_u64 : U64, U64, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u64 : U64, U64, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 range_len_u64 = |distance, step, upper_bound|
 	if step == 0 {
-		Known(0)
+		Ok(0)
 	} else {
 		match upper_bound {
-			Exclusive => Known((distance - 1) / step + 1)
+			Exclusive => Ok((distance - 1) / step + 1)
 			Inclusive => match (distance / step).plus_try(1) {
-				Ok(len) => Known(len)
-				Err(Overflow) => Unknown
+				Ok(len) => Ok(len)
+				Err(Overflow) => Err(Unknown)
 			}
 		}
 	}
 
-range_len_u128 : U128, U128, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_u128 : U128, U128, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 range_len_u128 = |distance, step, upper_bound|
 	if step == 0 {
-		Known(0)
+		Ok(0)
 	} else {
 		base = match upper_bound {
 			Exclusive => (distance - 1) / step
 			Inclusive => distance / step
 		}
 		match base.plus_try(1) {
-			Err(Overflow) => Unknown
+			Err(Overflow) => Err(Unknown)
 			Ok(len_u128) => match len_u128.to_u64_try() {
-				Ok(len) => Known(len)
-				Err(OutOfRange) => Unknown
+				Ok(len) => Ok(len)
+				Err(OutOfRange) => Err(Unknown)
 			}
 		}
 	}
 
-range_len_dec : Dec, Dec, Dec, [Exclusive, Inclusive] -> [Known(U64), Unknown]
+range_len_dec : Dec, Dec, Dec, [Exclusive, Inclusive] -> Try(U64, [Unknown])
 range_len_dec = |lower, upper, step, upper_bound| {
 	has_members = step > 0 and match upper_bound {
 		Exclusive => lower < upper
 		Inclusive => lower <= upper
 	}
 	if !has_members {
-		Known(0)
+		Ok(0)
 	} else {
 		match upper.minus_try(lower) {
-			Err(Overflow) => Unknown
+			Err(Overflow) => Err(Unknown)
 			Ok(distance) => {
 				count_try = match upper_bound {
 					Exclusive => (distance / step).ceiling_to_u64_try()
@@ -25206,8 +27308,8 @@ range_len_dec = |lower, upper, step, upper_bound| {
 					}
 				}
 				match count_try {
-					Ok(len) => Known(len)
-					Err(_) => Unknown
+					Ok(len) => Ok(len)
+					Err(_) => Err(Unknown)
 				}
 			}
 		}
@@ -25272,11 +27374,11 @@ range_standard_last = |lower, upper, step, upper_bound| {
 
 		amount_below_upper = match upper_bound {
 			Inclusive => distance_rem
-			Exclusive => if distance_rem == 0 step else distance_rem
+			Exclusive => if (distance_rem == 0) step else distance_rem
 		}
 
 		match upper.minus_try(amount_below_upper) {
-			Ok(last) => if last >= lower Ok(last) else Err(NoMore)
+			Ok(last) => if (last >= lower) Ok(last) else Err(NoMore)
 			Err(Overflow) => Err(NoMore)
 		}
 	}
@@ -25287,7 +27389,7 @@ range_standard_last = |lower, upper, step, upper_bound| {
 # Both directions use one tagged seed shape, so the public Range source owns a
 # single flat iterator representation even when `direction` is only known at
 # runtime.
-range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+range_iter_standard : num, num, num, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(num)
 	where [
 		num.is_eq : num, num -> Bool,
 		num.is_lt : num, num -> Bool,
@@ -25327,7 +27429,7 @@ range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
 						}
 						if step > 0 and within_upper {
 							next_state = match current.plus_try(step) {
-								Ok(next) => if next > current RangeAt(next) else RangeDone
+								Ok(next) => if (next > current) RangeAt(next) else RangeDone
 								Err(Overflow) => RangeDone
 							}
 							Ok((current, next_state))
@@ -25340,7 +27442,7 @@ range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
 							RangeDone
 						} else {
 							match current.minus_try(step) {
-								Ok(next) => if next < current and next >= lower RangeAt(next) else RangeDone
+								Ok(next) => if (next < current and next >= lower) RangeAt(next) else RangeDone
 								Err(Overflow) => RangeDone
 							}
 						}
@@ -25356,7 +27458,7 @@ range_iter_standard = |lower, upper, step, upper_bound, direction, len_if_known|
 # IEEE floats deliberately support only `_to` constructors. This helper keeps
 # their existing repeated-addition/stall semantics; a manually-constructed
 # `From` float range is empty because floats do not claim exact reversibility.
-range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64), Unknown] -> Iter(num)
+range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], Try(U64, [Unknown]) -> Iter(num)
 	where [
 		num.is_lt : num, num -> Bool,
 		num.is_lte : num, num -> Bool,
@@ -25367,7 +27469,7 @@ range_iter_float : num, num, num, [Exclusive, Inclusive], [To, From], [Known(U64
 range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| {
 	initial = match direction {
 		From => RangeDone
-		To => if step > 0 RangeAt(current) else RangeDone
+		To => if (step > 0) RangeAt(current) else RangeDone
 	}
 	Iter.custom(
 		initial,
@@ -25383,7 +27485,7 @@ range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| 
 
 					if step > 0 and within_upper {
 						next = item + step
-						next_state = if next > item RangeAt(next) else RangeDone
+						next_state = if (next > item) RangeAt(next) else RangeDone
 						Ok((item, next_state))
 					} else {
 						Err(NoMore)
@@ -25393,7 +27495,7 @@ range_iter_float = |current, upper, step, upper_bound, direction, len_if_known| 
 	)
 }
 
-iter_from_step : [Known(U64), Unknown], (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
+iter_from_step : Try(U64, [Unknown]), (() -> [One({ item : item, rest : Iter(item) }), Skip({ rest : Iter(item) }), Done]) -> Iter(item)
 iter_from_step = |len_if_known, step| {
 	len_if_known,
 	step,
@@ -25402,7 +27504,7 @@ iter_from_step = |len_if_known, step| {
 # The `Stream` counterpart of `iter_from_step`: every `Stream` source and
 # adapter builds its value through this one registered constructor, so Monotype
 # can give the result its exact minted representation.
-stream_from_step : [Known(U64), Unknown], (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
+stream_from_step : Try(U64, [Unknown]), (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
 stream_from_step = |len_if_known, step!| {
 	len_if_known,
 	step!,
@@ -25410,7 +27512,7 @@ stream_from_step = |len_if_known, step!| {
 
 range_done : () -> Iter(item)
 range_done = || iter_from_step(
-	Known(0),
+	Ok(0),
 	|| Done,
 )
 
@@ -25435,7 +27537,7 @@ iter_with_index = |src, index|
 stream_with_index : Stream(a), U64 -> Stream((U64, a))
 stream_with_index = |src, index|
 	stream_from_step(
-		Stream.size_hint(src),
+		Stream.len_if_known(src),
 		||
 			match Stream.next!(src) {
 				Done => Done
@@ -25455,15 +27557,15 @@ iter_step_by : Iter(item), (U64, U64) -> Iter(item)
 iter_step_by = |src, (stride, pending)|
 	iter_from_step(
 		match src.len_if_known {
-			Known(len) => if stride == 0 or len <= pending {
-				Known(0)
+			Ok(len) => if stride == 0 or len <= pending {
+				Ok(0)
 			} else {
-				Known((len - pending - 1) / stride + 1)
+				Ok((len - pending - 1) / stride + 1)
 			}
-			Unknown => if stride == 0 {
-				Known(0)
+			Err(Unknown) => if stride == 0 {
+				Ok(0)
 			} else {
-				Unknown
+				Err(Unknown)
 			}
 		},
 		||
@@ -25511,7 +27613,7 @@ scan_json_string_tail = |tail| {
 				raw = str_substring_unsafe(tail, 0, $index)
 				after = str_drop_first_bytes_unsafe(tail, $index + 1)
 
-				return Ok({ after, body: if $had_escape HasEscapes(raw) else NoEscapes(raw) })
+				return Ok({ after, body: if ($had_escape) HasEscapes(raw) else NoEscapes(raw) })
 			}
 			# If we find any backslashes, we mark that we found an escape and consume the full
 			# escape sequence atomically
@@ -25815,13 +27917,48 @@ list_map_cast_unsafe : List(input) -> List(output)
 
 # Implemented by the compiler. Moves ownership of the item at the given
 # index out of the list's buffer; the slot keeps stale bytes until
-# list_map_write_unsafe stores its replacement. No bounds checks.
-list_map_extract_unsafe : List(output), U64 -> input
+# list_map_write_unsafe stores its replacement. No bounds checks. The
+# transform is never evaluated: the list's type names only the output item,
+# so the transform's type is what says the slot holds an input item.
+list_map_extract_unsafe : List(output), U64, (input -> output) -> input
 
 # Implemented by the compiler. Stores an owned item into the slot at the
 # given index, which must have been vacated by list_map_extract_unsafe.
 # No bounds checks.
 list_map_write_unsafe : List(output), U64, output -> List(output)
+
+# Implemented by the compiler: the same move as list_map_extract_unsafe
+# for a list whose item type does not change. Moves the item at the index out
+# of a uniquely owned list's buffer, doing no refcount work; the slot keeps
+# stale bytes until list_move_in_unsafe refills it. No bounds checks.
+list_move_out_unsafe : List(item), U64 -> item
+
+# Implemented by the compiler: the same operation as list_map_write_unsafe
+# for a list whose item type does not change. Stores an owned item into the
+# slot at the index, doing no refcount work. No bounds checks.
+list_move_in_unsafe : List(item), U64, item -> List(item)
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when the list is
+# uniquely owned, not a seamless slice, and has an allocation, so its buffer
+# may be rewritten in place. Reads the refcount without changing it; a list
+# the compiler proved unique makes it a constant 1.
+list_owned_unique : List(item) -> U64
+
+# Implemented by the compiler. Returns 1 (otherwise 0) when the list's item
+# layout occupies at most the given number of bytes. Decided from the item
+# layout, so a `match` on it keeps only the arm the answer selects.
+list_item_size_at_most : List(item), U64 -> U8
+
+# Implemented by the compiler: addition that the backend may assume never
+# overflows, with no check. A call is undefined behavior when the sum does not
+# fit, so every call site carries the invariant that bounds it; only this file's
+# own sort uses these, never anything reachable from user code. In a debug
+# build the interpreter checks the sum anyway and panics on an actual overflow.
+plus_infallible : U64, U64 -> U64
+
+# Implemented by the compiler: the subtraction counterpart of plus_infallible;
+# a call whose result would be negative is undefined behavior.
+minus_infallible : U64, U64 -> U64
 
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
@@ -25855,10 +27992,6 @@ list_release_excess_capacity : List(item) -> List(item)
 # Implemented by the compiler: removes every item, keeping the allocation and
 # its capacity when the list is uniquely owned
 list_clear : List(item) -> List(item)
-
-# Implemented by the compiler. Consumes the list and sorts it stably using the
-# boxed comparator. The comparator allocation is borrowed for the whole call.
-list_sort_with : List(item), Box((item, item -> [Before, Same, After])) -> List(item)
 
 # Unsafe conversion functions - these return simple records instead of Try types
 # They are low-level operations that get replaced by the compiler
@@ -26308,3 +28441,171 @@ str_from_utf32_be_short : List(U8) -> Str
 
 # Private: the UTF decoders establish validity while producing these bytes.
 str_from_utf8_validated : List(U8) -> Str
+
+# A builtin the compiler implements has no structural tag union in its type
+# (design.md "Builtins Build Their Own Tag Unions"). Each one below is a
+# private helper; the public builtin builds its tag union in Roc from the
+# helper's result, so a caller may use that union at any wider union.
+
+u8_order_raw : U8, U8 -> Num.RawOrder
+
+i8_order_raw : I8, I8 -> Num.RawOrder
+
+u16_order_raw : U16, U16 -> Num.RawOrder
+
+i16_order_raw : I16, I16 -> Num.RawOrder
+
+u32_order_raw : U32, U32 -> Num.RawOrder
+
+i32_order_raw : I32, I32 -> Num.RawOrder
+
+u64_order_raw : U64, U64 -> Num.RawOrder
+
+i64_order_raw : I64, I64 -> Num.RawOrder
+
+u128_order_raw : U128, U128 -> Num.RawOrder
+
+i128_order_raw : I128, I128 -> Num.RawOrder
+
+dec_order_raw : Dec, Dec -> Num.RawOrder
+
+order_from_raw : Num.RawOrder -> [Before, Same, After]
+order_from_raw = |raw| match raw {
+	Num.RawOrder.After => After
+	Num.RawOrder.Before => Before
+	Num.RawOrder.Same => Same
+}
+
+bad_num_str : Try(a, {}) -> Try(a, [BadNumStr])
+bad_num_str = |raw| match raw {
+	Ok(value) => Ok(value)
+	Err(_) => Err(BadNumStr)
+}
+
+out_of_range : Try(a, {}) -> Try(a, [OutOfRange])
+out_of_range = |raw| match raw {
+	Ok(value) => Ok(value)
+	Err(_) => Err(OutOfRange)
+}
+
+str_from_utf8_raw : List(U8) -> Try(Str, { problem : Str.Utf8Problem, index : U64 })
+
+u8_to_i8_try_raw : U8 -> Try(I8, {})
+
+i8_to_u8_try_raw : I8 -> Try(U8, {})
+
+i8_to_u16_try_raw : I8 -> Try(U16, {})
+
+i8_to_u32_try_raw : I8 -> Try(U32, {})
+
+i8_to_u64_try_raw : I8 -> Try(U64, {})
+
+i8_to_u128_try_raw : I8 -> Try(U128, {})
+
+u16_to_i8_try_raw : U16 -> Try(I8, {})
+
+u16_to_i16_try_raw : U16 -> Try(I16, {})
+
+u16_to_u8_try_raw : U16 -> Try(U8, {})
+
+i16_to_i8_try_raw : I16 -> Try(I8, {})
+
+i16_to_u8_try_raw : I16 -> Try(U8, {})
+
+i16_to_u16_try_raw : I16 -> Try(U16, {})
+
+i16_to_u32_try_raw : I16 -> Try(U32, {})
+
+i16_to_u64_try_raw : I16 -> Try(U64, {})
+
+i16_to_u128_try_raw : I16 -> Try(U128, {})
+
+u32_to_i8_try_raw : U32 -> Try(I8, {})
+
+u32_to_i16_try_raw : U32 -> Try(I16, {})
+
+u32_to_i32_try_raw : U32 -> Try(I32, {})
+
+u32_to_u8_try_raw : U32 -> Try(U8, {})
+
+u32_to_u16_try_raw : U32 -> Try(U16, {})
+
+i32_to_i8_try_raw : I32 -> Try(I8, {})
+
+i32_to_i16_try_raw : I32 -> Try(I16, {})
+
+i32_to_u8_try_raw : I32 -> Try(U8, {})
+
+i32_to_u16_try_raw : I32 -> Try(U16, {})
+
+i32_to_u32_try_raw : I32 -> Try(U32, {})
+
+i32_to_u64_try_raw : I32 -> Try(U64, {})
+
+i32_to_u128_try_raw : I32 -> Try(U128, {})
+
+u64_to_i8_try_raw : U64 -> Try(I8, {})
+
+u64_to_i16_try_raw : U64 -> Try(I16, {})
+
+u64_to_i32_try_raw : U64 -> Try(I32, {})
+
+u64_to_i64_try_raw : U64 -> Try(I64, {})
+
+u64_to_u8_try_raw : U64 -> Try(U8, {})
+
+u64_to_u16_try_raw : U64 -> Try(U16, {})
+
+u64_to_u32_try_raw : U64 -> Try(U32, {})
+
+i64_to_i8_try_raw : I64 -> Try(I8, {})
+
+i64_to_i16_try_raw : I64 -> Try(I16, {})
+
+i64_to_i32_try_raw : I64 -> Try(I32, {})
+
+i64_to_u8_try_raw : I64 -> Try(U8, {})
+
+i64_to_u16_try_raw : I64 -> Try(U16, {})
+
+i64_to_u32_try_raw : I64 -> Try(U32, {})
+
+i64_to_u64_try_raw : I64 -> Try(U64, {})
+
+i64_to_u128_try_raw : I64 -> Try(U128, {})
+
+u128_to_i8_try_raw : U128 -> Try(I8, {})
+
+u128_to_i16_try_raw : U128 -> Try(I16, {})
+
+u128_to_i32_try_raw : U128 -> Try(I32, {})
+
+u128_to_i64_try_raw : U128 -> Try(I64, {})
+
+u128_to_i128_try_raw : U128 -> Try(I128, {})
+
+u128_to_u8_try_raw : U128 -> Try(U8, {})
+
+u128_to_u16_try_raw : U128 -> Try(U16, {})
+
+u128_to_u32_try_raw : U128 -> Try(U32, {})
+
+u128_to_u64_try_raw : U128 -> Try(U64, {})
+
+i128_to_i8_try_raw : I128 -> Try(I8, {})
+
+i128_to_i16_try_raw : I128 -> Try(I16, {})
+
+i128_to_i32_try_raw : I128 -> Try(I32, {})
+
+i128_to_i64_try_raw : I128 -> Try(I64, {})
+
+i128_to_u8_try_raw : I128 -> Try(U8, {})
+
+i128_to_u16_try_raw : I128 -> Try(U16, {})
+
+i128_to_u32_try_raw : I128 -> Try(U32, {})
+
+i128_to_u64_try_raw : I128 -> Try(U64, {})
+
+i128_to_u128_try_raw : I128 -> Try(U128, {})

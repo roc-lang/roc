@@ -98,6 +98,26 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
             }
         }
 
+        /// Call `sink.decided(key, value)` for every node whose result the
+        /// last `visit`, which returned `root_result`, proved on its own.
+        /// A node completed true reaches a true node through completed
+        /// children, so it is true wherever the walk starts. When the root is
+        /// false the walk reached every node reachable from it and found no
+        /// true one, so every node it reached is false. A node completed
+        /// false under a true root may have been cut short by a cycle back to
+        /// a node still active, so it is not reported.
+        pub fn reportDecided(self: *const Self, root_result: bool, sink: anytype) void {
+            std.debug.assert(self.frames.items.len == 0);
+            var it = self.memo.iterator();
+            while (it.next()) |entry| {
+                const value = switch (entry.value_ptr.*) {
+                    .active => unreachable, // every frame completes before visit returns
+                    .complete => |value| value,
+                };
+                if (value or !root_result) sink.decided(entry.key_ptr.*, value);
+            }
+        }
+
         /// The memoized or immediate result of `key`, or null after pushing
         /// its frame.
         fn begin(self: *Self, key: Key) Allocator.Error!?bool {
@@ -143,186 +163,6 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
     };
 }
 
-/// Reserve-then-fill traversal for building recursive graph results.
-///
-/// `Context.reserve(context, key)` reserves a node's result before its
-/// children are visited, `Context.fill(context, children, key, reserved)`
-/// lists its children, and `Context.filled(context, key, reserved,
-/// child_results)` completes it from its children's results. A child already
-/// in progress yields its reserved result.
-pub fn ReserveThenFillTraversal(comptime Key: type, comptime Result: type, comptime Context: type) type {
-    return struct {
-        const Self = @This();
-
-        const Frame = struct {
-            key: Key,
-            reserved: Result,
-            children_start: usize,
-            results_start: usize,
-        };
-
-        allocator: Allocator,
-        context: *Context,
-        active: std.AutoHashMap(Key, Result),
-        frames: std.ArrayList(Frame) = .empty,
-        children: std.ArrayList(Key) = .empty,
-        results: std.ArrayList(Result) = .empty,
-
-        pub fn init(allocator: Allocator, context: *Context) Self {
-            return .{
-                .allocator = allocator,
-                .context = context,
-                .active = std.AutoHashMap(Key, Result).init(allocator),
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.results.deinit(self.allocator);
-            self.children.deinit(self.allocator);
-            self.frames.deinit(self.allocator);
-            self.active.deinit();
-        }
-
-        pub fn visit(self: *Self, root: Key) Allocator.Error!Result {
-            errdefer {
-                for (self.frames.items) |frame| _ = self.active.remove(frame.key);
-                self.frames.clearRetainingCapacity();
-                self.children.clearRetainingCapacity();
-                self.results.clearRetainingCapacity();
-            }
-            if (self.active.get(root)) |reserved| return reserved;
-            try self.begin(root);
-            while (true) {
-                const frame = &self.frames.items[self.frames.items.len - 1];
-                const visited = self.results.items.len - frame.results_start;
-                if (frame.children_start + visited < self.children.items.len) {
-                    const child = self.children.items[frame.children_start + visited];
-                    if (self.active.get(child)) |reserved| {
-                        try self.results.append(self.allocator, reserved);
-                    } else {
-                        try self.begin(child);
-                    }
-                    continue;
-                }
-                const finished = frame.*;
-                try self.context.filled(finished.key, finished.reserved, self.results.items[finished.results_start..]);
-                _ = self.frames.pop();
-                _ = self.active.remove(finished.key);
-                self.children.shrinkRetainingCapacity(finished.children_start);
-                self.results.shrinkRetainingCapacity(finished.results_start);
-                if (self.frames.items.len == 0) return finished.reserved;
-                try self.results.append(self.allocator, finished.reserved);
-            }
-        }
-
-        fn begin(self: *Self, key: Key) Allocator.Error!void {
-            const reserved = try self.context.reserve(key);
-            try self.active.put(key, reserved);
-            const children_start = self.children.items.len;
-            self.context.fill(Children(Key){ .allocator = self.allocator, .list = &self.children }, key, reserved) catch |err| {
-                self.children.shrinkRetainingCapacity(children_start);
-                _ = self.active.remove(key);
-                return err;
-            };
-            self.frames.append(self.allocator, .{
-                .key = key,
-                .reserved = reserved,
-                .children_start = children_start,
-                .results_start = self.results.items.len,
-            }) catch |err| {
-                self.children.shrinkRetainingCapacity(children_start);
-                _ = self.active.remove(key);
-                return err;
-            };
-        }
-    };
-}
-
-/// Active-path traversal for digest builders that encode back edges by depth.
-///
-/// `Context.visit(context, children, key)` records a node and lists its
-/// children; a child already on the active path is reported through
-/// `Context.backEdge(context, depth)` instead of being visited.
-pub fn DigestTraversal(comptime Key: type, comptime Context: type) type {
-    return struct {
-        const Self = @This();
-
-        const Frame = struct {
-            key: Key,
-            children_start: usize,
-            next: usize,
-        };
-
-        allocator: Allocator,
-        context: *Context,
-        active: std.AutoHashMap(Key, u32),
-        frames: std.ArrayList(Frame) = .empty,
-        children: std.ArrayList(Key) = .empty,
-
-        pub fn init(allocator: Allocator, context: *Context) Self {
-            return .{
-                .allocator = allocator,
-                .context = context,
-                .active = std.AutoHashMap(Key, u32).init(allocator),
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.children.deinit(self.allocator);
-            self.frames.deinit(self.allocator);
-            self.active.deinit();
-        }
-
-        pub fn activeCount(self: *const Self) u32 {
-            return @intCast(self.active.count());
-        }
-
-        pub fn visit(self: *Self, root: Key) Allocator.Error!void {
-            defer {
-                for (self.frames.items) |frame| _ = self.active.remove(frame.key);
-                self.frames.clearRetainingCapacity();
-                self.children.clearRetainingCapacity();
-            }
-            if (self.active.get(root)) |depth| {
-                self.context.backEdge(depth);
-                return;
-            }
-            try self.begin(root);
-            while (self.frames.items.len != 0) {
-                const frame = &self.frames.items[self.frames.items.len - 1];
-                if (frame.next < self.children.items.len) {
-                    const child = self.children.items[frame.next];
-                    frame.next += 1;
-                    if (self.active.get(child)) |depth| {
-                        self.context.backEdge(depth);
-                    } else {
-                        try self.begin(child);
-                    }
-                    continue;
-                }
-                const finished = self.frames.pop().?;
-                _ = self.active.remove(finished.key);
-                self.children.shrinkRetainingCapacity(finished.children_start);
-            }
-        }
-
-        fn begin(self: *Self, key: Key) Allocator.Error!void {
-            try self.active.put(key, self.context.activeDepth());
-            const children_start = self.children.items.len;
-            self.context.visit(Children(Key){ .allocator = self.allocator, .list = &self.children }, key) catch |err| {
-                self.children.shrinkRetainingCapacity(children_start);
-                _ = self.active.remove(key);
-                return err;
-            };
-            self.frames.append(self.allocator, .{ .key = key, .children_start = children_start, .next = children_start }) catch |err| {
-                self.children.shrinkRetainingCapacity(children_start);
-                _ = self.active.remove(key);
-                return err;
-            };
-        }
-    };
-}
-
 /// Return whether a checked-type root contains any identity variables.
 pub fn checkedTypeContainsIdentityVariables(
     comptime Key: type,
@@ -357,7 +197,6 @@ pub fn checkedTypeSliceContainsIdentityVariables(
 pub fn checkedTypePayloadIdentityVariableChildren(
     comptime pending_policy: PendingPolicy,
     children: anytype,
-    pool_owner: anytype,
     root: anytype,
     payload: anytype,
     context: anytype,
@@ -367,7 +206,7 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             .forbid => true,
             .tolerate => context.pendingContainsIdentityVariables(root),
         },
-        .err => return false,
+        .field_kind, .err => return false,
         .flex,
         .rigid,
         => return true,
@@ -379,7 +218,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.addSlice(alias.args);
         },
         .record => |record| {
-            for (record.fields) |field| try children.add(field.ty);
+            for (0..record.fields.len()) |field_index| {
+                const field = record.fields.get(field_index);
+                try children.add(field.ty);
+            }
             try children.add(record.ext);
         },
         .tuple => |items| try children.addSlice(items),
@@ -389,7 +231,10 @@ pub fn checkedTypePayloadIdentityVariableChildren(
             try children.add(function.ret);
         },
         .tag_union => |tag_union| {
-            for (tag_union.tags) |tag| try children.addSlice(tag.argsSlice(pool_owner));
+            for (0..tag_union.tags.len()) |tag_index| {
+                const tag = tag_union.tags.get(tag_index);
+                try children.addSlice(tag.args);
+            }
             try children.add(tag_union.ext);
         },
     }
@@ -418,7 +263,7 @@ const PredicateTestContext = struct {
         for (self.edges) |entry| {
             if (entry.key == key) return entry;
         }
-        unreachable;
+        std.debug.panic("test fixture has no edge for key {d}", .{key});
     }
 };
 
@@ -499,101 +344,6 @@ test "BoolPredicateTraversal completes root after recursive inserts rehash memo"
     try std.testing.expectEqual(@as(u8, 1), visits[199]);
 }
 
-const ReserveTestContext = struct {
-    edges: []const TestEdge,
-    next: u8 = 10,
-    back_edge_result: u8 = 0,
-
-    fn reserve(self: *@This(), _: u8) Allocator.Error!u8 {
-        const out = self.next;
-        self.next += 1;
-        return out;
-    }
-
-    fn fill(self: *@This(), children: anytype, key: u8, _: u8) Allocator.Error!void {
-        try children.addSlice(self.findEdge(key).children);
-    }
-
-    fn filled(self: *@This(), key: u8, _: u8, child_results: []const u8) Allocator.Error!void {
-        const entry = self.findEdge(key);
-        for (entry.children, child_results) |child, child_result| {
-            if (key == 2 and child == 1) {
-                self.back_edge_result = child_result;
-            }
-        }
-    }
-
-    fn findEdge(self: *const @This(), key: u8) TestEdge {
-        for (self.edges) |entry| {
-            if (entry.key == key) return entry;
-        }
-        unreachable;
-    }
-};
-
-test "ReserveThenFillTraversal returns reserved result on back edge" {
-    const children_1 = [_]u8{2};
-    const children_2 = [_]u8{1};
-    const edges = [_]TestEdge{
-        .{ .key = 1, .children = &children_1 },
-        .{ .key = 2, .children = &children_2 },
-    };
-    var context = ReserveTestContext{ .edges = &edges };
-    var traversal = ReserveThenFillTraversal(u8, u8, ReserveTestContext).init(std.testing.allocator, &context);
-    defer traversal.deinit();
-
-    const root = try traversal.visit(1);
-    try std.testing.expectEqual(@as(u8, 10), root);
-    try std.testing.expectEqual(root, context.back_edge_result);
-}
-
-const DigestTestContext = struct {
-    edges: []const TestEdge,
-    bytes: std.ArrayList(u8),
-    traversal: ?*DigestTraversal(u8, @This()) = null,
-
-    fn deinit(self: *@This(), allocator: Allocator) void {
-        self.bytes.deinit(allocator);
-    }
-
-    fn activeDepth(self: *@This()) u32 {
-        return self.traversal.?.activeCount();
-    }
-
-    fn visit(self: *@This(), children: anytype, key: u8) Allocator.Error!void {
-        try self.bytes.append(std.testing.allocator, key);
-        try children.addSlice(self.findEdge(key).children);
-    }
-
-    fn backEdge(self: *@This(), depth: u32) void {
-        self.bytes.append(std.testing.allocator, @intCast(depth)) catch unreachable;
-    }
-
-    fn findEdge(self: *const @This(), key: u8) TestEdge {
-        for (self.edges) |entry| {
-            if (entry.key == key) return entry;
-        }
-        unreachable;
-    }
-};
-
-test "DigestTraversal emits active depth for back edge" {
-    const children_1 = [_]u8{2};
-    const children_2 = [_]u8{1};
-    const edges = [_]TestEdge{
-        .{ .key = 1, .children = &children_1 },
-        .{ .key = 2, .children = &children_2 },
-    };
-    var context = DigestTestContext{ .edges = &edges, .bytes = .empty };
-    defer context.deinit(std.testing.allocator);
-    var traversal = DigestTraversal(u8, DigestTestContext).init(std.testing.allocator, &context);
-    defer traversal.deinit();
-    context.traversal = &traversal;
-
-    try traversal.visit(1);
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 0 }, context.bytes.items);
-}
-
 /// Composite merge-input key mirroring the platform-relation resolver's
 /// `PlatformAppRelationMergeInput`: a walk over two roots plus a context tag.
 const TestMergeInput = struct {
@@ -624,7 +374,7 @@ const CompositePredicateContext = struct {
         for (self.edges) |entry| {
             if (std.meta.eql(entry.key, key)) return entry;
         }
-        unreachable;
+        std.debug.panic("test fixture has no edge for key {any}", .{key});
     }
 };
 
@@ -663,67 +413,6 @@ test "BoolPredicateTraversal finds a true branch beside a composite-key cycle" {
     defer traversal.deinit();
 
     try std.testing.expect(try traversal.visit(a));
-}
-
-/// Composite finalize-input key mirroring `PlatformAppRelationFinalizeInput`.
-const TestFinalizeInput = struct {
-    root: u8,
-    context: u8 = 0,
-};
-
-const CompositeDigestEdge = struct {
-    key: TestFinalizeInput,
-    children: []const TestFinalizeInput = &.{},
-};
-
-const CompositeDigestContext = struct {
-    edges: []const CompositeDigestEdge,
-    bytes: std.ArrayList(u8),
-    traversal: ?*DigestTraversal(TestFinalizeInput, @This()) = null,
-
-    fn deinit(self: *@This(), allocator: Allocator) void {
-        self.bytes.deinit(allocator);
-    }
-
-    fn activeDepth(self: *@This()) u32 {
-        return self.traversal.?.activeCount();
-    }
-
-    fn visit(self: *@This(), children: anytype, key: TestFinalizeInput) Allocator.Error!void {
-        try self.bytes.append(std.testing.allocator, key.root);
-        try children.addSlice(self.findEdge(key).children);
-    }
-
-    fn backEdge(self: *@This(), depth: u32) void {
-        self.bytes.append(std.testing.allocator, @as(u8, @intCast(depth)) | 0x80) catch unreachable;
-    }
-
-    fn findEdge(self: *const @This(), key: TestFinalizeInput) CompositeDigestEdge {
-        for (self.edges) |entry| {
-            if (std.meta.eql(entry.key, key)) return entry;
-        }
-        unreachable;
-    }
-};
-
-test "DigestTraversal emits active depth for a composite finalize-input back edge" {
-    const a = TestFinalizeInput{ .root = 1 };
-    const b = TestFinalizeInput{ .root = 2 };
-    const children_a = [_]TestFinalizeInput{b};
-    const children_b = [_]TestFinalizeInput{a};
-    const edges = [_]CompositeDigestEdge{
-        .{ .key = a, .children = &children_a },
-        .{ .key = b, .children = &children_b },
-    };
-    var context = CompositeDigestContext{ .edges = &edges, .bytes = .empty };
-    defer context.deinit(std.testing.allocator);
-    var traversal = DigestTraversal(TestFinalizeInput, CompositeDigestContext).init(std.testing.allocator, &context);
-    defer traversal.deinit();
-    context.traversal = &traversal;
-
-    try traversal.visit(a);
-    // node 1, node 2, then a back edge to the active root at depth 0.
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 0x80 }, context.bytes.items);
 }
 
 const StressNode = struct {

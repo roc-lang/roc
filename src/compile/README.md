@@ -48,7 +48,7 @@ const base = @import("base");
 const CoreCtx = @import("ctx").CoreCtx;
 
 // 1. Builtins + Coordinator
-var builtins = try eval.BuiltinModules.init(gpa);
+var builtins = try eval.BuiltinModules.init(gpa, io);
 defer builtins.deinit();
 
 var coord = try compile.coordinator.Coordinator.init(
@@ -119,11 +119,10 @@ defer view.deinit();
 //    value the interpreter returns, since big strings point into it.
 var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
 defer static_strings.deinit();
-var interp = try eval.LirInterpreter.initWithBoxyTables(
+var interp = try eval.LirInterpreter.init(
     gpa,
     &view.store,
     &view.layouts,
-    eval.LirInterpreter.BoxyTables.fromImageView(&view),
     static_strings.view(),
     &my_roc_ops,
 );

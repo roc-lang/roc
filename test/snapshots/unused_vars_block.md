@@ -40,7 +40,7 @@ UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "unused_var")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_unused_var")
@@ -54,7 +54,7 @@ UNUSED VARIABLE - unused_vars_block.md:11:5:11:19
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "another_unused")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_another_unused")
@@ -167,7 +167,7 @@ main! = |_| {
 					(e-num (value "999")))
 				(s-let
 					(p-assign (ident "result"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 267)
+					(e-dispatch-call (method "plus") (constraint-fn-var 272)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "used_var"))))

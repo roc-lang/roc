@@ -239,7 +239,7 @@ fn tokenizeReport(
     const body = switch (diagnostic.tag) {
         .BidiControlInSource => blk: {
             const control = base.bidi.at(source_env.source[region.start.offset..]).?;
-            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable;
+            break :blk std.fmt.bufPrint(&bidi_body, "Literal U+{X:0>4} ({s}) can make source appear different from what Roc executes. Use \\u({X:0>4}) in a literal, or remove the control from source text.", .{ control.codepoint, control.name, control.codepoint }) catch unreachable; // bidi_body fits the fixed text plus the longest bidi control name (under 30 bytes)
         },
         .TooManyTokenizationErrors => "Additional tokenization errors were omitted because the diagnostic limit was reached.",
         .MisplacedCarriageReturn => "Carriage return characters (\\r) are not allowed in Roc source code.",
@@ -317,9 +317,10 @@ pub fn tokenizedRegionToRegion(self: *AST, tokenized_region: TokenizedRegion) ba
         safe_end_idx;
 
     const start_region = self.tokens.resolve(safe_start_idx);
-    // Protect against underflow when final_end_idx is 0
-    const end_idx = if (final_end_idx > 0) final_end_idx - 1 else 0;
-    const end_region = self.tokens.resolve(end_idx);
+    // A span of no tokens, such as a missing expression at the end of the
+    // file, is the empty region where its first token would start.
+    if (final_end_idx <= safe_start_idx) return .{ .start = start_region.start, .end = start_region.start };
+    const end_region = self.tokens.resolve(final_end_idx - 1);
     return .{
         .start = start_region.start,
         .end = end_region.end,
@@ -517,13 +518,15 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .invalid_roc_version => reportParseProblem(ctx, "Invalid Roc Version", "I was parsing the `roc` entry of a header, and I did not recognize this version.", "The `roc` entry pins the version of the Roc compiler this file is written for. It must be a string holding either a nightly tag or a release version.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .duplicate_roc_version => reportParseProblem(ctx, "Duplicate Roc Version", "I was parsing a header, and it pins the `roc` version more than once.", "A header can pin at most one compiler version. Remove the extra `roc` entries.", .{ .example = "roc: \"nightly-2026-08-05-24f0b47\"", .show_found = false }),
         .roc_version_key_is_reserved => reportParseProblem(ctx, "Reserved Dependency Name", "I was parsing a dependency record, and `roc` is used as the name of a platform or package.", "The `roc` name is reserved for pinning the compiler version, so it cannot name a dependency. Pick a different name for this one.", .{ .example = "pf: platform \"../platform/main.roc\"", .show_found = false }),
+        .dependency_source_not_plain => reportParseProblem(ctx, "Dependency Source Not Plain", "I was parsing a dependency entry, and its path or URL uses string interpolation or an escape sequence.", "Dependency sources are read exactly as they are written, so write the path or URL out in full, without `${...}` or `\\` escapes.", .{ .example = "json: \"../json/main.roc\"", .show_found = false }),
+        .duplicate_package_shorthand => reportParseProblem(ctx, "Duplicate Package Shorthand", "I was parsing a dependency record, and this name was already given to an earlier dependency in the same record.", "Each name in a dependency record refers to exactly one platform or package, so every entry needs its own name. Remove this entry, or rename one of the two.", .{ .example = "{ json: \"../json/main.roc\", json_old: \"../json_old/main.roc\" }", .show_found = false }),
         .missing_arrow => reportParseProblem(ctx, "Missing Arrow", "I was parsing a function type, and I expected an arrow here.", "Function types use `->` between arguments and return values. Add the missing arrow or wrap the surrounding type in parentheses if a different grouping was intended.", .{ .example = "Str -> U64" }),
         .expected_exposes => reportParseProblem(ctx, "Expected Exposes", "I was parsing a platform header, and I expected the `exposes` section.", "A platform header must list the values it exposes before the package and provides sections.", .{ .example = "exposes [main]" }),
         .expected_exposes_close_square => reportParseProblem(ctx, "Expected Closing Bracket", "I was parsing an `exposes` list, and I expected a closing `]`.", "Every exposes list starts with `[` and ends with `]`. Add the closing bracket after the last exposed name.", .{ .example = "exposes [main, helper]" }),
         .expected_exposes_open_square => reportParseProblem(ctx, "Expected Opening Bracket", "I was parsing an `exposes` section, and I expected an opening `[`.", "The exposed names must be written inside square brackets.", .{ .example = "exposes [main]" }),
         .expected_package_or_platform_name => reportParseProblem(ctx, "Expected Dependency Name", "I was parsing an app dependency record, and I expected a lowercase field name.", "Each package or platform entry starts with a lowercase field name, followed by `:` and a string path or `platform` path.", .{ .example = "pf: platform \"../platform/main.roc\"" }),
-        .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing an app dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
-        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing an app or package dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_colon => reportParseProblem(ctx, "Expected Dependency Colon", "I was parsing a dependency entry, and I expected `:` after the field name.", "A dependency entry uses a colon between the local package name and the package path.", .{ .example = "json: \"../json/main.roc\"" }),
+        .expected_package_or_platform_string => reportParseProblem(ctx, "Expected Package Path", "I was parsing a dependency entry, and I expected a string path.", "Normal package dependencies use a string path after the colon. Use `platform \"...\"` only for the single platform entry.", .{ .example = "json: \"../json/main.roc\"" }),
         .expected_package_platform_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing an app or package dependency record, and I expected a closing `}`.", "Dependency records must be closed with `}` after the final entry.", .{ .example = "{ pf: platform \"../platform/main.roc\" }" }),
         .expected_app_open_curly => reportParseProblem(ctx, "Expected Opening Brace", "I was parsing an app header, and I expected an opening `{` for dependencies.", "App headers write the platform and package dependencies in a record after the provided names list.", .{ .example = "app [main] { pf: platform \"../platform/main.roc\" }" }),
         .expected_packages => reportParseProblem(ctx, "Expected Packages", "I was parsing a platform header, and I expected the `packages` section.", "A platform header must include a packages record that names package dependencies.", .{ .example = "packages { base: \"../base/main.roc\" }" }),
@@ -617,6 +620,7 @@ fn parseReport(ctx: ParseReportContext) Allocator.Error!reporting.Report {
         .expected_expr_comma => reportParseProblem(ctx, "Expected Comma", "I was parsing a record update, and I expected `,` before the fields.", "A record update writes the base record after `..`, then a comma, then the updated fields.", .{ .example = "{ ..person, name: \"Ada\" }" }),
         .expected_expr_close_curly => reportParseProblem(ctx, "Expected Closing Brace", "I was parsing a block expression, and I expected `}` before the file ended.", "Close the block after its final statement or expression.", .{ .example = "{\n    answer = 42\n    answer\n}" }),
         .expr_dot_suffix_not_allowed => reportParseProblem(ctx, "Expected Record Accessor", "I was parsing access after `.`, and I expected a field name or tuple index.", "Required record access uses `.name`, optional record access uses `.?name`, and tuple access uses `.0`. Accessor names must be lowercase and adjacent to their punctuation.", .{ .example = "person.name\nmaybe_person.?name\npair.0" }),
+        .expr_type_suffix_on_parenthesized_literal => reportParseProblem(ctx, "Parenthesized Type Suffix", "I was parsing access after `.`, and I found a type suffix after parentheses.", "A type suffix like `.U64` is part of the literal it gives a type to, so it goes directly after the number or string, inside any parentheses around it.", .{ .example = "1.U64\n-12.34.Dec\n(1.U64)", .show_found = false }),
         .incomplete_import => reportParseProblem(ctx, "Incomplete Import", "I was parsing an import, and the module path is incomplete.", "Imports must name a module, optionally with a qualifier and exposing list.", .{ .example = "import Json/Decode exposing [decode]" }),
         .file_import_expected_as => reportParseProblem(ctx, "Expected File Import Name", "I was parsing a file import, and I expected `as` after the path.", "File imports give the file contents a local name using `as`.", .{ .example = "import \"data.txt\" as data : Str" }),
         .file_import_expected_name => reportParseProblem(ctx, "Expected File Import Binding", "I was parsing a file import, and I expected a lowercase binding name.", "The name after `as` is the local value that will contain the imported file contents.", .{ .example = "import \"data.txt\" as data : Str" }),
@@ -655,6 +659,8 @@ pub const Diagnostic = struct {
         invalid_roc_version,
         duplicate_roc_version,
         roc_version_key_is_reserved,
+        duplicate_package_shorthand,
+        dependency_source_not_plain,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -758,6 +764,7 @@ pub const Diagnostic = struct {
         expected_expr_comma,
         expected_expr_close_curly,
         expr_dot_suffix_not_allowed,
+        expr_type_suffix_on_parenthesized_literal,
         incomplete_import,
         file_import_expected_as,
         file_import_expected_name,
@@ -830,6 +837,35 @@ pub fn rootAppKind(self: *const AST) RootAppKind {
     };
 }
 
+/// The source offset just past `header`'s last token, or zero for a file
+/// without a header.
+pub fn headerEndOffset(self: *const AST, header: Header) u32 {
+    const region = header.to_tokenized_region();
+    if (region.end <= region.start) return 0;
+
+    const token_count: u32 = @intCast(self.tokens.tokens.len);
+    if (token_count == 0) return 0;
+
+    const last_token = @min(region.end - 1, token_count - 1);
+    return self.tokens.resolve(last_token).end.offset;
+}
+
+/// Whether the tokenizer reported a problem inside `header`.
+///
+/// The tokenizer reports problems in source order, except that a byte order
+/// mark and source-policy rejections (see `source_rejected`) come first, and it
+/// drops the latest ones past its limit. Short of a source-policy rejection,
+/// the limit marker therefore never stands for a header problem that is not
+/// also reported individually.
+pub fn headerHasTokenizeErrors(self: *const AST, header: Header) bool {
+    const header_end_offset = self.headerEndOffset(header);
+    for (self.tokenize_diagnostics.items) |diagnostic| {
+        if (diagnostic.tag == .TooManyTokenizationErrors) continue;
+        if (diagnostic.region.start.offset < header_end_offset) return true;
+    }
+    return false;
+}
+
 /// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *const AST, token: Token.Idx) []const u8 {
     const range = self.tokens.resolve(token);
@@ -865,11 +901,13 @@ fn pushQualifiedName(
     final_token: Token.Idx,
 ) std.mem.Allocator.Error!void {
     const qualifier_tokens = self.store.tokenSlice(qualifiers);
-    const final_ident = self.tokens.resolveIdentifier(final_token) orelse unreachable;
+    const final_ident = self.tokens.resolveIdentifier(final_token) orelse
+        base.invariant("AST invariant violated: qualified name token {d} is not an identifier", .{final_token});
 
     var byte_count = env.getIdent(final_ident).len;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         byte_count += env.getIdent(segment).len + 1;
     }
 
@@ -877,7 +915,8 @@ fn pushQualifiedName(
     const buffer = tree.reservedStringBuffer(begin);
     var offset: usize = 0;
     for (qualifier_tokens) |raw_token| {
-        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse unreachable;
+        const segment = self.tokens.resolveIdentifier(@intCast(raw_token)) orelse
+            base.invariant("AST invariant violated: qualifier token {d} is not an identifier", .{raw_token});
         const text = env.getIdent(segment);
         std.mem.copyForwards(u8, buffer[offset..][0..text.len], text);
         offset += text.len;
@@ -989,6 +1028,17 @@ comptime {
 
 test {
     _ = std.testing.refAllDecls(@This());
+}
+
+/// The S-expression node name for a variant: `prefix`, a dash, and the
+/// variant's tag name with underscores replaced by dashes.
+fn sexprName(comptime prefix: []const u8, comptime tag: anytype) []const u8 {
+    comptime {
+        var name: [@tagName(tag).len]u8 = @tagName(tag)[0..@tagName(tag).len].*;
+        std.mem.replaceScalar(u8, &name, '_', '-');
+        const final = name;
+        return prefix ++ "-" ++ &final;
+    }
 }
 
 /// Helper function to convert the AST to a human friendly representation in S-expression format
@@ -1249,16 +1299,8 @@ pub const Statement = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .crash => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-crash", a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
-            .dbg => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-dbg", a.region);
+            inline .crash, .dbg, .@"return" => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("s", tag), a.region);
                 const attrs = tree.beginNode();
 
                 try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
@@ -1309,14 +1351,6 @@ pub const Statement = union(enum) {
                 const begin = try ast.beginSexprNodeAt(env, tree, "s-break", a.region);
                 try tree.endNodeWithoutChildren(begin);
             },
-            .@"return" => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "s-return", a.region);
-                const attrs = tree.beginNode();
-
-                try ast.store.getExpr(a.expr).pushToSExprTree(gpa, env, ast, tree);
-
-                try tree.endNode(begin, attrs);
-            },
             .type_anno => |a| {
                 const begin = try ast.beginSexprNodeAt(env, tree, "s-type-anno", a.region);
                 try tree.pushStringPair("name", ast.resolve(a.name));
@@ -1346,14 +1380,7 @@ pub const Statement = union(enum) {
     /// Extract the region from any Statement variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .decl => |s| s.region,
-            .@"var" => |s| s.region,
-            inline .expr, .import, .type_decl, .crash, .dbg, .expect => |s| s.region,
-            .@"for" => |s| s.region,
-            .@"while" => |s| s.region,
-            .@"return" => |s| s.region,
-            .@"break" => |s| s.region,
-            inline .type_anno, .malformed, .file_import => |s| s.region,
+            inline .decl, .@"var", .expr, .import, .type_decl, .crash, .dbg, .expect, .@"for", .@"while", .@"return", .@"break", .type_anno, .malformed, .file_import => |v| v.region,
         };
     }
 };
@@ -1493,42 +1520,15 @@ pub const Pattern = union(enum) {
     /// Extract the region from any Pattern variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .ident => |p| p.region,
-            .var_ident => |p| p.region,
-            .tag => |p| p.region,
-            .int => |p| p.region,
-            .frac => |p| p.region,
-            .typed_int => |p| p.region,
-            .typed_frac => |p| p.region,
-            .string => |p| p.region,
-            .single_quote => |p| p.region,
-            .record => |p| p.region,
-            .list => |p| p.region,
-            .list_rest => |p| p.region,
-            .tuple => |p| p.region,
-            .underscore => |p| p.region,
-            .alternatives => |p| p.region,
-            .as => |p| p.region,
-            .malformed => |p| p.region,
+            inline .ident, .var_ident, .tag, .int, .frac, .typed_int, .typed_frac, .string, .single_quote, .record, .list, .list_rest, .tuple, .underscore, .alternatives, .as, .malformed => |v| v.region,
         };
     }
 
     /// Push this Pattern to the SExprTree stack
     pub fn pushToSExprTree(self: @This(), gpa: std.mem.Allocator, env: *const CommonEnv, ast: *const AST, tree: *SExprTree) std.mem.Allocator.Error!void {
         switch (self) {
-            .ident => |ident| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-ident", ident.region);
-
-                // Add raw attribute
-                const raw_begin = try tree.beginNamedNode("raw");
-                try tree.pushString(ast.resolve(ident.ident_tok));
-                try tree.endNodeWithoutChildren(raw_begin);
-                const attrs = tree.beginNode();
-
-                try tree.endNode(begin, attrs);
-            },
-            .var_ident => |ident| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-var-ident", ident.region);
+            inline .ident, .var_ident => |ident, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), ident.region);
 
                 // Add raw attribute
                 const raw_begin = try tree.beginNamedNode("raw");
@@ -1550,24 +1550,13 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .int => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-int", num.region);
+            inline .int, .frac => |num, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try tree.endNodeWithoutChildren(begin);
             },
-            .frac => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-frac", num.region);
-                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_int => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-int", num.region);
-                try tree.pushStringPair("raw", ast.resolve(num.number_tok));
-                try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_frac => |num| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-typed-frac", num.region);
+            inline .typed_int, .typed_frac => |num, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), num.region);
                 try tree.pushStringPair("raw", ast.resolve(num.number_tok));
                 try ast.pushLiteralTypeSuffix(env, tree, num.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
@@ -1611,8 +1600,8 @@ pub const Pattern = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .list => |list| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-list", list.region);
+            inline .list, .tuple => |list, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("p", tag), list.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.patternSlice(list.patterns)) |pat| {
@@ -1628,16 +1617,6 @@ pub const Pattern = union(enum) {
                     try tree.pushStringPair("name", ast.resolve(name_tok));
                 }
                 const attrs = tree.beginNode();
-
-                try tree.endNode(begin, attrs);
-            },
-            .tuple => |tuple| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "p-tuple", tuple.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.patternSlice(tuple.patterns)) |pat| {
-                    try ast.store.getPattern(pat).pushToSExprTree(gpa, env, ast, tree);
-                }
 
                 try tree.endNode(begin, attrs);
             },
@@ -2146,7 +2125,7 @@ pub const Header = union(enum) {
     /// Extract the region from any Header variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            inline .app, .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => |a| a.region,
+            inline .app, .module, .package, .platform, .hosted, .type_module, .default_app, .malformed => |v| v.region,
         };
     }
 };
@@ -2255,7 +2234,7 @@ pub const ExposedItem = union(enum) {
     /// Extract the region from any ExposedItem variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            inline .lower_ident, .upper_ident, .upper_ident_star, .malformed => |i| i.region,
+            inline .lower_ident, .upper_ident, .upper_ident_star, .malformed => |v| v.region,
         };
     }
 };
@@ -2398,7 +2377,7 @@ pub const TypeAnno = union(enum) {
     tag_union: struct {
         tags: TypeAnno.Span,
         /// Extension for open tag unions
-        ext: TagUnionExt,
+        ext: Ext,
         region: TokenizedRegion,
     },
     tuple: struct {
@@ -2407,7 +2386,7 @@ pub const TypeAnno = union(enum) {
     },
     record: struct {
         fields: AnnoRecordField.Span,
-        ext: RecordExt,
+        ext: Ext,
         region: TokenizedRegion,
     },
     @"fn": struct {
@@ -2428,33 +2407,18 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    /// Extension type for open tag unions
-    pub const TagUnionExt = union(enum) {
-        /// Closed tag union: `[A, B, C]`
+    /// Extension of a tag union or record type annotation
+    pub const Ext = union(enum) {
+        /// Closed: `[A, B, C]` or `{ name: Str }`
         closed,
-        /// Anonymous open tag union: `[A, B, ..]` - stores the DoubleDot token index
+        /// Anonymous open: `[A, B, ..]` or `{ name: Str, .. }` - stores the DoubleDot token index
         open: Token.Idx,
-        /// Named open tag union: `[A, B, ..ext]`
+        /// Named open: `[A, B, ..ext]` or `{ name: Str, ..ext }`
         named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
     };
 
-    pub const TagUnionRhs = packed struct {
-        /// 0 = closed, 1 = anonymous open, 2 = named open
-        ext_kind: u2,
-        _padding: u30 = 0,
-    };
-
-    /// Extension type for open records
-    pub const RecordExt = union(enum) {
-        /// Closed record: `{ name: Str }`
-        closed,
-        /// Anonymous open record: `{ name: Str, .. }` - stores the DoubleDot token index
-        open: Token.Idx,
-        /// Named open record: `{ name: Str, ..ext }`
-        named: struct { anno: TypeAnno.Idx, region: TokenizedRegion },
-    };
-
-    pub const RecordRhs = packed struct {
+    /// Node `rhs` word of a tag union or record type annotation.
+    pub const ExtRhs = packed struct {
         /// 0 = closed, 1 = anonymous open, 2 = named open
         ext_kind: u2,
         _padding: u30 = 0,
@@ -2465,10 +2429,7 @@ pub const TypeAnno = union(enum) {
     /// Extract the region from any TypeAnno variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         switch (self) {
-            inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record => |a| return a.region,
-            .@"fn" => |f| return f.region,
-            .parens => |p| return p.region,
-            .malformed => |m| return m.region,
+            inline .apply, .ty_var, .underscore_type_var, .underscore, .ty, .tag_union, .tuple, .record, .@"fn", .parens, .malformed => |a| return a.region,
         }
     }
 
@@ -2912,42 +2873,7 @@ pub const Expr = union(enum) {
     /// Extract the region from any Expr variant
     pub fn to_tokenized_region(self: @This()) TokenizedRegion {
         return switch (self) {
-            .ident => |e| e.region,
-            .int => |e| e.region,
-            .frac => |e| e.region,
-            .typed_int => |e| e.region,
-            .typed_frac => |e| e.region,
-            .string => |e| e.region,
-            .multiline_string => |e| e.region,
-            .typed_string => |e| e.region,
-            .typed_multiline_string => |e| e.region,
-            .tag => |e| e.region,
-            .list => |e| e.region,
-            .record => |e| e.region,
-            .tuple => |e| e.region,
-            .field_access => |e| e.region,
-            .method_call => |e| e.region,
-            .tuple_access => |e| e.region,
-            .arrow_call => |e| e.region,
-            .lambda => |e| e.region,
-            .record_updater => |e| e.region,
-            .bin_op => |e| e.region,
-            .unary_op => |e| e.region,
-            .suffix_single_question => |e| e.region,
-            .apply => |e| e.region,
-            .if_then_else => |e| e.region,
-            .if_without_else => |e| e.region,
-            .match => |e| e.region,
-            .dbg => |e| e.region,
-            .crash => |e| e.region,
-            .block => |e| e.region,
-            .record_builder => |e| e.region,
-            .nominal_record => |e| e.region,
-            .nominal_apply => |e| e.region,
-            .ellipsis => |e| e.region,
-            .@"break" => |e| e.region,
-            .@"return" => |e| e.region,
-            inline .for_expr, .malformed, .string_part, .single_quote => |e| e.region,
+            inline .ident, .int, .frac, .typed_int, .typed_frac, .string, .multiline_string, .typed_string, .typed_multiline_string, .tag, .list, .record, .tuple, .field_access, .method_call, .tuple_access, .arrow_call, .lambda, .record_updater, .bin_op, .unary_op, .suffix_single_question, .apply, .if_then_else, .if_without_else, .match, .dbg, .crash, .block, .record_builder, .nominal_record, .nominal_apply, .ellipsis, .@"break", .@"return", .for_expr, .malformed, .string_part, .single_quote => |v| v.region,
         };
     }
 
@@ -2969,14 +2895,8 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try tree.endNodeWithoutChildren(begin);
             },
-            .typed_int => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-int", a.region);
-                try tree.pushStringPair("raw", ast.resolve(a.token));
-                try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
-                try tree.endNodeWithoutChildren(begin);
-            },
-            .typed_frac => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-frac", a.region);
+            inline .typed_int, .typed_frac => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
                 try ast.pushLiteralTypeSuffix(env, tree, a.type_suffix);
                 try tree.endNodeWithoutChildren(begin);
@@ -2996,8 +2916,8 @@ pub const Expr = union(enum) {
                 try tree.endNodeWithoutChildren(raw);
                 try tree.endNodeWithoutChildren(begin);
             },
-            .string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-string", str.region);
+            inline .string, .multiline_string => |str, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), str.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(str.parts)) |part_id| {
@@ -3007,19 +2927,8 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .multiline_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-multiline-string", str.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ast.store.getExpr(part_id);
-                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .typed_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-string", str.region);
+            inline .typed_string, .typed_multiline_string => |str, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), str.region);
                 try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
                 const attrs = tree.beginNode();
 
@@ -3030,30 +2939,8 @@ pub const Expr = union(enum) {
 
                 try tree.endNode(begin, attrs);
             },
-            .typed_multiline_string => |str| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-typed-multiline-string", str.region);
-                try ast.pushLiteralTypeSuffix(env, tree, str.type_suffix);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(str.parts)) |part_id| {
-                    const part_expr = ast.store.getExpr(part_id);
-                    try part_expr.pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .list => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-list", a.region);
-                const attrs = tree.beginNode();
-
-                for (ast.store.exprSlice(a.items)) |b| {
-                    try ast.store.getExpr(b).pushToSExprTree(gpa, env, ast, tree);
-                }
-
-                try tree.endNode(begin, attrs);
-            },
-            .tuple => |a| {
-                const begin = try ast.beginSexprNodeAt(env, tree, "e-tuple", a.region);
+            inline .list, .tuple => |a, tag| {
+                const begin = try ast.beginSexprNodeAt(env, tree, comptime sexprName("e", tag), a.region);
                 const attrs = tree.beginNode();
 
                 for (ast.store.exprSlice(a.items)) |b| {
@@ -3282,7 +3169,8 @@ pub const Expr = union(enum) {
                 for (ast.store.fieldAccessSegmentSlice(a.segments)) |segment| {
                     const segment_node = try tree.beginNamedNode("segment");
                     try tree.pushStringPair("mode", @tagName(segment.mode));
-                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse unreachable;
+                    const field_ident = ast.tokens.resolveIdentifier(segment.field_token) orelse
+                        base.invariant("AST invariant violated: field access token {d} is not an identifier", .{segment.field_token});
                     try tree.pushStringPair("field", env.getIdent(field_ident));
                     try tree.endNodeWithoutChildren(segment_node);
                 }

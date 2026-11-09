@@ -1,0 +1,12 @@
+--- !tapi-tbd
+tbd-version:     4
+targets:         [ x86_64-macos, arm64-macos ]
+install-name:    '/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation'
+current-version: 3502.1.255
+compatibility-version: 150
+exports:
+  - targets:         [ x86_64-macos, arm64-macos ]
+    symbols:         [ _CFArrayCreate, _CFRelease, _CFRunLoopGetCurrent, _CFRunLoopRun,
+                       _CFRunLoopRunInMode, _CFRunLoopStop, _CFStringCreateWithCString,
+                       _kCFRunLoopDefaultMode ]
+...

@@ -58,6 +58,9 @@ pub const LaneState = struct {
 };
 
 /// Exclusive execution lane and its persistent and task-scoped allocators.
+/// A thread has one lane per nesting depth of the sessions it is waiting
+/// in, so a task it runs while waiting in a session never shares a lane with
+/// the task that waits (`Executor.lane_count`).
 pub const Worker = struct {
     id: usize,
     /// Allocator for task-owned output. The caller owns cleanup of allocations
@@ -88,21 +91,38 @@ pub const Completion = struct {
 };
 
 /// Bounded executor borrowed from a compilation coordinator.
+///
+/// A session may be opened from any thread, a task's callback included: an
+/// owner waiting for a completion runs its own session's queued tasks itself
+/// in the meantime, so a task that opens a session and waits never blocks a
+/// thread the session's tasks need, and the same pool serves every nesting
+/// level.
 pub const Executor = struct {
     context: *anyopaque,
+    /// The threads the executor runs tasks on, which bounds how many tasks a
+    /// session has out at once.
     worker_count: usize,
-    beginFn: *const fn (*anyopaque) void,
-    submitFn: *const fn (*anyopaque, Task) std.mem.Allocator.Error!void,
+    /// The distinct lane ids a `Worker` can carry: every thread has a lane
+    /// per nesting depth. A consumer keeping state per lane sizes it by
+    /// this.
+    lane_count: usize,
+    /// Open a session, returning its handle.
+    beginFn: *const fn (*anyopaque) std.mem.Allocator.Error!*anyopaque,
+    /// Success accepts exactly one task. Failure accepts none: no queued or
+    /// running callback and no future completion may belong to that submission.
+    submitFn: *const fn (*anyopaque, *anyopaque, Task) std.mem.Allocator.Error!void,
     /// Must synchronize with the completed callback so its writes are visible
     /// before the returned value is consumed.
-    receiveFn: *const fn (*anyopaque) Completion,
-    endFn: *const fn (*anyopaque) void,
+    receiveFn: *const fn (*anyopaque, *anyopaque) Completion,
+    /// A completion already filed with the session, without waiting or
+    /// running anything.
+    tryReceiveFn: *const fn (*anyopaque, *anyopaque) ?Completion,
+    endFn: *const fn (*anyopaque, *anyopaque) void,
 
-    /// Start an exclusive streaming session.
-    pub fn begin(self: Executor) Session {
+    /// Start a streaming session.
+    pub fn begin(self: Executor) std.mem.Allocator.Error!Session {
         std.debug.assert(self.worker_count > 0);
-        self.beginFn(self.context);
-        return .{ .executor = self };
+        return .{ .executor = self, .handle = try self.beginFn(self.context) };
     }
 
     /// Run one bounded batch. `completions` must have exactly `tasks.len` entries.
@@ -123,7 +143,7 @@ pub const Executor = struct {
     /// Values registered in `Worker.lane_state` instead belong to the executor.
     pub fn run(self: Executor, tasks: []const Task, completions: []Completion) std.mem.Allocator.Error!void {
         std.debug.assert(tasks.len == completions.len);
-        var session = self.begin();
+        var session = try self.begin();
         var submitted: usize = 0;
         var received: usize = 0;
         var submit_error: ?std.mem.Allocator.Error = null;
@@ -153,6 +173,7 @@ pub const Executor = struct {
 /// until their callbacks have returned.
 pub const Session = struct {
     executor: Executor,
+    handle: *anyopaque,
     outstanding: usize = 0,
     ended: bool = false,
 
@@ -162,14 +183,24 @@ pub const Session = struct {
 
     pub fn submit(self: *Session, task: Task) std.mem.Allocator.Error!void {
         std.debug.assert(self.canSubmit());
-        try self.executor.submitFn(self.executor.context, task);
+        try self.executor.submitFn(self.executor.context, self.handle, task);
         self.outstanding += 1;
     }
 
-    /// Receive the next completion in arrival order.
+    /// Receive the next completion in arrival order, running the session's
+    /// queued tasks on this thread while none is filed.
     pub fn receive(self: *Session) Completion {
         std.debug.assert(!self.ended and self.outstanding > 0);
-        const completion = self.executor.receiveFn(self.executor.context);
+        const completion = self.executor.receiveFn(self.executor.context, self.handle);
+        self.outstanding -= 1;
+        return completion;
+    }
+
+    /// A completion already filed, without waiting or running anything.
+    pub fn tryReceive(self: *Session) ?Completion {
+        std.debug.assert(!self.ended);
+        if (self.outstanding == 0) return null;
+        const completion = self.executor.tryReceiveFn(self.executor.context, self.handle) orelse return null;
         self.outstanding -= 1;
         return completion;
     }
@@ -177,7 +208,7 @@ pub const Session = struct {
     /// Release the executor only after every accepted completion was consumed.
     pub fn end(self: *Session) void {
         std.debug.assert(!self.ended and self.outstanding == 0);
-        self.executor.endFn(self.executor.context);
+        self.executor.endFn(self.executor.context, self.handle);
         self.ended = true;
     }
 };
@@ -198,14 +229,16 @@ test "post-check executor run drains accepted tasks after submit OOM" {
         received: usize = 0,
         lane_state: *LaneState,
 
-        fn begin(_: *anyopaque) void {}
-        fn submitTask(context_opaque: *anyopaque, task: Task) std.mem.Allocator.Error!void {
+        fn begin(context_opaque: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+            return context_opaque;
+        }
+        fn submitTask(context_opaque: *anyopaque, _: *anyopaque, task: Task) std.mem.Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             if (self.accepted_len == self.accepted.len) return error.OutOfMemory;
             self.accepted[self.accepted_len] = task;
             self.accepted_len += 1;
         }
-        fn receive(context_opaque: *anyopaque) Completion {
+        fn receive(context_opaque: *anyopaque, _: *anyopaque) Completion {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             const task = self.accepted[self.received];
             self.received += 1;
@@ -220,7 +253,10 @@ test "post-check executor run drains accepted tasks after submit OOM" {
                 }),
             };
         }
-        fn end(context_opaque: *anyopaque) void {
+        fn tryReceive(_: *anyopaque, _: *anyopaque) ?Completion {
+            return null;
+        }
+        fn end(context_opaque: *anyopaque, _: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             std.debug.assert(self.received == self.accepted_len);
         }
@@ -232,9 +268,11 @@ test "post-check executor run drains accepted tasks after submit OOM" {
     const executor = Executor{
         .context = &harness,
         .worker_count = 3,
+        .lane_count = 3,
         .beginFn = Harness.begin,
         .submitFn = Harness.submitTask,
         .receiveFn = Harness.receive,
+        .tryReceiveFn = Harness.tryReceive,
         .endFn = Harness.end,
     };
     var contexts = [_]TaskContext{ .{}, .{}, .{} };
@@ -271,9 +309,11 @@ test "post-check executor never admits more tasks than worker capacity" {
         peak_active: usize = 0,
         lane_state: *LaneState,
 
-        fn begin(_: *anyopaque) void {}
+        fn begin(context_opaque: *anyopaque) std.mem.Allocator.Error!*anyopaque {
+            return context_opaque;
+        }
 
-        fn submitTask(context_opaque: *anyopaque, task: Task) std.mem.Allocator.Error!void {
+        fn submitTask(context_opaque: *anyopaque, _: *anyopaque, task: Task) std.mem.Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             if (self.active >= 2) {
                 invariant("{s}", .{"post-check executor admitted work beyond its worker capacity"});
@@ -284,7 +324,7 @@ test "post-check executor never admits more tasks than worker capacity" {
             self.peak_active = @max(self.peak_active, self.active);
         }
 
-        fn receive(context_opaque: *anyopaque) Completion {
+        fn receive(context_opaque: *anyopaque, _: *anyopaque) Completion {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             const task = self.accepted[self.received];
             self.received += 1;
@@ -302,7 +342,11 @@ test "post-check executor never admits more tasks than worker capacity" {
             };
         }
 
-        fn end(context_opaque: *anyopaque) void {
+        fn tryReceive(_: *anyopaque, _: *anyopaque) ?Completion {
+            return null;
+        }
+
+        fn end(context_opaque: *anyopaque, _: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(context_opaque));
             std.debug.assert(self.active == 0);
             std.debug.assert(self.received == self.accepted_len);
@@ -315,9 +359,11 @@ test "post-check executor never admits more tasks than worker capacity" {
     const executor = Executor{
         .context = &harness,
         .worker_count = 2,
+        .lane_count = 2,
         .beginFn = Harness.begin,
         .submitFn = Harness.submitTask,
         .receiveFn = Harness.receive,
+        .tryReceiveFn = Harness.tryReceive,
         .endFn = Harness.end,
     };
     var contexts = [_]TaskContext{ .{}, .{}, .{}, .{}, .{}, .{}, .{} };

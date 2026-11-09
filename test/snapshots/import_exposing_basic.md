@@ -28,7 +28,7 @@ DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 		(headline
 			(reflow "The name ")
 			(annotated symbol-unqualified "Json")
-			(reflow " is being redeclared here:"))
+			(reflow " is being redeclared here."))
 		(document
 			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 43) (annotation error) (line-text "import json.Json exposing [decode, to_str]"))
 			(line-break)
@@ -39,7 +39,7 @@ DOES NOT EXIST - import_exposing_basic.md:6:15:6:21
 				(file "import_exposing_basic.md")
 				(line 1)
 				(column 1))
-			(reflow ":")
+			(reflow ".")
 			(line-break)
 			(source-region (file "import_exposing_basic.md") (start 1 1) (end 1 1) (annotation dim) (line-text "import json.Json exposing [decode, to_str]"))))
 	(report

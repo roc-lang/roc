@@ -250,8 +250,6 @@ EndOfFile,
 ~~~roc
 app [] { f: platform "" }
 
-
-
 ~~~
 # CANONICALIZE
 ~~~clojure

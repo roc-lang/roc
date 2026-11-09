@@ -29,7 +29,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.17.0
+          version: 0.17.1
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -59,6 +59,13 @@ jobs:
         run: |
           echo "Cross-compiling fx tests from ${{ matrix.host }} to ${{ matrix.target }}"
           zig build run-test-cli -- --suite platforms --filter test/fx/ --cross-target=${{ matrix.target }}
+
+      # `roc build` below reads the int platform's hosts from the checkout.
+      - name: Publish int platform hosts into the checkout
+        uses: ./.github/actions/flaky-retry
+        with:
+          command: zig build update-test-fixtures -Dplatform=int
+          retry_count: 3
 
       - name: Cross-compile int platform test app (Unix)
         if: runner.os != 'Windows'

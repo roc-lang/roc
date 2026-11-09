@@ -266,6 +266,30 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 12505: record tuple and tag snapshots survive loop updates",
+        .source =
+        \\{
+        \\    make = |n| { a: n, b: n + 1, text: Str.concat("a heap allocated aggregate field: ", n.to_str()), items: [n, n + 2] }
+        \\    var $index = 0.U64
+        \\    var $state = make($index)
+        \\    var $sum = 0.U64
+        \\    while $index < 6 {
+        \\        snapshot = $state
+        \\        pair = (snapshot, $index)
+        \\        wrapped = if $index == 1 Empty else Full(pair)
+        \\        $index = $index + 1
+        \\        $state = make($index)
+        \\        $sum = $sum + match wrapped {
+        \\            Empty => 0
+        \\            Full((old, old_index)) => old.a + old.b + old_index + old.items.len().to_u64() + Str.count_utf8_bytes(old.text).to_u64()
+        \\        }
+        \\    }
+        \\    $sum.to_str()
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"232\"" },
+    },
+    .{
         .name = "issue 11992: local value captures itself through a function field",
         .source_kind = .module,
         .source =
@@ -431,6 +455,7 @@ pub const tests = [_]TestCase{
         \\Runner :: {}.{
         \\    run = |_, body| body({}).repeat(3)
         \\}
+        \\demo : Runner -> (Str, List(List(U64)))
         \\demo = |runner| (runner.run(|{}| "a"), runner.run(|{}| [1.U64]))
         \\main = demo(Runner.{})
         ,
@@ -447,6 +472,7 @@ pub const tests = [_]TestCase{
         \\        (repeated, body({}))
         \\    }
         \\}
+        \\demo : Db({ fetch : {} -> Str }) -> ((Str, Str), (Str, U64))
         \\demo = |db| (db.run(|{}| "a"), db.run(|{}| 42.U64))
         \\forward = |db| demo(db)
         \\main = forward(Db.{ deps: { fetch: |{}| "x" } })
@@ -2056,6 +2082,53 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "[\"failed: Nope2\"]" },
     },
     .{
+        // The interpolation's literal requirement travels around a cycle of
+        // two schemes, returning to each at the variables it left with.
+        .name = "issue 11060: literal requirement of a mutually recursive accumulator",
+        .source_kind = .module,
+        .source =
+        \\make = |start, file|
+        \\    match start(file) {
+        \\        Ok(handle) => Good(handle)
+        \\        Err(e) => Bad("failed: ${Str.inspect(e)}")
+        \\    }
+        \\
+        \\ping = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => pong(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\pong = |start, remaining, acc|
+        \\    match remaining {
+        \\        [] => acc
+        \\        [file, .. as rest] => ping(start, rest, acc.append(make(start, file)))
+        \\    }
+        \\
+        \\main = ping(|_file| Err(Nope2), ["x", "y"], []).len()
+        ,
+        .expected = .{ .inspect_str = "2" },
+    },
+    .{
+        // Two annotated schemes calling each other each have variables of
+        // their own, so the cycle renames them on every step.
+        .name = "issue 11060: literal requirements of mutually recursive annotated schemes",
+        .source_kind = .module,
+        .source =
+        \\ping : a, U64 -> a where [a.plus : a, a -> a]
+        \\ping = |x, n| if n == 0 x.plus(x) else pong(x, n - 1)
+        \\
+        \\pong : b, U64 -> b where [b.plus : b, b -> b]
+        \\pong = |y, n| if n == 0 y.plus(y.plus(y)) else ping(y, n - 1)
+        \\
+        \\label = |s, n| if n == 0 "ping ${s}" else label2(s, n - 1)
+        \\label2 = |s, n| if n == 0 "pong ${s}" else label(s, n - 1)
+        \\
+        \\main = (ping(5.U64, 3), ping(5.U64, 2), label("x", 3))
+        ,
+        .expected = .{ .inspect_str = "(15, 10, \"pong x\")" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/11063
         //
         // `Opt` brings its own `parser_for`, and the record `Opt` wraps has a
@@ -2238,7 +2311,7 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrap := [W(Str)].{
-        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrap), [InvalidInterpolation(Str)])
+        \\    from_interpolation : List(Str) -> Try((Iter(Str) -> Wrap), [InvalidInterpolation(Str)])
         \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| W(Str.concat("<", Str.concat(assemble(values), ">"))))
         \\
         \\    text : Wrap -> Str
@@ -2295,6 +2368,90 @@ pub const tests = [_]TestCase{
         \\}
         ,
         .expected = .{ .inspect_str = "\"hi!\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // An unannotated inline lambda that dispatches a method on its
+        // parameter is stored in an unannotated record. Nothing in `Hooks`
+        // pins the parameter's type, so the importing module's request must
+        // select `Str.concat`.
+        .name = "issue 12609: inline where-clause lambda read out of a record in an imported module",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    hooks = { shout: |s| s.concat("!") }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    shout = Hooks.hooks.shout
+        \\    shout("hi")
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"hi!\"" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // The same lambda stored in a tuple and in a list. Each importing use
+        // copies the stored function's type, so two uses can request two
+        // different receiver types.
+        .name = "issue 12609: inline where-clause lambdas in an imported tuple and list run at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    pair = (|s| s.concat("!"), 1)
+            \\    fns = [|s| s.concat(s)]
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = {
+        \\    (shout, _) = Hooks.pair
+        \\    text = match Hooks.fns {
+        \\        [twice] => twice("ab")
+        \\        _ => ""
+        \\    }
+        \\    bytes = match Hooks.fns {
+        \\        [twice] => twice([1.U8, 2])
+        \\        _ => []
+        \\    }
+        \\    (shout("hi"), text, bytes)
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(\"hi!\", \"abab\", [1, 2, 1, 2])" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12609
+        // A lambda that a stored conditional selects has no construction edge
+        // of its own, so it owns a callable-derived evidence scope: its
+        // requirement on the value's unpinned variable resolves from each
+        // importing request.
+        .name = "issue 12609: imported lambda a stored conditional selects runs at two types",
+        .source_kind = .module,
+        .imports = &.{.{
+            .name = "Hooks",
+            .source =
+            \\Hooks := [].{
+            \\    flag = Bool.True
+            \\    hooks = { dup: if flag |s| s.concat(s) else |s| s }
+            \\}
+            ,
+        }},
+        .source =
+        \\import Hooks
+        \\
+        \\main = ((Hooks.hooks.dup)("ab"), (Hooks.hooks.dup)([1.U8]))
+        ,
+        .expected = .{ .inspect_str = "(\"abab\", [1, 1])" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11170
@@ -4204,11 +4361,11 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(Nope, Nope)" },
     },
     .{
-        // A `?` whose closed error row the enclosing annotated result rejects
-        // is a checked error that crashes when reached. The function keeps its
-        // body's result type, so a caller that widens the error row still
-        // specializes it, and the rejected return never flows a value.
-        .name = "rejected try suffix on a nominal payload function crashes at runtime",
+        // A `?` on a closed error row read out of a nominal payload contributes
+        // that row's tags to the annotated result without closing it (design.md
+        // "Row Subsumption"), so the result also holds `NotAFunction` and the
+        // `?` return's error row joins it (design.md "Row Joins").
+        .name = "try suffix on a closed error row from a nominal payload widens into the result",
         .source_kind = .module,
         .source =
         \\Holder := [H({} -> Try(I64, [WrongArity, TypeMismatch]))].{
@@ -4224,10 +4381,11 @@ pub const tests = [_]TestCase{
         \\
         \\main = Holder.run(H(|_| Err(WrongArity))) == Err(WrongArity)
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
-        .name = "rejected try suffix on a function parameter crashes at runtime",
+        // The same `?` on a closed error row read out of a function parameter.
+        .name = "try suffix on a closed error row from a function parameter widens into the result",
         .source_kind = .module,
         .source =
         \\run : ({} -> Try(I64, [WrongArity, TypeMismatch])) -> Try(I64, _)
@@ -4238,7 +4396,7 @@ pub const tests = [_]TestCase{
         \\
         \\main = run(|_| Err(WrongArity)) == Err(WrongArity)
         ,
-        .expected = .{ .problem_and_crash = {} },
+        .expected = .{ .inspect_str = "True" },
     },
     .{
         // repro for https://github.com/roc-lang/roc/issues/11769
@@ -4834,10 +4992,11 @@ pub const tests = [_]TestCase{
     },
     .{
         // https://github.com/roc-lang/roc/issues/12095
-        // `f`'s body returns its closed parameter, which closes the result row,
-        // so its own recursive call cannot be used at a wider union. The use is
-        // reported and retired; reaching it at runtime crashes.
-        .name = "issue 12095: recursive call result used at a wider tag union than the body leaves open",
+        // `f`'s body returns its closed parameter through a widening copy, so
+        // the result row stays open (design.md "Row Subsumption") and its own
+        // recursive call may be used at a wider union; the parameter's row
+        // joins the result's at the return (design.md "Row Joins").
+        .name = "issue 12095: recursive call result used at a wider tag union than the body forwards",
         .source_kind = .module,
         .source =
         \\f : [A, C] -> [A, C]
@@ -4848,7 +5007,7 @@ pub const tests = [_]TestCase{
         \\
         \\main = f(C)
         ,
-        .expected = .problem_and_crash,
+        .expected = .{ .inspect_str = "C" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/12095
@@ -4869,5 +5028,115 @@ pub const tests = [_]TestCase{
         \\main = f(2)
         ,
         .expected = .{ .inspect_str = "A" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `go` captures `kinds`, so `contains` at the tag union's structural
+        // equality is owned by the `go` specialization that lowers it. The
+        // recursive call lowers a second, identical `go` first; the outer
+        // `go`'s own `contains` must not reuse the copy owned by the inner
+        // one, which is discarded when the two merge.
+        .name = "issue 12127: closed direct call does not reuse a caller-owned specialization from another owner",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |argv| {
+        \\    kinds = Dict.empty().insert("v", Value).insert("f", Flag)
+        \\    go = |args, acc|
+        \\        match args {
+        \\            [] => acc
+        \\            [a, .. as rest] => go(rest, if [Value].contains(kinds.get(a).ok_or(Flag)) acc + 2 else acc + 1)
+        \\        }
+        \\    go(argv, 0)
+        \\}
+        \\
+        \\main = count(["v", "f", "v"])
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `Dict.update` hands the alteration the stored list, which the
+        // dictionary's entries still hold. Once the call to the lookup is
+        // inlined, the lookup's result is born unique as a whole, but the list
+        // inside it is not, so appending to it must copy rather than write in
+        // place.
+        .name = "issue 12127: appending to a list updated in place inside a dictionary copies the shared list",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |xs|
+        \\    xs.fold(Dict.empty(), |d, s| d.update(s, |ov| match ov {
+        \\        Ok(vs) => Ok(vs.append(""))
+        \\        Err(Missing) => Ok([""])
+        \\    }))
+        \\        .get("v")
+        \\        .ok_or([])
+        \\        .len()
+        \\
+        \\main = count(["v", "v", "v"])
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
+    .{
+        // The loop's iteration method names the element record only through
+        // the iterator type's argument. The record's row is open inside
+        // `sum_x`, so Boxy reads its descriptor from the method's evidence,
+        // which must describe that type-argument position of the signature.
+        .name = "open record named only through an iterator's type argument is read through the method evidence",
+        .source =
+        \\{
+        \\    sum_x = |points| {
+        \\        var $x = 0.I64
+        \\        for point in points {
+        \\            $x = $x + point.x
+        \\        }
+        \\        $x
+        \\    }
+        \\    sum_x([{ x: 1, y: 2 }, { x: 30, y: 40 }])
+        \\}
+        ,
+        .expected = .{ .inspect_str = "31" },
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12624
+        // `run`'s scheme reads `exec`'s result as an anonymous tag union, and
+        // the callback's `?` lifts it into `Try` at this call. The `Ok`
+        // payload's `trim` dispatch is left to the callable, so its evidence
+        // path's tag step reaches the `Try` and must read its backing.
+        .name = "issue 12624: callable-derived evidence path reads a Try lifted from the scheme's tag union",
+        .source_kind = .module,
+        .source =
+        \\run = |exec| {
+        \\    match exec("a") {
+        \\        Ok(output) => Ok(output.trim())
+        \\        Err(e) => Err("${Str.inspect(e)}")
+        \\    }
+        \\}
+        \\
+        \\main = match run(|_s| {
+        \\    _ = Err(Boom)?
+        \\    crash "unreachable"
+        \\}) {
+        \\    Ok(_) => "ok"
+        \\    Err(msg) => msg
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"Boom\"" },
+    },
+    .{
+        // Checking orders a scheme's evidence by its walk of the scheme's row
+        // chains, so `p.y`, read first, puts `y`'s `is_eq` ahead of `x`'s
+        // `trim`. Boxy pairs each signature dictionary group with its own
+        // checked slot rather than its position in the label-sorted
+        // signature.
+        .name = "dictionary groups read their checked evidence slot when the row reads fields out of label order",
+        .source =
+        \\{
+        \\    run = |p| if p.y == "" p.x.trim() else p.y
+        \\    run({ x: " b ", y: "" })
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"b\"" },
     },
 };

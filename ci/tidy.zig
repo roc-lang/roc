@@ -772,7 +772,6 @@ fn tidyBannedGitDependency(file: SourceFile, errors: *Errors) void {
 /// user programs through LLVM bitcode merging and inlining.
 fn tidyBannedBuiltinStdFormat(file: SourceFile, errors: *Errors) void {
     if (!std.mem.startsWith(u8, file.path, "src/builtins/")) return;
-    if (std.mem.endsWith(u8, file.path, "fuzz_sort.zig")) return;
 
     const banned_patterns: []const struct { []const u8, []const u8 } = &.{
         .{ "std.fmt.", "builtin-local parsing/formatting helpers" },
@@ -1160,7 +1159,7 @@ fn tidyDeadDeclarationsIsPrivateDeclaration(
             if (context_tag != .keyword_fn and context_tag != .keyword_const) return false;
             declaration_keyword = context_tag;
         } else {
-            if (context_tag == .keyword_inline or context_tag == .string_literal) continue;
+            if (context_tag == .keyword_inline or context_tag == .keyword_noinline or context_tag == .string_literal) continue;
             if (context_tag == .keyword_extern) {
                 saw_extern = true;
                 continue;
@@ -1392,10 +1391,10 @@ const DeadFilesDetector = struct {
 
         for (detector.files.keys(), detector.files.values()) |name, state| {
             if (state.definition_count == 0) {
-                errors.addFileUntracked(&name);
+                errors.addFileUntracked(std.mem.trimEnd(u8, &name, "\x00"));
             }
             if (state.is_src and state.import_count == 0 and !isEntryPoint(name)) {
-                errors.addFileDead(&name);
+                errors.addFileDead(std.mem.trimEnd(u8, &name, "\x00"));
             }
         }
     }
@@ -1465,7 +1464,6 @@ const DeadFilesDetector = struct {
             "shim_io.zig", // Minimal std.Io impl for shims; imported as named module via build.zig
             "tracy.zig", // Profiler module (added via b.addModule)
             "tracy_stub.zig", // No-op tracy stub for standalone static library builds (added via b.addModule)
-            "fuzz_sort.zig", // Fuzzing entry point
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
             "glue_test.zig", // Glue generation tests
@@ -1513,6 +1511,23 @@ test "dead files detector distinguishes private toolchain imports from repositor
     const int = detector.files.get(DeadFilesDetector.pathToName("int.zig")).?;
     try std.testing.expectEqual(@as(u32, 1), int.import_count);
     try std.testing.expectEqual(@as(u32, 0), int.definition_count);
+}
+
+test "dead declarations count pub noinline functions as public" {
+    const gpa = std.testing.allocator;
+    const cases = [_]struct { source: [:0]const u8, private: bool }{
+        .{ .source = "pub noinline fn f() void {}\n", .private = false },
+        .{ .source = "noinline fn f() void {}\n", .private = true },
+        .{ .source = "pub inline fn f() void {}\n", .private = false },
+    };
+    for (cases) |case| {
+        var tree = try Ast.parse(gpa, case.source, .{ .mode = .zig });
+        defer tree.deinit(gpa);
+        const name = for (tree.tokens.items(.tag), 0..) |tag, index| {
+            if (tag == .identifier) break @as(Ast.TokenIndex, @intCast(index));
+        } else unreachable;
+        try std.testing.expectEqual(case.private, tidyDeadDeclarationsIsPrivateDeclaration(&tree, name));
+    }
 }
 
 /// Lists all files in the repository.
@@ -1665,4 +1680,22 @@ fn hasPathComponent(path: []const u8, component: []const u8) bool {
 fn cut(str: []const u8, delimiter: []const u8) ?struct { []const u8, []const u8 } {
     const index = std.mem.find(u8, str, delimiter) orelse return null;
     return .{ str[0..index], str[index + delimiter.len ..] };
+}
+
+// test/echo/all_syntax_test.roc is the language's all-syntax example, so it
+// must not contain TODO notes; unimplemented syntax is tracked in issues.
+test "all-syntax example contains no TODO notes" {
+    const path = "test/echo/all_syntax_test.roc";
+    const text = try std.Io.Dir.cwd().readFileAlloc(std.testing.io, path, std.testing.allocator, .limited(1024 * 1024));
+    defer std.testing.allocator.free(text);
+
+    var line_number: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |line| {
+        line_number += 1;
+        if (std.mem.find(u8, line, "TODO") != null) {
+            std.debug.print("{s}:{d}: {s}\n", .{ path, line_number, line });
+            return error.TodoInAllSyntaxExample;
+        }
+    }
 }

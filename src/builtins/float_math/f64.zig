@@ -18,10 +18,11 @@
 // is preserved.
 
 const std = @import("std");
+const ieee = @import("ieee.zig");
 const trig = @import("tan.zig");
 
-const canonical_nan: f64 = @bitCast(@as(u64, 0x7ff8_0000_0000_0000));
-const positive_infinity: f64 = @bitCast(@as(u64, 0x7ff0_0000_0000_0000));
+const canonical_nan = ieee.canonicalNan(f64);
+const positive_infinity = ieee.positiveInfinity(f64);
 
 const bp = [2]f64{ 1.0, 1.5 };
 const dp_high = [2]f64{ 0.0, 5.84962487220764160156e-01 };
@@ -65,37 +66,6 @@ fn withHighWord(value: f64, high: u32) f64 {
 fn withLowWord(value: f64, low: u32) f64 {
     const bits: u64 = @bitCast(value);
     return @bitCast((bits & 0xffff_ffff_0000_0000) | low);
-}
-
-fn scalePowerOfTwo(value: f64, power: i32) f64 {
-    var bits: u64 = @bitCast(value);
-    const sign = bits & 0x8000_0000_0000_0000;
-    var exponent: i32 = @intCast((bits >> 52) & 0x7ff);
-    if (exponent == 0x7ff or bits & 0x7fff_ffff_ffff_ffff == 0) return value;
-
-    if (exponent == 0) {
-        const scaled = value * 0x1.0p54;
-        bits = @bitCast(scaled);
-        exponent = @as(i32, @intCast((bits >> 52) & 0x7ff)) - 54;
-    }
-
-    const new_exponent = exponent + power;
-    if (new_exponent >= 0x7ff) return @bitCast(sign | 0x7ff0_0000_0000_0000);
-    if (new_exponent > 0) return @bitCast((bits & 0x800f_ffff_ffff_ffff) | (@as(u64, @intCast(new_exponent)) << 52));
-    if (new_exponent <= -54) return @bitCast(sign);
-
-    const adjusted_power = new_exponent + 54;
-    const normal_bits = (bits & 0x800f_ffff_ffff_ffff) | (@as(u64, @intCast(adjusted_power)) << 52);
-    const normal: f64 = @bitCast(normal_bits);
-    return normal * 0x1.0p-54;
-}
-
-fn isOddInteger(value: f64) bool {
-    const abs_bits = @as(u64, @bitCast(value)) & 0x7fff_ffff_ffff_ffff;
-    if (abs_bits >= 0x4340_0000_0000_0000) return false;
-    if (@trunc(value) != value) return false;
-    const integer: i64 = @intFromFloat(value);
-    return integer & 1 != 0;
 }
 
 /// Computes the magnitude of `base^exponent` for a positive, finite, nonzero
@@ -223,50 +193,11 @@ fn finitePowerMagnitude(base: f64, exponent: f64) f64 {
     const correction = exp_argument - square * (p1 + square * (p2 + square * (p3 + square * (p4 + square * p5))));
     const approximation = (exp_argument * correction) / (correction - 2.0) - (exp_tail + exp_argument * exp_tail);
     exp_argument = 1.0 - (approximation - exp_argument);
-    return scalePowerOfTwo(exp_argument, scale_exponent);
+    return ieee.scalePowerOfTwo(f64, 54, exp_argument, scale_exponent);
 }
 
 /// Returns `base` raised to `exponent`, computed entirely with binary64 operations.
-pub fn pow(base: f64, exponent: f64) f64 {
-    @setFloatMode(.strict);
-
-    if (exponent == 0.0 or base == 1.0) return 1.0;
-    const base_bits: u64 = @bitCast(base);
-    const exponent_bits: u64 = @bitCast(exponent);
-    const base_abs_bits = base_bits & 0x7fff_ffff_ffff_ffff;
-    const exponent_abs_bits = exponent_bits & 0x7fff_ffff_ffff_ffff;
-    if (base_abs_bits > 0x7ff0_0000_0000_0000 or exponent_abs_bits > 0x7ff0_0000_0000_0000) return canonical_nan;
-    if (exponent == 1.0) return base;
-    if (exponent == -1.0) return 1.0 / base;
-    if (exponent == 2.0) return base * base;
-
-    if (base_abs_bits == 0) {
-        if (exponent < 0.0) return if (isOddInteger(exponent)) @bitCast((base_bits & 0x8000_0000_0000_0000) | 0x7ff0_0000_0000_0000) else positive_infinity;
-        return if (isOddInteger(exponent)) base else 0.0;
-    }
-
-    if (exponent_abs_bits == 0x7ff0_0000_0000_0000) {
-        if (base == -1.0) return 1.0;
-        const tends_to_zero = (@abs(base) < 1.0) == (exponent > 0.0);
-        return if (tends_to_zero) 0.0 else positive_infinity;
-    }
-    if (base_abs_bits == 0x7ff0_0000_0000_0000) {
-        if (base_bits >> 63 != 0) {
-            const reciprocal: f64 = @bitCast(base_bits & 0x8000_0000_0000_0000);
-            return pow(reciprocal, -exponent);
-        }
-        return if (exponent < 0.0) 0.0 else positive_infinity;
-    }
-    if (exponent == 0.5) return @sqrt(base);
-    if (exponent == -0.5) return 1.0 / @sqrt(base);
-
-    const exponent_is_integer = @trunc(exponent) == exponent;
-    if (base < 0.0 and !exponent_is_integer) return canonical_nan;
-
-    var result = finitePowerMagnitude(@abs(base), exponent);
-    if (base < 0.0 and isOddInteger(exponent)) result = -result;
-    return result;
-}
+pub const pow = ieee.powFn(f64, finitePowerMagnitude);
 
 /// Returns the sine of `value`, computed entirely with binary64 operations.
 pub fn sin(value: f64) f64 {
@@ -295,10 +226,73 @@ pub fn acos(value: f64) f64 {
     return std.math.acos(value);
 }
 
-/// Returns the arctangent of `value` using Zig's explicit binary64 algorithm.
+/// Returns the arctangent of `value`, computed entirely with binary64
+/// operations. This is fdlibm's `s_atan.c`, as Zig's `std.math.atan` ports
+/// it, except that a subnormal `value` returns without raising the underflow
+/// exception, which Roc never observes. Raising it takes an inline `asm`
+/// operand that the wasm backend cannot place in position-independent code.
 pub fn atan(value: f64) f64 {
     @setFloatMode(.strict);
-    return std.math.atan(value);
+    const high = [_]f64{ 4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00 };
+    const low = [_]f64{ 2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17 };
+    const coefficients = [_]f64{
+        3.33333333333329318027e-01,  -1.99999999998764832476e-01, 1.42857142725034663711e-01,
+        -1.11111104054623557880e-01, 9.09088713343650656196e-02,  -7.69187620504482999495e-02,
+        6.66107313738753120669e-02,  -5.83357013379057348645e-02, 4.97687799461593236017e-02,
+        -3.65315727442169155270e-02, 1.62858201153657823623e-02,
+    };
+
+    const bits: u64 = @bitCast(value);
+    const high_word: u32 = @truncate((bits >> 32) & 0x7fff_ffff);
+    const negative = bits >> 63 != 0;
+    if (high_word >= 0x4410_0000) {
+        if (value != value) return value;
+        const result = high[3] + 0x1p-120;
+        return if (negative) -result else result;
+    }
+
+    var reduced: f64 = undefined;
+    var identity: ?u2 = null;
+    if (high_word < 0x3fdc_0000) {
+        if (high_word < 0x3e40_0000) return value;
+        reduced = value;
+    } else {
+        const magnitude = @abs(value);
+        if (high_word < 0x3ff3_0000) {
+            if (high_word < 0x3fe6_0000) {
+                reduced = (2.0 * magnitude - 1.0) / (2.0 + magnitude);
+                identity = 0;
+            } else {
+                reduced = (magnitude - 1.0) / (magnitude + 1.0);
+                identity = 1;
+            }
+        } else if (high_word < 0x4003_8000) {
+            reduced = (magnitude - 1.5) / (1.0 + 1.5 * magnitude);
+            identity = 2;
+        } else {
+            reduced = -1.0 / magnitude;
+            identity = 3;
+        }
+    }
+
+    const z = reduced * reduced;
+    const w = z * z;
+    const odd = z * (coefficients[0] + w * (coefficients[2] + w * (coefficients[4] + w * (coefficients[6] + w * (coefficients[8] + w * coefficients[10])))));
+    const even = w * (coefficients[1] + w * (coefficients[3] + w * (coefficients[5] + w * (coefficients[7] + w * coefficients[9]))));
+    if (identity) |id| {
+        const index: usize = id;
+        const result = high[index] - (reduced * (odd + even) - low[index] - reduced);
+        return if (negative) -result else result;
+    }
+    return reduced - reduced * (odd + even);
+}
+
+test "F64 atan matches Zig's binary64 algorithm bit for bit" {
+    const values = [_]f64{ 0.0, -0.0, 1e-320, -1e-320, 1e-10, 0.3, -0.43, 0.5, 0.7, -1.0, 1.1, 1.3, 2.0, -2.5, 10.0, 1e20, -1e300, ieee.positiveInfinity(f64), -ieee.positiveInfinity(f64) };
+    for (values) |value| {
+        try std.testing.expectEqual(@as(u64, @bitCast(std.math.atan(value))), @as(u64, @bitCast(atan(value))));
+    }
+    try std.testing.expect(std.math.isNan(atan(canonical_nan)));
 }
 
 test "F64 power special cases" {
@@ -498,7 +492,7 @@ pub fn atan2(y: f64, x: f64) f64 {
     }
 
     // 2 * sign(x) + sign(y)
-    const m = ((y_high >> 31) & 1) | ((x_high >> 30) & 2);
+    const m: u2 = @intCast(((y_high >> 31) & 1) | ((x_high >> 30) & 2));
     x_high &= 0x7FFFFFFF;
     y_high &= 0x7FFFFFFF;
 
@@ -507,7 +501,6 @@ pub fn atan2(y: f64, x: f64) f64 {
             0, 1 => return y, // atan(+-0, +...)
             2 => return pi, // atan(+0, -...)
             3 => return -pi, // atan(-0, -...)
-            else => unreachable,
         }
     }
 
@@ -526,7 +519,6 @@ pub fn atan2(y: f64, x: f64) f64 {
                 1 => return -pi / 4, // atan(-inf, +inf)
                 2 => return 3 * pi / 4, // atan(+inf, -inf)
                 3 => return -3 * pi / 4, // atan(-inf, -inf)
-                else => unreachable,
             }
         } else {
             switch (m) {
@@ -534,7 +526,6 @@ pub fn atan2(y: f64, x: f64) f64 {
                 1 => return -0.0, // atan(-..., +inf)
                 2 => return pi, // atan(+..., -inf)
                 3 => return -pi, // atan(-...f, -inf)
-                else => unreachable,
             }
         }
     }
@@ -562,7 +553,6 @@ pub fn atan2(y: f64, x: f64) f64 {
         1 => return -z, // atan(-, +)
         2 => return pi - (z - pi_lo), // atan(+, -)
         3 => return (z - pi_lo) - pi, // atan(-, -)
-        else => unreachable,
     }
 }
 

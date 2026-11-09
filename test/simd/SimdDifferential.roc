@@ -14,130 +14,130 @@ SimdDifferential := [].{
 		index_u8x16 = count % 16
 		offset = count.to_u64() % 33
 		# U8x16
-		if U8x16.splat(a.to_u8_wrap()).to_u128_bits() != SimdOracle.U8x16.splat(a.to_u8_wrap()).to_u128_bits() {
+		if U8x16.splat(a.to_u8_wrap()).to_u128_bits() != SimdOracle.ScalarU8x16.splat(a.to_u8_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.splat"
 		} else {}
-		if U8x16.to_u128_bits(U8x16.from_u128_bits(a)) != SimdOracle.U8x16.to_u128_bits(SimdOracle.U8x16.from_u128_bits(a)) {
+		if U8x16.to_u128_bits(U8x16.from_u128_bits(a)) != SimdOracle.ScalarU8x16.to_u128_bits(SimdOracle.ScalarU8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U8x16.to_u128_bits"
 		} else {}
-		if U8x16.from_u128_bits(a).to_u128_bits() != SimdOracle.U8x16.from_u128_bits(a).to_u128_bits() {
+		if U8x16.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarU8x16.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.from_u128_bits"
 		} else {}
-		if U8x16.plus_wrap(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.plus_wrap(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.plus_wrap(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.plus_wrap(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.plus_wrap"
 		} else {}
-		if U8x16.minus_wrap(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.minus_wrap(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.minus_wrap(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.minus_wrap(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.minus_wrap"
 		} else {}
-		if U8x16.plus_saturated(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.plus_saturated(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.plus_saturated(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.plus_saturated(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.plus_saturated"
 		} else {}
-		if U8x16.minus_saturated(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.minus_saturated(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.minus_saturated(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.minus_saturated(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.minus_saturated"
 		} else {}
-		if U8x16.min(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.min(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.min(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.min(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.min"
 		} else {}
-		if U8x16.max(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.max(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.max(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.max(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.max"
 		} else {}
-		if U8x16.abs_diff(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.abs_diff(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.abs_diff(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.abs_diff(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.abs_diff"
 		} else {}
-		if U8x16.avg_rounded(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.avg_rounded(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.avg_rounded(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.avg_rounded(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.avg_rounded"
 		} else {}
-		if U8x16.bitwise_and(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.bitwise_and(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.bitwise_and(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.bitwise_and(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.bitwise_and"
 		} else {}
-		if U8x16.bitwise_or(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.bitwise_or(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.bitwise_or(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.bitwise_or(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.bitwise_or"
 		} else {}
-		if U8x16.bitwise_xor(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.bitwise_xor(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.bitwise_xor(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.bitwise_xor(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.bitwise_xor"
 		} else {}
-		if U8x16.bitwise_not(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.U8x16.bitwise_not(SimdOracle.U8x16.from_u128_bits(a)).to_u128_bits() {
+		if U8x16.bitwise_not(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU8x16.bitwise_not(SimdOracle.ScalarU8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.bitwise_not"
 		} else {}
-		if U8x16.bit_select(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b), U8x16.from_u128_bits(c)).to_u128_bits() != SimdOracle.U8x16.bit_select(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b), SimdOracle.U8x16.from_u128_bits(c)).to_u128_bits() {
+		if U8x16.bit_select(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b), U8x16.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarU8x16.bit_select(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b), SimdOracle.ScalarU8x16.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.bit_select"
 		} else {}
-		if U8x16.eq_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.eq_lanes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.eq_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.eq_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.eq_lanes"
 		} else {}
-		if U8x16.gt_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.gt_lanes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.gt_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.gt_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.gt_lanes"
 		} else {}
-		if U8x16.gte_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.gte_lanes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.gte_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.gte_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.gte_lanes"
 		} else {}
-		if U8x16.to_bitmask(U8x16.from_u128_bits(a)) != SimdOracle.U8x16.to_bitmask(SimdOracle.U8x16.from_u128_bits(a)) {
+		if U8x16.to_bitmask(U8x16.from_u128_bits(a)) != SimdOracle.ScalarU8x16.to_bitmask(SimdOracle.ScalarU8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U8x16.to_bitmask"
 		} else {}
-		if U8x16.shl_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U8x16.shl_wrap(SimdOracle.U8x16.from_u128_bits(a), count).to_u128_bits() {
+		if U8x16.shl_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU8x16.shl_wrap(SimdOracle.ScalarU8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.shl_wrap"
 		} else {}
-		if U8x16.shr_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U8x16.shr_wrap(SimdOracle.U8x16.from_u128_bits(a), count).to_u128_bits() {
+		if U8x16.shr_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU8x16.shr_wrap(SimdOracle.ScalarU8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.shr_wrap"
 		} else {}
-		if U8x16.shr_zf_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U8x16.shr_zf_wrap(SimdOracle.U8x16.from_u128_bits(a), count).to_u128_bits() {
+		if U8x16.shr_zf_wrap(U8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU8x16.shr_zf_wrap(SimdOracle.ScalarU8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.shr_zf_wrap"
 		} else {}
-		if U8x16.get_lane(U8x16.from_u128_bits(a), index_u8x16.to_u64()) != SimdOracle.U8x16.get_lane(SimdOracle.U8x16.from_u128_bits(a), index_u8x16.to_u64()) {
+		if U8x16.get_lane(U8x16.from_u128_bits(a), index_u8x16.to_u64()) != SimdOracle.ScalarU8x16.get_lane(SimdOracle.ScalarU8x16.from_u128_bits(a), index_u8x16.to_u64()) {
 			crash "SIMD differential mismatch: U8x16.get_lane"
 		} else {}
-		if U8x16.with_lane(U8x16.from_u128_bits(a), index_u8x16.to_u64(), c.to_u8_wrap()).to_u128_bits() != SimdOracle.U8x16.with_lane(SimdOracle.U8x16.from_u128_bits(a), index_u8x16.to_u64(), c.to_u8_wrap()).to_u128_bits() {
+		if U8x16.with_lane(U8x16.from_u128_bits(a), index_u8x16.to_u64(), c.to_u8_wrap()).to_u128_bits() != SimdOracle.ScalarU8x16.with_lane(SimdOracle.ScalarU8x16.from_u128_bits(a), index_u8x16.to_u64(), c.to_u8_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.with_lane"
 		} else {}
-		if U8x16.interleave_lo(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.interleave_lo(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.interleave_lo(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.interleave_lo(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.interleave_lo"
 		} else {}
-		if U8x16.interleave_hi(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.interleave_hi(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.interleave_hi(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.interleave_hi(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.interleave_hi"
 		} else {}
-		if U8x16.even_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.even_lanes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.even_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.even_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.even_lanes"
 		} else {}
-		if U8x16.odd_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.odd_lanes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.odd_lanes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.odd_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.odd_lanes"
 		} else {}
-		if U8x16.reverse_lanes(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.U8x16.reverse_lanes(SimdOracle.U8x16.from_u128_bits(a)).to_u128_bits() {
+		if U8x16.reverse_lanes(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU8x16.reverse_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.reverse_lanes"
 		} else {}
-		if U8x16.concat_shift_bytes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b), count % 17).to_u128_bits() != SimdOracle.U8x16.concat_shift_bytes(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b), count % 17).to_u128_bits() {
+		if U8x16.concat_shift_bytes(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b), count % 17).to_u128_bits() != SimdOracle.ScalarU8x16.concat_shift_bytes(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b), count % 17).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.concat_shift_bytes"
 		} else {}
-		if U8x16.table_lookup(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.table_lookup(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.table_lookup(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.table_lookup(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.table_lookup"
 		} else {}
-		if U8x16.to_u16x8_lo(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.U8x16.to_u16x8_lo(SimdOracle.U8x16.from_u128_bits(a)).to_u128_bits() {
+		if U8x16.to_u16x8_lo(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU8x16.to_u16x8_lo(SimdOracle.ScalarU8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.to_u16x8_lo"
 		} else {}
-		if U8x16.to_u16x8_hi(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.U8x16.to_u16x8_hi(SimdOracle.U8x16.from_u128_bits(a)).to_u128_bits() {
+		if U8x16.to_u16x8_hi(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU8x16.to_u16x8_hi(SimdOracle.ScalarU8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.to_u16x8_hi"
 		} else {}
-		if U8x16.pairwise_plus_to_u16x8(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.U8x16.pairwise_plus_to_u16x8(SimdOracle.U8x16.from_u128_bits(a)).to_u128_bits() {
+		if U8x16.pairwise_plus_to_u16x8(U8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU8x16.pairwise_plus_to_u16x8(SimdOracle.ScalarU8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.pairwise_plus_to_u16x8"
 		} else {}
-		if U8x16.times_wide_lo(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.times_wide_lo(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.times_wide_lo(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.times_wide_lo(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.times_wide_lo"
 		} else {}
-		if U8x16.times_wide_hi(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.times_wide_hi(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.times_wide_hi(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.times_wide_hi(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.times_wide_hi"
 		} else {}
-		if U8x16.dot_pairs_saturated(U8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.dot_pairs_saturated(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.dot_pairs_saturated(U8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.dot_pairs_saturated(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.dot_pairs_saturated"
 		} else {}
-		if U8x16.sums_of_abs_diffs(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.U8x16.sums_of_abs_diffs(SimdOracle.U8x16.from_u128_bits(a), SimdOracle.U8x16.from_u128_bits(b)).to_u128_bits() {
+		if U8x16.sums_of_abs_diffs(U8x16.from_u128_bits(a), U8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU8x16.sums_of_abs_diffs(SimdOracle.ScalarU8x16.from_u128_bits(a), SimdOracle.ScalarU8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U8x16.sums_of_abs_diffs"
 		} else {}
-		if U8x16.sum_lanes(U8x16.from_u128_bits(a)) != SimdOracle.U8x16.sum_lanes(SimdOracle.U8x16.from_u128_bits(a)) {
+		if U8x16.sum_lanes(U8x16.from_u128_bits(a)) != SimdOracle.ScalarU8x16.sum_lanes(SimdOracle.ScalarU8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U8x16.sum_lanes"
 		} else {}
-		if U8x16.store(U8x16.from_u128_bits(a), bytes, offset) != SimdOracle.U8x16.store(SimdOracle.U8x16.from_u128_bits(a), bytes, offset) {
+		if U8x16.store(U8x16.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarU8x16.store(SimdOracle.ScalarU8x16.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: U8x16.store"
 		} else {}
-		if U8x16.append_to(U8x16.from_u128_bits(a), bytes) != SimdOracle.U8x16.append_to(SimdOracle.U8x16.from_u128_bits(a), bytes) {
+		if U8x16.append_to(U8x16.from_u128_bits(a), bytes) != SimdOracle.ScalarU8x16.append_to(SimdOracle.ScalarU8x16.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: U8x16.append_to"
 		} else {}
 		{}
@@ -148,118 +148,118 @@ SimdDifferential := [].{
 		index_i8x16 = count % 16
 		offset = count.to_u64() % 33
 		# I8x16
-		if I8x16.splat(a.to_i8_wrap()).to_u128_bits() != SimdOracle.I8x16.splat(a.to_i8_wrap()).to_u128_bits() {
+		if I8x16.splat(a.to_i8_wrap()).to_u128_bits() != SimdOracle.ScalarI8x16.splat(a.to_i8_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.splat"
 		} else {}
-		if I8x16.to_u128_bits(I8x16.from_u128_bits(a)) != SimdOracle.I8x16.to_u128_bits(SimdOracle.I8x16.from_u128_bits(a)) {
+		if I8x16.to_u128_bits(I8x16.from_u128_bits(a)) != SimdOracle.ScalarI8x16.to_u128_bits(SimdOracle.ScalarI8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I8x16.to_u128_bits"
 		} else {}
-		if I8x16.from_u128_bits(a).to_u128_bits() != SimdOracle.I8x16.from_u128_bits(a).to_u128_bits() {
+		if I8x16.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarI8x16.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.from_u128_bits"
 		} else {}
-		if I8x16.plus_wrap(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.plus_wrap(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.plus_wrap(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.plus_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.plus_wrap"
 		} else {}
-		if I8x16.minus_wrap(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.minus_wrap(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.minus_wrap(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.minus_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.minus_wrap"
 		} else {}
-		if I8x16.plus_saturated(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.plus_saturated(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.plus_saturated(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.plus_saturated(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.plus_saturated"
 		} else {}
-		if I8x16.minus_saturated(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.minus_saturated(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.minus_saturated(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.minus_saturated(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.minus_saturated"
 		} else {}
-		if I8x16.negate_wrap(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.negate_wrap(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.negate_wrap(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.negate_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.negate_wrap"
 		} else {}
-		if I8x16.abs_wrap(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.abs_wrap(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.abs_wrap(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.abs_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.abs_wrap"
 		} else {}
-		if I8x16.min(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.min(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.min(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.min(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.min"
 		} else {}
-		if I8x16.max(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.max(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.max(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.max(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.max"
 		} else {}
-		if I8x16.bitwise_and(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.bitwise_and(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.bitwise_and(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.bitwise_and(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.bitwise_and"
 		} else {}
-		if I8x16.bitwise_or(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.bitwise_or(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.bitwise_or(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.bitwise_or(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.bitwise_or"
 		} else {}
-		if I8x16.bitwise_xor(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.bitwise_xor(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.bitwise_xor(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.bitwise_xor(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.bitwise_xor"
 		} else {}
-		if I8x16.bitwise_not(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.bitwise_not(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.bitwise_not(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.bitwise_not(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.bitwise_not"
 		} else {}
-		if I8x16.bit_select(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b), I8x16.from_u128_bits(c)).to_u128_bits() != SimdOracle.I8x16.bit_select(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b), SimdOracle.I8x16.from_u128_bits(c)).to_u128_bits() {
+		if I8x16.bit_select(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b), I8x16.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarI8x16.bit_select(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b), SimdOracle.ScalarI8x16.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.bit_select"
 		} else {}
-		if I8x16.eq_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.eq_lanes(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.eq_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.eq_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.eq_lanes"
 		} else {}
-		if I8x16.gt_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.gt_lanes(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.gt_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.gt_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.gt_lanes"
 		} else {}
-		if I8x16.gte_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.gte_lanes(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.gte_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.gte_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.gte_lanes"
 		} else {}
-		if I8x16.to_bitmask(I8x16.from_u128_bits(a)) != SimdOracle.I8x16.to_bitmask(SimdOracle.I8x16.from_u128_bits(a)) {
+		if I8x16.to_bitmask(I8x16.from_u128_bits(a)) != SimdOracle.ScalarI8x16.to_bitmask(SimdOracle.ScalarI8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I8x16.to_bitmask"
 		} else {}
-		if I8x16.shl_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I8x16.shl_wrap(SimdOracle.I8x16.from_u128_bits(a), count).to_u128_bits() {
+		if I8x16.shl_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI8x16.shl_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.shl_wrap"
 		} else {}
-		if I8x16.shr_zf_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I8x16.shr_zf_wrap(SimdOracle.I8x16.from_u128_bits(a), count).to_u128_bits() {
+		if I8x16.shr_zf_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI8x16.shr_zf_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.shr_zf_wrap"
 		} else {}
-		if I8x16.shr_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I8x16.shr_wrap(SimdOracle.I8x16.from_u128_bits(a), count).to_u128_bits() {
+		if I8x16.shr_wrap(I8x16.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI8x16.shr_wrap(SimdOracle.ScalarI8x16.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.shr_wrap"
 		} else {}
-		if I8x16.get_lane(I8x16.from_u128_bits(a), index_i8x16.to_u64()) != SimdOracle.I8x16.get_lane(SimdOracle.I8x16.from_u128_bits(a), index_i8x16.to_u64()) {
+		if I8x16.get_lane(I8x16.from_u128_bits(a), index_i8x16.to_u64()) != SimdOracle.ScalarI8x16.get_lane(SimdOracle.ScalarI8x16.from_u128_bits(a), index_i8x16.to_u64()) {
 			crash "SIMD differential mismatch: I8x16.get_lane"
 		} else {}
-		if I8x16.with_lane(I8x16.from_u128_bits(a), index_i8x16.to_u64(), c.to_i8_wrap()).to_u128_bits() != SimdOracle.I8x16.with_lane(SimdOracle.I8x16.from_u128_bits(a), index_i8x16.to_u64(), c.to_i8_wrap()).to_u128_bits() {
+		if I8x16.with_lane(I8x16.from_u128_bits(a), index_i8x16.to_u64(), c.to_i8_wrap()).to_u128_bits() != SimdOracle.ScalarI8x16.with_lane(SimdOracle.ScalarI8x16.from_u128_bits(a), index_i8x16.to_u64(), c.to_i8_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.with_lane"
 		} else {}
-		if I8x16.interleave_lo(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.interleave_lo(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.interleave_lo(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.interleave_lo(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.interleave_lo"
 		} else {}
-		if I8x16.interleave_hi(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.interleave_hi(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.interleave_hi(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.interleave_hi(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.interleave_hi"
 		} else {}
-		if I8x16.even_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.even_lanes(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.even_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.even_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.even_lanes"
 		} else {}
-		if I8x16.odd_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.odd_lanes(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.odd_lanes(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.odd_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.odd_lanes"
 		} else {}
-		if I8x16.reverse_lanes(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.reverse_lanes(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.reverse_lanes(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.reverse_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.reverse_lanes"
 		} else {}
-		if I8x16.to_i16x8_lo(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.to_i16x8_lo(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.to_i16x8_lo(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.to_i16x8_lo(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.to_i16x8_lo"
 		} else {}
-		if I8x16.to_i16x8_hi(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.to_i16x8_hi(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.to_i16x8_hi(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.to_i16x8_hi(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.to_i16x8_hi"
 		} else {}
-		if I8x16.pairwise_plus_to_i16x8(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.I8x16.pairwise_plus_to_i16x8(SimdOracle.I8x16.from_u128_bits(a)).to_u128_bits() {
+		if I8x16.pairwise_plus_to_i16x8(I8x16.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI8x16.pairwise_plus_to_i16x8(SimdOracle.ScalarI8x16.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.pairwise_plus_to_i16x8"
 		} else {}
-		if I8x16.times_wide_lo(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.times_wide_lo(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.times_wide_lo(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.times_wide_lo(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.times_wide_lo"
 		} else {}
-		if I8x16.times_wide_hi(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.I8x16.times_wide_hi(SimdOracle.I8x16.from_u128_bits(a), SimdOracle.I8x16.from_u128_bits(b)).to_u128_bits() {
+		if I8x16.times_wide_hi(I8x16.from_u128_bits(a), I8x16.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI8x16.times_wide_hi(SimdOracle.ScalarI8x16.from_u128_bits(a), SimdOracle.ScalarI8x16.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I8x16.times_wide_hi"
 		} else {}
-		if I8x16.sum_lanes(I8x16.from_u128_bits(a)) != SimdOracle.I8x16.sum_lanes(SimdOracle.I8x16.from_u128_bits(a)) {
+		if I8x16.sum_lanes(I8x16.from_u128_bits(a)) != SimdOracle.ScalarI8x16.sum_lanes(SimdOracle.ScalarI8x16.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I8x16.sum_lanes"
 		} else {}
-		if I8x16.store(I8x16.from_u128_bits(a), bytes, offset) != SimdOracle.I8x16.store(SimdOracle.I8x16.from_u128_bits(a), bytes, offset) {
+		if I8x16.store(I8x16.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarI8x16.store(SimdOracle.ScalarI8x16.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: I8x16.store"
 		} else {}
-		if I8x16.append_to(I8x16.from_u128_bits(a), bytes) != SimdOracle.I8x16.append_to(SimdOracle.I8x16.from_u128_bits(a), bytes) {
+		if I8x16.append_to(I8x16.from_u128_bits(a), bytes) != SimdOracle.ScalarI8x16.append_to(SimdOracle.ScalarI8x16.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: I8x16.append_to"
 		} else {}
 		{}
@@ -270,130 +270,130 @@ SimdDifferential := [].{
 		index_u16x8 = count % 8
 		offset = count.to_u64() % 33
 		# U16x8
-		if U16x8.splat(a.to_u16_wrap()).to_u128_bits() != SimdOracle.U16x8.splat(a.to_u16_wrap()).to_u128_bits() {
+		if U16x8.splat(a.to_u16_wrap()).to_u128_bits() != SimdOracle.ScalarU16x8.splat(a.to_u16_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.splat"
 		} else {}
-		if U16x8.to_u128_bits(U16x8.from_u128_bits(a)) != SimdOracle.U16x8.to_u128_bits(SimdOracle.U16x8.from_u128_bits(a)) {
+		if U16x8.to_u128_bits(U16x8.from_u128_bits(a)) != SimdOracle.ScalarU16x8.to_u128_bits(SimdOracle.ScalarU16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U16x8.to_u128_bits"
 		} else {}
-		if U16x8.from_u128_bits(a).to_u128_bits() != SimdOracle.U16x8.from_u128_bits(a).to_u128_bits() {
+		if U16x8.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarU16x8.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.from_u128_bits"
 		} else {}
-		if U16x8.plus_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.plus_wrap(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.plus_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.plus_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.plus_wrap"
 		} else {}
-		if U16x8.minus_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.minus_wrap(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.minus_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.minus_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.minus_wrap"
 		} else {}
-		if U16x8.plus_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.plus_saturated(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.plus_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.plus_saturated(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.plus_saturated"
 		} else {}
-		if U16x8.minus_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.minus_saturated(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.minus_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.minus_saturated(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.minus_saturated"
 		} else {}
-		if U16x8.min(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.min(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.min(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.min(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.min"
 		} else {}
-		if U16x8.max(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.max(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.max(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.max(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.max"
 		} else {}
-		if U16x8.abs_diff(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.abs_diff(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.abs_diff(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.abs_diff(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.abs_diff"
 		} else {}
-		if U16x8.avg_rounded(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.avg_rounded(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.avg_rounded(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.avg_rounded(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.avg_rounded"
 		} else {}
-		if U16x8.times_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.times_wrap(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.times_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.times_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.times_wrap"
 		} else {}
-		if U16x8.times_high(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.times_high(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.times_high(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.times_high(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.times_high"
 		} else {}
-		if U16x8.bitwise_and(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.bitwise_and(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.bitwise_and(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.bitwise_and(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.bitwise_and"
 		} else {}
-		if U16x8.bitwise_or(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.bitwise_or(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.bitwise_or(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.bitwise_or(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.bitwise_or"
 		} else {}
-		if U16x8.bitwise_xor(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.bitwise_xor(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.bitwise_xor(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.bitwise_xor(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.bitwise_xor"
 		} else {}
-		if U16x8.bitwise_not(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.U16x8.bitwise_not(SimdOracle.U16x8.from_u128_bits(a)).to_u128_bits() {
+		if U16x8.bitwise_not(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU16x8.bitwise_not(SimdOracle.ScalarU16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.bitwise_not"
 		} else {}
-		if U16x8.bit_select(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b), U16x8.from_u128_bits(c)).to_u128_bits() != SimdOracle.U16x8.bit_select(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b), SimdOracle.U16x8.from_u128_bits(c)).to_u128_bits() {
+		if U16x8.bit_select(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b), U16x8.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarU16x8.bit_select(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b), SimdOracle.ScalarU16x8.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.bit_select"
 		} else {}
-		if U16x8.eq_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.eq_lanes(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.eq_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.eq_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.eq_lanes"
 		} else {}
-		if U16x8.gt_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.gt_lanes(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.gt_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.gt_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.gt_lanes"
 		} else {}
-		if U16x8.gte_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.gte_lanes(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.gte_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.gte_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.gte_lanes"
 		} else {}
-		if U16x8.to_bitmask(U16x8.from_u128_bits(a)) != SimdOracle.U16x8.to_bitmask(SimdOracle.U16x8.from_u128_bits(a)) {
+		if U16x8.to_bitmask(U16x8.from_u128_bits(a)) != SimdOracle.ScalarU16x8.to_bitmask(SimdOracle.ScalarU16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U16x8.to_bitmask"
 		} else {}
-		if U16x8.shl_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U16x8.shl_wrap(SimdOracle.U16x8.from_u128_bits(a), count).to_u128_bits() {
+		if U16x8.shl_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU16x8.shl_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.shl_wrap"
 		} else {}
-		if U16x8.shr_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U16x8.shr_wrap(SimdOracle.U16x8.from_u128_bits(a), count).to_u128_bits() {
+		if U16x8.shr_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU16x8.shr_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.shr_wrap"
 		} else {}
-		if U16x8.shr_zf_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U16x8.shr_zf_wrap(SimdOracle.U16x8.from_u128_bits(a), count).to_u128_bits() {
+		if U16x8.shr_zf_wrap(U16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU16x8.shr_zf_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.shr_zf_wrap"
 		} else {}
-		if U16x8.get_lane(U16x8.from_u128_bits(a), index_u16x8.to_u64()) != SimdOracle.U16x8.get_lane(SimdOracle.U16x8.from_u128_bits(a), index_u16x8.to_u64()) {
+		if U16x8.get_lane(U16x8.from_u128_bits(a), index_u16x8.to_u64()) != SimdOracle.ScalarU16x8.get_lane(SimdOracle.ScalarU16x8.from_u128_bits(a), index_u16x8.to_u64()) {
 			crash "SIMD differential mismatch: U16x8.get_lane"
 		} else {}
-		if U16x8.with_lane(U16x8.from_u128_bits(a), index_u16x8.to_u64(), c.to_u16_wrap()).to_u128_bits() != SimdOracle.U16x8.with_lane(SimdOracle.U16x8.from_u128_bits(a), index_u16x8.to_u64(), c.to_u16_wrap()).to_u128_bits() {
+		if U16x8.with_lane(U16x8.from_u128_bits(a), index_u16x8.to_u64(), c.to_u16_wrap()).to_u128_bits() != SimdOracle.ScalarU16x8.with_lane(SimdOracle.ScalarU16x8.from_u128_bits(a), index_u16x8.to_u64(), c.to_u16_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.with_lane"
 		} else {}
-		if U16x8.interleave_lo(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.interleave_lo(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.interleave_lo(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.interleave_lo(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.interleave_lo"
 		} else {}
-		if U16x8.interleave_hi(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.interleave_hi(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.interleave_hi(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.interleave_hi(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.interleave_hi"
 		} else {}
-		if U16x8.even_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.even_lanes(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.even_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.even_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.even_lanes"
 		} else {}
-		if U16x8.odd_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.odd_lanes(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.odd_lanes(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.odd_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.odd_lanes"
 		} else {}
-		if U16x8.reverse_lanes(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.U16x8.reverse_lanes(SimdOracle.U16x8.from_u128_bits(a)).to_u128_bits() {
+		if U16x8.reverse_lanes(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU16x8.reverse_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.reverse_lanes"
 		} else {}
-		if U16x8.to_u32x4_lo(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.U16x8.to_u32x4_lo(SimdOracle.U16x8.from_u128_bits(a)).to_u128_bits() {
+		if U16x8.to_u32x4_lo(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU16x8.to_u32x4_lo(SimdOracle.ScalarU16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.to_u32x4_lo"
 		} else {}
-		if U16x8.to_u32x4_hi(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.U16x8.to_u32x4_hi(SimdOracle.U16x8.from_u128_bits(a)).to_u128_bits() {
+		if U16x8.to_u32x4_hi(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU16x8.to_u32x4_hi(SimdOracle.ScalarU16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.to_u32x4_hi"
 		} else {}
-		if U16x8.pairwise_plus_to_u32x4(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.U16x8.pairwise_plus_to_u32x4(SimdOracle.U16x8.from_u128_bits(a)).to_u128_bits() {
+		if U16x8.pairwise_plus_to_u32x4(U16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU16x8.pairwise_plus_to_u32x4(SimdOracle.ScalarU16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.pairwise_plus_to_u32x4"
 		} else {}
-		if U16x8.times_wide_lo(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.times_wide_lo(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.times_wide_lo(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.times_wide_lo(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.times_wide_lo"
 		} else {}
-		if U16x8.times_wide_hi(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.times_wide_hi(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.times_wide_hi(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.times_wide_hi(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.times_wide_hi"
 		} else {}
-		if U16x8.narrow_to_u8x16_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.narrow_to_u8x16_wrap(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.narrow_to_u8x16_wrap(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.narrow_to_u8x16_wrap(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.narrow_to_u8x16_wrap"
 		} else {}
-		if U16x8.narrow_to_u8x16_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.U16x8.narrow_to_u8x16_saturated(SimdOracle.U16x8.from_u128_bits(a), SimdOracle.U16x8.from_u128_bits(b)).to_u128_bits() {
+		if U16x8.narrow_to_u8x16_saturated(U16x8.from_u128_bits(a), U16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU16x8.narrow_to_u8x16_saturated(SimdOracle.ScalarU16x8.from_u128_bits(a), SimdOracle.ScalarU16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U16x8.narrow_to_u8x16_saturated"
 		} else {}
-		if U16x8.sum_lanes(U16x8.from_u128_bits(a)) != SimdOracle.U16x8.sum_lanes(SimdOracle.U16x8.from_u128_bits(a)) {
+		if U16x8.sum_lanes(U16x8.from_u128_bits(a)) != SimdOracle.ScalarU16x8.sum_lanes(SimdOracle.ScalarU16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U16x8.sum_lanes"
 		} else {}
-		if U16x8.store(U16x8.from_u128_bits(a), bytes, offset) != SimdOracle.U16x8.store(SimdOracle.U16x8.from_u128_bits(a), bytes, offset) {
+		if U16x8.store(U16x8.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarU16x8.store(SimdOracle.ScalarU16x8.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: U16x8.store"
 		} else {}
-		if U16x8.append_to(U16x8.from_u128_bits(a), bytes) != SimdOracle.U16x8.append_to(SimdOracle.U16x8.from_u128_bits(a), bytes) {
+		if U16x8.append_to(U16x8.from_u128_bits(a), bytes) != SimdOracle.ScalarU16x8.append_to(SimdOracle.ScalarU16x8.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: U16x8.append_to"
 		} else {}
 		{}
@@ -404,136 +404,136 @@ SimdDifferential := [].{
 		index_i16x8 = count % 8
 		offset = count.to_u64() % 33
 		# I16x8
-		if I16x8.splat(a.to_i16_wrap()).to_u128_bits() != SimdOracle.I16x8.splat(a.to_i16_wrap()).to_u128_bits() {
+		if I16x8.splat(a.to_i16_wrap()).to_u128_bits() != SimdOracle.ScalarI16x8.splat(a.to_i16_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.splat"
 		} else {}
-		if I16x8.to_u128_bits(I16x8.from_u128_bits(a)) != SimdOracle.I16x8.to_u128_bits(SimdOracle.I16x8.from_u128_bits(a)) {
+		if I16x8.to_u128_bits(I16x8.from_u128_bits(a)) != SimdOracle.ScalarI16x8.to_u128_bits(SimdOracle.ScalarI16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I16x8.to_u128_bits"
 		} else {}
-		if I16x8.from_u128_bits(a).to_u128_bits() != SimdOracle.I16x8.from_u128_bits(a).to_u128_bits() {
+		if I16x8.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarI16x8.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.from_u128_bits"
 		} else {}
-		if I16x8.plus_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.plus_wrap(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.plus_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.plus_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.plus_wrap"
 		} else {}
-		if I16x8.minus_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.minus_wrap(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.minus_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.minus_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.minus_wrap"
 		} else {}
-		if I16x8.plus_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.plus_saturated(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.plus_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.plus_saturated(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.plus_saturated"
 		} else {}
-		if I16x8.minus_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.minus_saturated(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.minus_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.minus_saturated(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.minus_saturated"
 		} else {}
-		if I16x8.negate_wrap(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.negate_wrap(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.negate_wrap(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.negate_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.negate_wrap"
 		} else {}
-		if I16x8.abs_wrap(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.abs_wrap(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.abs_wrap(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.abs_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.abs_wrap"
 		} else {}
-		if I16x8.min(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.min(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.min(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.min(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.min"
 		} else {}
-		if I16x8.max(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.max(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.max(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.max(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.max"
 		} else {}
-		if I16x8.times_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.times_wrap(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.times_wrap(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.times_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.times_wrap"
 		} else {}
-		if I16x8.times_high(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.times_high(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.times_high(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.times_high(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.times_high"
 		} else {}
-		if I16x8.times_fixed_q15_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.times_fixed_q15_saturated(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.times_fixed_q15_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.times_fixed_q15_saturated(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.times_fixed_q15_saturated"
 		} else {}
-		if I16x8.dot_pairs(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.dot_pairs(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.dot_pairs(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.dot_pairs(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.dot_pairs"
 		} else {}
-		if I16x8.bitwise_and(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.bitwise_and(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.bitwise_and(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.bitwise_and(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.bitwise_and"
 		} else {}
-		if I16x8.bitwise_or(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.bitwise_or(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.bitwise_or(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.bitwise_or(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.bitwise_or"
 		} else {}
-		if I16x8.bitwise_xor(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.bitwise_xor(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.bitwise_xor(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.bitwise_xor(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.bitwise_xor"
 		} else {}
-		if I16x8.bitwise_not(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.bitwise_not(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.bitwise_not(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.bitwise_not(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.bitwise_not"
 		} else {}
-		if I16x8.bit_select(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b), I16x8.from_u128_bits(c)).to_u128_bits() != SimdOracle.I16x8.bit_select(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b), SimdOracle.I16x8.from_u128_bits(c)).to_u128_bits() {
+		if I16x8.bit_select(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b), I16x8.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarI16x8.bit_select(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b), SimdOracle.ScalarI16x8.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.bit_select"
 		} else {}
-		if I16x8.eq_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.eq_lanes(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.eq_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.eq_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.eq_lanes"
 		} else {}
-		if I16x8.gt_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.gt_lanes(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.gt_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.gt_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.gt_lanes"
 		} else {}
-		if I16x8.gte_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.gte_lanes(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.gte_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.gte_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.gte_lanes"
 		} else {}
-		if I16x8.to_bitmask(I16x8.from_u128_bits(a)) != SimdOracle.I16x8.to_bitmask(SimdOracle.I16x8.from_u128_bits(a)) {
+		if I16x8.to_bitmask(I16x8.from_u128_bits(a)) != SimdOracle.ScalarI16x8.to_bitmask(SimdOracle.ScalarI16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I16x8.to_bitmask"
 		} else {}
-		if I16x8.shl_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I16x8.shl_wrap(SimdOracle.I16x8.from_u128_bits(a), count).to_u128_bits() {
+		if I16x8.shl_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI16x8.shl_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.shl_wrap"
 		} else {}
-		if I16x8.shr_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I16x8.shr_wrap(SimdOracle.I16x8.from_u128_bits(a), count).to_u128_bits() {
+		if I16x8.shr_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI16x8.shr_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.shr_wrap"
 		} else {}
-		if I16x8.shr_zf_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I16x8.shr_zf_wrap(SimdOracle.I16x8.from_u128_bits(a), count).to_u128_bits() {
+		if I16x8.shr_zf_wrap(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI16x8.shr_zf_wrap(SimdOracle.ScalarI16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.shr_zf_wrap"
 		} else {}
-		if I16x8.shift_right_rounded_by(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I16x8.shift_right_rounded_by(SimdOracle.I16x8.from_u128_bits(a), count).to_u128_bits() {
+		if I16x8.shift_right_rounded_by(I16x8.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI16x8.shift_right_rounded_by(SimdOracle.ScalarI16x8.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.shift_right_rounded_by"
 		} else {}
-		if I16x8.narrow_to_i8x16_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.narrow_to_i8x16_saturated(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.narrow_to_i8x16_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.narrow_to_i8x16_saturated(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.narrow_to_i8x16_saturated"
 		} else {}
-		if I16x8.narrow_to_u8x16_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.narrow_to_u8x16_saturated(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.narrow_to_u8x16_saturated(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.narrow_to_u8x16_saturated(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.narrow_to_u8x16_saturated"
 		} else {}
-		if I16x8.to_i32x4_lo(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.to_i32x4_lo(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.to_i32x4_lo(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.to_i32x4_lo(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.to_i32x4_lo"
 		} else {}
-		if I16x8.to_i32x4_hi(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.to_i32x4_hi(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.to_i32x4_hi(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.to_i32x4_hi(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.to_i32x4_hi"
 		} else {}
-		if I16x8.pairwise_plus_to_i32x4(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.pairwise_plus_to_i32x4(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.pairwise_plus_to_i32x4(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.pairwise_plus_to_i32x4(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.pairwise_plus_to_i32x4"
 		} else {}
-		if I16x8.times_wide_lo(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.times_wide_lo(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.times_wide_lo(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.times_wide_lo(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.times_wide_lo"
 		} else {}
-		if I16x8.times_wide_hi(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.times_wide_hi(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.times_wide_hi(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.times_wide_hi(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.times_wide_hi"
 		} else {}
-		if I16x8.sum_lanes(I16x8.from_u128_bits(a)) != SimdOracle.I16x8.sum_lanes(SimdOracle.I16x8.from_u128_bits(a)) {
+		if I16x8.sum_lanes(I16x8.from_u128_bits(a)) != SimdOracle.ScalarI16x8.sum_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I16x8.sum_lanes"
 		} else {}
-		if I16x8.get_lane(I16x8.from_u128_bits(a), index_i16x8.to_u64()) != SimdOracle.I16x8.get_lane(SimdOracle.I16x8.from_u128_bits(a), index_i16x8.to_u64()) {
+		if I16x8.get_lane(I16x8.from_u128_bits(a), index_i16x8.to_u64()) != SimdOracle.ScalarI16x8.get_lane(SimdOracle.ScalarI16x8.from_u128_bits(a), index_i16x8.to_u64()) {
 			crash "SIMD differential mismatch: I16x8.get_lane"
 		} else {}
-		if I16x8.with_lane(I16x8.from_u128_bits(a), index_i16x8.to_u64(), c.to_i16_wrap()).to_u128_bits() != SimdOracle.I16x8.with_lane(SimdOracle.I16x8.from_u128_bits(a), index_i16x8.to_u64(), c.to_i16_wrap()).to_u128_bits() {
+		if I16x8.with_lane(I16x8.from_u128_bits(a), index_i16x8.to_u64(), c.to_i16_wrap()).to_u128_bits() != SimdOracle.ScalarI16x8.with_lane(SimdOracle.ScalarI16x8.from_u128_bits(a), index_i16x8.to_u64(), c.to_i16_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.with_lane"
 		} else {}
-		if I16x8.interleave_lo(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.interleave_lo(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.interleave_lo(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.interleave_lo(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.interleave_lo"
 		} else {}
-		if I16x8.interleave_hi(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.interleave_hi(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.interleave_hi(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.interleave_hi(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.interleave_hi"
 		} else {}
-		if I16x8.even_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.even_lanes(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.even_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.even_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.even_lanes"
 		} else {}
-		if I16x8.odd_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.I16x8.odd_lanes(SimdOracle.I16x8.from_u128_bits(a), SimdOracle.I16x8.from_u128_bits(b)).to_u128_bits() {
+		if I16x8.odd_lanes(I16x8.from_u128_bits(a), I16x8.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI16x8.odd_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a), SimdOracle.ScalarI16x8.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.odd_lanes"
 		} else {}
-		if I16x8.reverse_lanes(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.I16x8.reverse_lanes(SimdOracle.I16x8.from_u128_bits(a)).to_u128_bits() {
+		if I16x8.reverse_lanes(I16x8.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI16x8.reverse_lanes(SimdOracle.ScalarI16x8.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I16x8.reverse_lanes"
 		} else {}
-		match (I16x8.store(I16x8.from_u128_bits(a), bytes, offset), SimdOracle.I16x8.store(SimdOracle.I16x8.from_u128_bits(a), bytes, offset)) {
+		match (I16x8.store(I16x8.from_u128_bits(a), bytes, offset), SimdOracle.ScalarI16x8.store(SimdOracle.ScalarI16x8.from_u128_bits(a), bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native == reference {
 					{}
@@ -555,7 +555,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I16x8.store bounds"
 			}
 		}
-		if I16x8.append_to(I16x8.from_u128_bits(a), bytes) != SimdOracle.I16x8.append_to(SimdOracle.I16x8.from_u128_bits(a), bytes) {
+		if I16x8.append_to(I16x8.from_u128_bits(a), bytes) != SimdOracle.ScalarI16x8.append_to(SimdOracle.ScalarI16x8.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: I16x8.append_to"
 		} else {}
 		{}
@@ -566,112 +566,112 @@ SimdDifferential := [].{
 		index_u32x4 = count % 4
 		offset = count.to_u64() % 33
 		# U32x4
-		if U32x4.splat(a.to_u32_wrap()).to_u128_bits() != SimdOracle.U32x4.splat(a.to_u32_wrap()).to_u128_bits() {
+		if U32x4.splat(a.to_u32_wrap()).to_u128_bits() != SimdOracle.ScalarU32x4.splat(a.to_u32_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.splat"
 		} else {}
-		if U32x4.to_u128_bits(U32x4.from_u128_bits(a)) != SimdOracle.U32x4.to_u128_bits(SimdOracle.U32x4.from_u128_bits(a)) {
+		if U32x4.to_u128_bits(U32x4.from_u128_bits(a)) != SimdOracle.ScalarU32x4.to_u128_bits(SimdOracle.ScalarU32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U32x4.to_u128_bits"
 		} else {}
-		if U32x4.from_u128_bits(a).to_u128_bits() != SimdOracle.U32x4.from_u128_bits(a).to_u128_bits() {
+		if U32x4.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarU32x4.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.from_u128_bits"
 		} else {}
-		if U32x4.plus_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.plus_wrap(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.plus_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.plus_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.plus_wrap"
 		} else {}
-		if U32x4.minus_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.minus_wrap(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.minus_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.minus_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.minus_wrap"
 		} else {}
-		if U32x4.min(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.min(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.min(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.min(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.min"
 		} else {}
-		if U32x4.max(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.max(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.max(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.max(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.max"
 		} else {}
-		if U32x4.times_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.times_wrap(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.times_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.times_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.times_wrap"
 		} else {}
-		if U32x4.times_wide_lo(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.times_wide_lo(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.times_wide_lo(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.times_wide_lo(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.times_wide_lo"
 		} else {}
-		if U32x4.times_wide_hi(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.times_wide_hi(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.times_wide_hi(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.times_wide_hi(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.times_wide_hi"
 		} else {}
-		if U32x4.bitwise_and(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.bitwise_and(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.bitwise_and(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.bitwise_and(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.bitwise_and"
 		} else {}
-		if U32x4.bitwise_or(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.bitwise_or(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.bitwise_or(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.bitwise_or(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.bitwise_or"
 		} else {}
-		if U32x4.bitwise_xor(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.bitwise_xor(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.bitwise_xor(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.bitwise_xor(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.bitwise_xor"
 		} else {}
-		if U32x4.bitwise_not(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.U32x4.bitwise_not(SimdOracle.U32x4.from_u128_bits(a)).to_u128_bits() {
+		if U32x4.bitwise_not(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU32x4.bitwise_not(SimdOracle.ScalarU32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.bitwise_not"
 		} else {}
-		if U32x4.bit_select(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b), U32x4.from_u128_bits(c)).to_u128_bits() != SimdOracle.U32x4.bit_select(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b), SimdOracle.U32x4.from_u128_bits(c)).to_u128_bits() {
+		if U32x4.bit_select(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b), U32x4.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarU32x4.bit_select(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b), SimdOracle.ScalarU32x4.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.bit_select"
 		} else {}
-		if U32x4.eq_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.eq_lanes(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.eq_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.eq_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.eq_lanes"
 		} else {}
-		if U32x4.gt_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.gt_lanes(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.gt_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.gt_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.gt_lanes"
 		} else {}
-		if U32x4.gte_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.gte_lanes(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.gte_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.gte_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.gte_lanes"
 		} else {}
-		if U32x4.to_bitmask(U32x4.from_u128_bits(a)) != SimdOracle.U32x4.to_bitmask(SimdOracle.U32x4.from_u128_bits(a)) {
+		if U32x4.to_bitmask(U32x4.from_u128_bits(a)) != SimdOracle.ScalarU32x4.to_bitmask(SimdOracle.ScalarU32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U32x4.to_bitmask"
 		} else {}
-		if U32x4.shl_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U32x4.shl_wrap(SimdOracle.U32x4.from_u128_bits(a), count).to_u128_bits() {
+		if U32x4.shl_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU32x4.shl_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.shl_wrap"
 		} else {}
-		if U32x4.shr_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U32x4.shr_wrap(SimdOracle.U32x4.from_u128_bits(a), count).to_u128_bits() {
+		if U32x4.shr_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU32x4.shr_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.shr_wrap"
 		} else {}
-		if U32x4.shr_zf_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U32x4.shr_zf_wrap(SimdOracle.U32x4.from_u128_bits(a), count).to_u128_bits() {
+		if U32x4.shr_zf_wrap(U32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU32x4.shr_zf_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.shr_zf_wrap"
 		} else {}
-		if U32x4.get_lane(U32x4.from_u128_bits(a), index_u32x4.to_u64()) != SimdOracle.U32x4.get_lane(SimdOracle.U32x4.from_u128_bits(a), index_u32x4.to_u64()) {
+		if U32x4.get_lane(U32x4.from_u128_bits(a), index_u32x4.to_u64()) != SimdOracle.ScalarU32x4.get_lane(SimdOracle.ScalarU32x4.from_u128_bits(a), index_u32x4.to_u64()) {
 			crash "SIMD differential mismatch: U32x4.get_lane"
 		} else {}
-		if U32x4.with_lane(U32x4.from_u128_bits(a), index_u32x4.to_u64(), c.to_u32_wrap()).to_u128_bits() != SimdOracle.U32x4.with_lane(SimdOracle.U32x4.from_u128_bits(a), index_u32x4.to_u64(), c.to_u32_wrap()).to_u128_bits() {
+		if U32x4.with_lane(U32x4.from_u128_bits(a), index_u32x4.to_u64(), c.to_u32_wrap()).to_u128_bits() != SimdOracle.ScalarU32x4.with_lane(SimdOracle.ScalarU32x4.from_u128_bits(a), index_u32x4.to_u64(), c.to_u32_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.with_lane"
 		} else {}
-		if U32x4.interleave_lo(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.interleave_lo(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.interleave_lo(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.interleave_lo(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.interleave_lo"
 		} else {}
-		if U32x4.interleave_hi(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.interleave_hi(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.interleave_hi(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.interleave_hi(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.interleave_hi"
 		} else {}
-		if U32x4.even_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.even_lanes(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.even_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.even_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.even_lanes"
 		} else {}
-		if U32x4.odd_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.odd_lanes(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.odd_lanes(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.odd_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.odd_lanes"
 		} else {}
-		if U32x4.reverse_lanes(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.U32x4.reverse_lanes(SimdOracle.U32x4.from_u128_bits(a)).to_u128_bits() {
+		if U32x4.reverse_lanes(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU32x4.reverse_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.reverse_lanes"
 		} else {}
-		if U32x4.to_u64x2_lo(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.U32x4.to_u64x2_lo(SimdOracle.U32x4.from_u128_bits(a)).to_u128_bits() {
+		if U32x4.to_u64x2_lo(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU32x4.to_u64x2_lo(SimdOracle.ScalarU32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.to_u64x2_lo"
 		} else {}
-		if U32x4.to_u64x2_hi(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.U32x4.to_u64x2_hi(SimdOracle.U32x4.from_u128_bits(a)).to_u128_bits() {
+		if U32x4.to_u64x2_hi(U32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU32x4.to_u64x2_hi(SimdOracle.ScalarU32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.to_u64x2_hi"
 		} else {}
-		if U32x4.narrow_to_u16x8_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.narrow_to_u16x8_wrap(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.narrow_to_u16x8_wrap(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.narrow_to_u16x8_wrap(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.narrow_to_u16x8_wrap"
 		} else {}
-		if U32x4.narrow_to_u16x8_saturated(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.U32x4.narrow_to_u16x8_saturated(SimdOracle.U32x4.from_u128_bits(a), SimdOracle.U32x4.from_u128_bits(b)).to_u128_bits() {
+		if U32x4.narrow_to_u16x8_saturated(U32x4.from_u128_bits(a), U32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU32x4.narrow_to_u16x8_saturated(SimdOracle.ScalarU32x4.from_u128_bits(a), SimdOracle.ScalarU32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U32x4.narrow_to_u16x8_saturated"
 		} else {}
-		if U32x4.sum_lanes(U32x4.from_u128_bits(a)) != SimdOracle.U32x4.sum_lanes(SimdOracle.U32x4.from_u128_bits(a)) {
+		if U32x4.sum_lanes(U32x4.from_u128_bits(a)) != SimdOracle.ScalarU32x4.sum_lanes(SimdOracle.ScalarU32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U32x4.sum_lanes"
 		} else {}
-		if U32x4.store(U32x4.from_u128_bits(a), bytes, offset) != SimdOracle.U32x4.store(SimdOracle.U32x4.from_u128_bits(a), bytes, offset) {
+		if U32x4.store(U32x4.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarU32x4.store(SimdOracle.ScalarU32x4.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: U32x4.store"
 		} else {}
-		if U32x4.append_to(U32x4.from_u128_bits(a), bytes) != SimdOracle.U32x4.append_to(SimdOracle.U32x4.from_u128_bits(a), bytes) {
+		if U32x4.append_to(U32x4.from_u128_bits(a), bytes) != SimdOracle.ScalarU32x4.append_to(SimdOracle.ScalarU32x4.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: U32x4.append_to"
 		} else {}
 		{}
@@ -682,121 +682,121 @@ SimdDifferential := [].{
 		index_i32x4 = count % 4
 		offset = count.to_u64() % 33
 		# I32x4
-		if I32x4.splat(a.to_i32_wrap()).to_u128_bits() != SimdOracle.I32x4.splat(a.to_i32_wrap()).to_u128_bits() {
+		if I32x4.splat(a.to_i32_wrap()).to_u128_bits() != SimdOracle.ScalarI32x4.splat(a.to_i32_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.splat"
 		} else {}
-		if I32x4.to_u128_bits(I32x4.from_u128_bits(a)) != SimdOracle.I32x4.to_u128_bits(SimdOracle.I32x4.from_u128_bits(a)) {
+		if I32x4.to_u128_bits(I32x4.from_u128_bits(a)) != SimdOracle.ScalarI32x4.to_u128_bits(SimdOracle.ScalarI32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I32x4.to_u128_bits"
 		} else {}
-		if I32x4.from_u128_bits(a).to_u128_bits() != SimdOracle.I32x4.from_u128_bits(a).to_u128_bits() {
+		if I32x4.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarI32x4.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.from_u128_bits"
 		} else {}
-		if I32x4.plus_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.plus_wrap(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.plus_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.plus_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.plus_wrap"
 		} else {}
-		if I32x4.minus_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.minus_wrap(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.minus_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.minus_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.minus_wrap"
 		} else {}
-		if I32x4.negate_wrap(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.negate_wrap(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.negate_wrap(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.negate_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.negate_wrap"
 		} else {}
-		if I32x4.abs_wrap(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.abs_wrap(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.abs_wrap(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.abs_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.abs_wrap"
 		} else {}
-		if I32x4.min(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.min(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.min(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.min(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.min"
 		} else {}
-		if I32x4.max(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.max(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.max(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.max(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.max"
 		} else {}
-		if I32x4.times_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.times_wrap(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.times_wrap(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.times_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.times_wrap"
 		} else {}
-		if I32x4.times_wide_lo(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.times_wide_lo(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.times_wide_lo(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.times_wide_lo(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.times_wide_lo"
 		} else {}
-		if I32x4.times_wide_hi(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.times_wide_hi(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.times_wide_hi(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.times_wide_hi(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.times_wide_hi"
 		} else {}
-		if I32x4.bitwise_and(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.bitwise_and(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.bitwise_and(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.bitwise_and(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.bitwise_and"
 		} else {}
-		if I32x4.bitwise_or(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.bitwise_or(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.bitwise_or(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.bitwise_or(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.bitwise_or"
 		} else {}
-		if I32x4.bitwise_xor(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.bitwise_xor(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.bitwise_xor(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.bitwise_xor(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.bitwise_xor"
 		} else {}
-		if I32x4.bitwise_not(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.bitwise_not(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.bitwise_not(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.bitwise_not(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.bitwise_not"
 		} else {}
-		if I32x4.bit_select(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b), I32x4.from_u128_bits(c)).to_u128_bits() != SimdOracle.I32x4.bit_select(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b), SimdOracle.I32x4.from_u128_bits(c)).to_u128_bits() {
+		if I32x4.bit_select(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b), I32x4.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarI32x4.bit_select(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b), SimdOracle.ScalarI32x4.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.bit_select"
 		} else {}
-		if I32x4.eq_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.eq_lanes(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.eq_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.eq_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.eq_lanes"
 		} else {}
-		if I32x4.gt_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.gt_lanes(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.gt_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.gt_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.gt_lanes"
 		} else {}
-		if I32x4.gte_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.gte_lanes(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.gte_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.gte_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.gte_lanes"
 		} else {}
-		if I32x4.to_bitmask(I32x4.from_u128_bits(a)) != SimdOracle.I32x4.to_bitmask(SimdOracle.I32x4.from_u128_bits(a)) {
+		if I32x4.to_bitmask(I32x4.from_u128_bits(a)) != SimdOracle.ScalarI32x4.to_bitmask(SimdOracle.ScalarI32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I32x4.to_bitmask"
 		} else {}
-		if I32x4.shl_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I32x4.shl_wrap(SimdOracle.I32x4.from_u128_bits(a), count).to_u128_bits() {
+		if I32x4.shl_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI32x4.shl_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.shl_wrap"
 		} else {}
-		if I32x4.shr_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I32x4.shr_wrap(SimdOracle.I32x4.from_u128_bits(a), count).to_u128_bits() {
+		if I32x4.shr_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI32x4.shr_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.shr_wrap"
 		} else {}
-		if I32x4.shr_zf_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I32x4.shr_zf_wrap(SimdOracle.I32x4.from_u128_bits(a), count).to_u128_bits() {
+		if I32x4.shr_zf_wrap(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI32x4.shr_zf_wrap(SimdOracle.ScalarI32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.shr_zf_wrap"
 		} else {}
-		if I32x4.shift_right_rounded_by(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I32x4.shift_right_rounded_by(SimdOracle.I32x4.from_u128_bits(a), count).to_u128_bits() {
+		if I32x4.shift_right_rounded_by(I32x4.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI32x4.shift_right_rounded_by(SimdOracle.ScalarI32x4.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.shift_right_rounded_by"
 		} else {}
-		if I32x4.narrow_to_i16x8_saturated(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.narrow_to_i16x8_saturated(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.narrow_to_i16x8_saturated(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.narrow_to_i16x8_saturated(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.narrow_to_i16x8_saturated"
 		} else {}
-		if I32x4.narrow_to_u16x8_saturated(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.narrow_to_u16x8_saturated(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.narrow_to_u16x8_saturated(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.narrow_to_u16x8_saturated(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.narrow_to_u16x8_saturated"
 		} else {}
-		if I32x4.to_i64x2_lo(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.to_i64x2_lo(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.to_i64x2_lo(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.to_i64x2_lo(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.to_i64x2_lo"
 		} else {}
-		if I32x4.to_i64x2_hi(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.to_i64x2_hi(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.to_i64x2_hi(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.to_i64x2_hi(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.to_i64x2_hi"
 		} else {}
-		if I32x4.sum_lanes(I32x4.from_u128_bits(a)) != SimdOracle.I32x4.sum_lanes(SimdOracle.I32x4.from_u128_bits(a)) {
+		if I32x4.sum_lanes(I32x4.from_u128_bits(a)) != SimdOracle.ScalarI32x4.sum_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I32x4.sum_lanes"
 		} else {}
-		if I32x4.get_lane(I32x4.from_u128_bits(a), index_i32x4.to_u64()) != SimdOracle.I32x4.get_lane(SimdOracle.I32x4.from_u128_bits(a), index_i32x4.to_u64()) {
+		if I32x4.get_lane(I32x4.from_u128_bits(a), index_i32x4.to_u64()) != SimdOracle.ScalarI32x4.get_lane(SimdOracle.ScalarI32x4.from_u128_bits(a), index_i32x4.to_u64()) {
 			crash "SIMD differential mismatch: I32x4.get_lane"
 		} else {}
-		if I32x4.with_lane(I32x4.from_u128_bits(a), index_i32x4.to_u64(), c.to_i32_wrap()).to_u128_bits() != SimdOracle.I32x4.with_lane(SimdOracle.I32x4.from_u128_bits(a), index_i32x4.to_u64(), c.to_i32_wrap()).to_u128_bits() {
+		if I32x4.with_lane(I32x4.from_u128_bits(a), index_i32x4.to_u64(), c.to_i32_wrap()).to_u128_bits() != SimdOracle.ScalarI32x4.with_lane(SimdOracle.ScalarI32x4.from_u128_bits(a), index_i32x4.to_u64(), c.to_i32_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.with_lane"
 		} else {}
-		if I32x4.interleave_lo(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.interleave_lo(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.interleave_lo(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.interleave_lo(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.interleave_lo"
 		} else {}
-		if I32x4.interleave_hi(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.interleave_hi(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.interleave_hi(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.interleave_hi(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.interleave_hi"
 		} else {}
-		if I32x4.even_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.even_lanes(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.even_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.even_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.even_lanes"
 		} else {}
-		if I32x4.odd_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.I32x4.odd_lanes(SimdOracle.I32x4.from_u128_bits(a), SimdOracle.I32x4.from_u128_bits(b)).to_u128_bits() {
+		if I32x4.odd_lanes(I32x4.from_u128_bits(a), I32x4.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI32x4.odd_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a), SimdOracle.ScalarI32x4.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.odd_lanes"
 		} else {}
-		if I32x4.reverse_lanes(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.I32x4.reverse_lanes(SimdOracle.I32x4.from_u128_bits(a)).to_u128_bits() {
+		if I32x4.reverse_lanes(I32x4.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI32x4.reverse_lanes(SimdOracle.ScalarI32x4.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I32x4.reverse_lanes"
 		} else {}
-		if I32x4.store(I32x4.from_u128_bits(a), bytes, offset) != SimdOracle.I32x4.store(SimdOracle.I32x4.from_u128_bits(a), bytes, offset) {
+		if I32x4.store(I32x4.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarI32x4.store(SimdOracle.ScalarI32x4.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: I32x4.store"
 		} else {}
-		if I32x4.append_to(I32x4.from_u128_bits(a), bytes) != SimdOracle.I32x4.append_to(SimdOracle.I32x4.from_u128_bits(a), bytes) {
+		if I32x4.append_to(I32x4.from_u128_bits(a), bytes) != SimdOracle.ScalarI32x4.append_to(SimdOracle.ScalarI32x4.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: I32x4.append_to"
 		} else {}
 		{}
@@ -807,82 +807,82 @@ SimdDifferential := [].{
 		index_u64x2 = count % 2
 		offset = count.to_u64() % 33
 		# U64x2
-		if U64x2.splat(a.to_u64_wrap()).to_u128_bits() != SimdOracle.U64x2.splat(a.to_u64_wrap()).to_u128_bits() {
+		if U64x2.splat(a.to_u64_wrap()).to_u128_bits() != SimdOracle.ScalarU64x2.splat(a.to_u64_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.splat"
 		} else {}
-		if U64x2.to_u128_bits(U64x2.from_u128_bits(a)) != SimdOracle.U64x2.to_u128_bits(SimdOracle.U64x2.from_u128_bits(a)) {
+		if U64x2.to_u128_bits(U64x2.from_u128_bits(a)) != SimdOracle.ScalarU64x2.to_u128_bits(SimdOracle.ScalarU64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U64x2.to_u128_bits"
 		} else {}
-		if U64x2.from_u128_bits(a).to_u128_bits() != SimdOracle.U64x2.from_u128_bits(a).to_u128_bits() {
+		if U64x2.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarU64x2.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.from_u128_bits"
 		} else {}
-		if U64x2.plus_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.plus_wrap(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.plus_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.plus_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.plus_wrap"
 		} else {}
-		if U64x2.minus_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.minus_wrap(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.minus_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.minus_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.minus_wrap"
 		} else {}
-		if U64x2.bitwise_and(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.bitwise_and(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.bitwise_and(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.bitwise_and(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.bitwise_and"
 		} else {}
-		if U64x2.bitwise_or(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.bitwise_or(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.bitwise_or(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.bitwise_or(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.bitwise_or"
 		} else {}
-		if U64x2.bitwise_xor(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.bitwise_xor(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.bitwise_xor(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.bitwise_xor(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.bitwise_xor"
 		} else {}
-		if U64x2.bitwise_not(U64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.U64x2.bitwise_not(SimdOracle.U64x2.from_u128_bits(a)).to_u128_bits() {
+		if U64x2.bitwise_not(U64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU64x2.bitwise_not(SimdOracle.ScalarU64x2.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.bitwise_not"
 		} else {}
-		if U64x2.bit_select(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b), U64x2.from_u128_bits(c)).to_u128_bits() != SimdOracle.U64x2.bit_select(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b), SimdOracle.U64x2.from_u128_bits(c)).to_u128_bits() {
+		if U64x2.bit_select(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b), U64x2.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarU64x2.bit_select(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b), SimdOracle.ScalarU64x2.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.bit_select"
 		} else {}
-		if U64x2.eq_lanes(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.eq_lanes(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.eq_lanes(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.eq_lanes(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.eq_lanes"
 		} else {}
-		if U64x2.to_bitmask(U64x2.from_u128_bits(a)) != SimdOracle.U64x2.to_bitmask(SimdOracle.U64x2.from_u128_bits(a)) {
+		if U64x2.to_bitmask(U64x2.from_u128_bits(a)) != SimdOracle.ScalarU64x2.to_bitmask(SimdOracle.ScalarU64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U64x2.to_bitmask"
 		} else {}
-		if U64x2.shl_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U64x2.shl_wrap(SimdOracle.U64x2.from_u128_bits(a), count).to_u128_bits() {
+		if U64x2.shl_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU64x2.shl_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.shl_wrap"
 		} else {}
-		if U64x2.shr_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U64x2.shr_wrap(SimdOracle.U64x2.from_u128_bits(a), count).to_u128_bits() {
+		if U64x2.shr_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU64x2.shr_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.shr_wrap"
 		} else {}
-		if U64x2.shr_zf_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.U64x2.shr_zf_wrap(SimdOracle.U64x2.from_u128_bits(a), count).to_u128_bits() {
+		if U64x2.shr_zf_wrap(U64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarU64x2.shr_zf_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.shr_zf_wrap"
 		} else {}
-		if U64x2.get_lane(U64x2.from_u128_bits(a), index_u64x2.to_u64()) != SimdOracle.U64x2.get_lane(SimdOracle.U64x2.from_u128_bits(a), index_u64x2.to_u64()) {
+		if U64x2.get_lane(U64x2.from_u128_bits(a), index_u64x2.to_u64()) != SimdOracle.ScalarU64x2.get_lane(SimdOracle.ScalarU64x2.from_u128_bits(a), index_u64x2.to_u64()) {
 			crash "SIMD differential mismatch: U64x2.get_lane"
 		} else {}
-		if U64x2.with_lane(U64x2.from_u128_bits(a), index_u64x2.to_u64(), c.to_u64_wrap()).to_u128_bits() != SimdOracle.U64x2.with_lane(SimdOracle.U64x2.from_u128_bits(a), index_u64x2.to_u64(), c.to_u64_wrap()).to_u128_bits() {
+		if U64x2.with_lane(U64x2.from_u128_bits(a), index_u64x2.to_u64(), c.to_u64_wrap()).to_u128_bits() != SimdOracle.ScalarU64x2.with_lane(SimdOracle.ScalarU64x2.from_u128_bits(a), index_u64x2.to_u64(), c.to_u64_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.with_lane"
 		} else {}
-		if U64x2.interleave_lo(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.interleave_lo(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.interleave_lo(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.interleave_lo(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.interleave_lo"
 		} else {}
-		if U64x2.interleave_hi(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.interleave_hi(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.interleave_hi(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.interleave_hi(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.interleave_hi"
 		} else {}
-		if U64x2.reverse_lanes(U64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.U64x2.reverse_lanes(SimdOracle.U64x2.from_u128_bits(a)).to_u128_bits() {
+		if U64x2.reverse_lanes(U64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarU64x2.reverse_lanes(SimdOracle.ScalarU64x2.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.reverse_lanes"
 		} else {}
-		if U64x2.narrow_to_u32x4_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.narrow_to_u32x4_wrap(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.narrow_to_u32x4_wrap(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.narrow_to_u32x4_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.narrow_to_u32x4_wrap"
 		} else {}
-		if U64x2.sum_lanes_wrap(U64x2.from_u128_bits(a)) != SimdOracle.U64x2.sum_lanes_wrap(SimdOracle.U64x2.from_u128_bits(a)) {
+		if U64x2.sum_lanes_wrap(U64x2.from_u128_bits(a)) != SimdOracle.ScalarU64x2.sum_lanes_wrap(SimdOracle.ScalarU64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: U64x2.sum_lanes_wrap"
 		} else {}
-		if U64x2.carryless_times_lo(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.carryless_times_lo(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.carryless_times_lo(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.carryless_times_lo(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.carryless_times_lo"
 		} else {}
-		if U64x2.carryless_times_hi(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.U64x2.carryless_times_hi(SimdOracle.U64x2.from_u128_bits(a), SimdOracle.U64x2.from_u128_bits(b)).to_u128_bits() {
+		if U64x2.carryless_times_hi(U64x2.from_u128_bits(a), U64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarU64x2.carryless_times_hi(SimdOracle.ScalarU64x2.from_u128_bits(a), SimdOracle.ScalarU64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: U64x2.carryless_times_hi"
 		} else {}
-		if U64x2.store(U64x2.from_u128_bits(a), bytes, offset) != SimdOracle.U64x2.store(SimdOracle.U64x2.from_u128_bits(a), bytes, offset) {
+		if U64x2.store(U64x2.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarU64x2.store(SimdOracle.ScalarU64x2.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: U64x2.store"
 		} else {}
-		if U64x2.append_to(U64x2.from_u128_bits(a), bytes) != SimdOracle.U64x2.append_to(SimdOracle.U64x2.from_u128_bits(a), bytes) {
+		if U64x2.append_to(U64x2.from_u128_bits(a), bytes) != SimdOracle.ScalarU64x2.append_to(SimdOracle.ScalarU64x2.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: U64x2.append_to"
 		} else {}
 		{}
@@ -893,82 +893,82 @@ SimdDifferential := [].{
 		index_i64x2 = count % 2
 		offset = count.to_u64() % 33
 		# I64x2
-		if I64x2.splat(a.to_i64_wrap()).to_u128_bits() != SimdOracle.I64x2.splat(a.to_i64_wrap()).to_u128_bits() {
+		if I64x2.splat(a.to_i64_wrap()).to_u128_bits() != SimdOracle.ScalarI64x2.splat(a.to_i64_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.splat"
 		} else {}
-		if I64x2.to_u128_bits(I64x2.from_u128_bits(a)) != SimdOracle.I64x2.to_u128_bits(SimdOracle.I64x2.from_u128_bits(a)) {
+		if I64x2.to_u128_bits(I64x2.from_u128_bits(a)) != SimdOracle.ScalarI64x2.to_u128_bits(SimdOracle.ScalarI64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I64x2.to_u128_bits"
 		} else {}
-		if I64x2.from_u128_bits(a).to_u128_bits() != SimdOracle.I64x2.from_u128_bits(a).to_u128_bits() {
+		if I64x2.from_u128_bits(a).to_u128_bits() != SimdOracle.ScalarI64x2.from_u128_bits(a).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.from_u128_bits"
 		} else {}
-		if I64x2.plus_wrap(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.plus_wrap(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.plus_wrap(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.plus_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.plus_wrap"
 		} else {}
-		if I64x2.minus_wrap(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.minus_wrap(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.minus_wrap(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.minus_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.minus_wrap"
 		} else {}
-		if I64x2.negate_wrap(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.I64x2.negate_wrap(SimdOracle.I64x2.from_u128_bits(a)).to_u128_bits() {
+		if I64x2.negate_wrap(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI64x2.negate_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.negate_wrap"
 		} else {}
-		if I64x2.bitwise_and(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.bitwise_and(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.bitwise_and(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.bitwise_and(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.bitwise_and"
 		} else {}
-		if I64x2.bitwise_or(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.bitwise_or(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.bitwise_or(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.bitwise_or(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.bitwise_or"
 		} else {}
-		if I64x2.bitwise_xor(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.bitwise_xor(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.bitwise_xor(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.bitwise_xor(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.bitwise_xor"
 		} else {}
-		if I64x2.bitwise_not(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.I64x2.bitwise_not(SimdOracle.I64x2.from_u128_bits(a)).to_u128_bits() {
+		if I64x2.bitwise_not(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI64x2.bitwise_not(SimdOracle.ScalarI64x2.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.bitwise_not"
 		} else {}
-		if I64x2.bit_select(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b), I64x2.from_u128_bits(c)).to_u128_bits() != SimdOracle.I64x2.bit_select(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b), SimdOracle.I64x2.from_u128_bits(c)).to_u128_bits() {
+		if I64x2.bit_select(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b), I64x2.from_u128_bits(c)).to_u128_bits() != SimdOracle.ScalarI64x2.bit_select(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b), SimdOracle.ScalarI64x2.from_u128_bits(c)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.bit_select"
 		} else {}
-		if I64x2.eq_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.eq_lanes(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.eq_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.eq_lanes(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.eq_lanes"
 		} else {}
-		if I64x2.gt_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.gt_lanes(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.gt_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.gt_lanes(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.gt_lanes"
 		} else {}
-		if I64x2.gte_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.gte_lanes(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.gte_lanes(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.gte_lanes(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.gte_lanes"
 		} else {}
-		if I64x2.to_bitmask(I64x2.from_u128_bits(a)) != SimdOracle.I64x2.to_bitmask(SimdOracle.I64x2.from_u128_bits(a)) {
+		if I64x2.to_bitmask(I64x2.from_u128_bits(a)) != SimdOracle.ScalarI64x2.to_bitmask(SimdOracle.ScalarI64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I64x2.to_bitmask"
 		} else {}
-		if I64x2.shl_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I64x2.shl_wrap(SimdOracle.I64x2.from_u128_bits(a), count).to_u128_bits() {
+		if I64x2.shl_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI64x2.shl_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.shl_wrap"
 		} else {}
-		if I64x2.shr_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I64x2.shr_wrap(SimdOracle.I64x2.from_u128_bits(a), count).to_u128_bits() {
+		if I64x2.shr_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI64x2.shr_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.shr_wrap"
 		} else {}
-		if I64x2.shr_zf_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.I64x2.shr_zf_wrap(SimdOracle.I64x2.from_u128_bits(a), count).to_u128_bits() {
+		if I64x2.shr_zf_wrap(I64x2.from_u128_bits(a), count).to_u128_bits() != SimdOracle.ScalarI64x2.shr_zf_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a), count).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.shr_zf_wrap"
 		} else {}
-		if I64x2.get_lane(I64x2.from_u128_bits(a), index_i64x2.to_u64()) != SimdOracle.I64x2.get_lane(SimdOracle.I64x2.from_u128_bits(a), index_i64x2.to_u64()) {
+		if I64x2.get_lane(I64x2.from_u128_bits(a), index_i64x2.to_u64()) != SimdOracle.ScalarI64x2.get_lane(SimdOracle.ScalarI64x2.from_u128_bits(a), index_i64x2.to_u64()) {
 			crash "SIMD differential mismatch: I64x2.get_lane"
 		} else {}
-		if I64x2.with_lane(I64x2.from_u128_bits(a), index_i64x2.to_u64(), c.to_i64_wrap()).to_u128_bits() != SimdOracle.I64x2.with_lane(SimdOracle.I64x2.from_u128_bits(a), index_i64x2.to_u64(), c.to_i64_wrap()).to_u128_bits() {
+		if I64x2.with_lane(I64x2.from_u128_bits(a), index_i64x2.to_u64(), c.to_i64_wrap()).to_u128_bits() != SimdOracle.ScalarI64x2.with_lane(SimdOracle.ScalarI64x2.from_u128_bits(a), index_i64x2.to_u64(), c.to_i64_wrap()).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.with_lane"
 		} else {}
-		if I64x2.interleave_lo(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.interleave_lo(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.interleave_lo(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.interleave_lo(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.interleave_lo"
 		} else {}
-		if I64x2.interleave_hi(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.I64x2.interleave_hi(SimdOracle.I64x2.from_u128_bits(a), SimdOracle.I64x2.from_u128_bits(b)).to_u128_bits() {
+		if I64x2.interleave_hi(I64x2.from_u128_bits(a), I64x2.from_u128_bits(b)).to_u128_bits() != SimdOracle.ScalarI64x2.interleave_hi(SimdOracle.ScalarI64x2.from_u128_bits(a), SimdOracle.ScalarI64x2.from_u128_bits(b)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.interleave_hi"
 		} else {}
-		if I64x2.reverse_lanes(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.I64x2.reverse_lanes(SimdOracle.I64x2.from_u128_bits(a)).to_u128_bits() {
+		if I64x2.reverse_lanes(I64x2.from_u128_bits(a)).to_u128_bits() != SimdOracle.ScalarI64x2.reverse_lanes(SimdOracle.ScalarI64x2.from_u128_bits(a)).to_u128_bits() {
 			crash "SIMD differential mismatch: I64x2.reverse_lanes"
 		} else {}
-		if I64x2.sum_lanes_wrap(I64x2.from_u128_bits(a)) != SimdOracle.I64x2.sum_lanes_wrap(SimdOracle.I64x2.from_u128_bits(a)) {
+		if I64x2.sum_lanes_wrap(I64x2.from_u128_bits(a)) != SimdOracle.ScalarI64x2.sum_lanes_wrap(SimdOracle.ScalarI64x2.from_u128_bits(a)) {
 			crash "SIMD differential mismatch: I64x2.sum_lanes_wrap"
 		} else {}
-		if I64x2.store(I64x2.from_u128_bits(a), bytes, offset) != SimdOracle.I64x2.store(SimdOracle.I64x2.from_u128_bits(a), bytes, offset) {
+		if I64x2.store(I64x2.from_u128_bits(a), bytes, offset) != SimdOracle.ScalarI64x2.store(SimdOracle.ScalarI64x2.from_u128_bits(a), bytes, offset) {
 			crash "SIMD differential mismatch: I64x2.store"
 		} else {}
-		if I64x2.append_to(I64x2.from_u128_bits(a), bytes) != SimdOracle.I64x2.append_to(SimdOracle.I64x2.from_u128_bits(a), bytes) {
+		if I64x2.append_to(I64x2.from_u128_bits(a), bytes) != SimdOracle.ScalarI64x2.append_to(SimdOracle.ScalarI64x2.from_u128_bits(a), bytes) {
 			crash "SIMD differential mismatch: I64x2.append_to"
 		} else {}
 		{}
@@ -977,7 +977,7 @@ SimdDifferential := [].{
 	check_loads : U8, List(U8) -> {}
 	check_loads = |count, bytes| {
 		offset = count.to_u64() % 33
-		match (U8x16.load(bytes, offset), SimdOracle.U8x16.load(bytes, offset)) {
+		match (U8x16.load(bytes, offset), SimdOracle.ScalarU8x16.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U8x16.load"
@@ -987,7 +987,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U8x16.load bounds"
 			}
 		}
-		match (U8x16.load(bytes, 33), SimdOracle.U8x16.load(bytes, 33)) {
+		match (U8x16.load(bytes, 33), SimdOracle.ScalarU8x16.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U8x16.load"
@@ -997,7 +997,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U8x16.load bounds"
 			}
 		}
-		match (I8x16.load(bytes, offset), SimdOracle.I8x16.load(bytes, offset)) {
+		match (I8x16.load(bytes, offset), SimdOracle.ScalarI8x16.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I8x16.load"
@@ -1007,7 +1007,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I8x16.load bounds"
 			}
 		}
-		match (I8x16.load(bytes, 33), SimdOracle.I8x16.load(bytes, 33)) {
+		match (I8x16.load(bytes, 33), SimdOracle.ScalarI8x16.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I8x16.load"
@@ -1017,7 +1017,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I8x16.load bounds"
 			}
 		}
-		match (U16x8.load(bytes, offset), SimdOracle.U16x8.load(bytes, offset)) {
+		match (U16x8.load(bytes, offset), SimdOracle.ScalarU16x8.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U16x8.load"
@@ -1027,7 +1027,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U16x8.load bounds"
 			}
 		}
-		match (U16x8.load(bytes, 33), SimdOracle.U16x8.load(bytes, 33)) {
+		match (U16x8.load(bytes, 33), SimdOracle.ScalarU16x8.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U16x8.load"
@@ -1037,7 +1037,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U16x8.load bounds"
 			}
 		}
-		match (I16x8.load(bytes, offset), SimdOracle.I16x8.load(bytes, offset)) {
+		match (I16x8.load(bytes, offset), SimdOracle.ScalarI16x8.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I16x8.load"
@@ -1047,7 +1047,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I16x8.load bounds"
 			}
 		}
-		match (I16x8.load(bytes, 33), SimdOracle.I16x8.load(bytes, 33)) {
+		match (I16x8.load(bytes, 33), SimdOracle.ScalarI16x8.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I16x8.load"
@@ -1057,7 +1057,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I16x8.load bounds"
 			}
 		}
-		match (U32x4.load(bytes, offset), SimdOracle.U32x4.load(bytes, offset)) {
+		match (U32x4.load(bytes, offset), SimdOracle.ScalarU32x4.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U32x4.load"
@@ -1067,7 +1067,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U32x4.load bounds"
 			}
 		}
-		match (U32x4.load(bytes, 33), SimdOracle.U32x4.load(bytes, 33)) {
+		match (U32x4.load(bytes, 33), SimdOracle.ScalarU32x4.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U32x4.load"
@@ -1077,7 +1077,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U32x4.load bounds"
 			}
 		}
-		match (I32x4.load(bytes, offset), SimdOracle.I32x4.load(bytes, offset)) {
+		match (I32x4.load(bytes, offset), SimdOracle.ScalarI32x4.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I32x4.load"
@@ -1087,7 +1087,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I32x4.load bounds"
 			}
 		}
-		match (I32x4.load(bytes, 33), SimdOracle.I32x4.load(bytes, 33)) {
+		match (I32x4.load(bytes, 33), SimdOracle.ScalarI32x4.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I32x4.load"
@@ -1097,7 +1097,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I32x4.load bounds"
 			}
 		}
-		match (U64x2.load(bytes, offset), SimdOracle.U64x2.load(bytes, offset)) {
+		match (U64x2.load(bytes, offset), SimdOracle.ScalarU64x2.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U64x2.load"
@@ -1107,7 +1107,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U64x2.load bounds"
 			}
 		}
-		match (U64x2.load(bytes, 33), SimdOracle.U64x2.load(bytes, 33)) {
+		match (U64x2.load(bytes, 33), SimdOracle.ScalarU64x2.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: U64x2.load"
@@ -1117,7 +1117,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: U64x2.load bounds"
 			}
 		}
-		match (I64x2.load(bytes, offset), SimdOracle.I64x2.load(bytes, offset)) {
+		match (I64x2.load(bytes, offset), SimdOracle.ScalarI64x2.load(bytes, offset)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I64x2.load"
@@ -1127,7 +1127,7 @@ SimdDifferential := [].{
 				crash "SIMD differential mismatch: I64x2.load bounds"
 			}
 		}
-		match (I64x2.load(bytes, 33), SimdOracle.I64x2.load(bytes, 33)) {
+		match (I64x2.load(bytes, 33), SimdOracle.ScalarI64x2.load(bytes, 33)) {
 			(Ok(native), Ok(reference)) =>
 				if native.to_u128_bits() != reference.to_u128_bits() {
 					crash "SIMD differential mismatch: I64x2.load"
@@ -1146,82 +1146,82 @@ SimdDifferential := [].{
 	check_shift_reference_count : U128, U8 -> {}
 	check_shift_reference_count = |bits, count| {
 		if count < 8 {
-			if U8x16.shl_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U8x16.shl_wrap(SimdOracle.U8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if U8x16.shl_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU8x16.shl_wrap(SimdOracle.ScalarU8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U8x16.shl_wrap canonical count"
 			} else {}
-			if U8x16.shr_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U8x16.shr_wrap(SimdOracle.U8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if U8x16.shr_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU8x16.shr_wrap(SimdOracle.ScalarU8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U8x16.shr_wrap canonical count"
 			} else {}
-			if U8x16.shr_zf_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U8x16.shr_zf_wrap(SimdOracle.U8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if U8x16.shr_zf_wrap(U8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU8x16.shr_zf_wrap(SimdOracle.ScalarU8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U8x16.shr_zf_wrap canonical count"
 			} else {}
-			if I8x16.shl_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I8x16.shl_wrap(SimdOracle.I8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if I8x16.shl_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI8x16.shl_wrap(SimdOracle.ScalarI8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I8x16.shl_wrap canonical count"
 			} else {}
-			if I8x16.shr_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I8x16.shr_wrap(SimdOracle.I8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if I8x16.shr_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI8x16.shr_wrap(SimdOracle.ScalarI8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I8x16.shr_wrap canonical count"
 			} else {}
-			if I8x16.shr_zf_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I8x16.shr_zf_wrap(SimdOracle.I8x16.from_u128_bits(bits), count).to_u128_bits() {
+			if I8x16.shr_zf_wrap(I8x16.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI8x16.shr_zf_wrap(SimdOracle.ScalarI8x16.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I8x16.shr_zf_wrap canonical count"
 			} else {}
 		} else {}
 		if count < 16 {
-			if U16x8.shl_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U16x8.shl_wrap(SimdOracle.U16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if U16x8.shl_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU16x8.shl_wrap(SimdOracle.ScalarU16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U16x8.shl_wrap canonical count"
 			} else {}
-			if U16x8.shr_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U16x8.shr_wrap(SimdOracle.U16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if U16x8.shr_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU16x8.shr_wrap(SimdOracle.ScalarU16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U16x8.shr_wrap canonical count"
 			} else {}
-			if U16x8.shr_zf_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U16x8.shr_zf_wrap(SimdOracle.U16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if U16x8.shr_zf_wrap(U16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU16x8.shr_zf_wrap(SimdOracle.ScalarU16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U16x8.shr_zf_wrap canonical count"
 			} else {}
-			if I16x8.shl_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I16x8.shl_wrap(SimdOracle.I16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if I16x8.shl_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI16x8.shl_wrap(SimdOracle.ScalarI16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I16x8.shl_wrap canonical count"
 			} else {}
-			if I16x8.shr_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I16x8.shr_wrap(SimdOracle.I16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if I16x8.shr_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI16x8.shr_wrap(SimdOracle.ScalarI16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I16x8.shr_wrap canonical count"
 			} else {}
-			if I16x8.shr_zf_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I16x8.shr_zf_wrap(SimdOracle.I16x8.from_u128_bits(bits), count).to_u128_bits() {
+			if I16x8.shr_zf_wrap(I16x8.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI16x8.shr_zf_wrap(SimdOracle.ScalarI16x8.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I16x8.shr_zf_wrap canonical count"
 			} else {}
 		} else {}
 		if count < 32 {
-			if U32x4.shl_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U32x4.shl_wrap(SimdOracle.U32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if U32x4.shl_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU32x4.shl_wrap(SimdOracle.ScalarU32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U32x4.shl_wrap canonical count"
 			} else {}
-			if U32x4.shr_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U32x4.shr_wrap(SimdOracle.U32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if U32x4.shr_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU32x4.shr_wrap(SimdOracle.ScalarU32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U32x4.shr_wrap canonical count"
 			} else {}
-			if U32x4.shr_zf_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U32x4.shr_zf_wrap(SimdOracle.U32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if U32x4.shr_zf_wrap(U32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU32x4.shr_zf_wrap(SimdOracle.ScalarU32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U32x4.shr_zf_wrap canonical count"
 			} else {}
-			if I32x4.shl_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I32x4.shl_wrap(SimdOracle.I32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if I32x4.shl_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI32x4.shl_wrap(SimdOracle.ScalarI32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I32x4.shl_wrap canonical count"
 			} else {}
-			if I32x4.shr_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I32x4.shr_wrap(SimdOracle.I32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if I32x4.shr_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI32x4.shr_wrap(SimdOracle.ScalarI32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I32x4.shr_wrap canonical count"
 			} else {}
-			if I32x4.shr_zf_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I32x4.shr_zf_wrap(SimdOracle.I32x4.from_u128_bits(bits), count).to_u128_bits() {
+			if I32x4.shr_zf_wrap(I32x4.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI32x4.shr_zf_wrap(SimdOracle.ScalarI32x4.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I32x4.shr_zf_wrap canonical count"
 			} else {}
 		} else {}
 		if count < 64 {
-			if U64x2.shl_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U64x2.shl_wrap(SimdOracle.U64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if U64x2.shl_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU64x2.shl_wrap(SimdOracle.ScalarU64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U64x2.shl_wrap canonical count"
 			} else {}
-			if U64x2.shr_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U64x2.shr_wrap(SimdOracle.U64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if U64x2.shr_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU64x2.shr_wrap(SimdOracle.ScalarU64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U64x2.shr_wrap canonical count"
 			} else {}
-			if U64x2.shr_zf_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.U64x2.shr_zf_wrap(SimdOracle.U64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if U64x2.shr_zf_wrap(U64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarU64x2.shr_zf_wrap(SimdOracle.ScalarU64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: U64x2.shr_zf_wrap canonical count"
 			} else {}
-			if I64x2.shl_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I64x2.shl_wrap(SimdOracle.I64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if I64x2.shl_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI64x2.shl_wrap(SimdOracle.ScalarI64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I64x2.shl_wrap canonical count"
 			} else {}
-			if I64x2.shr_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I64x2.shr_wrap(SimdOracle.I64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if I64x2.shr_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI64x2.shr_wrap(SimdOracle.ScalarI64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I64x2.shr_wrap canonical count"
 			} else {}
-			if I64x2.shr_zf_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.I64x2.shr_zf_wrap(SimdOracle.I64x2.from_u128_bits(bits), count).to_u128_bits() {
+			if I64x2.shr_zf_wrap(I64x2.from_u128_bits(bits), count).to_u128_bits() != SimdOracle.ScalarI64x2.shr_zf_wrap(SimdOracle.ScalarI64x2.from_u128_bits(bits), count).to_u128_bits() {
 				crash "SIMD differential mismatch: I64x2.shr_zf_wrap canonical count"
 			} else {}
 		} else {}
@@ -1442,28 +1442,28 @@ SimdDifferential := [].{
 
 	check_store_last_valid : U128, List(U8), U64 -> {}
 	check_store_last_valid = |bits, bytes, index| {
-		if U8x16.store(U8x16.from_u128_bits(bits), bytes, index) != SimdOracle.U8x16.store(SimdOracle.U8x16.from_u128_bits(bits), bytes, index) {
+		if U8x16.store(U8x16.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarU8x16.store(SimdOracle.ScalarU8x16.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: U8x16.store at last valid offset"
 		} else {}
-		if I8x16.store(I8x16.from_u128_bits(bits), bytes, index) != SimdOracle.I8x16.store(SimdOracle.I8x16.from_u128_bits(bits), bytes, index) {
+		if I8x16.store(I8x16.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarI8x16.store(SimdOracle.ScalarI8x16.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: I8x16.store at last valid offset"
 		} else {}
-		if U16x8.store(U16x8.from_u128_bits(bits), bytes, index) != SimdOracle.U16x8.store(SimdOracle.U16x8.from_u128_bits(bits), bytes, index) {
+		if U16x8.store(U16x8.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarU16x8.store(SimdOracle.ScalarU16x8.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: U16x8.store at last valid offset"
 		} else {}
-		if I16x8.store(I16x8.from_u128_bits(bits), bytes, index) != SimdOracle.I16x8.store(SimdOracle.I16x8.from_u128_bits(bits), bytes, index) {
+		if I16x8.store(I16x8.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarI16x8.store(SimdOracle.ScalarI16x8.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: I16x8.store at last valid offset"
 		} else {}
-		if U32x4.store(U32x4.from_u128_bits(bits), bytes, index) != SimdOracle.U32x4.store(SimdOracle.U32x4.from_u128_bits(bits), bytes, index) {
+		if U32x4.store(U32x4.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarU32x4.store(SimdOracle.ScalarU32x4.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: U32x4.store at last valid offset"
 		} else {}
-		if I32x4.store(I32x4.from_u128_bits(bits), bytes, index) != SimdOracle.I32x4.store(SimdOracle.I32x4.from_u128_bits(bits), bytes, index) {
+		if I32x4.store(I32x4.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarI32x4.store(SimdOracle.ScalarI32x4.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: I32x4.store at last valid offset"
 		} else {}
-		if U64x2.store(U64x2.from_u128_bits(bits), bytes, index) != SimdOracle.U64x2.store(SimdOracle.U64x2.from_u128_bits(bits), bytes, index) {
+		if U64x2.store(U64x2.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarU64x2.store(SimdOracle.ScalarU64x2.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: U64x2.store at last valid offset"
 		} else {}
-		if I64x2.store(I64x2.from_u128_bits(bits), bytes, index) != SimdOracle.I64x2.store(SimdOracle.I64x2.from_u128_bits(bits), bytes, index) {
+		if I64x2.store(I64x2.from_u128_bits(bits), bytes, index) != SimdOracle.ScalarI64x2.store(SimdOracle.ScalarI64x2.from_u128_bits(bits), bytes, index) {
 			crash "SIMD bounds mismatch: I64x2.store at last valid offset"
 		} else {}
 		{}
@@ -1582,7 +1582,7 @@ SimdDifferential := [].{
 		} else {}
 
 		u8_lanes = U8x16.to_list(u8a)
-		expected_u8_lanes = SimdOracle.U8x16.to_list(SimdOracle.U8x16.from_u128_bits(a))
+		expected_u8_lanes = SimdOracle.ScalarU8x16.to_list(SimdOracle.ScalarU8x16.from_u128_bits(a))
 		if u8_lanes != expected_u8_lanes {
 			if List.len(u8_lanes) != 16 {
 				crash "SIMD property mismatch: U8x16 to_list length"

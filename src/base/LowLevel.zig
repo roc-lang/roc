@@ -5,6 +5,7 @@
 //! no separate semantic/backend enum pair.
 
 const std = @import("std");
+const numeric_conversion = @import("numeric_conversion.zig");
 
 /// Canonical primitive operations shared across canonicalization and LIR/codegen.
 pub const LowLevel = enum(u16) {
@@ -45,6 +46,10 @@ pub const LowLevel = enum(u16) {
     str_from_utf8,
     str_split_on,
     str_join_with,
+    /// An interpolated `Str` literal's parts (its non-empty segments and its
+    /// values, in order, any number of them) written once: the lengths summed,
+    /// one string allocated, each part copied in. Every part is borrowed.
+    str_from_parts,
     str_inspect,
 
     // Numeric to_str operations
@@ -83,6 +88,7 @@ pub const LowLevel = enum(u16) {
     list_append_range_within_unsafe,
     list_append_sublist,
     list_append_le_bytes,
+    list_append_le_bytes_unsafe,
     list_slack_unique,
     list_owned_unique,
     list_set_in_place_unsafe,
@@ -94,14 +100,9 @@ pub const LowLevel = enum(u16) {
     list_replace_unsafe,
     list_swap,
     list_prepend,
-    list_first,
-    list_last,
-    list_drop_first,
-    list_drop_last,
     list_take_first,
     list_take_last,
     list_reverse,
-    list_sort_with,
     list_reserve,
     list_reserve_for_append,
     list_release_excess_capacity,
@@ -113,8 +114,20 @@ pub const LowLevel = enum(u16) {
     list_map_prepare_reuse,
     list_map_can_reuse,
     list_map_cast_unsafe,
+    /// `list_move_out_unsafe` for a buffer retyped to `List.map`'s output item.
+    /// Its third operand is `typeOnlyOperands`' `transform`: the buffer's type
+    /// does not say what its unwritten slots hold, so this operand tells
+    /// Lambda Solved.
     list_map_extract_unsafe,
     list_map_write_unsafe,
+    /// Moves the item at an index out of a uniquely owned list's buffer. The
+    /// result is an item of the list's own type.
+    list_move_out_unsafe,
+    /// Whether the list's item layout occupies at most the given number of
+    /// bytes: 1 or 0. A `match` on it with a literal bound folds at lowering
+    /// (see `layoutResolved`); anywhere else a backend answers it from the
+    /// item layout it builds for.
+    list_item_size_at_most,
 
     // Bool operations
     bool_not,
@@ -202,10 +215,8 @@ pub const LowLevel = enum(u16) {
     num_asin,
     num_acos,
     num_atan,
-    num_log,
     num_floor,
     num_ceiling,
-    num_to_str,
     f32_to_bits,
     f32_from_bits,
     f64_to_bits,
@@ -867,6 +878,21 @@ pub const LowLevel = enum(u16) {
         }
     };
 
+    /// The operations whose answer LIR lowering decides from committed
+    /// layouts, so a `match` on one can keep only the arm that answer selects
+    /// (design.md "In-Place List Transforms").
+    pub const LayoutResolved = enum {
+        list_map_can_reuse,
+        list_item_size_at_most,
+    };
+
+    /// This operation as a layout-resolved one, or null for every other.
+    pub fn layoutResolved(self: LowLevel) ?LayoutResolved {
+        if (self == .list_map_can_reuse) return .list_map_can_reuse;
+        if (self == .list_item_size_at_most) return .list_item_size_at_most;
+        return null;
+    }
+
     /// Operands read solely from their by-value representation. These reads
     /// need the saved descriptor, but never its backing allocation. Other
     /// operands retain their ordinary allocation-lifetime requirements.
@@ -888,1197 +914,514 @@ pub const LowLevel = enum(u16) {
     /// member, and neither is any operation whose meaning depends on anything
     /// but its operands' runtime representation.
     pub fn procedureKeyedByLayout(self: LowLevel) bool {
-        return switch (self) {
-            .list_len,
-            .list_prefetch,
-            .list_capacity,
-            .list_get_unsafe,
-            .list_append_unsafe,
-            .list_concat,
-            .list_append_range_within,
-            .list_copy_range_within,
-            .list_append_sublist,
-            .list_with_capacity,
-            .list_drop_at,
-            .list_sublist,
-            .list_set,
-            .list_replace_unsafe,
-            .list_swap,
-            .list_prepend,
-            .list_reserve,
-            .list_reserve_for_append,
-            .list_release_excess_capacity,
-            .list_map_prepare_reuse,
-            .list_map_cast_unsafe,
-            .list_map_extract_unsafe,
-            .list_map_write_unsafe,
-            .box_box,
-            .box_unbox,
-            => true,
+        return op_info[@backingInt(self)].keyed_by_layout;
+    }
 
-            .list_prefetched,
-            .str_is_eq,
-            .str_is_eq_static_small,
-            .str_static_small_word_eq,
-            .str_static_small_word_caseless_eq,
-            .str_concat,
-            .str_contains,
-            .str_trim,
-            .str_trim_start,
-            .str_trim_end,
-            .str_caseless_ascii_equals,
-            .str_with_ascii_lowercased,
-            .str_with_ascii_uppercased,
-            .str_starts_with,
-            .str_ends_with,
-            .str_repeat,
-            .str_drop_prefix,
-            .str_drop_prefix_caseless_ascii,
-            .str_drop_suffix,
-            .str_split_first,
-            .str_split_last,
-            .str_count_utf8_bytes,
-            .str_get_utf8_byte_unsafe,
-            .str_substring_unsafe,
-            .str_with_capacity,
-            .str_reserve,
-            .str_release_excess_capacity,
-            .str_to_utf8,
-            .str_from_utf8_lossy,
-            .str_from_utf8_validated,
-            .str_from_utf16_le_short,
-            .str_from_utf16_be_short,
-            .str_from_utf32_le_short,
-            .str_from_utf32_be_short,
-            .str_from_utf8,
-            .str_split_on,
-            .str_join_with,
-            .str_inspect,
-            .u8_to_str,
-            .i8_to_str,
-            .u16_to_str,
-            .i16_to_str,
-            .u32_to_str,
-            .i32_to_str,
-            .u64_to_str,
-            .i64_to_str,
-            .u128_to_str,
-            .i128_to_str,
-            .dec_to_str,
-            .f32_to_str,
-            .f64_to_str,
-            .list_append_range_within_unsafe,
-            .list_append_le_bytes,
-            .list_slack_unique,
-            .list_owned_unique,
-            .list_set_in_place_unsafe,
-            .list_sublist_borrowed,
-            .list_first,
-            .list_last,
-            .list_drop_first,
-            .list_drop_last,
-            .list_take_first,
-            .list_take_last,
-            .list_clear,
-            .list_reverse,
-            .list_sort_with,
-            .list_map_can_reuse,
-            .bool_not,
-            .bool_likely,
-            .dict_pseudo_seed,
-            .hasher_finish,
-            .hasher_write_bool,
-            .hasher_write_u8,
-            .hasher_write_u16,
-            .hasher_write_u32,
-            .hasher_write_u64,
-            .hasher_write_u128,
-            .hasher_write_i8,
-            .hasher_write_i16,
-            .hasher_write_i32,
-            .hasher_write_i64,
-            .hasher_write_i128,
-            .hasher_write_f32,
-            .hasher_write_f64,
-            .hasher_write_dec,
-            .hasher_write_bytes,
-            .hasher_write_str,
-            .crypto_sha256_hash_bytes,
-            .crypto_sha256_hasher_empty,
-            .crypto_sha256_hasher_write,
-            .crypto_sha256_hasher_finish,
-            .crypto_blake3_hash_bytes,
-            .crypto_blake3_hasher_empty,
-            .crypto_blake3_hasher_write,
-            .crypto_blake3_hasher_finish,
-            .num_is_eq,
-            .num_is_gt,
-            .num_is_gte,
-            .num_is_lt,
-            .num_is_lte,
-            .num_negate,
-            .num_abs,
-            .num_abs_diff,
-            .num_plus,
-            .num_minus,
-            .num_times,
-            .num_int_add_wrap,
-            .num_int_add_crash_on_overflow,
-            .num_int_add_overflows,
-            .num_int_add_proven_cannot_overflow,
-            .num_int_sub_wrap,
-            .num_int_sub_crash_on_overflow,
-            .num_int_sub_overflows,
-            .num_int_sub_proven_cannot_overflow,
-            .num_int_mul_wrap,
-            .num_int_mul_crash_on_overflow,
-            .num_int_mul_overflows,
-            .num_int_mul_proven_cannot_overflow,
-            .num_float_add,
-            .num_float_sub,
-            .num_float_mul,
-            .dec_mul,
-            .num_div_by,
-            .num_div_by_checked,
-            .num_div_trunc_by,
-            .num_div_trunc_by_checked,
-            .num_rem_by,
-            .num_rem_by_checked,
-            .num_mod_by,
-            .num_mod_by_checked,
-            .num_negate_checked,
-            .num_abs_checked,
-            .num_pow,
-            .num_atan2,
-            .num_sqrt,
-            .num_sin,
-            .num_cos,
-            .num_tan,
-            .num_asin,
-            .num_acos,
-            .num_atan,
-            .num_log,
-            .num_floor,
-            .num_ceiling,
-            .num_to_str,
-            .f32_to_bits,
-            .f32_from_bits,
-            .f64_to_bits,
-            .f64_from_bits,
-            .num_shift_left_by,
-            .num_shift_right_by,
-            .num_shift_right_zf_by,
-            .num_bitwise_and,
-            .num_bitwise_or,
-            .num_bitwise_xor,
-            .num_bitwise_not,
-            .num_count_one_bits,
-            .num_count_leading_zero_bits,
-            .num_count_trailing_zero_bits,
-            .num_from_le_bytes_unchecked,
-            .simd_load_16_unchecked,
-            .simd_store_16_unchecked,
-            .simd_append_16,
-            .simd_splat,
-            .simd_get_lane_unchecked,
-            .simd_with_lane_unchecked,
-            .simd_to_u128_bits,
-            .simd_from_u128_bits,
-            .simd_add_wrap,
-            .simd_sub_wrap,
-            .simd_add_sat,
-            .simd_sub_sat,
-            .simd_neg_wrap,
-            .simd_abs_wrap,
-            .simd_min,
-            .simd_max,
-            .simd_abs_diff,
-            .simd_avg_rounded,
-            .simd_mul_wrap,
-            .simd_mul_high,
-            .simd_mul_q15_sat,
-            .simd_mul_wide_lo,
-            .simd_mul_wide_hi,
-            .simd_dot_pairs,
-            .simd_dot_pairs_sat,
-            .simd_sad,
-            .simd_and,
-            .simd_or,
-            .simd_xor,
-            .simd_not,
-            .simd_bit_select,
-            .simd_eq_lanes,
-            .simd_gt_lanes,
-            .simd_gte_lanes,
-            .simd_bitmask,
-            .simd_shl_wrap,
-            .simd_shr_wrap,
-            .simd_shr_zf_wrap,
-            .simd_shr_rounded,
-            .simd_interleave_lo,
-            .simd_interleave_hi,
-            .simd_even_lanes,
-            .simd_odd_lanes,
-            .simd_reverse_lanes,
-            .simd_table_lookup,
-            .simd_concat_shift_bytes,
-            .simd_widen_lo,
-            .simd_widen_hi,
-            .simd_pairwise_add_widen,
-            .simd_narrow_wrap,
-            .simd_narrow_sat,
-            .simd_sum_lanes,
-            .simd_sum_lanes_wrap,
-            .simd_clmul_lo,
-            .simd_clmul_hi,
-            .u8_from_str,
-            .i8_from_str,
-            .u16_from_str,
-            .i16_from_str,
-            .u32_from_str,
-            .i32_from_str,
-            .u64_from_str,
-            .i64_from_str,
-            .u128_from_str,
-            .i128_from_str,
-            .dec_from_str,
-            .dec_to_attos,
-            .dec_from_attos,
-            .f32_from_str,
-            .f64_from_str,
-            .u8_from_str_prefix,
-            .u8_from_utf8_prefix,
-            .i8_from_str_prefix,
-            .i8_from_utf8_prefix,
-            .u16_from_str_prefix,
-            .u16_from_utf8_prefix,
-            .i16_from_str_prefix,
-            .i16_from_utf8_prefix,
-            .u32_from_str_prefix,
-            .u32_from_utf8_prefix,
-            .i32_from_str_prefix,
-            .i32_from_utf8_prefix,
-            .u64_from_str_prefix,
-            .u64_from_utf8_prefix,
-            .i64_from_str_prefix,
-            .i64_from_utf8_prefix,
-            .u128_from_str_prefix,
-            .u128_from_utf8_prefix,
-            .i128_from_str_prefix,
-            .i128_from_utf8_prefix,
-            .dec_from_str_prefix,
-            .dec_from_utf8_prefix,
-            .f32_from_str_prefix,
-            .f32_from_utf8_prefix,
-            .f64_from_str_prefix,
-            .f64_from_utf8_prefix,
-            .u8_to_i8_wrap,
-            .u8_to_i8_try,
-            .u8_to_i16,
-            .u8_to_i32,
-            .u8_to_i64,
-            .u8_to_i128,
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
-            .u8_to_u128,
-            .u8_to_f32,
-            .u8_to_f64,
-            .u8_to_dec,
-            .i8_to_i16,
-            .i8_to_i32,
-            .i8_to_i64,
-            .i8_to_i128,
-            .i8_to_u8_wrap,
-            .i8_to_u8_try,
-            .i8_to_u16_wrap,
-            .i8_to_u16_try,
-            .i8_to_u32_wrap,
-            .i8_to_u32_try,
-            .i8_to_u64_wrap,
-            .i8_to_u64_try,
-            .i8_to_u128_wrap,
-            .i8_to_u128_try,
-            .i8_to_f32,
-            .i8_to_f64,
-            .i8_to_dec,
-            .u16_to_i8_wrap,
-            .u16_to_i8_try,
-            .u16_to_i16_wrap,
-            .u16_to_i16_try,
-            .u16_to_i32,
-            .u16_to_i64,
-            .u16_to_i128,
-            .u16_to_u8_wrap,
-            .u16_to_u8_try,
-            .u16_to_u32,
-            .u16_to_u64,
-            .u16_to_u128,
-            .u16_to_f32,
-            .u16_to_f64,
-            .u16_to_dec,
-            .i16_to_i8_wrap,
-            .i16_to_i8_try,
-            .i16_to_i32,
-            .i16_to_i64,
-            .i16_to_i128,
-            .i16_to_u8_wrap,
-            .i16_to_u8_try,
-            .i16_to_u16_wrap,
-            .i16_to_u16_try,
-            .i16_to_u32_wrap,
-            .i16_to_u32_try,
-            .i16_to_u64_wrap,
-            .i16_to_u64_try,
-            .i16_to_u128_wrap,
-            .i16_to_u128_try,
-            .i16_to_f32,
-            .i16_to_f64,
-            .i16_to_dec,
-            .u32_to_i8_wrap,
-            .u32_to_i8_try,
-            .u32_to_i16_wrap,
-            .u32_to_i16_try,
-            .u32_to_i32_wrap,
-            .u32_to_i32_try,
-            .u32_to_i64,
-            .u32_to_i128,
-            .u32_to_u8_wrap,
-            .u32_to_u8_try,
-            .u32_to_u16_wrap,
-            .u32_to_u16_try,
-            .u32_to_u64,
-            .u32_to_u128,
-            .u32_to_f32,
-            .u32_to_f64,
-            .u32_to_dec,
-            .i32_to_i8_wrap,
-            .i32_to_i8_try,
-            .i32_to_i16_wrap,
-            .i32_to_i16_try,
-            .i32_to_i64,
-            .i32_to_i128,
-            .i32_to_u8_wrap,
-            .i32_to_u8_try,
-            .i32_to_u16_wrap,
-            .i32_to_u16_try,
-            .i32_to_u32_wrap,
-            .i32_to_u32_try,
-            .i32_to_u64_wrap,
-            .i32_to_u64_try,
-            .i32_to_u128_wrap,
-            .i32_to_u128_try,
-            .i32_to_f32,
-            .i32_to_f64,
-            .i32_to_dec,
-            .u64_to_i8_wrap,
-            .u64_to_i8_try,
-            .u64_to_i16_wrap,
-            .u64_to_i16_try,
-            .u64_to_i32_wrap,
-            .u64_to_i32_try,
-            .u64_to_i64_wrap,
-            .u64_to_i64_try,
-            .u64_to_i128,
-            .u64_to_u8_wrap,
-            .u64_to_u8_try,
-            .u64_to_u16_wrap,
-            .u64_to_u16_try,
-            .u64_to_u32_wrap,
-            .u64_to_u32_try,
-            .u64_to_u128,
-            .u64_to_f32,
-            .u64_to_f64,
-            .u64_to_dec,
-            .i64_to_i8_wrap,
-            .i64_to_i8_try,
-            .i64_to_i16_wrap,
-            .i64_to_i16_try,
-            .i64_to_i32_wrap,
-            .i64_to_i32_try,
-            .i64_to_i128,
-            .i64_to_u8_wrap,
-            .i64_to_u8_try,
-            .i64_to_u16_wrap,
-            .i64_to_u16_try,
-            .i64_to_u32_wrap,
-            .i64_to_u32_try,
-            .i64_to_u64_wrap,
-            .i64_to_u64_try,
-            .i64_to_u128_wrap,
-            .i64_to_u128_try,
-            .i64_to_f32,
-            .i64_to_f64,
-            .i64_to_dec,
-            .u128_to_i8_wrap,
-            .u128_to_i8_try,
-            .u128_to_i16_wrap,
-            .u128_to_i16_try,
-            .u128_to_i32_wrap,
-            .u128_to_i32_try,
-            .u128_to_i64_wrap,
-            .u128_to_i64_try,
-            .u128_to_i128_wrap,
-            .u128_to_i128_try,
-            .u128_to_u8_wrap,
-            .u128_to_u8_try,
-            .u128_to_u16_wrap,
-            .u128_to_u16_try,
-            .u128_to_u32_wrap,
-            .u128_to_u32_try,
-            .u128_to_u64_wrap,
-            .u128_to_u64_try,
-            .u128_to_f32,
-            .u128_to_f64,
-            .u128_to_dec_try_unsafe,
-            .i128_to_i8_wrap,
-            .i128_to_i8_try,
-            .i128_to_i16_wrap,
-            .i128_to_i16_try,
-            .i128_to_i32_wrap,
-            .i128_to_i32_try,
-            .i128_to_i64_wrap,
-            .i128_to_i64_try,
-            .i128_to_u8_wrap,
-            .i128_to_u8_try,
-            .i128_to_u16_wrap,
-            .i128_to_u16_try,
-            .i128_to_u32_wrap,
-            .i128_to_u32_try,
-            .i128_to_u64_wrap,
-            .i128_to_u64_try,
-            .i128_to_u128_wrap,
-            .i128_to_u128_try,
-            .i128_to_f32,
-            .i128_to_f64,
-            .i128_to_dec_try_unsafe,
-            .f32_to_i8_trunc,
-            .f32_to_i8_try_unsafe,
-            .f32_to_i16_trunc,
-            .f32_to_i16_try_unsafe,
-            .f32_to_i32_trunc,
-            .f32_to_i32_try_unsafe,
-            .f32_to_i64_trunc,
-            .f32_to_i64_try_unsafe,
-            .f32_to_i128_trunc,
-            .f32_to_i128_try_unsafe,
-            .f32_to_u8_trunc,
-            .f32_to_u8_try_unsafe,
-            .f32_to_u16_trunc,
-            .f32_to_u16_try_unsafe,
-            .f32_to_u32_trunc,
-            .f32_to_u32_try_unsafe,
-            .f32_to_u64_trunc,
-            .f32_to_u64_try_unsafe,
-            .f32_to_u128_trunc,
-            .f32_to_u128_try_unsafe,
-            .f32_to_f64,
-            .f64_to_i8_trunc,
-            .f64_to_i8_try_unsafe,
-            .f64_to_i16_trunc,
-            .f64_to_i16_try_unsafe,
-            .f64_to_i32_trunc,
-            .f64_to_i32_try_unsafe,
-            .f64_to_i64_trunc,
-            .f64_to_i64_try_unsafe,
-            .f64_to_i128_trunc,
-            .f64_to_i128_try_unsafe,
-            .f64_to_u8_trunc,
-            .f64_to_u8_try_unsafe,
-            .f64_to_u16_trunc,
-            .f64_to_u16_try_unsafe,
-            .f64_to_u32_trunc,
-            .f64_to_u32_try_unsafe,
-            .f64_to_u64_trunc,
-            .f64_to_u64_try_unsafe,
-            .f64_to_u128_trunc,
-            .f64_to_u128_try_unsafe,
-            .f64_to_f32_wrap,
-            .f64_to_f32_try_unsafe,
-            .dec_to_i8_trunc,
-            .dec_to_i8_try_unsafe,
-            .dec_to_i16_trunc,
-            .dec_to_i16_try_unsafe,
-            .dec_to_i32_trunc,
-            .dec_to_i32_try_unsafe,
-            .dec_to_i64_trunc,
-            .dec_to_i64_try_unsafe,
-            .dec_to_i128_trunc,
-            .dec_to_u8_trunc,
-            .dec_to_u8_try_unsafe,
-            .dec_to_u16_trunc,
-            .dec_to_u16_try_unsafe,
-            .dec_to_u32_trunc,
-            .dec_to_u32_try_unsafe,
-            .dec_to_u64_trunc,
-            .dec_to_u64_try_unsafe,
-            .dec_to_u128_trunc,
-            .dec_to_u128_try_unsafe,
-            .dec_to_f32_wrap,
-            .dec_to_f32_try_unsafe,
-            .dec_to_f64,
-            .box_unbox_borrowed,
-            .box_prepare_update,
-            .erased_capture_load,
-            .ptr_alloca,
-            .box_alloc_zeroed,
-            .ptr_store,
-            .ptr_load,
-            .ptr_cast,
-            .compare,
-            .crash,
-            => false,
-        };
+    /// How many trailing operands exist only for their types. Lambda Solved
+    /// reads them, every lowerer drops them unevaluated, and no later stage
+    /// sees them.
+    pub fn typeOnlyOperands(self: LowLevel) u32 {
+        return op_info[@backingInt(self)].type_only_operands;
     }
 
     /// Return the explicit RC metadata for this primitive. The masks identify
     /// argument positions whose refcount may be inspected for copy-on-write.
     pub fn rcEffect(self: LowLevel) RcEffect {
-        return switch (self) {
-            .str_concat => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            // Trimming a shared string returns a seamless slice of it rather
-            // than copying, so the result's outermost allocation is the
-            // argument's and its count is whatever the argument's was. Same
-            // regime as the list slice ops below.
-            .str_trim,
-            .str_trim_start,
-            .str_trim_end,
-            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
-
-            .str_with_ascii_lowercased,
-            .str_with_ascii_uppercased,
-            .str_reserve,
-            .str_release_excess_capacity,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            .str_drop_prefix,
-            .str_drop_suffix,
-            .str_substring_unsafe,
-            => RcEffect.retainsSharingArgs(argMask(&.{0})),
-
-            .str_drop_prefix_caseless_ascii,
-            .str_split_first,
-            .str_split_last,
-            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            // Prefix number parsing borrows its input and returns `rest` as an
-            // owned seamless slice of it: the builtin retains the source
-            // allocation itself, exactly like `str_drop_prefix_caseless_ascii`.
-            .u8_from_str_prefix,
-            .u8_from_utf8_prefix,
-            .i8_from_str_prefix,
-            .i8_from_utf8_prefix,
-            .u16_from_str_prefix,
-            .u16_from_utf8_prefix,
-            .i16_from_str_prefix,
-            .i16_from_utf8_prefix,
-            .u32_from_str_prefix,
-            .u32_from_utf8_prefix,
-            .i32_from_str_prefix,
-            .i32_from_utf8_prefix,
-            .u64_from_str_prefix,
-            .u64_from_utf8_prefix,
-            .i64_from_str_prefix,
-            .i64_from_utf8_prefix,
-            .u128_from_str_prefix,
-            .u128_from_utf8_prefix,
-            .i128_from_str_prefix,
-            .i128_from_utf8_prefix,
-            .dec_from_str_prefix,
-            .dec_from_utf8_prefix,
-            .f32_from_str_prefix,
-            .f32_from_utf8_prefix,
-            .f64_from_str_prefix,
-            .f64_from_utf8_prefix,
-            => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            .str_from_utf8 => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            // Valid UTF-8 retains and shares the borrowed list allocation;
-            // invalid UTF-8 allocates replacement bytes. Neither path consumes
-            // the list, and a shared result is not born unique.
-            .str_from_utf8_lossy => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
-            .str_from_utf8_validated => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            .list_drop_at,
-            .list_sublist,
-            .list_drop_first,
-            .list_drop_last,
-            .list_take_first,
-            .list_take_last,
-            => RcEffect.runtimeUniquenessMaybeSharedResult(argMask(&.{0})),
-
-            .list_sublist_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
-
-            .list_reverse,
-            .list_sort_with,
-            .list_reserve,
-            .list_reserve_for_append,
-            .list_release_excess_capacity,
-            .list_clear,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            // SIMD byte stores and appends consume/update their List(U8),
-            // which is argument 1 in both primitive signatures.
-            .simd_store_16_unchecked,
-            .simd_append_16,
-            => RcEffect.runtimeUniqueness(argMask(&.{1})),
-
-            .list_prepend => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{1})),
-
-            .list_append_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{1})),
-
-            // Like `list_append_unsafe`: stores into a list the loop promotion
-            // pass proved uniquely owned, so there is nothing to check at
-            // runtime. The displaced element is released inside the builtin.
-            .list_set_in_place_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
-
-            // Like `list_append_unsafe`: mutates a list the loop-append
-            // promotion pass proved uniquely owned with enough capacity, so
-            // there is nothing to check at runtime. Copied refcounted
-            // elements gain their references inside the builtin.
-            .list_append_range_within_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
-
-            // Moves the list's ownership unit into a new local before the
-            // reuse query, forcing ARC to preserve every later use first.
-            // List.map, List.update, and loop promotion use this transfer.
-            .list_map_prepare_reuse => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
-
-            // The same list; LIR lowering replaces it with an alias, so this
-            // describes the source-level operation only.
-            .list_prefetched => RcEffect.consumesArgsReturningConsumedArgs(argMask(&.{0})),
-
-            // Reads the prepared list's refcount (and slice bit) without
-            // changing it. List.map additionally gates this result on item
-            // representation compatibility during lowering.
-            .list_map_can_reuse => RcEffect.none(),
-            // The owned flag reads the list's count and nothing else; it is
-            // the check a versioned loop dispatches on, so a list proven
-            // unique makes it a constant.
-            .list_owned_unique => .{ .may_runtime_uniqueness_check_args = argMask(&.{0}) },
-
-            // Retypes a unique non-slice list to the output element type,
-            // keeping the same allocation. Only reachable behind a true
-            // `list_map_can_reuse`, so the result's count is 1 on return.
-            .list_map_cast_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), 0),
-
-            // Moves one element's ownership out of a unique list's buffer.
-            // The buffer slot keeps stale bytes until `list_map_write_unsafe`
-            // stores the replacement; the op itself performs no RC work.
-            .list_map_extract_unsafe => RcEffect.none(),
-
-            // Stores an owned element into the slot vacated by
-            // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
-            .list_map_write_unsafe => RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(argMask(&.{0}), argMask(&.{2})),
-
-            .list_swap => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            .list_set,
-            .list_replace_unsafe,
-            => RcEffect.runtimeUniquenessRetainingArgs(argMask(&.{0}), argMask(&.{2})),
-
-            .list_concat => RcEffect.runtimeUniqueness(argMask(&.{ 0, 1 })),
-
-            // Both appends mutate only their first list; `list_append_sublist`
-            // reads its source without consuming or retaining it. The
-            // within-list range copy mutates the one list it is given.
-            .list_append_range_within,
-            .list_copy_range_within,
-            .list_append_sublist,
-            .list_append_le_bytes,
-            => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            .list_first,
-            .list_last,
-            .list_get_unsafe,
-            => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
-
-            // Allocates the list of segments, and counts the source string
-            // once per segment it slices out of it.
-            .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
-
-            .str_repeat,
-            .str_from_utf16_le_short,
-            .str_from_utf16_be_short,
-            .str_from_utf32_le_short,
-            .str_from_utf32_be_short,
-
-            .str_with_capacity,
-            .str_inspect,
-            .u8_to_str,
-            .i8_to_str,
-            .u16_to_str,
-            .i16_to_str,
-            .u32_to_str,
-            .i32_to_str,
-            .u64_to_str,
-            .i64_to_str,
-            .u128_to_str,
-            .i128_to_str,
-            .dec_to_str,
-            .f32_to_str,
-            .f64_to_str,
-            .num_to_str,
-            .list_with_capacity,
-            .crypto_sha256_hash_bytes,
-            .crypto_sha256_hasher_empty,
-            .crypto_sha256_hasher_write,
-            .crypto_sha256_hasher_finish,
-            .crypto_blake3_hash_bytes,
-            .crypto_blake3_hasher_empty,
-            .crypto_blake3_hasher_write,
-            .crypto_blake3_hasher_finish,
-            => RcEffect.allocates(),
-
-            .str_join_with => RcEffect.allocatesConsumingArgs(argMask(&.{0})),
-
-            .box_box => RcEffect.allocatesRetainingArgs(argMask(&.{0})),
-
-            .box_unbox => .{
-                .may_retain_or_release = true,
-                .consume_args = argMask(&.{0}),
-                .result_shares_args = argMask(&.{0}),
-            },
-
-            .box_unbox_borrowed => RcEffect.retainsResultBorrowingArgs(argMask(&.{0})),
-
-            .box_prepare_update => RcEffect.runtimeUniqueness(argMask(&.{0})),
-
-            // The capture environment is read through the executing frame's
-            // closure, not through an explicit refcounted argument, so the
-            // result cannot name a lender to borrow from.
-            .erased_capture_load => RcEffect.retainsResult(),
-
-            .box_alloc_zeroed => RcEffect.allocates(),
-
-            // The stored value's ownership transfers into the pointed-at structure.
-            // A ptr address is never refcounted; a Box address is borrowed.
-            .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
-
-            .ptr_alloca,
-            .ptr_load,
-            .ptr_cast,
-            => RcEffect.none(),
-
-            .str_is_eq,
-            .str_is_eq_static_small,
-            .str_static_small_word_eq,
-            .str_static_small_word_caseless_eq,
-            .str_contains,
-            .str_caseless_ascii_equals,
-            .str_starts_with,
-            .str_ends_with,
-            .str_count_utf8_bytes,
-            .str_get_utf8_byte_unsafe,
-            .list_len,
-            .list_capacity,
-            .list_prefetch,
-            .list_slack_unique,
-            .bool_not,
-            .bool_likely,
-            .dict_pseudo_seed,
-            .hasher_finish,
-            .hasher_write_bool,
-            .hasher_write_u8,
-            .hasher_write_u16,
-            .hasher_write_u32,
-            .hasher_write_u64,
-            .hasher_write_u128,
-            .hasher_write_i8,
-            .hasher_write_i16,
-            .hasher_write_i32,
-            .hasher_write_i64,
-            .hasher_write_i128,
-            .hasher_write_f32,
-            .hasher_write_f64,
-            .hasher_write_dec,
-            .hasher_write_bytes,
-            .hasher_write_str,
-            .num_is_eq,
-            .num_is_gt,
-            .num_is_gte,
-            .num_is_lt,
-            .num_is_lte,
-            .num_negate,
-            .num_negate_checked,
-            .num_abs,
-            .num_abs_checked,
-            .num_abs_diff,
-            .num_plus,
-            .num_minus,
-            .num_times,
-            .num_int_add_wrap,
-            .num_int_add_crash_on_overflow,
-            .num_int_add_overflows,
-            .num_int_add_proven_cannot_overflow,
-            .num_int_sub_wrap,
-            .num_int_sub_crash_on_overflow,
-            .num_int_sub_overflows,
-            .num_int_sub_proven_cannot_overflow,
-            .num_int_mul_wrap,
-            .num_int_mul_crash_on_overflow,
-            .num_int_mul_overflows,
-            .num_int_mul_proven_cannot_overflow,
-            .num_float_add,
-            .num_float_sub,
-            .num_float_mul,
-            .dec_mul,
-            .num_div_by,
-            .num_div_by_checked,
-            .num_div_trunc_by,
-            .num_div_trunc_by_checked,
-            .num_rem_by,
-            .num_rem_by_checked,
-            .num_mod_by,
-            .num_mod_by_checked,
-            .num_pow,
-            .num_atan2,
-            .num_sqrt,
-            .num_sin,
-            .num_cos,
-            .num_tan,
-            .num_asin,
-            .num_acos,
-            .num_atan,
-            .num_log,
-            .num_floor,
-            .num_ceiling,
-            .f32_to_bits,
-            .f32_from_bits,
-            .f64_to_bits,
-            .f64_from_bits,
-            .dec_to_attos,
-            .dec_from_attos,
-            .num_shift_left_by,
-            .num_shift_right_by,
-            .num_shift_right_zf_by,
-            .num_bitwise_and,
-            .num_bitwise_or,
-            .num_bitwise_xor,
-            .num_bitwise_not,
-            .num_count_one_bits,
-            .num_count_leading_zero_bits,
-            .num_count_trailing_zero_bits,
-            .num_from_le_bytes_unchecked,
-            .simd_load_16_unchecked,
-            .simd_splat,
-            .simd_get_lane_unchecked,
-            .simd_with_lane_unchecked,
-            .simd_to_u128_bits,
-            .simd_from_u128_bits,
-            .simd_add_wrap,
-            .simd_sub_wrap,
-            .simd_add_sat,
-            .simd_sub_sat,
-            .simd_neg_wrap,
-            .simd_abs_wrap,
-            .simd_min,
-            .simd_max,
-            .simd_abs_diff,
-            .simd_avg_rounded,
-            .simd_mul_wrap,
-            .simd_mul_high,
-            .simd_mul_q15_sat,
-            .simd_mul_wide_lo,
-            .simd_mul_wide_hi,
-            .simd_dot_pairs,
-            .simd_dot_pairs_sat,
-            .simd_sad,
-            .simd_and,
-            .simd_or,
-            .simd_xor,
-            .simd_not,
-            .simd_bit_select,
-            .simd_eq_lanes,
-            .simd_gt_lanes,
-            .simd_gte_lanes,
-            .simd_bitmask,
-            .simd_shl_wrap,
-            .simd_shr_wrap,
-            .simd_shr_zf_wrap,
-            .simd_shr_rounded,
-            .simd_interleave_lo,
-            .simd_interleave_hi,
-            .simd_even_lanes,
-            .simd_odd_lanes,
-            .simd_reverse_lanes,
-            .simd_table_lookup,
-            .simd_concat_shift_bytes,
-            .simd_widen_lo,
-            .simd_widen_hi,
-            .simd_pairwise_add_widen,
-            .simd_narrow_wrap,
-            .simd_narrow_sat,
-            .simd_sum_lanes,
-            .simd_sum_lanes_wrap,
-            .simd_clmul_lo,
-            .simd_clmul_hi,
-            .u8_from_str,
-            .i8_from_str,
-            .u16_from_str,
-            .i16_from_str,
-            .u32_from_str,
-            .i32_from_str,
-            .u64_from_str,
-            .i64_from_str,
-            .u128_from_str,
-            .i128_from_str,
-            .dec_from_str,
-            .f32_from_str,
-            .f64_from_str,
-            .u8_to_i8_wrap,
-            .u8_to_i8_try,
-            .u8_to_i16,
-            .u8_to_i32,
-            .u8_to_i64,
-            .u8_to_i128,
-            .u8_to_u16,
-            .u8_to_u32,
-            .u8_to_u64,
-            .u8_to_u128,
-            .u8_to_f32,
-            .u8_to_f64,
-            .u8_to_dec,
-            .i8_to_i16,
-            .i8_to_i32,
-            .i8_to_i64,
-            .i8_to_i128,
-            .i8_to_u8_wrap,
-            .i8_to_u8_try,
-            .i8_to_u16_wrap,
-            .i8_to_u16_try,
-            .i8_to_u32_wrap,
-            .i8_to_u32_try,
-            .i8_to_u64_wrap,
-            .i8_to_u64_try,
-            .i8_to_u128_wrap,
-            .i8_to_u128_try,
-            .i8_to_f32,
-            .i8_to_f64,
-            .i8_to_dec,
-            .u16_to_i8_wrap,
-            .u16_to_i8_try,
-            .u16_to_i16_wrap,
-            .u16_to_i16_try,
-            .u16_to_i32,
-            .u16_to_i64,
-            .u16_to_i128,
-            .u16_to_u8_wrap,
-            .u16_to_u8_try,
-            .u16_to_u32,
-            .u16_to_u64,
-            .u16_to_u128,
-            .u16_to_f32,
-            .u16_to_f64,
-            .u16_to_dec,
-            .i16_to_i8_wrap,
-            .i16_to_i8_try,
-            .i16_to_i32,
-            .i16_to_i64,
-            .i16_to_i128,
-            .i16_to_u8_wrap,
-            .i16_to_u8_try,
-            .i16_to_u16_wrap,
-            .i16_to_u16_try,
-            .i16_to_u32_wrap,
-            .i16_to_u32_try,
-            .i16_to_u64_wrap,
-            .i16_to_u64_try,
-            .i16_to_u128_wrap,
-            .i16_to_u128_try,
-            .i16_to_f32,
-            .i16_to_f64,
-            .i16_to_dec,
-            .u32_to_i8_wrap,
-            .u32_to_i8_try,
-            .u32_to_i16_wrap,
-            .u32_to_i16_try,
-            .u32_to_i32_wrap,
-            .u32_to_i32_try,
-            .u32_to_i64,
-            .u32_to_i128,
-            .u32_to_u8_wrap,
-            .u32_to_u8_try,
-            .u32_to_u16_wrap,
-            .u32_to_u16_try,
-            .u32_to_u64,
-            .u32_to_u128,
-            .u32_to_f32,
-            .u32_to_f64,
-            .u32_to_dec,
-            .i32_to_i8_wrap,
-            .i32_to_i8_try,
-            .i32_to_i16_wrap,
-            .i32_to_i16_try,
-            .i32_to_i64,
-            .i32_to_i128,
-            .i32_to_u8_wrap,
-            .i32_to_u8_try,
-            .i32_to_u16_wrap,
-            .i32_to_u16_try,
-            .i32_to_u32_wrap,
-            .i32_to_u32_try,
-            .i32_to_u64_wrap,
-            .i32_to_u64_try,
-            .i32_to_u128_wrap,
-            .i32_to_u128_try,
-            .i32_to_f32,
-            .i32_to_f64,
-            .i32_to_dec,
-            .u64_to_i8_wrap,
-            .u64_to_i8_try,
-            .u64_to_i16_wrap,
-            .u64_to_i16_try,
-            .u64_to_i32_wrap,
-            .u64_to_i32_try,
-            .u64_to_i64_wrap,
-            .u64_to_i64_try,
-            .u64_to_i128,
-            .u64_to_u8_wrap,
-            .u64_to_u8_try,
-            .u64_to_u16_wrap,
-            .u64_to_u16_try,
-            .u64_to_u32_wrap,
-            .u64_to_u32_try,
-            .u64_to_u128,
-            .u64_to_f32,
-            .u64_to_f64,
-            .u64_to_dec,
-            .i64_to_i8_wrap,
-            .i64_to_i8_try,
-            .i64_to_i16_wrap,
-            .i64_to_i16_try,
-            .i64_to_i32_wrap,
-            .i64_to_i32_try,
-            .i64_to_i128,
-            .i64_to_u8_wrap,
-            .i64_to_u8_try,
-            .i64_to_u16_wrap,
-            .i64_to_u16_try,
-            .i64_to_u32_wrap,
-            .i64_to_u32_try,
-            .i64_to_u64_wrap,
-            .i64_to_u64_try,
-            .i64_to_u128_wrap,
-            .i64_to_u128_try,
-            .i64_to_f32,
-            .i64_to_f64,
-            .i64_to_dec,
-            .u128_to_i8_wrap,
-            .u128_to_i8_try,
-            .u128_to_i16_wrap,
-            .u128_to_i16_try,
-            .u128_to_i32_wrap,
-            .u128_to_i32_try,
-            .u128_to_i64_wrap,
-            .u128_to_i64_try,
-            .u128_to_i128_wrap,
-            .u128_to_i128_try,
-            .u128_to_u8_wrap,
-            .u128_to_u8_try,
-            .u128_to_u16_wrap,
-            .u128_to_u16_try,
-            .u128_to_u32_wrap,
-            .u128_to_u32_try,
-            .u128_to_u64_wrap,
-            .u128_to_u64_try,
-            .u128_to_f32,
-            .u128_to_f64,
-            .u128_to_dec_try_unsafe,
-            .i128_to_i8_wrap,
-            .i128_to_i8_try,
-            .i128_to_i16_wrap,
-            .i128_to_i16_try,
-            .i128_to_i32_wrap,
-            .i128_to_i32_try,
-            .i128_to_i64_wrap,
-            .i128_to_i64_try,
-            .i128_to_u8_wrap,
-            .i128_to_u8_try,
-            .i128_to_u16_wrap,
-            .i128_to_u16_try,
-            .i128_to_u32_wrap,
-            .i128_to_u32_try,
-            .i128_to_u64_wrap,
-            .i128_to_u64_try,
-            .i128_to_u128_wrap,
-            .i128_to_u128_try,
-            .i128_to_f32,
-            .i128_to_f64,
-            .i128_to_dec_try_unsafe,
-            .f32_to_i8_trunc,
-            .f32_to_i8_try_unsafe,
-            .f32_to_i16_trunc,
-            .f32_to_i16_try_unsafe,
-            .f32_to_i32_trunc,
-            .f32_to_i32_try_unsafe,
-            .f32_to_i64_trunc,
-            .f32_to_i64_try_unsafe,
-            .f32_to_i128_trunc,
-            .f32_to_i128_try_unsafe,
-            .f32_to_u8_trunc,
-            .f32_to_u8_try_unsafe,
-            .f32_to_u16_trunc,
-            .f32_to_u16_try_unsafe,
-            .f32_to_u32_trunc,
-            .f32_to_u32_try_unsafe,
-            .f32_to_u64_trunc,
-            .f32_to_u64_try_unsafe,
-            .f32_to_u128_trunc,
-            .f32_to_u128_try_unsafe,
-            .f32_to_f64,
-            .f64_to_i8_trunc,
-            .f64_to_i8_try_unsafe,
-            .f64_to_i16_trunc,
-            .f64_to_i16_try_unsafe,
-            .f64_to_i32_trunc,
-            .f64_to_i32_try_unsafe,
-            .f64_to_i64_trunc,
-            .f64_to_i64_try_unsafe,
-            .f64_to_i128_trunc,
-            .f64_to_i128_try_unsafe,
-            .f64_to_u8_trunc,
-            .f64_to_u8_try_unsafe,
-            .f64_to_u16_trunc,
-            .f64_to_u16_try_unsafe,
-            .f64_to_u32_trunc,
-            .f64_to_u32_try_unsafe,
-            .f64_to_u64_trunc,
-            .f64_to_u64_try_unsafe,
-            .f64_to_u128_trunc,
-            .f64_to_u128_try_unsafe,
-            .f64_to_f32_wrap,
-            .f64_to_f32_try_unsafe,
-            .dec_to_i8_trunc,
-            .dec_to_i8_try_unsafe,
-            .dec_to_i16_trunc,
-            .dec_to_i16_try_unsafe,
-            .dec_to_i32_trunc,
-            .dec_to_i32_try_unsafe,
-            .dec_to_i64_trunc,
-            .dec_to_i64_try_unsafe,
-            .dec_to_i128_trunc,
-            .dec_to_u8_trunc,
-            .dec_to_u8_try_unsafe,
-            .dec_to_u16_trunc,
-            .dec_to_u16_try_unsafe,
-            .dec_to_u32_trunc,
-            .dec_to_u32_try_unsafe,
-            .dec_to_u64_trunc,
-            .dec_to_u64_try_unsafe,
-            .dec_to_u128_trunc,
-            .dec_to_u128_try_unsafe,
-            .dec_to_f32_wrap,
-            .dec_to_f32_try_unsafe,
-            .dec_to_f64,
-            .compare,
-            .crash,
-            => RcEffect.none(),
-        };
+        return op_info[@backingInt(self)].rc_effect;
     }
+
+    /// How much of a type variable a body asks for when a value whose type
+    /// mentions that variable reaches one of its operations (design.md
+    /// "Specialization By Demand").
+    pub const ElementDemand = enum(u2) {
+        /// The operation reads nothing that depends on the variable and never
+        /// owns the value: a list header's length or capacity.
+        none,
+        /// The operation moves, stores, copies, or refcounts values of the
+        /// variable's type, which needs only their layout.
+        layout,
+        /// The operation's behavior depends on the variable's type itself.
+        full,
+    };
+
+    /// The demand this operation places on every type variable that argument
+    /// `arg`'s type mentions. An argument whose type is fixed mentions no
+    /// variable, so its entry is never consulted. The operation's result is
+    /// not an argument: a value it produces is demanded by whatever consumes
+    /// it.
+    pub fn elementDemand(self: LowLevel, arg: usize) ElementDemand {
+        const demands = op_info[@backingInt(self)].element_demands;
+        if (arg >= demands.len) return .full;
+        return demands[arg];
+    }
+
+    /// The most arguments `elementDemand` records separately; every later
+    /// argument is `full`.
+    const max_element_demand_args = 4;
+
+    /// One operation's `elementDemand` entries by argument position.
+    const ElementDemands = [max_element_demand_args]ElementDemand;
+
+    /// The per-operation properties behind `procedureKeyedByLayout`,
+    /// `rcEffect`, `elementDemand`, and `typeOnlyOperands`.
+    const OpInfo = struct {
+        keyed_by_layout: bool,
+        rc_effect: RcEffect,
+        element_demands: ElementDemands = @splat(.full),
+        type_only_operands: u32 = 0,
+
+        /// This operation with the given argument demands, in argument
+        /// order; arguments past the end stay `full`.
+        fn elements(self: OpInfo, comptime demands: []const ElementDemand) OpInfo {
+            var out = self;
+            for (demands, 0..) |demand, index| out.element_demands[index] = demand;
+            return out;
+        }
+
+        /// This operation with its last `count` operands existing only for
+        /// their types.
+        fn typeOnly(self: OpInfo, comptime count: u32) OpInfo {
+            var out = self;
+            out.type_only_operands = count;
+            return out;
+        }
+    };
+
+    /// An operation on `procedureKeyedByLayout`'s allow list.
+    fn byLayout(rc_effect: RcEffect) OpInfo {
+        return .{ .keyed_by_layout = true, .rc_effect = rc_effect };
+    }
+
+    /// An operation whose Builtin procedures are identified by their types.
+    fn byType(rc_effect: RcEffect) OpInfo {
+        return .{ .keyed_by_layout = false, .rc_effect = rc_effect };
+    }
+
+    /// The properties of every operation that converts between two machine
+    /// number types, which `numeric_conversion.getConversionSpec` classifies
+    /// from the operation's name at comptime. Its operands and result are
+    /// scalars, so there is no refcount for it to touch.
+    const numeric_conversion_info = byType(.none());
+
+    /// Every operation's `OpInfo`, indexed by enum value.
+    const op_info = blk: {
+        @setEvalBranchQuota(1 << 14);
+        const ops = std.enums.values(LowLevel);
+        var infos: [ops.len]OpInfo = undefined;
+        for (ops) |op| {
+            infos[@backingInt(op)] = if (numeric_conversion.getConversionSpec(op) != null)
+                numeric_conversion_info
+            else
+                @field(explicit_op_info, @tagName(op));
+        }
+        break :blk infos;
+    };
+
+    /// A struct with one field for each operation that is not a numeric
+    /// conversion, so `explicit_op_info` must give every such operation its
+    /// own row and cannot give one to a numeric conversion.
+    const ExplicitOpInfo = blk: {
+        @setEvalBranchQuota(1 << 14);
+        var names: []const []const u8 = &.{};
+        for (std.enums.values(LowLevel)) |op| {
+            if (numeric_conversion.getConversionSpec(op) == null) names = names ++ .{@tagName(op)};
+        }
+        break :blk @Struct(.auto, null, names, &@splat(OpInfo), &@splat(.{}));
+    };
+
+    const arg_0 = argMask(&.{0});
+    const arg_1 = argMask(&.{1});
+    const arg_2 = argMask(&.{2});
+
+    /// The properties of every operation that is not a numeric conversion.
+    const explicit_op_info: ExplicitOpInfo = .{
+        .str_concat = byType(.runtimeUniqueness(arg_0)),
+
+        // Trimming a shared string returns a seamless slice of it rather
+        // than copying, so the result's outermost allocation is the
+        // argument's and its count is whatever the argument's was. Same
+        // regime as the list slice ops below.
+        .str_trim = byType(.runtimeUniquenessMaybeSharedResult(arg_0)),
+        .str_trim_start = byType(.runtimeUniquenessMaybeSharedResult(arg_0)),
+        .str_trim_end = byType(.runtimeUniquenessMaybeSharedResult(arg_0)),
+
+        .str_with_ascii_lowercased = byType(.runtimeUniqueness(arg_0)),
+        .str_with_ascii_uppercased = byType(.runtimeUniqueness(arg_0)),
+        .str_reserve = byType(.runtimeUniqueness(arg_0)),
+        .str_release_excess_capacity = byType(.runtimeUniqueness(arg_0)),
+
+        .str_drop_prefix = byType(.retainsSharingArgs(arg_0)),
+        .str_drop_suffix = byType(.retainsSharingArgs(arg_0)),
+        .str_substring_unsafe = byType(.retainsSharingArgs(arg_0)),
+
+        .str_drop_prefix_caseless_ascii = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .str_split_first = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .str_split_last = byType(.retainsOrReleasesSharingArgs(arg_0)),
+
+        // Prefix number parsing borrows its input and returns `rest` as an
+        // owned seamless slice of it: the builtin retains the source
+        // allocation itself, exactly like `str_drop_prefix_caseless_ascii`.
+        .u8_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u8_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i8_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i8_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u16_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u16_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i16_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i16_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u32_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u32_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i32_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i32_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u64_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u64_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i64_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i64_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u128_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .u128_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i128_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .i128_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .dec_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .dec_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .f32_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .f32_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .f64_from_str_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+        .f64_from_utf8_prefix = byType(.retainsOrReleasesSharingArgs(arg_0)),
+
+        .str_from_utf8 = byType(.retainsOrReleasesSharingArgs(arg_0)),
+
+        // Valid UTF-8 retains and shares the borrowed list allocation;
+        // invalid UTF-8 allocates replacement bytes. Neither path consumes
+        // the list, and a shared result is not born unique.
+        .str_from_utf8_lossy = byType(.allocatesAndRetainsOrReleasesSharingArgs(arg_0)),
+
+        .str_to_utf8 = byType(.allocatesAndRetainsOrReleasesSharingArgs(arg_0)),
+        .str_from_utf8_validated = byType(.retainsOrReleasesSharingArgs(arg_0)),
+
+        .list_drop_at = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_sublist = byLayout(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_take_first = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+        .list_take_last = byType(.runtimeUniquenessMaybeSharedResult(arg_0)).elements(&.{ .layout, .none }),
+
+        .list_sublist_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
+
+        .list_reverse = byType(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
+        .list_reserve = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none }),
+        .list_reserve_for_append = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none }),
+        .list_release_excess_capacity = byLayout(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
+        .list_clear = byType(.runtimeUniqueness(arg_0)).elements(&.{.layout}),
+
+        // SIMD byte stores and appends consume/update their List(U8),
+        // which is argument 1 in both primitive signatures.
+        .simd_store_16_unchecked = byType(.runtimeUniqueness(arg_1)),
+        .simd_append_16 = byType(.runtimeUniqueness(arg_1)),
+
+        .list_prepend = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_1)).elements(&.{ .layout, .layout }),
+
+        .list_append_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_1)).elements(&.{ .layout, .layout }),
+
+        // Like `list_append_unsafe`: stores into a list the loop promotion
+        // pass proved uniquely owned, so there is nothing to check at
+        // runtime. The displaced element is released inside the builtin.
+        .list_set_in_place_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
+
+        // Like `list_append_unsafe`: mutates a list the loop-append
+        // promotion pass proved uniquely owned with enough capacity, so
+        // there is nothing to check at runtime. Copied refcounted
+        // elements gain their references inside the builtin.
+        .list_append_range_within_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)).elements(&.{ .layout, .none, .none }),
+
+        // Moves the list's ownership unit into a new local before the
+        // reuse query, forcing ARC to preserve every later use first.
+        // List.map, List.update, and loop promotion use this transfer.
+        .list_map_prepare_reuse = byLayout(.consumesArgsReturningConsumedArgs(arg_0)).elements(&.{.layout}),
+
+        // The same list; LIR lowering replaces it with an alias, so this
+        // describes the source-level operation only.
+        .list_prefetched = byType(.consumesArgsReturningConsumedArgs(arg_0)).elements(&.{ .layout, .none }),
+
+        // Reads the prepared list's refcount (and slice bit) without
+        // changing it. List.map additionally gates this result on item
+        // representation compatibility during lowering.
+        .list_map_can_reuse = byType(.none()),
+        // The owned flag reads the list's count and nothing else; it is
+        // the check a versioned loop dispatches on, so a list proven
+        // unique makes it a constant.
+        .list_owned_unique = byType(.{ .may_runtime_uniqueness_check_args = arg_0 }).elements(&.{.none}),
+
+        // Retypes a unique non-slice list to the output element type,
+        // keeping the same allocation. Only reachable behind a true
+        // `list_map_can_reuse`, so the result's count is 1 on return.
+        .list_map_cast_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)).elements(&.{.layout}),
+
+        // Moves one element's ownership out of a unique list's buffer.
+        // The buffer slot keeps stale bytes until `list_map_write_unsafe`
+        // stores the replacement; the op itself performs no RC work.
+        // Its `transform` operand puts a function in every request's type,
+        // and a function's type is program-specific, so it is not layout-keyed.
+        .list_map_extract_unsafe = byType(.none()).elements(&.{ .layout, .none, .none }).typeOnly(1),
+
+        // The move `list_map_extract_unsafe` performs, on a list whose item
+        // type does not change.
+        .list_move_out_unsafe = byLayout(.none()).elements(&.{ .layout, .none }),
+
+        // Stores an owned element into the slot vacated by
+        // `list_map_extract_unsafe`, mirroring `list_append_unsafe`.
+        .list_map_write_unsafe = byLayout(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
+
+        // Reads the bound and the list's layout, never the list itself; the
+        // bound is an operand value, so the operation is not layout-keyed.
+        .list_item_size_at_most = byType(.none()).elements(&.{ .layout, .none }),
+
+        .list_swap = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none }),
+
+        .list_set = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
+        .list_replace_unsafe = byLayout(.runtimeUniquenessRetainingArgs(arg_0, arg_2)).elements(&.{ .layout, .none, .layout }),
+
+        .list_concat = byLayout(.runtimeUniqueness(argMask(&.{ 0, 1 }))).elements(&.{ .layout, .layout }),
+
+        // Both appends mutate only their first list; `list_append_sublist`
+        // reads its source without consuming or retaining it. The
+        // within-list range copy mutates the one list it is given.
+        .list_append_range_within = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none }),
+        .list_copy_range_within = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .none, .none, .none }),
+        .list_append_sublist = byLayout(.runtimeUniqueness(arg_0)).elements(&.{ .layout, .layout, .none, .none }),
+        .list_append_le_bytes = byType(.runtimeUniqueness(arg_0)),
+        // Like `list_append_unsafe`: stores a word into a list the
+        // loop-append promotion pass proved uniquely owned with a word of
+        // spare capacity, so there is nothing to check at runtime.
+        .list_append_le_bytes_unsafe = byType(.consumesArgsReturningConsumedArgsRetainingArgs(arg_0, 0)),
+
+        .list_get_unsafe = byLayout(.retainsResultBorrowingArgs(arg_0)).elements(&.{ .layout, .none }),
+
+        // Allocates the list of segments, and counts the source string
+        // once per segment it slices out of it.
+        .str_split_on = byType(.allocatesAndRetainsOrReleasesSharingArgs(arg_0)),
+
+        .str_repeat = byType(.allocates()),
+        .str_from_utf16_le_short = byType(.allocates()),
+        .str_from_utf16_be_short = byType(.allocates()),
+        .str_from_utf32_le_short = byType(.allocates()),
+        .str_from_utf32_be_short = byType(.allocates()),
+        .str_with_capacity = byType(.allocates()),
+        .str_inspect = byType(.allocates()),
+        .u8_to_str = byType(.allocates()),
+        .i8_to_str = byType(.allocates()),
+        .u16_to_str = byType(.allocates()),
+        .i16_to_str = byType(.allocates()),
+        .u32_to_str = byType(.allocates()),
+        .i32_to_str = byType(.allocates()),
+        .u64_to_str = byType(.allocates()),
+        .i64_to_str = byType(.allocates()),
+        .u128_to_str = byType(.allocates()),
+        .i128_to_str = byType(.allocates()),
+        .dec_to_str = byType(.allocates()),
+        .f32_to_str = byType(.allocates()),
+        .f64_to_str = byType(.allocates()),
+        .list_with_capacity = byLayout(.allocates()).elements(&.{.none}),
+        .crypto_sha256_hash_bytes = byType(.allocates()),
+        .crypto_sha256_hasher_empty = byType(.allocates()),
+        .crypto_sha256_hasher_write = byType(.allocates()),
+        .crypto_sha256_hasher_finish = byType(.allocates()),
+        .crypto_blake3_hash_bytes = byType(.allocates()),
+        .crypto_blake3_hasher_empty = byType(.allocates()),
+        .crypto_blake3_hasher_write = byType(.allocates()),
+        .crypto_blake3_hasher_finish = byType(.allocates()),
+
+        .str_join_with = byType(.allocatesConsumingArgs(arg_0)),
+        .str_from_parts = byType(.allocates()),
+
+        .box_box = byLayout(.allocatesRetainingArgs(arg_0)).elements(&.{.layout}),
+
+        .box_unbox = byLayout(.{ .may_retain_or_release = true, .consume_args = arg_0, .result_shares_args = arg_0 }).elements(&.{.layout}),
+
+        .box_unbox_borrowed = byType(.retainsResultBorrowingArgs(arg_0)).elements(&.{.layout}),
+
+        .box_prepare_update = byType(.runtimeUniqueness(arg_0)),
+
+        // The capture environment is read through the executing frame's
+        // closure, not through an explicit refcounted argument, so the
+        // result cannot name a lender to borrow from.
+        .erased_capture_load = byType(.retainsResult()),
+
+        .box_alloc_zeroed = byType(.allocates()),
+
+        // The stored value's ownership transfers into the pointed-at structure.
+        // A ptr address is never refcounted; a Box address is borrowed.
+        .ptr_store = byType(.consumesArgsRetainingArgs(arg_1, 0)),
+
+        .ptr_alloca = byType(.none()),
+        .ptr_load = byType(.none()),
+        .ptr_cast = byType(.none()),
+
+        .str_is_eq = byType(.none()),
+        .str_is_eq_static_small = byType(.none()),
+        .str_static_small_word_eq = byType(.none()),
+        .str_static_small_word_caseless_eq = byType(.none()),
+        .str_contains = byType(.none()),
+        .str_caseless_ascii_equals = byType(.none()),
+        .str_starts_with = byType(.none()),
+        .str_ends_with = byType(.none()),
+        .str_count_utf8_bytes = byType(.none()),
+        .str_get_utf8_byte_unsafe = byType(.none()),
+        .list_len = byLayout(.none()).elements(&.{.none}),
+        .list_capacity = byLayout(.none()).elements(&.{.none}),
+        .list_prefetch = byLayout(.none()).elements(&.{ .none, .none }),
+        .list_slack_unique = byType(.none()).elements(&.{.none}),
+        .bool_not = byType(.none()),
+        .bool_likely = byType(.none()),
+        .dict_pseudo_seed = byType(.none()),
+        .hasher_finish = byType(.none()),
+        .hasher_write_bool = byType(.none()),
+        .hasher_write_u8 = byType(.none()),
+        .hasher_write_u16 = byType(.none()),
+        .hasher_write_u32 = byType(.none()),
+        .hasher_write_u64 = byType(.none()),
+        .hasher_write_u128 = byType(.none()),
+        .hasher_write_i8 = byType(.none()),
+        .hasher_write_i16 = byType(.none()),
+        .hasher_write_i32 = byType(.none()),
+        .hasher_write_i64 = byType(.none()),
+        .hasher_write_i128 = byType(.none()),
+        .hasher_write_f32 = byType(.none()),
+        .hasher_write_f64 = byType(.none()),
+        .hasher_write_dec = byType(.none()),
+        .hasher_write_bytes = byType(.none()),
+        .hasher_write_str = byType(.none()),
+        .num_is_eq = byType(.none()),
+        .num_is_gt = byType(.none()),
+        .num_is_gte = byType(.none()),
+        .num_is_lt = byType(.none()),
+        .num_is_lte = byType(.none()),
+        .num_negate = byType(.none()),
+        .num_negate_checked = byType(.none()),
+        .num_abs = byType(.none()),
+        .num_abs_checked = byType(.none()),
+        .num_abs_diff = byType(.none()),
+        .num_plus = byType(.none()),
+        .num_minus = byType(.none()),
+        .num_times = byType(.none()),
+        .num_int_add_wrap = byType(.none()),
+        .num_int_add_crash_on_overflow = byType(.none()),
+        .num_int_add_overflows = byType(.none()),
+        .num_int_add_proven_cannot_overflow = byType(.none()),
+        .num_int_sub_wrap = byType(.none()),
+        .num_int_sub_crash_on_overflow = byType(.none()),
+        .num_int_sub_overflows = byType(.none()),
+        .num_int_sub_proven_cannot_overflow = byType(.none()),
+        .num_int_mul_wrap = byType(.none()),
+        .num_int_mul_crash_on_overflow = byType(.none()),
+        .num_int_mul_overflows = byType(.none()),
+        .num_int_mul_proven_cannot_overflow = byType(.none()),
+        .num_float_add = byType(.none()),
+        .num_float_sub = byType(.none()),
+        .num_float_mul = byType(.none()),
+        .dec_mul = byType(.none()),
+        .num_div_by = byType(.none()),
+        .num_div_by_checked = byType(.none()),
+        .num_div_trunc_by = byType(.none()),
+        .num_div_trunc_by_checked = byType(.none()),
+        .num_rem_by = byType(.none()),
+        .num_rem_by_checked = byType(.none()),
+        .num_mod_by = byType(.none()),
+        .num_mod_by_checked = byType(.none()),
+        .num_pow = byType(.none()),
+        .num_atan2 = byType(.none()),
+        .num_sqrt = byType(.none()),
+        .num_sin = byType(.none()),
+        .num_cos = byType(.none()),
+        .num_tan = byType(.none()),
+        .num_asin = byType(.none()),
+        .num_acos = byType(.none()),
+        .num_atan = byType(.none()),
+        .num_floor = byType(.none()),
+        .num_ceiling = byType(.none()),
+        .f32_to_bits = byType(.none()),
+        .f32_from_bits = byType(.none()),
+        .f64_to_bits = byType(.none()),
+        .f64_from_bits = byType(.none()),
+        .dec_to_attos = byType(.none()),
+        .dec_from_attos = byType(.none()),
+        .num_shift_left_by = byType(.none()),
+        .num_shift_right_by = byType(.none()),
+        .num_shift_right_zf_by = byType(.none()),
+        .num_bitwise_and = byType(.none()),
+        .num_bitwise_or = byType(.none()),
+        .num_bitwise_xor = byType(.none()),
+        .num_bitwise_not = byType(.none()),
+        .num_count_one_bits = byType(.none()),
+        .num_count_leading_zero_bits = byType(.none()),
+        .num_count_trailing_zero_bits = byType(.none()),
+        .num_from_le_bytes_unchecked = byType(.none()),
+        .simd_load_16_unchecked = byType(.none()),
+        .simd_splat = byType(.none()),
+        .simd_get_lane_unchecked = byType(.none()),
+        .simd_with_lane_unchecked = byType(.none()),
+        .simd_to_u128_bits = byType(.none()),
+        .simd_from_u128_bits = byType(.none()),
+        .simd_add_wrap = byType(.none()),
+        .simd_sub_wrap = byType(.none()),
+        .simd_add_sat = byType(.none()),
+        .simd_sub_sat = byType(.none()),
+        .simd_neg_wrap = byType(.none()),
+        .simd_abs_wrap = byType(.none()),
+        .simd_min = byType(.none()),
+        .simd_max = byType(.none()),
+        .simd_abs_diff = byType(.none()),
+        .simd_avg_rounded = byType(.none()),
+        .simd_mul_wrap = byType(.none()),
+        .simd_mul_high = byType(.none()),
+        .simd_mul_q15_sat = byType(.none()),
+        .simd_mul_wide_lo = byType(.none()),
+        .simd_mul_wide_hi = byType(.none()),
+        .simd_dot_pairs = byType(.none()),
+        .simd_dot_pairs_sat = byType(.none()),
+        .simd_sad = byType(.none()),
+        .simd_and = byType(.none()),
+        .simd_or = byType(.none()),
+        .simd_xor = byType(.none()),
+        .simd_not = byType(.none()),
+        .simd_bit_select = byType(.none()),
+        .simd_eq_lanes = byType(.none()),
+        .simd_gt_lanes = byType(.none()),
+        .simd_gte_lanes = byType(.none()),
+        .simd_bitmask = byType(.none()),
+        .simd_shl_wrap = byType(.none()),
+        .simd_shr_wrap = byType(.none()),
+        .simd_shr_zf_wrap = byType(.none()),
+        .simd_shr_rounded = byType(.none()),
+        .simd_interleave_lo = byType(.none()),
+        .simd_interleave_hi = byType(.none()),
+        .simd_even_lanes = byType(.none()),
+        .simd_odd_lanes = byType(.none()),
+        .simd_reverse_lanes = byType(.none()),
+        .simd_table_lookup = byType(.none()),
+        .simd_concat_shift_bytes = byType(.none()),
+        .simd_widen_lo = byType(.none()),
+        .simd_widen_hi = byType(.none()),
+        .simd_pairwise_add_widen = byType(.none()),
+        .simd_narrow_wrap = byType(.none()),
+        .simd_narrow_sat = byType(.none()),
+        .simd_sum_lanes = byType(.none()),
+        .simd_sum_lanes_wrap = byType(.none()),
+        .simd_clmul_lo = byType(.none()),
+        .simd_clmul_hi = byType(.none()),
+        .u8_from_str = byType(.none()),
+        .i8_from_str = byType(.none()),
+        .u16_from_str = byType(.none()),
+        .i16_from_str = byType(.none()),
+        .u32_from_str = byType(.none()),
+        .i32_from_str = byType(.none()),
+        .u64_from_str = byType(.none()),
+        .i64_from_str = byType(.none()),
+        .u128_from_str = byType(.none()),
+        .i128_from_str = byType(.none()),
+        .dec_from_str = byType(.none()),
+        .f32_from_str = byType(.none()),
+        .f64_from_str = byType(.none()),
+        .compare = byType(.none()),
+        .crash = byType(.none()),
+    };
 
     /// ARC-only primitive variant whose result may borrow from an argument.
     /// Neutral LIR keeps the source operation; ARC uses this explicit mapping
@@ -2139,4 +1482,30 @@ pub const LowLevel = enum(u16) {
 test "LowLevel declares no list_split_first or list_split_last op" {
     try std.testing.expect(!@hasField(LowLevel, "list_split_first"));
     try std.testing.expect(!@hasField(LowLevel, "list_split_last"));
+}
+
+test "elementDemand gives every operation an entry for every argument" {
+    // `explicit_op_info` has one field per operation that is not a numeric
+    // conversion, so a missing row is a compile error; this walks the
+    // finished table so every row is also evaluated.
+    for (std.enums.values(LowLevel)) |op| {
+        for (0..LowLevel.max_element_demand_args + 1) |arg| {
+            _ = op.elementDemand(arg);
+        }
+        if (numeric_conversion.getConversionSpec(op) != null) {
+            try std.testing.expectEqual(LowLevel.ElementDemand.full, op.elementDemand(0));
+        }
+    }
+}
+
+test "elementDemand distinguishes header reads, element moves, and inspection" {
+    try std.testing.expectEqual(LowLevel.ElementDemand.none, LowLevel.list_len.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.none, LowLevel.list_capacity.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.list_get_unsafe.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.list_append_unsafe.elementDemand(1));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.box_box.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.layout, LowLevel.box_unbox.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.list_map_can_reuse.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.num_plus.elementDemand(0));
+    try std.testing.expectEqual(LowLevel.ElementDemand.full, LowLevel.list_len.elementDemand(LowLevel.max_element_demand_args));
 }

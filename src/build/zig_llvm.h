@@ -137,10 +137,12 @@ ZIG_EXTERN_C void ZigLLVMInitializeAllTargets();
 
 ZIG_EXTERN_C void ZigLLVMParseCommandLineOptions(size_t argc, const char *const *argv);
 
-ZIG_EXTERN_C bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output);
-ZIG_EXTERN_C bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output);
-ZIG_EXTERN_C bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output);
-ZIG_EXTERN_C bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output);
+ZIG_EXTERN_C bool ZigLLDLinkCOFF(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
+ZIG_EXTERN_C bool ZigLLDLinkELF(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
+ZIG_EXTERN_C bool ZigLLDLinkMachO(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
+ZIG_EXTERN_C bool ZigLLDLinkWasm(int argc, const char **argv, bool can_exit_early, bool disable_output, const char **diagnostics, size_t *diagnostics_len);
+// Releases the diagnostics one of the ZigLLDLink* entry points returned.
+ZIG_EXTERN_C void ZigLLDFreeDiagnostics(const char *diagnostics);
 
 ZIG_EXTERN_C bool ZigLLVMWriteArchive(const char *archive_name, const char **file_names, size_t file_name_count,
     ZigLLVMArchiveKind archive_kind);

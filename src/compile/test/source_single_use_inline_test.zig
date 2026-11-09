@@ -1,6 +1,5 @@
 //! Dev builds inline a function by how many call sites its module's source
-//! has, never by how many callers one program has, so every program that
-//! links a procedure from the object cache makes the same inline decisions.
+//! has, never by how many callers one program has.
 //! Each case counts the procedures dev lowering keeps beyond those of a
 //! program that has only `main!`.
 
@@ -104,30 +103,57 @@ test "dev keeps a function its source also uses as a value" {
     ));
 }
 
-fn expectInlinedProcedureMarked(store: *const lir.LirStore, _: *const @import("layout").Store) harness.LowerToLirHarnessError!void {
-    var marked: usize = 0;
-    for (store.getProcSpecs()) |proc| {
-        if (proc.inlined_at_calls) marked += 1;
-    }
-    try std.testing.expectEqual(@as(usize, 1), marked);
+// Each lambda below captures `n` and loops, so it is not a wrapper.
+test "dev inlines a capturing lambda its source calls where it is written" {
+    try std.testing.expectEqual(@as(usize, 0), try procsDevKeeps(
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    total = 0 |> (|start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    })
+        \\    if total == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\}
+    ));
 }
 
-test "a procedure whose calls dev inlines is marked so the object cache never offers it" {
-    // `bump` is a wrapper: its call is inlined, and passing it as a value
-    // still gives it a procedure, which a program taking a cache hit for it
-    // before inlining could not inline.
-    try harness.expectLirInspectionWithOptions(
-        \\bump : U64 -> U64
-        \\bump = |x| x + 1
-        \\
-        \\apply : (U64 -> U64), U64 -> U64
-        \\apply = |f, x| f(x)
-        \\
+test "dev inlines a named capturing local function its source calls once" {
+    try std.testing.expectEqual(@as(usize, 0), try procsDevKeeps(
         \\main! = |args| {
-        \\    if bump(args.len()) + apply(bump, 3) == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\    n = args.len()
+        \\    sum_from = |start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    }
+        \\    if sum_from(0) == 0 { Err(Exit(1)) } else { Ok({}) }
         \\}
-    , .{
-        .inline_mode = .wrappers_and_source_single_use,
-        .spec_constr_clone_inlining = .iterator_fusion,
-    }, expectInlinedProcedureMarked);
+    ));
+}
+
+test "dev keeps a capturing local function its source calls twice" {
+    try std.testing.expectEqual(@as(usize, 1), try procsDevKeeps(
+        \\main! = |args| {
+        \\    n = args.len()
+        \\    sum_from = |start| {
+        \\        var $acc = start
+        \\        var $i = 0
+        \\        while $i < n {
+        \\            $acc = $acc + $i
+        \\            $i = $i + 1
+        \\        }
+        \\        $acc
+        \\    }
+        \\    if sum_from(0) + sum_from(1) == 0 { Err(Exit(1)) } else { Ok({}) }
+        \\}
+    ));
 }

@@ -73,46 +73,67 @@ pub const Spans = struct {
 /// Report snippets expand leading tabs, dedent all rows equally, and transform
 /// underline coordinates alongside source text.
 pub const Snippet = struct {
-    rows: std.array_list.Managed([]u8),
+    allocator: std.mem.Allocator,
+    /// Every expanded row, back to back; `rows` slices into it.
+    bytes: []u8,
+    rows: [][]const u8,
     common: usize,
     start_column: u32,
     end_column: u32,
     /// Build the source layout from explicit coordinates.
     pub fn init(gpa: std.mem.Allocator, text: []const u8, start_column: u32, end_column: u32) std.mem.Allocator.Error!Snippet {
-        var rows = std.array_list.Managed([]u8).init(gpa);
-        errdefer {
-            for (rows.items) |row| gpa.free(row);
-            rows.deinit();
+        var total_len: usize = 0;
+        var row_count: usize = 0;
+        var sizing = std.mem.splitScalar(u8, text, '\n');
+        while (sizing.next()) |source_line| {
+            const indent = leadingIndent(source_line);
+            total_len += indent.expanded + source_line.len - indent.original;
+            row_count += 1;
         }
+
+        const bytes = try gpa.alloc(u8, total_len);
+        errdefer gpa.free(bytes);
+        const rows = try gpa.alloc([]const u8, row_count);
+        errdefer gpa.free(rows);
+
         var common: usize = std.math.maxInt(usize);
         var first_expanded: usize = 0;
         var first_original: usize = 0;
+        var offset: usize = 0;
         var iter = std.mem.splitScalar(u8, text, '\n');
-        while (iter.next()) |source_line| {
-            var original: usize = 0;
-            var expanded: usize = 0;
-            while (original < source_line.len and (source_line[original] == ' ' or source_line[original] == '\t')) : (original += 1) {
-                expanded += if (source_line[original] == '\t') 4 else 1;
+        var row_index: usize = 0;
+        while (iter.next()) |source_line| : (row_index += 1) {
+            const indent = leadingIndent(source_line);
+            if (row_index == 0) {
+                first_expanded = indent.expanded;
+                first_original = indent.original;
             }
-            if (rows.items.len == 0) {
-                first_expanded = expanded;
-                first_original = original;
-            }
-            if (original < source_line.len) common = @min(common, expanded);
-            const row = try gpa.alloc(u8, expanded + source_line.len - original);
-            errdefer gpa.free(row);
-            @memset(row[0..expanded], ' ');
-            @memcpy(row[expanded..], source_line[original..]);
-            try rows.append(row);
+            if (indent.original < source_line.len) common = @min(common, indent.expanded);
+            const row = bytes[offset..][0 .. indent.expanded + source_line.len - indent.original];
+            @memset(row[0..indent.expanded], ' ');
+            @memcpy(row[indent.expanded..], source_line[indent.original..]);
+            rows[row_index] = row;
+            offset += row.len;
         }
+        std.debug.assert(row_index == row_count and offset == total_len);
         if (common == std.math.maxInt(usize)) common = 0;
         const delta = @as(i64, @intCast(first_expanded)) - @as(i64, @intCast(common)) - @as(i64, @intCast(first_original));
-        return .{ .rows = rows, .common = common, .start_column = @intCast(@max(@as(i64, start_column) + delta, 1)), .end_column = @intCast(@max(@as(i64, end_column) + delta, 1)) };
+        return .{ .allocator = gpa, .bytes = bytes, .rows = rows, .common = common, .start_column = @intCast(@max(@as(i64, start_column) + delta, 1)), .end_column = @intCast(@max(@as(i64, end_column) + delta, 1)) };
+    }
+    /// A row's leading whitespace: its length in the source, and its width
+    /// once each tab is expanded to four spaces.
+    fn leadingIndent(source_line: []const u8) struct { original: usize, expanded: usize } {
+        var original: usize = 0;
+        var expanded: usize = 0;
+        while (original < source_line.len and (source_line[original] == ' ' or source_line[original] == '\t')) : (original += 1) {
+            expanded += if (source_line[original] == '\t') 4 else 1;
+        }
+        return .{ .original = original, .expanded = expanded };
     }
     /// Release the prepared source rows.
     pub fn deinit(self: *Snippet) void {
-        for (self.rows.items) |row| self.rows.allocator.free(row);
-        self.rows.deinit();
+        self.allocator.free(self.rows);
+        self.allocator.free(self.bytes);
     }
     /// Return a row with the common indentation removed.
     pub fn line(self: Snippet, row: []const u8) []const u8 {
@@ -378,14 +399,14 @@ test "printSpaces" {
 test "report snippet transforms tabs and Unicode underline columns together" {
     var snippet = try Snippet.init(testing.allocator, "\t  café\n\t    next", 4, 9);
     defer snippet.deinit();
-    try testing.expectEqualStrings("café", snippet.line(snippet.rows.items[0]));
-    try testing.expectEqualStrings("  next", snippet.line(snippet.rows.items[1]));
-    const caret = snippet.caret(snippet.line(snippet.rows.items[0]));
+    try testing.expectEqualStrings("café", snippet.line(snippet.rows[0]));
+    try testing.expectEqualStrings("  next", snippet.line(snippet.rows[1]));
+    const caret = snippet.caret(snippet.line(snippet.rows[0]));
     try testing.expectEqual(@as(u32, 0), caret.padding);
     try testing.expectEqual(@as(usize, 4), caret.length);
     snippet.start_column = 20;
     snippet.end_column = 2;
-    const reversed = snippet.caret(snippet.line(snippet.rows.items[0]));
+    const reversed = snippet.caret(snippet.line(snippet.rows[0]));
     try testing.expectEqual(@as(u32, 4), reversed.padding);
     try testing.expectEqual(@as(usize, 1), reversed.length);
 }

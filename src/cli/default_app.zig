@@ -13,7 +13,6 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const can = @import("can");
 const check = @import("check");
 
 const Allocator = std.mem.Allocator;
@@ -47,8 +46,9 @@ pub const Kind = enum {
 };
 
 /// Whether the caller needs an application entrypoint. Checking also accepts
-/// type modules; execution must reject non-app roots before platform setup.
-pub const Purpose = enum { checking, execution };
+/// type modules; running and building must reject non-app roots before
+/// platform setup.
+pub const Purpose = enum { checking, running, building };
 
 /// Preparation either supplies default-platform wiring, leaves an explicit
 /// app/plain module unchanged, or reports why the root cannot be prepared.
@@ -135,14 +135,7 @@ pub fn stage(
             var result: Result = .{ .invalid = .empty };
             errdefer result.deinit(gpa);
             try result.invalid.ensureTotalCapacity(gpa, 1);
-            const region = ast.tokenizedRegionToRegion(ast.store.getFile().region);
-            result.invalid.appendAssumeCapacity(try can.CIR.Diagnostic.buildExecutionRequiresAppOrDefaultAppReport(
-                gpa,
-                env.calcRegionInfo(region),
-                source_path,
-                original_source,
-                env.line_starts.items.items,
-            ));
+            result.invalid.appendAssumeCapacity(try notAnAppReport(gpa, ast, &env, purpose, source_path));
             return result;
         },
         .default_platform => {},
@@ -162,10 +155,84 @@ pub fn stage(
             .header_lines = countNewlines(headerless_wiring),
         },
         .app => |app| try stagePlatformlessApp(gpa, source_dir, owned_source, ast, app),
-        .module, .package, .platform, .hosted, .malformed => unreachable,
+        .module, .package, .platform, .hosted, .malformed => unreachable, // rootAppKind classifies these headers as non_app, handled above
     };
     source_transferred = true;
     return .{ .staged = staged };
+}
+
+/// Explain why a root that is not an app cannot be run or built. A root with a
+/// header shows that header, since the header is what makes it something other
+/// than an app. A headerless root lacks a `main!` function, and nothing in its
+/// text is the problem, so its report is about the file as a whole.
+fn notAnAppReport(
+    gpa: Allocator,
+    ast: *parse.AST,
+    env: *const base.CommonEnv,
+    purpose: Purpose,
+    source_path: []const u8,
+) Error!Report {
+    const headline, const alternative = switch (purpose) {
+        .running => .{ "This file cannot be run because it is not an app or a default app.", "run the file that imports it instead." },
+        .building => .{ "This file cannot be built because it is not an app or a default app.", "build the file that imports it instead." },
+        .checking => unreachable, // stage returns .unmodified for a checked non-app before reporting
+    };
+
+    var report = try Report.init(gpa, "Execution Requires App Or Default App", headline, .runtime_error);
+    errdefer report.deinit();
+
+    const header = ast.store.getHeader(ast.store.getFile().header);
+    const keyword: ?[]const u8 = switch (header) {
+        .type_module => null,
+        .module => "module",
+        .package => "package",
+        .platform => "platform",
+        .hosted => "hosted",
+        .app, .default_app, .malformed => unreachable, // stage reports only non_app roots without parse errors, and a malformed header is a parse error
+    };
+
+    if (keyword) |kw| {
+        const region = ast.tokenizedRegionToRegion(header.to_tokenized_region());
+        try report.document.addSourceRegion(env.calcRegionInfo(region), .error_highlight, source_path, env.source, env.line_starts.items.items);
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("It has a ");
+        try report.document.addInlineCode(kw);
+        try report.document.addReflowingText(" header instead of an ");
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header.");
+        try report.document.addLineBreaks(2);
+        try report.document.addReflowingText("To make it an app, replace that header with an ");
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header that names a platform:");
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock("app [main!] { pf: platform \"...\" }");
+        try report.document.addLineBreaks(2);
+    } else {
+        try report.document.addReflowingText("It has no ");
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header and no ");
+        try report.document.addInlineCode("main!");
+        try report.document.addReflowingText(" function.");
+        try report.document.addLineBreaks(2);
+        try report.document.addReflowingText("To make it a default app, add a ");
+        try report.document.addInlineCode("main!");
+        try report.document.addReflowingText(" function that takes 1 argument:");
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock("main! = |arg| { ... }");
+        try report.document.addLineBreaks(2);
+        try report.document.addReflowingText("Or, to make it an app for a specific platform, add an ");
+        try report.document.addInlineCode("app");
+        try report.document.addReflowingText(" header at the top of the file:");
+        try report.document.addLineBreaks(2);
+        try report.document.addCodeBlock("app [main!] { pf: platform \"...\" }");
+        try report.document.addLineBreaks(2);
+        try report.setFile(source_path);
+    }
+
+    try report.document.addReflowingText("If this file is meant to be imported by other files, ");
+    try report.document.addReflowingText(alternative);
+    try report.document.addLineBreak();
+    return report;
 }
 
 /// Build the staged source for an app header that names no platform: the
@@ -221,7 +288,7 @@ fn stagePlatformlessApp(
         defer gpa.free(absolute);
 
         try synthetic.appendSlice(gpa, original_source[copied_through..spec_region.start.offset]);
-        try appendRocStringBody(gpa, &synthetic, absolute);
+        try appendDependencySource(gpa, &synthetic, absolute);
         copied_through = spec_region.end.offset;
     }
     try synthetic.appendSlice(gpa, original_source[copied_through..splice_at]);
@@ -265,9 +332,7 @@ fn platformAlias(
         const candidate = if (suffix == 1)
             preferred_platform_alias
         else
-            // The buffer holds the alias plus more digits than a record with
-            // one entry per distinct alias could ever need.
-            std.fmt.bufPrint(buf, "{s}{d}", .{ preferred_platform_alias, suffix }) catch unreachable;
+            std.fmt.bufPrint(buf, "{s}{d}", .{ preferred_platform_alias, suffix }) catch unreachable; // the caller's buffer holds the alias plus 20 digits, the most a usize prints
 
         var taken = false;
         for (ast.store.recordFieldSlice(.{ .span = packages.span })) |field_idx| {
@@ -281,16 +346,12 @@ fn platformAlias(
     }
 }
 
-/// Append `text` as the body of a Roc string literal, escaping the bytes that
-/// a string literal cannot carry literally.
-fn appendRocStringBody(gpa: Allocator, out: *std.ArrayList(u8), text: []const u8) Allocator.Error!void {
-    for (text) |byte| {
-        switch (byte) {
-            '\\', '"', '$' => try out.append(gpa, '\\'),
-            else => {},
-        }
-        try out.append(gpa, byte);
-    }
+/// Append an absolute path as the body of a dependency source. Dependency
+/// sources are read exactly as written, without escape sequences, so the
+/// path's separators are written as `/`, which every host accepts.
+fn appendDependencySource(gpa: Allocator, out: *std.ArrayList(u8), path: []const u8) Allocator.Error!void {
+    try out.ensureUnusedCapacity(gpa, path.len);
+    for (path) |byte| out.appendAssumeCapacity(if (byte == '\\') '/' else byte);
 }
 
 /// Whether a package spec names a URL rather than a path. Mirrors the rule the
@@ -381,10 +442,13 @@ test "stage: a relative package path is rewritten for the staging directory" {
     var expected_literal = std.ArrayList(u8).empty;
     defer expected_literal.deinit(testing.allocator);
     try expected_literal.appendSlice(testing.allocator, "helper: \"");
-    try appendRocStringBody(testing.allocator, &expected_literal, expected_path);
+    try appendDependencySource(testing.allocator, &expected_literal, expected_path);
     try expected_literal.append(testing.allocator, '"');
 
     try testing.expect(std.mem.find(u8, staged.synthetic_source, expected_literal.items) != null);
+    // Dependency sources carry no escape sequences, whatever the host's
+    // path separator.
+    try testing.expect(std.mem.findScalar(u8, expected_literal.items, '\\') == null);
 }
 
 test "stage: the platform alias avoids a package that already uses it" {
@@ -413,7 +477,7 @@ test "stage: execution rejects non-app roots without inventing platform wiring" 
         "foo = |_| {\n    main! = |_| Ok({})\n    main!\n}\n",
     };
     for (sources) |source| {
-        var result = try stage(testing.allocator, "/tmp", source, .execution, "Foo.roc");
+        var result = try stage(testing.allocator, "/tmp", source, .running, "Foo.roc");
         defer result.deinit(testing.allocator);
         try testing.expect(result == .invalid);
         try testing.expectEqual(@as(usize, 1), result.invalid.items.len);
@@ -425,8 +489,37 @@ test "stage: execution rejects non-app roots without inventing platform wiring" 
     }
 }
 
+test "stage: a headerless non-app root is reported about the whole file" {
+    const sources = [_][]const u8{
+        "",
+        "\n\n# only a comment\n",
+        "x = 1\n\ny = 2\n",
+        "Foo := [A, B]\n",
+    };
+    for (sources) |source| {
+        for ([_]Purpose{ .running, .building }) |purpose| {
+            var result = try stage(testing.allocator, "/tmp", source, purpose, "Foo.roc");
+            defer result.deinit(testing.allocator);
+            const report = result.invalid.items[0];
+            try testing.expectEqualStrings("Foo.roc", report.file.?);
+            try testing.expectEqual(@as(?base.RegionInfo, null), report.getRegionInfo());
+        }
+    }
+}
+
+test "stage: a non-app root with a header is reported at that header" {
+    const source = "# comment\nmodule [foo]\n\nfoo = 1\n";
+    var result = try stage(testing.allocator, "/tmp", source, .building, "Foo.roc");
+    defer result.deinit(testing.allocator);
+    const report = result.invalid.items[0];
+    try testing.expectEqual(@as(?[]const u8, null), report.file);
+    const region = report.getRegionInfo().?;
+    try testing.expectEqual(@as(u32, 2), region.start_line_idx);
+    try testing.expectEqual(@as(u32, 2), region.end_line_idx);
+}
+
 test "stage: normalized default apps own their source after parsing" {
-    var result = try stage(testing.allocator, "/tmp", "main! = |_| Ok({})\r\n", .execution, "main.roc");
+    var result = try stage(testing.allocator, "/tmp", "main! = |_| Ok({})\r\n", .running, "main.roc");
     defer result.deinit(testing.allocator);
     try testing.expect(result == .staged);
     try testing.expectEqualStrings("main! = |_| Ok({})\n", result.staged.original_source);
@@ -440,7 +533,7 @@ test "stage: syntax errors are reported directly against the original root" {
         "main! = |_| \"unclosed\n",
     };
     for (sources) |source| {
-        var result = try stage(testing.allocator, "/tmp", source, .execution, "original.roc");
+        var result = try stage(testing.allocator, "/tmp", source, .running, "original.roc");
         defer result.deinit(testing.allocator);
         try testing.expect(result == .invalid);
         try testing.expect(result.invalid.items.len > 0);
@@ -463,7 +556,7 @@ test "stage: entrypoint arity and type remain checking responsibilities" {
         "main! = 123\n",
     };
     for (sources) |source| {
-        var result = try stage(testing.allocator, "/tmp", source, .execution, "main.roc");
+        var result = try stage(testing.allocator, "/tmp", source, .running, "main.roc");
         defer result.deinit(testing.allocator);
         try testing.expect(result == .staged);
         try testing.expectEqual(Kind.headerless, result.staged.kind);

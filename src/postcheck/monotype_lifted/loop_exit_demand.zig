@@ -13,6 +13,11 @@ pub const Plan = struct {
     items: []Item,
     aggregate: ?Ast.LocalId,
     used_count: usize = 0,
+    /// Some use observes the complete tuple rather than its components.
+    whole: bool = false,
+    /// Every component is a primitive other than `Str`, or zero-sized, so
+    /// no component carries a reference count.
+    scalars_only: bool = false,
 
     pub const Item = struct {
         ty: Type.TypeId,
@@ -20,8 +25,18 @@ pub const Plan = struct {
         used: bool = false,
     };
 
+    /// Whether the exit should transfer the demanded components directly.
+    /// That holds when the continuation leaves some component unread, and,
+    /// when it reads every one, whenever some component may carry a
+    /// reference count: a tuple the continuation only takes apart is
+    /// otherwise built at each exit and read field by field after it, and
+    /// each read pays a retain and a release of every refcounted component.
+    /// A tuple of scalars costs nothing to build and take apart, and keeping
+    /// it leaves each exit's continuation its own copy, where values the
+    /// exit fixes stay constants.
     pub fn selected(self: Plan) bool {
-        return self.used_count != 0 and self.used_count != self.items.len;
+        if (self.used_count == 0 or self.whole) return false;
+        return self.used_count != self.items.len or !self.scalars_only;
     }
 
     fn useItem(self: *Plan, index: usize) void {
@@ -36,7 +51,7 @@ pub const Plan = struct {
 pub const Inventory = struct {
     allocator: std.mem.Allocator,
     program: *const Ast.Program,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     plans: collections.DenseMap(Ast.PatId, *Plan),
     uses: collections.DenseMap(Ast.LocalId, Use),
     /// Deterministic work counter for scaling tests.
@@ -48,7 +63,7 @@ pub const Inventory = struct {
         return .{
             .allocator = allocator,
             .program = program,
-            .arena = std.heap.ArenaAllocator.init(allocator),
+            .arena = collections.SingleThreadArena.init(allocator),
             .plans = .init(allocator),
             .uses = .init(allocator),
         };
@@ -66,7 +81,8 @@ pub const Inventory = struct {
     }
 
     pub fn hasSelection(self: *const Inventory) bool {
-        for (self.plans.values.items) |plan| if (plan.selected()) return true;
+        var plans = self.plans.constIterator();
+        while (plans.next()) |entry| if (entry.value_ptr.*.selected()) return true;
         return false;
     }
 
@@ -112,13 +128,29 @@ pub const Inventory = struct {
             };
             if (item.local) |local| try self.uses.put(local, .{ .plan = plan, .item = i });
         }
+        plan.scalars_only = for (plan.items) |item| {
+            if (!self.isScalar(item.ty)) break false;
+        } else true;
         if (plan.aggregate) |local| try self.uses.put(local, .{ .plan = plan, .item = null });
         try self.plans.put(pat_id, plan);
     }
 
+    /// Whether values of `ty` never carry a reference count: a primitive
+    /// other than `Str`, or a zero-sized type (a demand hole included).
+    fn isScalar(self: *const Inventory, ty: Type.TypeId) bool {
+        return switch (self.program.types.get(ty)) {
+            .primitive => |primitive| switch (primitive) {
+                .str => false,
+                .bool, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => true,
+            },
+            .zst, .hole => true,
+            .named, .record, .tuple, .tag_union, .list, .box, .func, .erased => false,
+        };
+    }
+
     fn useLocal(self: *Inventory, local: Ast.LocalId, field: ?u32) void {
         const use = self.uses.get(local) orelse return;
-        if (use.plan.used_count == use.plan.items.len) return;
+        if (use.plan.whole) return;
         if (use.item) |i| {
             use.plan.useItem(i);
         } else if (field) |i| {
@@ -129,6 +161,7 @@ pub const Inventory = struct {
             // locals and values crossing call or capture boundaries.
             for (use.plan.items) |*item| item.used = true;
             use.plan.used_count = use.plan.items.len;
+            use.plan.whole = true;
         }
     }
 
@@ -216,7 +249,6 @@ pub const Inventory = struct {
                         .break_,
                         .continue_,
                         .return_,
-                        .comptime_branch_taken,
                         .expect_err,
                         .literal_rejected,
                         .try_sequence,

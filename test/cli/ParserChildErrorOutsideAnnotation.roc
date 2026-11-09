@@ -1,7 +1,8 @@
 # A custom nominal parser nested in a derived record contributes its own error
 # tags to the definition that parses the record, so an annotation that omits
-# one of them is a type mismatch. A caller widening the same row does not
-# excuse it.
+# one of them is an error at the parser. An annotated value's row is the
+# annotation's at every use, so a match that names another tag is a mismatch
+# of its own.
 ParserChildErrorOutsideAnnotation :: [].{}
 
 Token := { raw : Str }.{

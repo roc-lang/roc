@@ -67,7 +67,19 @@ TYPE MISMATCH - mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_1
 			(annotation-start code-block)
 			(indent 1)
 			(text "Str")
-			(annotation-end))))
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Convert it to a")
+			(reflow " ")
+			(annotated code "Str")
+			(reflow " ")
+			(reflow "with")
+			(reflow " ")
+			(annotated code ".to_str()")
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -229,7 +241,7 @@ Client(effects) := { effects : effects }.{
 	first = |client, items, n| {
 		pinned : List(Str)
 		pinned = items
-		if n == 0 Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
+		if (n == 0) Ok(Str.join_with(pinned, "")) else second(client, items, n - 1)
 	}
 
 	second : Client(_), List(_), U64 -> Try(Str, [Refused(Str), ..others])
@@ -269,7 +281,7 @@ run = |num| {
 									(e-num (value "0"))))
 							(e-tag (name "Ok")
 								(args
-									(e-call (constraint-fn-var 417)
+									(e-call (constraint-fn-var 422)
 										(e-lookup-external
 											(builtin))
 										(e-lookup-local
@@ -277,14 +289,14 @@ run = |num| {
 										(e-string
 											(e-literal (string ""))))))))
 					(if-else
-						(e-call (constraint-fn-var 439)
+						(e-call (constraint-fn-var 444)
 							(e-lookup-local
 								(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.second")))
 							(e-lookup-local
 								(p-assign (ident "client")))
 							(e-lookup-local
 								(p-assign (ident "items")))
-							(e-dispatch-call (method "minus") (constraint-fn-var 433)
+							(e-dispatch-call (method "minus") (constraint-fn-var 438)
 								(receiver
 									(e-lookup-local
 										(p-assign (ident "n"))))
@@ -310,7 +322,7 @@ run = |num| {
 				(p-assign (ident "client"))
 				(p-assign (ident "items"))
 				(p-assign (ident "n")))
-			(e-call (constraint-fn-var 458)
+			(e-call (constraint-fn-var 463)
 				(e-lookup-local
 					(p-assign (ident "mutual_recursive_methods_underscore_hole_pinned_mismatch_issue_11605.Client.first")))
 				(e-lookup-local

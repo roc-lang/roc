@@ -105,7 +105,7 @@ UNUSED VARIABLE - can_var_scoping_regular_var.md:2:17:2:22
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "items")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_items")
@@ -204,7 +204,7 @@ NO CHANGE
 					(e-num (value "0")))
 				(s-reassign
 					(p-var-assign (ident "count_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 270)
+					(e-dispatch-call (method "plus") (constraint-fn-var 275)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "count_"))))
@@ -212,7 +212,7 @@ NO CHANGE
 							(e-num (value "1")))))
 				(s-reassign
 					(p-var-assign (ident "total_"))
-					(e-dispatch-call (method "plus") (constraint-fn-var 279)
+					(e-dispatch-call (method "plus") (constraint-fn-var 284)
 						(receiver
 							(e-lookup-local
 								(p-var-assign (ident "total_"))))
@@ -233,11 +233,11 @@ NO CHANGE
 									(p-var-assign (ident "count_")))))))
 				(s-let
 					(p-assign (ident "result"))
-					(e-call (constraint-fn-var 283)
+					(e-call (constraint-fn-var 288)
 						(e-lookup-local
 							(p-assign (ident "nestedFunc")))
 						(e-empty_record)))
-				(e-dispatch-call (method "plus") (constraint-fn-var 284)
+				(e-dispatch-call (method "plus") (constraint-fn-var 289)
 					(receiver
 						(e-lookup-local
 							(p-var-assign (ident "total_"))))

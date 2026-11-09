@@ -4,7 +4,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 ## Recommended way
 
-[Download Zig 0.17.0](https://ziglang.org/download/) and add it to your PATH.
+[Download Zig 0.17.1](https://ziglang.org/download/) and add it to your PATH.
 [Search "Setting up PATH"](https://ziglang.org/learn/getting-started/) for more details.
 
 Do a test run with

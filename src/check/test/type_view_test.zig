@@ -98,11 +98,14 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     const nominal = try f.declaration("TryLike", &.{ a, b }, backing);
     const app = try f.application(nominal, &.{ actual_a, actual_b });
     const root = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
-    var cache = exhaustive.NominalOpenCache.init(testing.allocator);
+    var shared = Reader.SharedDependencies.init(testing.allocator, &f.store);
+    defer shared.deinit();
+    var finality = FinalityFixture{ .final = true };
+    var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal });
     defer cache.deinit();
     const idents = try builtinIdents(&f, &cache);
     const before = f.store.len();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var blockers: std.ArrayList(Var) = .empty;
     defer blockers.deinit(testing.allocator);
@@ -133,6 +136,74 @@ test "nominal views exhaustive boundary returns actual blockers only and permits
     try testing.expectEqual(before, f.store.len());
 }
 
+const FinalityFixture = struct {
+    final: bool,
+
+    fn isFinal(owner: *const anyopaque, _: types.NominalDecl.Idx) bool {
+        const self: *const FinalityFixture = @ptrCast(@alignCast(owner));
+        return self.final;
+    }
+};
+
+test "nominal views share a final declaration's dependency graph across reads" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const b = try f.rigid("b");
+    const actual_a = try f.rigid("a");
+    const actual_b = try f.store.fresh();
+    const empty = try f.store.freshFromContent(.{ .structure = .empty_tag_union });
+    const ok = try f.ident("Ok");
+    const err = try f.ident("Err");
+    const tags = try f.store.appendTags(&.{
+        .{ .name = ok, .args = try f.store.appendVars(&.{a}) },
+        .{ .name = err, .args = try f.store.appendVars(&.{b}) },
+    });
+    const backing = try f.store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = tags, .ext = empty } } });
+    const nominal = try f.declaration("TryLike", &.{ a, b }, backing);
+    const app = try f.application(nominal, &.{ actual_a, actual_b });
+    const root = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = app } });
+
+    var shared = exhaustive.SharedNominalDependencies.init(testing.allocator, &f.store);
+    defer shared.deinit();
+    for ([_]bool{ false, true }) |final| {
+        var finality: FinalityFixture = .{ .final = final };
+        var arena = base.SingleThreadArena.init(testing.allocator);
+        defer arena.deinit();
+        var blockers: std.ArrayList(Var) = .empty;
+        defer blockers.deinit(testing.allocator);
+        var first_graph: ?*const anyopaque = null;
+        for (0..2) |_| {
+            var cache = exhaustive.NominalOpenCache.initShared(testing.allocator, .{
+                .graphs = &shared,
+                .owner = &finality,
+                .isFinal = FinalityFixture.isFinal,
+            });
+            defer cache.deinit();
+            const idents = try builtinIdents(&f, &cache);
+            blockers.clearRetainingCapacity();
+            try exhaustive.collectAbsentCtorPayloadBlockersForConstructedTags(
+                arena.allocator(),
+                &f.store,
+                idents,
+                root,
+                &.{ok},
+                &blockers,
+            );
+            try testing.expectEqualSlices(Var, &.{actual_b}, blockers.items);
+            // Only a final declaration's graph outlives the read, and a later
+            // read reuses it rather than computing another.
+            try testing.expectEqual(@as(usize, if (final) 1 else 0), shared.graphs.count());
+            if (final) {
+                var graphs = shared.graphs.valueIterator();
+                const graph: *const anyopaque = graphs.next().?.*;
+                if (first_graph) |previous| try testing.expectEqual(previous, graph);
+                first_graph = graph;
+            }
+        }
+    }
+}
+
 test "nominal views private unknown assumptions remain application scoped" {
     var f = try Fixture.init();
     defer f.deinit();
@@ -150,6 +221,10 @@ test "nominal views private unknown assumptions remain application scoped" {
     defer reader.deinit();
     const left = (try reader.openNominalBacking(left_app)).?;
     const right = (try reader.openNominalBacking(right_app)).?;
+    // Ownership retains the actual argument, but it is not a substitution
+    // dependency: neither application's private unknown can escape.
+    try testing.expect(!try reader.hasSourceDependencies(left));
+    try testing.expect(!try reader.hasSourceDependencies(right));
     const left_unknown = (try tupleChildren(&reader, left))[0];
     const right_unknown = (try tupleChildren(&reader, right))[0];
     try testing.expect(left_unknown != right_unknown);
@@ -272,12 +347,17 @@ test "nominal views preserve scoped actuals aliases and owned unknowns without s
     defer reader.deinit();
     const opened = (try reader.openNominalBacking(app)).?;
     const children = try tupleChildren(&reader, opened);
+    try testing.expect(try reader.hasSourceDependencies(opened));
+    try testing.expect(try reader.hasSourceDependencies(children[0]));
+    try testing.expect(!try reader.hasSourceDependencies(children[2]));
+    try testing.expect(try reader.hasSourceDependencies(children[3]));
     try testing.expectEqual(actual_a, children[1]);
     try testing.expectEqual(@as(?Var, actual_a), reader.sourceVar(children[1]));
     try testing.expectEqual(@as(?Var, null), reader.sourceVar(children[2]));
     try testing.expect((try reader.resolveVar(children[2])).desc.content == .flex);
     const projected_inner = (try reader.resolveVar(children[0])).desc.content.structure.nominal_type;
     const nested = (try reader.openNominalBacking(projected_inner)).?;
+    try testing.expect(try reader.hasSourceDependencies(nested));
     try testing.expectEqual(actual_a, (try tupleChildren(&reader, nested))[0]);
     const projected_alias = (try reader.resolveVar(children[3])).desc.content.alias;
     try testing.expectEqual(actual_a, (try tupleChildren(&reader, reader.getAliasBackingVar(projected_alias)))[0]);
@@ -346,6 +426,12 @@ fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || bas
     const record = try f.store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
     const nominal = try f.declaration("Fields", &.{a}, record);
     const app = try f.application(nominal, &.{empty});
+    const b = try f.rigid("b");
+    const inner = try f.declaration("Inner", &.{b}, try f.tuple(&.{b}));
+    const inner_app = try f.application(inner, &.{record});
+    const inner_var = try f.store.freshFromContent(.{ .structure = .{ .nominal_type = inner_app } });
+    const outer = try f.declaration("Outer", &.{a}, inner_var);
+    const outer_app = try f.application(outer, &.{empty});
     const before = f.store.len();
     var reader = Reader.init(gpa, &f.store);
     defer reader.deinit();
@@ -356,6 +442,11 @@ fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || bas
     try testing.expectEqual(empty, first.typeVar());
     try testing.expect((try reader.resolveVar(first.presenceVar().?)).desc.content.field_presence == .optional);
     try testing.expectEqual(@as(u32, 42), (try reader.resolveVar(second.presenceVar().?)).desc.content.field_presence.defaulted.expr_node);
+    const projected_inner = (try reader.resolveVar((try reader.openNominalBacking(outer_app)).?)).desc.content.structure.nominal_type;
+    const nested = (try reader.openNominalBacking(projected_inner)).?;
+    // Following an owned actual's dependencies exercises the proof's scratch
+    // allocations as well as the dependency graph's allocation failures.
+    try testing.expect(try reader.hasSourceDependencies(nested));
     try testing.expectEqual(before, f.store.len());
 }
 
@@ -392,9 +483,9 @@ test "nominal views retain captured field slices across projection growth" {
     try testing.expectEqual(before, f.store.len());
 }
 
-test "nominal views exhaustive recursive permutation and mutual closed reset" {
+test "nominal views exhaustive two-parameter recursion and mutual closed reset" {
     const source =
-        \\Pair(a, b) := [Again(Pair(b, a)), Stop(a)]
+        \\Pair(a, b) := [Again(Pair(a, b)), Stop(a)]
         \\Left(a) := [LeftEnd(a), ToRight(Right({}))]
         \\Right(a) := [RightEnd(a), ToLeft(Left({}))]
         \\pair_value : Pair(I64, Str)
@@ -435,4 +526,52 @@ test "nominal views polymorphic Try empty error through record tuple and list pa
     defer env.deinit();
     try env.assertNoErrors();
     try env.assertLastDefType("I64");
+}
+
+test "nominal views blocker dependency proof follows recursive edges and rechecks mutable templates" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const actual = try f.store.fresh();
+    const private = try f.store.fresh();
+    const recursive = try f.store.fresh();
+    try f.store.setVarContent(recursive, .{ .structure = .{ .tuple = .{ .elems = try f.store.appendVars(&.{ recursive, private }) } } });
+    const nominal = try f.declaration("Recursive", &.{a}, recursive);
+    const app = try f.application(nominal, &.{actual});
+    var shared = Reader.SharedDependencies.init(testing.allocator, &f.store);
+    defer shared.deinit();
+    var finality = FinalityFixture{ .final = false };
+    for ([_]bool{ false, true }) |depends_on_actual| {
+        if (depends_on_actual) try f.store.setVarContent(private, .{ .structure = .{ .tuple = .{ .elems = try f.store.appendVars(&.{a}) } } });
+        var reader = Reader.initShared(testing.allocator, &f.store, .{ .graphs = &shared, .owner = &finality, .isFinal = FinalityFixture.isFinal });
+        defer reader.deinit();
+        const opened = (try reader.openNominalBacking(app)).?;
+        try testing.expectEqual(depends_on_actual, try reader.hasSourceDependencies(opened));
+        try testing.expectEqual(@as(usize, 0), shared.graphs.count());
+    }
+}
+
+test "nominal views blocker dependency proof includes hidden alias arguments and record row evidence" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const a = try f.rigid("a");
+    const actual = try f.store.fresh();
+    const unit = try f.store.freshFromContent(.{ .structure = .empty_record });
+    const alias = try f.store.freshFromContent(.{ .alias = .{
+        .ident = .{ .ident_idx = try f.ident("Hidden") },
+        .vars = .{ .nonempty = try f.store.appendVars(&.{ unit, a }) },
+        .source_arg_count = 0,
+        .origin_module = fixture_module,
+    } });
+    const presence = try f.store.freshFromContent(.{ .structure = .{ .record = .{
+        .fields = try f.store.appendRecordFields(&.{.{ .name = try f.ident("field"), .presence = .unknown(a, unit) }}),
+        .ext = unit,
+    } } });
+    const extension = try f.store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = a } } });
+    const nominal = try f.declaration("Evidence", &.{a}, try f.tuple(&.{ alias, presence, extension }));
+    const app = try f.application(nominal, &.{actual});
+    var reader = Reader.init(testing.allocator, &f.store);
+    defer reader.deinit();
+    const children = try tupleChildren(&reader, (try reader.openNominalBacking(app)).?);
+    for (children) |child| try testing.expect(try reader.hasSourceDependencies(child));
 }

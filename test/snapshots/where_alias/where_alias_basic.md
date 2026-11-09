@@ -54,10 +54,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a.Stringable :  where [a.to_str : a -> Str]
-
-stringify : a -> Str where [a.Stringable]
-stringify = |value| value.to_str()
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -67,7 +64,7 @@ stringify = |value| value.to_str()
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 244)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 249)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))

@@ -108,8 +108,6 @@ But the annotation says it should be:<br>
 ~~~
 # LSP
 ~~~text
-type mismatch
-
 This expression is used in an unexpected way.
 result_of_a_computation_with_a_rather_long_name = [
 	1,

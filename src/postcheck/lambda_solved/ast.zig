@@ -53,6 +53,8 @@ pub const ProgramView = struct {
 /// Lambda Solved program plus the solved type store.
 pub const Program = struct {
     allocator: std.mem.Allocator,
+    /// Owned immutable annotations restored from an exact analysis record.
+    analysis_backing: ?*std.heap.ArenaAllocator = null,
     lifted: Lifted.Program,
     types: Type.Store,
     defs: std.ArrayList(Def),
@@ -88,6 +90,25 @@ pub const Program = struct {
         self.defs.deinit(self.allocator);
         self.types.deinit();
         self.lifted.deinit();
+        if (self.analysis_backing) |arena| {
+            const owner = arena.child_allocator;
+            arena.deinit();
+            owner.destroy(arena);
+        }
+    }
+
+    /// Drop every solved type and table, keeping the lifted program, so the
+    /// program can be solved again from the start.
+    pub fn resetSolution(self: *Program) void {
+        self.types.deinit();
+        self.types = Type.Store.init(self.allocator);
+        self.defs.clearRetainingCapacity();
+        self.local_tys.clearRetainingCapacity();
+        self.expr_tys.clearRetainingCapacity();
+        self.pat_tys.clearRetainingCapacity();
+        self.fn_tys.clearRetainingCapacity();
+        self.layout_requests.clearRetainingCapacity();
+        self.runtime_schema_requests.clearRetainingCapacity();
     }
 
     pub fn view(self: *const Program) ProgramView {

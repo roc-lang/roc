@@ -556,7 +556,7 @@ fn emitStringLiteral(self: *Self, bytes: []const u8) EmitError!void {
 fn emitSmallDec(self: *Self, value: CIR.SmallDecValue) EmitError!void {
     const magnitude: u16 = @abs(value.numerator);
     var digit_buffer: [5]u8 = undefined;
-    const digits = std.fmt.bufPrint(&digit_buffer, "{d}", .{magnitude}) catch unreachable;
+    const digits = std.fmt.bufPrint(&digit_buffer, "{d}", .{magnitude}) catch unreachable; // a u16 has at most 5 decimal digits
     const power: usize = value.denominator_power_of_ten;
 
     if (value.numerator < 0) try self.write("-");

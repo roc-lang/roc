@@ -798,7 +798,7 @@ test "RelocationEntry.parse—parses index relocation (function_index_leb)" {
             try testing.expectEqual(@as(u32, 5), idx.offset);
             try testing.expectEqual(@as(u32, 2), idx.symbol_index);
         },
-        .offset => unreachable,
+        .offset => return error.TestUnexpectedResult,
     }
 }
 
@@ -815,7 +815,7 @@ test "RelocationEntry.parse—parses offset relocation (memory_addr_leb) with ad
             try testing.expectEqual(@as(u32, 1), off.symbol_index);
             try testing.expectEqual(@as(i32, 16), off.addend);
         },
-        .index => unreachable,
+        .index => return error.TestUnexpectedResult,
     }
 }
 

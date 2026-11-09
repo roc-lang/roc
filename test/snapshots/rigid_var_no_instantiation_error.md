@@ -60,7 +60,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result1")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result1")
@@ -74,7 +74,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result2")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result2")
@@ -88,7 +88,7 @@ UNUSED VARIABLE - rigid_var_no_instantiation_error.md:21:5:21:12
 		(headline
 			(reflow "Variable ")
 			(annotated symbol-unqualified "result3")
-			(reflow " is defined here and then never used:"))
+			(reflow " is defined here and then never used."))
 		(document
 			(reflow "If you don't need this variable, prefix it with an underscore like ")
 			(annotated symbol-unqualified "_result3")
@@ -251,7 +251,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "result1"))
-					(e-call (constraint-fn-var 300)
+					(e-call (constraint-fn-var 305)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
@@ -266,7 +266,7 @@ main! = |_| {
 						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "result3"))
-					(e-call (constraint-fn-var 362)
+					(e-call (constraint-fn-var 367)
 						(e-lookup-local
 							(p-assign (ident "swap")))
 						(e-tuple
