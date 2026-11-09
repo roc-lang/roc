@@ -39128,6 +39128,27 @@ test "provided procedure remains a runtime root" {
     });
 }
 
+test "provided evaluated function binding remains a procedure signature" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_add_one": add_one_for_host }
+        \\
+        \\make : I64 -> (I64 -> I64)
+        \\make = |amount| |value| value + amount
+        \\add_one_for_host : I64 -> I64
+        \\add_one_for_host = make(1)
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
 test "published procedure body with an unset record field frees its checked copy" {
     // The checked-body copier heap-allocates a record's unset-label slice
     // (`copyUnsetFieldLabels`); publication must free it alongside the
