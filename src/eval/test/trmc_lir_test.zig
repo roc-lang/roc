@@ -1402,6 +1402,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         defer b.deinit(allocator);
         const desc = try b.addLocal(allocator, .opaque_ptr);
         const other_desc = try b.addLocal(allocator, .opaque_ptr);
+        const plan = try b.addLocal(allocator, .opaque_ptr);
         const result = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .result } });
         const call_target = if (adapted)
             try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = other_desc, .storage = .frame } })
@@ -1420,7 +1421,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const after_call = if (adapted) try store.addCFStmt(.{ .dyn = .{
             .target = result,
-            .data = try store.addStmtRow(LIR.DynOp, .{ .adapt = .{ .src = call_target, .from = other_desc, .to = desc } }),
+            .data = try store.addStmtRow(LIR.DynOp, .{ .adapt = .{ .src = call_target, .plan = plan } }),
             .next = ret,
         } }, .test_fixture) else ret;
         const call = try store.addCFStmt(.{ .assign_call = .{
