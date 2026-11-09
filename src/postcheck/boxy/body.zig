@@ -4164,6 +4164,9 @@ pub const Builder = struct {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
                     const node = literal_requirement.site.node;
+                    // Forwarding can enter an imported scheme whose linked
+                    // worker needed no body index. Reading its literal does.
+                    try self.bodies().demandIndex();
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
