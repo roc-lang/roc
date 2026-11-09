@@ -2806,8 +2806,32 @@ const Pass = struct {
     }
 
     fn lookup(self: *const Pass, local: LocalId) ?Binding {
+        // A merge seeds what its edges prove about a single-assignment local
+        // on the path (see `bindSeeded`); that holds only in the region it
+        // seeds, so it takes precedence over the local's round-wide binding
+        // there and nowhere else.
+        if (self.path_env.get(local)) |binding| return binding;
         if (self.isSingleAssign(local)) return self.global_env.get(local);
-        return self.path_env.get(local);
+        return null;
+    }
+
+    /// Bind what a merge's edges prove about a local, for the region the
+    /// merge seeds. The meet holds only inside that region: an arm entered
+    /// when `x == 13` proves `x` is 13 there, not at the code after the
+    /// branches rejoin. So even a single-assignment local, whose own binding
+    /// is round-wide, is bound on the path, which every region starts empty.
+    fn bindSeeded(self: *Pass, local: LocalId, binding: Binding) ResourceError!void {
+        if (!self.isSingleAssign(local)) return self.bind(local, binding);
+        if (trackedIntMax(self.localLayout(local)) != null and self.rootOf(binding.node) == binding.node) {
+            try self.path_value_roots.put(binding.node, local);
+        }
+        const entry = try self.path_env.getOrPut(local);
+        const prev: ?Binding = if (entry.found_existing) entry.value_ptr.* else null;
+        entry.value_ptr.* = binding;
+        try self.undo.append(self.allocator, .{
+            .local = local,
+            .prev = prev,
+        });
     }
 
     fn bind(self: *Pass, local: LocalId, binding: Binding) ResourceError!void {
@@ -4201,7 +4225,7 @@ const Pass = struct {
                     .lo = 0,
                     .hi = 0,
                 });
-                try self.bind(meet.local, .{ .node = node });
+                try self.bindSeeded(meet.local, .{ .node = node });
                 continue;
             }
             if (meet.len_bounds.len > 0) {
@@ -4215,7 +4239,7 @@ const Pass = struct {
                 }
                 try self.len_terms.put(list_node, len_term);
                 try self.path_len_roots.put(len_term, meet.local);
-                try self.bind(meet.local, .{ .node = list_node });
+                try self.bindSeeded(meet.local, .{ .node = list_node });
                 continue;
             }
             // The edges bind different values, but each proves the same
@@ -4224,7 +4248,7 @@ const Pass = struct {
             const nonzero = self.completeConstantEdges(&met);
             const node = (try self.metScalarNode(met)) orelse
                 (if (nonzero.len > 0) try self.unknownFor(self.localLayout(met.local)) else continue);
-            try self.bind(met.local, .{ .node = node });
+            try self.bindSeeded(met.local, .{ .node = node });
             if (nonzero.len > 0) try self.nonzero_bounds.put(self.rootOf(node), nonzero);
         }
     }
@@ -4519,7 +4543,7 @@ const Pass = struct {
                     .constant => used = true,
                 }
             }
-            if (used) try self.bind(entry.local, .{ .node = node });
+            if (used) try self.bindSeeded(entry.local, .{ .node = node });
         }
     }
 
