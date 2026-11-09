@@ -31,19 +31,49 @@ const Digest = [32]u8;
 /// The digests of the modules of one link, each computed once.
 pub const Digests = struct {
     gpa: Allocator,
+    io: std.Io,
     names: ModuleNames,
     artifacts: std.AutoHashMapUnmanaged(Key, *const Artifact) = .empty,
     /// Each module of `artifacts`' name under `names`.
     module_names: std.AutoHashMapUnmanaged(Key, [32]u8) = .empty,
     interfaces: std.AutoHashMapUnmanaged(Key, Digest) = .empty,
     exports: std.AutoHashMapUnmanaged(Key, Digest) = .empty,
+    /// The hashing of each module's own part of its digests, done ahead of
+    /// `interfaceOf` and `objectInput` (`prepare`), which then add only
+    /// the imports' digests.
+    prepared: std.AutoHashMapUnmanaged(Key, Prepared) = .empty,
+    /// Guards `interfaces`, `exports` and `prepared`, which the units of a
+    /// link read and record from their lanes. `artifacts` and
+    /// `module_names` grow only through `add`, which the thread owning the
+    /// digests calls before any unit runs, so they are read without it.
+    mutex: Mutex = .init,
+
+    /// A mutex on hosts with threads; a freestanding compiler runs every
+    /// unit on its one thread.
+    const Mutex = if (@import("builtin").os.tag == .freestanding) struct {
+        pub const init: @This() = .{};
+        pub fn lockUncancelable(_: *@This(), _: std.Io) void {}
+        pub fn unlock(_: *@This(), _: std.Io) void {}
+    } else std.Io.Mutex;
+
+    /// The part of a module's digests that is a function of the module
+    /// alone, as a hasher that has consumed it: what `interfaceOf` hashes
+    /// before its imports' interfaces, and what `objectInput` hashes before
+    /// its imports' interfaces and exports. Hashing a module's stored
+    /// values and public surface is the bulk of either digest's cost, and it
+    /// reads only the module, so `prepare` runs for every module of a link
+    /// in parallel, off the thread that keys the units.
+    pub const Prepared = struct {
+        interface: Sha256,
+        object_input: Sha256,
+    };
 
     /// The digests of `artifacts`, every module of the link.
-    pub fn init(gpa: Allocator, artifacts: []const *const Artifact) Allocator.Error!Digests {
+    pub fn init(gpa: Allocator, io: std.Io, artifacts: []const *const Artifact) Allocator.Error!Digests {
         const views = try gpa.alloc(CheckedArtifact.ImportedModuleView, artifacts.len);
         defer gpa.free(views);
         for (artifacts, views) |artifact, *view| view.* = CheckedArtifact.importedView(artifact);
-        var digests: Digests = .{ .gpa = gpa, .names = try ModuleNames.fromViews(gpa, views) };
+        var digests: Digests = .{ .gpa = gpa, .io = io, .names = try ModuleNames.fromViews(gpa, views) };
         errdefer digests.deinit();
         for (artifacts) |artifact| _ = try digests.add(artifact);
         return digests;
@@ -68,23 +98,70 @@ pub const Digests = struct {
         self.module_names.deinit(self.gpa);
         self.interfaces.deinit(self.gpa);
         self.exports.deinit(self.gpa);
+        self.prepared.deinit(self.gpa);
+    }
+
+    /// Hash the part of `artifact`'s digests that is a function of the
+    /// module alone (`Prepared`), unless a unit did already. Reads only
+    /// `artifact` and the link's names outside the mutex, so the units of
+    /// a link hash their own parts in parallel.
+    pub fn ensurePrepared(self: *Digests, artifact: *const Artifact) Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        const known = self.prepared.contains(artifact.key.bytes);
+        self.mutex.unlock(self.io);
+        if (known) return;
+        const prepared = try self.prepare(artifact);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        const entry = try self.prepared.getOrPut(self.gpa, artifact.key.bytes);
+        if (!entry.found_existing) entry.value_ptr.* = prepared;
+    }
+
+    /// Hash the part of `artifact`'s digests that is a function of the
+    /// module alone (`Prepared`). Reads only `artifact` and the link's
+    /// names, so it runs on any thread while nothing adds to the link.
+    fn prepare(self: *const Digests, artifact: *const Artifact) Allocator.Error!Prepared {
+        var interface = Sha256.init(.{});
+        interface.update("roc.boxy.interface.v1");
+        interface.update(&self.nameOf(artifact.key.bytes));
+        try self.hashPublicSurface(&interface, artifact);
+        var object_input = Sha256.init(.{});
+        object_input.update("roc.boxy.object_input.v1");
+        object_input.update(&artifact.source_hash);
+        object_input.update(&self.nameOf(artifact.key.bytes));
+        object_input.update(&CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity));
+        try self.hashStoredValues(&object_input, artifact, .every_root);
+        return .{ .interface = interface, .object_input = object_input };
+    }
+
+    /// `artifact`'s part of its digests, hashed now when no unit did
+    /// (a module with no unit of its own, such as a platform module
+    /// lowered at its app's types). Called with the mutex held.
+    fn preparedOf(self: *Digests, artifact: *const Artifact) Allocator.Error!Prepared {
+        const entry = try self.prepared.getOrPut(self.gpa, artifact.key.bytes);
+        if (!entry.found_existing) entry.value_ptr.* = try self.prepare(artifact);
+        return entry.value_ptr.*;
     }
 
     /// The digest of `artifact`'s interface and its imports'. The caller
     /// asks for a module only once its compile-time values are final.
     pub fn interfaceOf(self: *Digests, artifact: *const Artifact) Allocator.Error!Digest {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return try self.interfaceOfLocked(artifact);
+    }
+
+    /// `interfaceOf` with the mutex held.
+    fn interfaceOfLocked(self: *Digests, artifact: *const Artifact) Allocator.Error!Digest {
         if (self.interfaces.get(artifact.key.bytes)) |known| return known;
-        var hasher = Sha256.init(.{});
-        hasher.update("roc.boxy.interface.v1");
-        hasher.update(&self.nameOf(artifact.key.bytes));
-        try self.hashPublicSurface(&hasher, artifact);
+        var hasher = (try self.preparedOf(artifact)).interface;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
-            hasher.update(&try self.interfaceOf(imported));
+            hasher.update(&try self.interfaceOfLocked(imported));
         }
         const digest = hasher.finalResult();
         try self.interfaces.put(self.gpa, artifact.key.bytes, digest);
-        if (base.dev_diagnostics.isSet(.trace_boxy_work)) try self.traceInterface(artifact, digest);
+        if (base.dev_diagnostics.isSet(.trace_boxy_digests)) try self.traceInterface(artifact, digest);
         return digest;
     }
 
@@ -115,7 +192,7 @@ pub const Digests = struct {
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
             .imports => for (artifact.direct_import_module_keys) |key| {
                 const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
-                hasher.update(&try self.interfaceOf(imported));
+                hasher.update(&try self.interfaceOfLocked(imported));
             },
         }
     }
@@ -124,8 +201,17 @@ pub const Digests = struct {
     /// caller records a module only after every import of it that has an
     /// object.
     pub fn recordExports(self: *Digests, artifact: *const Artifact, records: []const object_cache.ExportRecord) Allocator.Error!void {
-        const sorted = try self.gpa.dupe(object_cache.ExportRecord, records);
-        defer self.gpa.free(sorted);
+        try self.recordHashedExports(artifact, try hashExports(self.gpa, records));
+    }
+
+    /// Hash `records`, the export records of a module's object: the part
+    /// of the module's exports digest that is a function of its object
+    /// alone, which `recordHashedExports` completes. Reads nothing of the
+    /// link, so the unit that built or restored the object hashes its own
+    /// records on its lane.
+    pub fn hashExports(gpa: Allocator, records: []const object_cache.ExportRecord) Allocator.Error!Sha256 {
+        const sorted = try gpa.dupe(object_cache.ExportRecord, records);
+        defer gpa.free(sorted);
         std.mem.sort(object_cache.ExportRecord, sorted, {}, struct {
             fn lessThan(_: void, a: object_cache.ExportRecord, b: object_cache.ExportRecord) bool {
                 return std.mem.order(u8, &a.identity, &b.identity) == .lt;
@@ -140,44 +226,56 @@ pub const Digests = struct {
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
             hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
         }
+        return hasher;
+    }
+
+    /// Record `artifact`'s exports from `hashed`, its records as
+    /// `hashExports` hashed them. The caller records a module only after
+    /// every import of it that has an object.
+    pub fn recordHashedExports(self: *Digests, artifact: *const Artifact, hashed: Sha256) Allocator.Error!void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        var hasher = hashed;
         self.hashImportedExports(&hasher, artifact);
         try self.exports.put(self.gpa, artifact.key.bytes, hasher.finalResult());
     }
 
-    /// Take `artifact`'s exports as `other` recorded them.
+    /// Take `artifact`'s exports as `other`, digests no unit records to
+    /// any more, recorded them.
     pub fn adoptExports(self: *Digests, other: *const Digests, artifact: *const Artifact) Allocator.Error!void {
-        if (other.exports.get(artifact.key.bytes)) |digest| try self.exports.put(self.gpa, artifact.key.bytes, digest);
+        const digest = other.exports.get(artifact.key.bytes) orelse return;
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        try self.exports.put(self.gpa, artifact.key.bytes, digest);
     }
 
     /// What `artifact`'s object is a function of beyond the compilation's
     /// target and policy: the key its cache entry is filed under folds this
     /// in. Every import with an object has recorded its exports.
     pub fn objectInput(self: *Digests, artifact: *const Artifact) Allocator.Error!Digest {
-        var hasher = Sha256.init(.{});
-        hasher.update("roc.boxy.object_input.v1");
-        hasher.update(&artifact.source_hash);
-        hasher.update(&self.nameOf(artifact.key.bytes));
-        hasher.update(&CheckedArtifact.checkingContextPolicyHash(artifact.checking_context_identity));
-        try self.hashStoredValues(&hasher, artifact, .every_root);
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        var hasher = (try self.preparedOf(artifact)).object_input;
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
-            hasher.update(&try self.interfaceOf(imported));
+            hasher.update(&try self.interfaceOfLocked(imported));
         }
         self.hashImportedExports(&hasher, artifact);
         const digest = hasher.finalResult();
-        if (base.dev_diagnostics.isSet(.trace_boxy_work)) try self.traceObjectInput(artifact, digest);
+        if (base.dev_diagnostics.isSet(.trace_boxy_digests)) try self.traceObjectInput(artifact, digest);
         return digest;
     }
 
     /// Print the digest of each part of `artifact`'s object input, so a
-    /// trace of two builds shows which part an edit changed.
+    /// trace of two builds shows which part an edit changed. Called with
+    /// the mutex held.
     fn traceObjectInput(self: *Digests, artifact: *const Artifact, digest: Digest) Allocator.Error!void {
         var values = Sha256.init(.{});
         try self.hashStoredValues(&values, artifact, .every_root);
         var imports = Sha256.init(.{});
         for (artifact.direct_import_module_keys) |key| {
             const imported = self.artifacts.get(key.bytes) orelse base.invariant("a module of a link imports a module outside it", .{});
-            imports.update(&try self.interfaceOf(imported));
+            imports.update(&try self.interfaceOfLocked(imported));
         }
         var exports = Sha256.init(.{});
         self.hashImportedExports(&exports, artifact);
@@ -193,6 +291,7 @@ pub const Digests = struct {
         });
     }
 
+    /// Called with the mutex held.
     fn hashImportedExports(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) void {
         for (artifact.direct_import_module_keys) |key| {
             if (self.exports.get(key.bytes)) |digest| hasher.update(&digest);
@@ -203,7 +302,7 @@ pub const Digests = struct {
     /// interface (its names, schemes, nominal backings and method bindings),
     /// what checking's commit derives from bodies for callers, the workers
     /// they name, and the stored values they restore.
-    fn hashPublicSurface(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+    fn hashPublicSurface(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         hasher.update(&artifact.moduleEnvConst().checking_dependency.digest);
         for (artifact.exported_procedure_templates.templates) |exported| {
             self.hashTemplateRef(hasher, artifact, exported.template);
@@ -251,7 +350,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashConsts(self: *Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
+    fn hashConsts(self: *const Digests, hasher: *Sha256, artifact: *const Artifact) Allocator.Error!void {
         const exported_consts = artifact.exported_const_templates.templates;
         for (exported_consts) |exported| try self.hashConstTemplate(hasher, artifact, exported.template);
         for (artifact.const_templates.templates.items) |template| switch (template.owner) {
@@ -279,7 +378,7 @@ pub const Digests = struct {
 
     /// How an importer reads a constant: the value stored for it, or the
     /// entry procedure of one compile-time evaluation did not store.
-    fn hashConstTemplate(self: *Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
+    fn hashConstTemplate(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, template: CheckedArtifact.ConstTemplate) Allocator.Error!void {
         hashTag(hasher, @tagName(std.meta.activeTag(template.state)));
         switch (template.state) {
             .eval_template => |eval_template| self.hashTemplateRef(hasher, artifact, eval_template.entry_template),
@@ -301,7 +400,7 @@ pub const Digests = struct {
 
     /// The values of `artifact`'s compile-time roots in `scope`. A module's
     /// own object stores all of them.
-    fn hashStoredValues(self: *Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
+    fn hashStoredValues(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, scope: RootScope) Allocator.Error!void {
         for (artifact.compile_time_roots.roots) |root| {
             switch (scope) {
                 .every_root => {},
@@ -311,7 +410,7 @@ pub const Digests = struct {
         }
     }
 
-    fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
+    fn hashRootValue(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
         hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
         switch (root.payload) {

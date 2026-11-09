@@ -959,160 +959,138 @@ pub const Converter = struct {
         };
     }
 
-    /// Whether scheme variable `variable` of `module` is SEALED (design.md
-    /// "Sealed Result Rows"): a flex tag-row tail that an annotation bounds,
-    /// whose row default is the empty row, and whose constraints closing
-    /// the row discharges. A worker binds such a variable to the empty row
-    /// and takes no descriptor for it; omitting it from the worker's scheme
-    /// variables is exactly that, since a flex no scope binds seals to its
-    /// row default (`sealVariable`).
-    pub fn sealedSchemeVar(self: Converter, module: ModuleIndex, variable: checked.CheckedTypeId, fn_root: checked.CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
-        const types = self.modules.get(module).types();
-        const payload = types.payload(variable);
-        const bounded = switch (payload) {
-            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
-            .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
-        };
-        if (!bounded) return false;
-        // Polarity also opens a row in a callback's parameter, which the
-        // definition produces but which no instantiation of its result
-        // converts: a variable at such a position, or anywhere else outside
-        // the result's reach, keeps its descriptor.
-        if (try self.occursOutsideResultReach(module, fn_root, variable)) return false;
-        // A callable the worker receives from its caller carries the caller's
-        // instantiation of every variable its interface mentions. A function
-        // parameter shows that interface and is excluded above; a `where`
-        // dictionary's interface is its evidence parameter's callable, and a
-        // nominal over a callable payload hides its callable's interface in
-        // its methods, so a parameter holding one may involve any variable.
-        for (evidence_params) |param| {
-            if (try self.mentionsVariable(module, param.callable_ty, variable)) return false;
-        }
-        return !try self.argumentsHoldCallablePayload(module, fn_root);
-    }
+    /// The sealing of a template's scheme variables (design.md "Sealed
+    /// Result Rows"), answered per variable by `sealed`. The positions that
+    /// keep a variable's descriptor are walked once for the template, the
+    /// first time a variable that could seal asks, so each variable's answer
+    /// is a lookup.
+    pub const SchemeSealing = struct {
+        converter: Converter,
+        module: ModuleIndex,
+        /// The template's checked root.
+        fn_root: checked.CheckedTypeId,
+        /// The template's evidence parameters.
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        walked: ?Walked = null,
 
-    /// Whether any argument of the function type `fn_root` holds a nominal
-    /// over a callable payload (`local_box_payload_capability`,
-    /// `imported_box_payload_capability`): a function value whose
-    /// interface the signature does not show.
-    fn argumentsHoldCallablePayload(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId) Allocator.Error!bool {
-        const types = self.modules.get(module).types();
-        const allocator = self.store.allocator;
-        var root = fn_root;
-        const function = while (true) switch (types.payload(root)) {
-            .alias => |alias| root = alias.backing,
-            .function => |function| break function,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
+        const Walked = struct {
+            /// Whether any variable can seal: the root is a function type
+            /// none of whose arguments holds a nominal over a callable
+            /// payload (`local_box_payload_capability`,
+            /// `imported_box_payload_capability`), a function value whose
+            /// interface the signature does not show.
+            sealable: bool,
+            /// Every type reached from a position that keeps a variable's
+            /// descriptor: the function's arguments, each evidence
+            /// parameter's callable, and the positions under the result a
+            /// row coercion does not reach (design.md "Row Coercion
+            /// Primitive": the root row, tag payload rows, the error
+            /// argument of a `Try`, and alias backings are reached; records,
+            /// tuples, lists, boxes, functions, and other named types'
+            /// arguments are not). Empty when nothing seals.
+            mentioned: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty,
         };
-        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer pending.deinit(allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(allocator);
-        try pending.appendSlice(allocator, function.args);
-        while (pending.pop()) |ty| {
-            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-            switch (types.payload(ty)) {
-                .alias => |alias| {
-                    try pending.appendSlice(allocator, alias.args);
-                    try pending.append(allocator, alias.backing);
-                },
-                .record => |record| {
-                    for (0..record.fields.len()) |field_index| {
-                        const field = record.fields.get(field_index);
-                        try pending.append(allocator, field.ty);
-                    }
-                    try pending.append(allocator, record.ext);
-                },
-                .tuple => |items| try pending.appendSlice(allocator, items),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.len()) |tag_index| {
-                        const tag = tag_union.tags.get(tag_index);
-                        try pending.appendSlice(allocator, tag.args);
-                    }
-                    try pending.append(allocator, tag_union.ext);
-                },
-                .function => |inner| {
-                    try pending.appendSlice(allocator, inner.args);
-                    try pending.append(allocator, inner.ret);
-                },
-                .nominal => |nominal| switch (nominal.representation) {
-                    .local_box_payload_capability, .imported_box_payload_capability => return true,
-                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
-                },
-                .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+
+        pub fn deinit(self: *SchemeSealing) void {
+            if (self.walked) |*walked| walked.mentioned.deinit(self.converter.store.allocator);
+            self.* = undefined;
+        }
+
+        /// Whether scheme variable `variable` of the template is SEALED: a
+        /// flex tag-row tail that an annotation bounds, whose row default is
+        /// the empty row, and whose constraints closing the row discharges,
+        /// mentioned at no position that keeps its descriptor. A worker
+        /// binds such a variable to the empty row and takes no descriptor
+        /// for it; omitting it from the worker's scheme variables is exactly
+        /// that, since a flex no scope binds seals to its row default
+        /// (`sealVariable`).
+        pub fn sealed(self: *SchemeSealing, variable: checked.CheckedTypeId) Allocator.Error!bool {
+            const payload = self.converter.modules.get(self.module).types().payload(variable);
+            const bounded = switch (payload) {
+                .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            };
+            if (!bounded) return false;
+            if (self.walked == null) self.walked = try self.walk();
+            const walked = &self.walked.?;
+            return walked.sealable and !walked.mentioned.contains(variable);
+        }
+
+        fn walk(self: *const SchemeSealing) Allocator.Error!Walked {
+            const types = self.converter.modules.get(self.module).types();
+            const allocator = self.converter.store.allocator;
+            var root = self.fn_root;
+            const function = while (true) switch (types.payload(root)) {
+                .alias => |alias| root = alias.backing,
+                .function => |function| break function,
+                .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return .{ .sealable = false },
+            };
+            var walked: Walked = .{ .sealable = true };
+            errdefer walked.mentioned.deinit(allocator);
+            var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+            defer pending.deinit(allocator);
+            // Polarity also opens a row in a callback's parameter, which
+            // the definition produces but which no instantiation of its
+            // result converts: an argument mentions every type under it.
+            try pending.appendSlice(allocator, function.args);
+            while (pending.pop()) |ty| {
+                if ((try walked.mentioned.getOrPut(allocator, ty)).found_existing) continue;
+                const payload = types.payload(ty);
+                if (payload == .nominal) switch (payload.nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => walked.sealable = false,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                };
+                try pushChildren(allocator, &pending, payload);
             }
-        }
-        return false;
-    }
-
-    /// Whether `variable` occurs in the function type `fn_root` anywhere but
-    /// along its result's coercion reach: an argument, or a position under
-    /// the result that a row coercion does not reach (design.md "Row
-    /// Coercion Primitive": the root row, tag payload rows, the error
-    /// argument of a `Try`, and alias backings are reached; records, tuples,
-    /// lists, boxes, functions, and other named types' arguments are not).
-    fn occursOutsideResultReach(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
-        const types = self.modules.get(module).types();
-        const allocator = self.store.allocator;
-        var root = fn_root;
-        const function = while (true) switch (types.payload(root)) {
-            .alias => |alias| root = alias.backing,
-            .function => |function| break function,
-            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return true,
-        };
-        for (function.args) |arg| {
-            if (try self.mentionsVariable(module, arg, variable)) return true;
-        }
-        // Reached positions under the result, in which only the variable's
-        // own occurrence as a row extension is on the reach.
-        var reached: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer reached.deinit(allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(allocator);
-        try reached.append(allocator, function.ret);
-        while (reached.pop()) |ty| {
-            if (ty == variable) continue;
-            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-            switch (types.payload(ty)) {
-                .alias => |alias| try reached.append(allocator, alias.backing),
-                .tag_union => |tag_union| {
-                    for (0..tag_union.tags.len()) |tag_index| {
-                        const tag = tag_union.tags.get(tag_index);
-                        try reached.appendSlice(allocator, tag.args);
-                    }
-                    try reached.append(allocator, tag_union.ext);
-                },
-                .nominal => |nominal| switch (nominal.representation) {
-                    .builtin => |builtin_nominal| if (checked.builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
-                        if (try self.mentionsVariable(module, nominal.args[0], variable)) return true;
-                        try reached.append(allocator, nominal.args[1]);
-                    } else {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+            // A callable the worker receives from its caller carries the
+            // caller's instantiation of every variable its interface
+            // mentions. A function parameter shows that interface and is an
+            // argument; a `where` dictionary's interface is its evidence
+            // parameter's callable.
+            for (self.evidence_params) |param| try pending.append(allocator, param.callable_ty);
+            // Under the result, a position a row coercion reaches leaves a
+            // variable's own occurrence as a row extension unmentioned; a
+            // position it does not reach is mentioned whole.
+            var reached: std.ArrayList(checked.CheckedTypeId) = .empty;
+            defer reached.deinit(allocator);
+            var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+            defer seen.deinit(allocator);
+            try reached.append(allocator, function.ret);
+            while (reached.pop()) |ty| {
+                if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
+                switch (types.payload(ty)) {
+                    .alias => |alias| try reached.append(allocator, alias.backing),
+                    .tag_union => |tag_union| {
+                        for (0..tag_union.tags.len()) |tag_index| {
+                            const tag = tag_union.tags.get(tag_index);
+                            try reached.appendSlice(allocator, tag.args);
+                        }
+                        try reached.append(allocator, tag_union.ext);
                     },
-                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
-                        for (nominal.args) |arg| if (try self.mentionsVariable(module, arg, variable)) return true;
+                    .nominal => |nominal| switch (nominal.representation) {
+                        .builtin => |builtin_nominal| if (checked.builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                            try pending.append(allocator, nominal.args[0]);
+                            try reached.append(allocator, nominal.args[1]);
+                        } else {
+                            try pending.appendSlice(allocator, nominal.args);
+                        },
+                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => try pending.appendSlice(allocator, nominal.args),
                     },
-                },
-                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
-                .record, .tuple, .function => if (try self.mentionsVariable(module, ty, variable)) return true,
+                    .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                    .record, .tuple, .function => try pending.append(allocator, ty),
+                }
             }
+            while (pending.pop()) |ty| {
+                if ((try walked.mentioned.getOrPut(allocator, ty)).found_existing) continue;
+                try pushChildren(allocator, &pending, types.payload(ty));
+            }
+            return walked;
         }
-        return false;
-    }
 
-    /// Whether `variable` occurs anywhere in `root`.
-    fn mentionsVariable(self: Converter, module: ModuleIndex, root: checked.CheckedTypeId, variable: checked.CheckedTypeId) Allocator.Error!bool {
-        const types = self.modules.get(module).types();
-        const allocator = self.store.allocator;
-        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
-        defer pending.deinit(allocator);
-        var seen: collections.DenseMapUnmanaged(checked.CheckedTypeId, void) = .empty;
-        defer seen.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |ty| {
-            if (ty == variable) return true;
-            if ((try seen.getOrPut(allocator, ty)).found_existing) continue;
-            switch (types.payload(ty)) {
+        /// Push every type `payload` is built from: what a mention of the
+        /// type mentions.
+        fn pushChildren(allocator: Allocator, pending: *std.ArrayList(checked.CheckedTypeId), payload: checked.CheckedTypePayload) Allocator.Error!void {
+            switch (payload) {
                 .alias => |alias| {
                     try pending.appendSlice(allocator, alias.args);
                     try pending.append(allocator, alias.backing);
@@ -1140,7 +1118,13 @@ pub const Converter = struct {
                 .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
         }
-        return false;
+    };
+
+    /// The sealing of the scheme variables of a template of `module` whose
+    /// checked root is `fn_root` and whose evidence parameters are
+    /// `evidence_params`. The caller owns the result.
+    pub fn schemeSealing(self: Converter, module: ModuleIndex, fn_root: checked.CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) SchemeSealing {
+        return .{ .converter = self, .module = module, .fn_root = fn_root, .evidence_params = evidence_params };
     }
 
     /// The type a scheme variable takes where nothing relates it to a use:

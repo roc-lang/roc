@@ -931,13 +931,15 @@ pub const Program = struct {
         var sealed_slots: std.ArrayList(u32) = .empty;
         defer sealed_slots.deinit(self.allocator);
         const evidence_params = poolSlice(static_dispatch.EvidenceParamRecord, view.view.checked_procedure_templates.evidence_params_pool, template.evidence_params);
+        var sealing = self.converter().schemeSealing(module_index, template.checked_fn_root, evidence_params);
+        defer sealing.deinit();
         for (checked_scheme_vars, 0..) |variable, slot| {
             // A platform requirement's identity variable is the app type
             // this program lowers the platform at (`solvePlatformIdentities`):
             // every mention converts to that type, so it is no hidden
             // parameter either.
             if (self.converter().platformIdentity(module_index, variable) != null) continue;
-            if (try self.converter().sealedSchemeVar(module_index, variable, template.checked_fn_root, evidence_params)) {
+            if (try sealing.sealed(variable)) {
                 try sealed_slots.append(self.allocator, @intCast(slot));
                 continue;
             }
