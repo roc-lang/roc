@@ -10381,7 +10381,10 @@ converts instead (Sealed Result Rows); the checker is the same for both.
 **Where joins come from.** Every place a value's rows flow into another's:
 a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
-function's `Try` result. These are edges between types, not between rows:
+function's `Try` result. Generated `try_sequence` and `try_record_sequence`
+forward the input error payload to either their shared error continuation or
+their own result's error payload; both forms carry the same row-join edge.
+These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
@@ -20977,10 +20980,11 @@ callee can return with a call pending, and on each deferred call:
 - `none`: nothing can be pending after the statement.
 - `handed_up`: this procedure returns the value unchanged to a caller that
   makes the pending call, and until then the statement's target holds no
-  value. Only reference-count statements and jumps into a join body may
-  separate the call from the return; a pending call owns its closure and
-  every argument, so running those statements first releases nothing it
-  reads.
+  value. Only reference-count statements, residual-release field reads
+  explicitly marked `arc_dismantle`, and jumps into a join body may separate
+  the call from the return. The field reads neither dismantle, read, nor
+  overwrite the pending result. A pending call owns its closure and every
+  argument, so running that cleanup first releases nothing it reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
