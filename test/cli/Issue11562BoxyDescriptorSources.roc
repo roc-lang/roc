@@ -8,13 +8,13 @@ Issue11562BoxyDescriptorSources :: [].{}
 # implementations, inspection, and derived encoders.
 
 expect {
-	v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
 	v = Json.parse("{\"a\":\"x\"}")
-	v == Err(MissingRequiredField("b"))
+	v == Err(InvalidJson("Missing field: b"))
 }
 
 expect {
-	v : Try({ a : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ a : Str }, [InvalidJson(Str)])
 	v = Json.parse("")
 	match v {
 		Err(InvalidJson(_)) => True

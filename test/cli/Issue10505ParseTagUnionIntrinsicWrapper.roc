@@ -14,7 +14,7 @@ Issue10505ParseTagUnionIntrinsicWrapper :: {}.{
 }
 
 Parser := {}.{
-	parse_tag_union : Parser, Encoding.ParseTagUnionSpec(a), Str -> Try({ value : a, rest : Str }, [Oops])
+	parse_tag_union : Parser, Encoding.ParseTagUnionSpec(a, Parser, Str, [Oops]), Str -> Try({ value : a, rest : Str }, [Oops])
 	parse_tag_union = |parser, spec, state| {
 		spec.parse({
 			tag: "Friendly",

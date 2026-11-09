@@ -59,7 +59,7 @@ t = 0 |> (0)
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-call (constraint-fn-var 232)
+		(e-call (constraint-fn-var 235)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-num (value "0")))))
 ~~~

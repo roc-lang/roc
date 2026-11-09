@@ -34,13 +34,13 @@ Format := [Default].{
 	skip_record_field : Format, State -> Try(State, [MissingRequired])
 	skip_record_field = |_, _| Ok(Done)
 
-	missing_record_field : Format, Str, State -> [MissingRequired]
-	missing_record_field = |_, _, _| MissingRequired
+	missing_field : Format, Str -> [MissingRequired]
+	missing_field = |_, _| MissingRequired
 
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [MissingRequired])
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, State, [MissingRequired]), State -> Try({ value : a, rest : State }, [MissingRequired])
 	parse_tag_union = |format, spec, state|
 		match state {
 			Tag(tag_name) => Encoding.ParseTagUnionSpec.parse(spec, {
@@ -58,9 +58,9 @@ Format := [Default].{
 
 State := [Tag(Str), FieldValue(Str), Done]
 
-parse : Str -> Try(a, [MissingRequired, MissingRequiredField(Str)])
+parse : Str -> Try(a, [MissingRequired])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired, MissingRequiredField(Str)])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [MissingRequired])),
 	]
 parse = |input| {
 	Shape : a
@@ -69,7 +69,7 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try([One({ foo : Str }), Two], [MissingRequired, MissingRequiredField(Str)])
+main : Try([One({ foo : Str }), Two], [MissingRequired])
 main = parse("One")
 
 expect main == Ok(One({ foo: "payload" }))

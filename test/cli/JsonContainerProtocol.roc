@@ -1,6 +1,6 @@
 JsonContainerProtocol :: [].{}
 
-Parsed(a) : Try(a, [InvalidJson(Str), MissingRequiredField(Str)])
+Parsed(a) : Try(a, [InvalidJson(Str)])
 
 ## Tuple arity is static, so the format itself rejects a JSON array whose
 ## length disagrees rather than the driver manufacturing a generic error.

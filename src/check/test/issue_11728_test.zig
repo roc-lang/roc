@@ -52,7 +52,7 @@ test "issue 11728: imported format-generic custom parser as a record field" {
 
 test "issue 11728: parent cannot exclude the custom parser format error" {
     var env = try TestEnv.init("Test", token ++
-        \\parse : Str -> Try({ t : Token }, [MissingRequiredField(Str)])
+        \\parse : Str -> Try({ t : Token }, [OtherError(Str)])
         \\parse = |json| Json.parse(json)
     );
     defer env.deinit();
@@ -61,7 +61,7 @@ test "issue 11728: parent cannot exclude the custom parser format error" {
 
 test "issue 11728: parent cannot change the custom parser error payload" {
     var env = try TestEnv.init("Test", token ++
-        \\parse : Str -> Try({ t : Token }, [InvalidJson(U64), MissingRequiredField(Str)])
+        \\parse : Str -> Try({ t : Token }, [InvalidJson(U64)])
         \\parse = |json| Json.parse(json)
     );
     defer env.deinit();
@@ -70,7 +70,7 @@ test "issue 11728: parent cannot change the custom parser error payload" {
 
 // The format method has its own requirement, so the error becomes known only
 // after dispatching Token.parser_for -> Format.parse_str -> State.read.
-// Collection methods are infallible: ReadFailed comes only from the child.
+// Collection methods do not fail, but still use the format-owned error.
 const transitive = token ++
     \\State := {}.{
     \\    read : State -> Try({ value : Str, rest : State }, [ReadFailed(Str)])
@@ -83,11 +83,11 @@ const transitive = token ++
     \\        S : state
     \\        S.read(state)
     \\    }
-    \\    parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [])
+    \\    parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [ReadFailed(Str)])
     \\    parse_list_start = |_, state| Ok(Counted({ len: 1, rest: state }))
-    \\    parse_list_next : Format, State -> Try([Item(State), Done(State)], [])
+    \\    parse_list_next : Format, State -> Try([Item(State), Done(State)], [ReadFailed(Str)])
     \\    parse_list_next = |_, state| Ok(Done(state))
-    \\    parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], [])
+    \\    parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], [ReadFailed(Str)])
     \\    parse_list_after_item = |_, state| Ok(Done(state))
     \\}
     \\parse : {} -> Try({ value : List(Token), rest : State }, [ReadFailed(Str)])
@@ -104,7 +104,7 @@ test "issue 11728: custom parser errors settle through transitive requirements" 
     try env.assertNoErrors();
 }
 
-test "issue 11728: format parser errors settle before row composition" {
+test "issue 11728: format parser errors settle before contract equality" {
     const source = try std.mem.replaceOwned(u8, std.testing.allocator, transitive, "List(Token)", "List(Str)");
     defer std.testing.allocator.free(source);
     var env = try TestEnv.init("Test", source);
@@ -117,5 +117,5 @@ test "issue 11728: parent rejects an error contributed only by the custom parser
     defer std.testing.allocator.free(source);
     var env = try TestEnv.init("Test", source);
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Row Missing Tag");
+    try env.assertOneTypeError("Parser Error Type Mismatch");
 }
