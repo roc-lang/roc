@@ -248,6 +248,7 @@ test "export interface snapshot owns the complete calling contract" {
 pub const Output = struct {
     lir_result: LirProgram.Result,
     static_data: []LirProgram.StaticDataExport,
+    runtime_schemas: @import("../runtime_schemas.zig").RuntimeSchemaStore,
     /// With `Input.stored_functions`, the program's types and workers.
     retained: ?*StoredFn.Retained = null,
 };
@@ -3409,6 +3410,8 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
     // links against it.
     if (program.moduleUnit() != null and !input.compile_time) try seedUnitWorkers(program);
 
+    var schema_roots: std.ArrayList(TypeId) = .empty;
+    defer schema_roots.deinit(allocator);
     const requests = input.roots.requests;
     for (requests, 0..) |request, index| {
         const root_id = request.compile_time_root orelse continue;
@@ -3426,6 +3429,10 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         const worker_id = try lowerRoot(program, request, @intCast(index), source_module);
         const proc = program.worker(worker_id).proc;
         try program.result.root_procs.append(allocator, proc);
+        if (request.abi == .platform) {
+            try schema_roots.appendSlice(allocator, program.worker(worker_id).params);
+            try schema_roots.append(allocator, program.worker(worker_id).ret);
+        }
         // A compile-time evaluator stores each root's value by the plan
         // and stored type of the root's own result type. A lowering that
         // evaluates none (a test lowering one constant's root) runs the
@@ -3529,12 +3536,15 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
         }
     }
     program.result.finishExpectSites();
+    var runtime_schemas = try @import("runtime_schemas.zig").collect(program, schema_roots.items);
+    errdefer runtime_schemas.deinit();
     const static_data = try program.static_descs.takeExports();
     const kept = if (input.stored_functions) try StoredFn.retain(allocator, program) else null;
     retained = kept != null;
     return .{
         .lir_result = program.result,
         .static_data = static_data,
+        .runtime_schemas = runtime_schemas,
         .retained = kept,
     };
 }
