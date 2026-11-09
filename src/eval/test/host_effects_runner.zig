@@ -378,12 +378,12 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
 
         var static_image = backend.StaticDataImage.init(allocator, lowered.view.static_data) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.StaticDataImageFailed,
+            else => base.invariant("host-effects program has an invalid static-data graph", .{}),
         };
         defer static_image.deinit();
         const addresses = static_image.lirValueAddresses(allocator, lowered.view.static_data_value_count) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.StaticDataImageFailed,
+            else => base.invariant("host-effects static-data graph omitted a requested value", .{}),
         };
         defer allocator.free(addresses);
 
@@ -423,6 +423,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
         const Resolver = struct {
             codegen: *const HostLirCodeGen,
             executable: *const ExecutableMemory,
+
             fn resolve(raw: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
                 const self: *@This() = @ptrCast(@alignCast(raw.?));
                 const address = @intFromPtr(self.executable.codePtr());
@@ -434,7 +435,7 @@ fn runDev(allocator: std.mem.Allocator, lowered: *const LoweredProgram) BackendE
         var resolver = Resolver{ .codegen = &codegen, .executable = &exec_mem };
         static_image.resolveFunctionRelocations(.{ .context = &resolver, .resolve = Resolver.resolve }) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            else => return error.StaticDataImageFailed,
+            else => base.invariant("host-effects static-data graph omitted a callable procedure", .{}),
         };
 
         var runtime_env = RuntimeHostEnv.init(allocator);

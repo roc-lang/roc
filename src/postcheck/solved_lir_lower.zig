@@ -7425,10 +7425,10 @@ const Lowerer = struct {
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const proc_id = self.current_proc orelse Common.invariant("static data candidate lowering ran without a current procedure");
         const in_initializer = self.result.store.getProcSpecImmediate(proc_id).is_static_initializer;
-        // These expressions describe data to the compile-time encoder only.
-        // Runtime reads always reference the finished value, even when it is
-        // empty or a consumer will subsequently mutate it.
-        if (in_initializer) switch (candidate.value) {
+        // Aggregate expressions describe data to the compile-time encoder
+        // only. Bool and inline strings are immediates, matching reads of
+        // values completed in this compilation.
+        if (in_initializer or layout_idx == .bool or !candidate.storage.needsTargetStorage(self.result.layouts.targetUsize())) switch (candidate.value) {
             .runtime => |runtime| return .{ .tail = exprTask(where, target, runtime, ty, next) },
             .stored => {},
         };
