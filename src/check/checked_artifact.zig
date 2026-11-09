@@ -39090,7 +39090,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     try std.testing.expect(try checkedTypeIdsContainIdentityVariables(allocator, &store, &.{root}));
 }
 
-test "provided callable-containing record constant is a data export, not a runtime root" {
+test "provided record constant with an unboxed function is rejected before publication" {
     const source =
         \\platform ""
         \\    requires {}
@@ -39104,11 +39104,9 @@ test "provided callable-containing record constant is a data export, not a runti
         \\table_for_host = { f: |value| value + 1 }
     ;
 
-    try expectProvidedExportKind(source, .{
-        .procedure_roots = 0,
-        .data_exports = 1,
-        .procedure_exports = 0,
-    });
+    var env = try @import("test/TestEnv.zig").init("Platform", source);
+    defer env.deinit();
+    try env.assertOneTypeError("Hosted Function Requires Boxed Lambda");
 }
 
 test "provided procedure remains a runtime root" {

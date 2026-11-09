@@ -184,9 +184,11 @@ pub const PlatformDefNotFound = struct {
     ctx: enum { not_found, found_but_not_exported },
 };
 
-/// Hosted functions cannot accept or return unboxed functions.
+/// Host-visible callable values must be directly boxed.
 pub const HostedUnboxedFunction = struct {
     region: base.Region,
+    path: ExtraStringIdx,
+    kind: enum { function, iter, stream },
 };
 
 /// Every function the host provides is effectful, so a hosted declaration

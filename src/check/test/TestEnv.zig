@@ -230,9 +230,18 @@ pub fn init(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
     return initWithExecutableRootNames(module_name, source, &.{});
 }
 
+/// Check a platform-owned type module using the production hosted transform.
+pub fn initHosted(module_name: []const u8, source: []const u8) TestEnvError!TestEnv {
+    return initConfigured(module_name, source, &.{}, true);
+}
+
 /// Initialize a source file and mark selected top-level defs as executable
 /// zero-arg roots for checker validation.
 pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8) TestEnvError!TestEnv {
+    return initConfigured(module_name, source, explicit_root_names, false);
+}
+
+fn initConfigured(module_name: []const u8, source: []const u8, explicit_root_names: []const []const u8, hosted: bool) TestEnvError!TestEnv {
     const gpa = std.testing.allocator;
 
     const roc_ctx = CoreCtx.testing(gpa, gpa);
@@ -282,6 +291,8 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     try can.canonicalizeFile();
     // Note: We skip validateForChecking() in unit tests since tests may not be valid
     // type modules. The validation is for real modules that will be imported.
+
+    if (hosted) try can_mod.HostedCompiler.replaceAnnoOnlyWithHosted(module_env);
 
     // Get Bool, Try, and Str statement indices from the IMPORTED modules (not copied!)
     const bool_stmt_in_bool_module = builtin_indices.bool_type;
