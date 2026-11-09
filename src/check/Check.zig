@@ -23448,15 +23448,6 @@ fn tagRowHasTag(self: *const Self, row: Var, tag_name: Ident.Idx) bool {
     }
 }
 
-/// Record the error tags the generated codec being validated requires in
-/// `row` (see `codec_row_demands`).
-fn recordCodecRowDemand(self: *Self, row: Var, tags: []const Ident.Idx) Allocator.Error!void {
-    if (self.active_codec_owner_region == null) return;
-    const names_start = self.codec_row_demand_tags.items.len;
-    try self.codec_row_demand_tags.appendSlice(self.gpa, tags);
-    try self.recordCodecRowDemandRange(row, names_start);
-}
-
 /// Record a demand whose tag names were just appended to
 /// `codec_row_demand_tags` from `names_start` on.
 fn recordCodecRowDemandRange(self: *Self, row: Var, names_start: usize) Allocator.Error!void {
