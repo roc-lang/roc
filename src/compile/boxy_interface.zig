@@ -6,7 +6,7 @@
 //!
 //! An interface has two halves. `Digests.interfaceOf` covers what a module's
 //! checked data tells an importer's lowering; it is known once the module's
-//! compile-time values are. `Digests.recordExports` covers the ownership
+//! compile-time values are. `Digests.recordExportsDigest` covers the ownership
 //! signatures the module's own object solved, known once that object exists.
 //! Each folds in the same half of the module's imports, because lowering
 //! reads through an import to the modules behind it.
@@ -15,7 +15,6 @@ const std = @import("std");
 const base = @import("base");
 const check = @import("check");
 const eval = @import("eval");
-const object_cache = @import("boxy_object_cache.zig");
 
 const Allocator = std.mem.Allocator;
 const Sha256 = base.Sha256;
@@ -109,7 +108,7 @@ pub const Digests = struct {
             .templates => for (artifact.exported_procedure_templates.templates) |exported| self.hashTemplateRef(hasher, artifact, exported.template),
             .bindings => self.hashBindings(hasher, artifact),
             .methods => self.hashMethods(hasher, artifact),
-            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len)))),
+            .defaults => hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa))))),
             .nominals => hashNominals(hasher, artifact),
             .consts => try self.hashConsts(hasher, artifact),
             .values => try self.hashStoredValues(hasher, artifact, .read_by_importers),
@@ -120,29 +119,14 @@ pub const Digests = struct {
         }
     }
 
-    /// Record `records`, the export records of `artifact`'s object. The
-    /// caller records a module only after every import of it that has an
-    /// object.
-    pub fn recordExports(self: *Digests, artifact: *const Artifact, records: []const object_cache.ExportRecord) Allocator.Error!void {
-        const sorted = try self.gpa.dupe(object_cache.ExportRecord, records);
-        defer self.gpa.free(sorted);
-        std.mem.sort(object_cache.ExportRecord, sorted, {}, struct {
-            fn lessThan(_: void, a: object_cache.ExportRecord, b: object_cache.ExportRecord) bool {
-                return std.mem.order(u8, &a.identity, &b.identity) == .lt;
-            }
-        }.lessThan);
+    /// Record the exports of `artifact`'s object by `records_digest`, the
+    /// `object_cache.exportRecordsDigest` of its export records, which its
+    /// cache entry files. The caller records a module only after every
+    /// import of it that has an object.
+    pub fn recordExportsDigest(self: *Digests, artifact: *const Artifact, records_digest: Digest) Allocator.Error!void {
         var hasher = Sha256.init(.{});
-        hasher.update("roc.boxy.exports.v1");
-        for (sorted) |record| {
-            hasher.update(&record.identity);
-            inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
-            hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
-            hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
-            hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
-            // An importer fills the worker's tables from its needs.
-            hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
-            hasher.update(record.table_needs);
-        }
+        hasher.update("roc.boxy.exports.v2");
+        hasher.update(&records_digest);
         self.hashImportedExports(&hasher, artifact);
         try self.exports.put(self.gpa, artifact.key.bytes, hasher.finalResult());
     }
@@ -213,7 +197,7 @@ pub const Digests = struct {
         }
         self.hashBindings(hasher, artifact);
         self.hashMethods(hasher, artifact);
-        hasher.update(std.mem.asBytes(&@as(u32, @intCast(artifact.bodies().defaultExprs().len))));
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(try artifact.bodies().defaultExprCount(self.gpa)))));
         hashNominals(hasher, artifact);
         try self.hashConsts(hasher, artifact);
         try self.hashStoredValues(hasher, artifact, .read_by_importers);

@@ -6812,6 +6812,7 @@ fn lowerRunUnits(
         defer ctx.gpa.free(records);
         try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
             .exports = records,
+            .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
             .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             .host_boundary_digests = host_boundary_digests,
             // No link composes the root unit of a run image.
@@ -10594,7 +10595,7 @@ fn buildBoxyLibraryObjects(
             .done => |*result| {
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
-                try digests.recordExports(task.artifact, result.exports);
+                try digests.recordExportsDigest(task.artifact, result.exports_digest);
                 keys[index] = task.key.bytes;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
@@ -11676,6 +11677,7 @@ fn buildWasmUnits(
     const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
     try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
         .exports = records,
+        .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
         .hosted_symbols = try compile.boxy_unit.hostedSymbols(ctx.arena, &lowered.lir_result.store),
         .app_export_symbols = app_export_symbols,
         .pieces = &.{},
@@ -12273,6 +12275,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
                 defer ctx.gpa.free(encoded);
                 try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, boxy_root_key.?, .{
                     .exports = records,
+                    .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                     .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
                     .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
                     .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
@@ -12298,6 +12301,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             defer ctx.gpa.free(encoded);
             try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
                 .exports = records,
+                .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                 .hosted_symbols = root_hosted_symbols,
                 .link_root_symbols = link_facts.link_root_symbols,
                 .app_export_symbols = link_facts.app_export_symbols,
@@ -15883,6 +15887,7 @@ fn unitTestRootImage(
     defer ctx.gpa.free(records);
     try compile.boxy_unit.store(ctx.gpa, cache_manager, key, .{
         .exports = records,
+        .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
         .hosted_symbols = hosted,
         // No link composes a test program's root unit.
         .pieces = &.{},

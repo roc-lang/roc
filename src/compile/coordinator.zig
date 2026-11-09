@@ -1809,10 +1809,6 @@ const BoxyObjects = struct {
         // A host whose units carry images loads them; every other host
         // composes the pieces (`boxy_object_code`).
         std.debug.assert(boxy_unit.producesImage(self.lowering.target) == (eval.CompileTimeFinalization.boxy_object_code == .image));
-        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
-        try self.pieces.ensureUnusedCapacity(gpa, 1);
-        try self.images.ensureUnusedCapacity(gpa, 1);
         // The image and the pieces become the compilation's once stored;
         // until then a failure releases them with the rest of `built`.
         var code_stored = false;
@@ -1824,6 +1820,10 @@ const BoxyObjects = struct {
             }
         };
         defer built.deinitKeepingCode(gpa);
+        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
+        try self.pieces.ensureUnusedCapacity(gpa, 1);
+        try self.images.ensureUnusedCapacity(gpa, 1);
         const code: @FieldType(Object, "code") = switch (eval.CompileTimeFinalization.boxy_object_code) {
             .image => image: {
                 const image = built.image orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its image", .{});
@@ -1831,7 +1831,7 @@ const BoxyObjects = struct {
             },
             .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
         };
-        try self.digests.recordExports(artifact, built.exports);
+        try self.digests.recordExportsDigest(artifact, built.exports_digest);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
         code_stored = true;
@@ -13558,6 +13558,97 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     try std.testing.expect(!parser_changed.cached and !parser_changed.stored_before_evaluation);
     try std.testing.expect(!std.mem.eql(u8, &input_changed.key, &parser_changed.key));
     try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
+}
+
+test "Boxy object record reservation OOM releases the transferred unit" {
+    const allocator = std.testing.allocator;
+    var input_entry: boxy_object_cache.Entry = .{
+        .exports_digest = undefined,
+        .exports = &.{.{
+            .identity = @splat(1),
+            .rc_borrowed_params = 0,
+            .rc_ret_lenders = 0,
+            .rc_read_only_params = 0,
+            .rc_ret_unique_fields = 0,
+            .rc_ret_borrowed = false,
+            .rc_ret_unique = false,
+            .may_leave_pending = false,
+            .rc_ret_conditions = &.{ 3, 9 },
+            .table_needs = "needs",
+        }},
+        .hosted_symbols = &.{"roc_fx_test"},
+        .expect_sites = &.{.{ .module = @splat(1), .region_start = 0, .region_end = 1 }},
+        .test_roots = &.{.{ .module = @splat(1), .root_index = 0, .symbol = 0 }},
+        .pieces = "",
+        .image = "image bytes",
+        .code_locations = "locations",
+        .function_metadata = "metadata",
+    };
+    input_entry.exports_digest = try boxy_object_cache.exportRecordsDigest(allocator, input_entry.exports);
+    const encoded = try boxy_object_cache.encode(allocator, input_entry);
+    defer allocator.free(encoded);
+
+    // Reserve the preceding containers before arming failure, so each of
+    // record's four reservations fails in turn without lowering any code.
+    for (0..4) |reservation| {
+        var failing = std.testing.FailingAllocator.init(allocator, .{});
+        const gpa = failing.allocator();
+        var coordinator: Coordinator = undefined;
+        coordinator.gpa = gpa;
+        // Only fields reached before reservation failure are initialized.
+        // Neither the artifact nor any compiler service is consulted.
+        var objects: BoxyObjects = undefined;
+        objects.coordinator = &coordinator;
+        objects.lowering.target = roc_target.RocTarget.detectNative();
+        objects.arena = .init(gpa);
+        defer objects.arena.deinit();
+        objects.owned_pieces = .empty;
+        defer objects.owned_pieces.deinit(gpa);
+        objects.replaced_images = .empty;
+        defer objects.replaced_images.deinit(gpa);
+        objects.pieces = .empty;
+        defer objects.pieces.deinit(gpa);
+        objects.images = .empty;
+        defer objects.images.deinit(gpa);
+        if (reservation > 0) try objects.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        if (reservation > 1) try objects.replaced_images.ensureUnusedCapacity(gpa, 1);
+        if (reservation > 2) try objects.pieces.ensureUnusedCapacity(gpa, 1);
+        const reserved_bytes = failing.allocated_bytes - failing.freed_bytes;
+
+        const built: boxy_unit.Built = unit: {
+            const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
+            errdefer gpa.destroy(pieces);
+            const entry = try boxy_object_cache.decode(gpa, encoded);
+            pieces.* = .{
+                .arena = .init(gpa),
+                .set = .{ .arena = .init(gpa), .excerpts = &.{} },
+                .erased_capture_prefix = 0,
+                .source_files = &.{},
+                .exported_data = &.{},
+                .helper_aliases = &.{},
+            };
+            break :unit .{
+                .restored = true,
+                .pieces = pieces,
+                .image = .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .owned },
+                .function_metadata = entry.function_metadata,
+                .exports = entry.exports,
+                .exports_digest = entry.exports_digest,
+                .hosted_symbols = entry.hosted_symbols,
+                .expect_sites = entry.expect_sites,
+                .test_roots = entry.test_roots,
+            };
+        };
+        failing.fail_index = failing.alloc_index;
+        var artifact: CheckedArtifact.CheckedModuleArtifact = undefined;
+        try std.testing.expectError(error.OutOfMemory, objects.record(&artifact, built));
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(reserved_bytes, failing.allocated_bytes - failing.freed_bytes);
+        try std.testing.expectEqual(@as(usize, 0), objects.owned_pieces.items.len);
+        try std.testing.expectEqual(@as(usize, 0), objects.replaced_images.items.len);
+        try std.testing.expectEqual(@as(u32, 0), objects.pieces.count());
+        try std.testing.expectEqual(@as(u32, 0), objects.images.count());
+    }
 }
 
 test "post-check publication submit OOM accepts no first task" {

@@ -9486,7 +9486,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -9569,7 +9569,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -22978,7 +22978,7 @@ pub fn pairCheckedPlatform(
             if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
         }
-        for (platform_analyses.index.node_kinds, 0..) |kind, raw| {
+        for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
             const data = env.store.getExpr(call_expr);
@@ -31225,6 +31225,7 @@ pub const CheckedModuleArtifact = struct {
         const type_view = self.typesView();
 
         const checked = self.bodies();
+        try checked.demandIndex();
         for (checked.index().node_kinds, 0..) |kind, raw| {
             const node: u32 = @intCast(raw);
             switch (kind) {
@@ -34197,7 +34198,7 @@ pub fn publishFromTypedModule(
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
-    const module_index = &analyses.index;
+    const module_index = try analyses.demandIndex();
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -34858,7 +34859,7 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
         .evaluation_state = .prepared,
-        .has_expects = analyses.index.has_expects,
+        .has_expects = module_index.has_expects,
         .body_analyses = analyses,
     };
     // The artifact owns the key slots from here on, and its views name its

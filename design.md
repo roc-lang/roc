@@ -14433,7 +14433,8 @@ a nested lambda or closure expression, a generated structural codec
 derivation, or an entry wrapper. Worker identity is the template or expression
 identity; a template is never lowered twice, whatever the number of its uses
 or instantiations, with one declared, bounded exception: a `List` template
-also has a `List(U8)` worker (Pre-Specialized List(U8) Workers). A worker is
+also has one worker per fixed-size integer item type (Pre-Specialized
+Integer List Workers). A worker is
 lowered at its checked definition type, in which its scheme's quantified
 variables appear as type variables.
 
@@ -14656,18 +14657,23 @@ closed operations use their committed layouts. Function values and erased calls
 retain the wrapper and its ordinary calling convention. This is direct lowering
 of a declared primitive, not general body inlining or specialization.
 
-#### Pre-Specialized List(U8) Workers
+#### Pre-Specialized Integer List Workers
 
-Byte lists are the one instantiation pre-specialized under `.boxy`. A
-monomorphic `List(U8)` call into a generic `List` worker would read the item's
-size from its descriptor, copy single bytes through it, and build each `Try`
-result through the descriptor of the result type, which dominates byte-oriented
-programs. So every `List` template has, besides its generic worker, a second
-worker lowered with its list item variable bound to `U8`
-(`TemplateBinding.list_u8`). No other type and no other template gets one,
-and nothing requests one on demand: this is not a specialization mechanism.
+Lists of fixed-size integers are the one family of instantiations
+pre-specialized under `.boxy`. A monomorphic `List(U32)` call into a generic
+`List` worker would read the item's size from its descriptor, copy each item
+through it, and build each `Try` result through the descriptor of the result
+type, which dominates byte- and integer-oriented programs (a decompressor's
+`List(U16)` and `List(U32)` tables). So every `List` template has, besides its
+generic worker, one worker per INTEGER LIST ITEM TYPE, lowered with its list
+item variable bound to that type (`TemplateBinding.list_int`). The integer list
+item types are exactly `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`,
+`U128` and `I128`, in that declared order (`ListIntItem`). No other type (not
+`F32`, `F64`, `Dec`, `Bool`, `Str`, a SIMD vector, or any composite or nominal
+type) and no other template gets one, and nothing requests one on demand: this
+is not a specialization mechanism.
 
-- A template has a `List(U8)` worker exactly when the Builtin module's method
+- A template has integer list workers exactly when the Builtin module's method
   registry names it as a method of `List`, its body is a checked body (a
   template with `provided_low_level` already emits its operation at every
   direct call), and its first parameter's type is `List(item)` for a scheme
@@ -14676,31 +14682,36 @@ and nothing requests one on demand: this is not a specialization mechanism.
   converted signature; it never reads a name or scans a body. Templates with
   other scheme variables (`map : List(a), (a -> b) -> List(b)`) bind only
   the item variable; the rest stay variables of the worker.
-- The worker's body, signature, and the lambdas its scope roots are lowered
-  with the item variable bound to the `U8` type (`Worker.list_u8_slot`), so
-  every value of the item type, and every type over it (`Try(item, e)`,
-  `List(item)`), is closed and lowers as monomorphic code does. Its hidden
-  inputs are the generic worker's in the same order: the item variable's
-  descriptor stays an input, which callers fill with `U8`'s descriptor and
-  the body never reads, and its dictionaries (`is_eq` on items) and literal
-  arguments are supplied as for the generic worker. Call sites, dictionaries,
-  and table recipes therefore need nothing of their own.
+- Each worker's body, signature, and the lambdas its scope roots are lowered
+  with the item variable bound to its integer type (`Worker.list_int`, the
+  slot and the type). The item type and types whose only open component was
+  that item (`List(item)`, or `Try(item, e)` with sealed `e`) are closed and
+  lower as monomorphic code does; other quantified variables remain open.
+  Its hidden inputs are the generic worker's in the same order: the item
+  variable's descriptor stays an input, which callers fill with the integer
+  type's descriptor and the body never reads, and its dictionaries (`is_eq` on
+  items) and literal arguments are supplied as for the generic worker. Call
+  sites, dictionaries, and table recipes therefore need nothing of their own.
 - A direct call of a generic `List` template whose instantiation binds the
-  list item variable to exactly `U8` calls the `List(U8)` worker
-  (`Program.directCallTarget`), with the hidden inputs computed for the generic
-  worker. Every other instantiation, including a variable the caller's own
-  instantiation will make `U8`, calls the generic worker. A function value of
-  the template (`List.get` used as a value, or a dictionary method) is the
-  generic worker's: only direct calls are redirected.
-- The worker's identity is a content identity of its own
-  (`listU8TemplateWorkerIdentity`), distinct from the generic worker's and the
-  same in every object of the link; its readable name is the template's with
-  `@U8` appended (`Builtin.List.get@U8`). Stored-function and table-needs
-  metadata name it with its own worker tag (`template_list_u8`).
-- The Builtin module's unit lowers and exports the `List(U8)` workers of all
-  its `List` templates with the generic workers (Per-Module Output), in
-  template order, since its importers are lowered independently and reach
-  them by symbol. The link drops those nothing calls.
+  list item variable to exactly one integer list item type calls that type's
+  worker (`Program.directCallTarget`), with the hidden inputs computed for the
+  generic worker. Every other instantiation, including a variable the caller's
+  own instantiation will make an integer type, calls the generic worker. A
+  function value of the template (`List.get` used as a value, or a dictionary
+  method) is the generic worker's: only direct calls are redirected.
+- Each worker's identity is a content identity of its own
+  (`listIntTemplateWorkerIdentity`, over the template and the item type),
+  distinct from the generic worker's and the other item types' and the same in
+  every object of the link; its readable name is the template's with the item
+  type appended (`Builtin.List.get@U8`, `Builtin.List.get@I64`).
+  Stored-function and table-needs metadata name it with its own worker tag
+  (`template_list_int`) followed by one byte naming the item type.
+- The Builtin module's unit lowers and exports the integer list workers of
+  all its `List` templates with the generic workers (Per-Module Output), in
+  template order and, within a template, in the declared item type order, so
+  the unit's output is the same whatever the thread count. Its importers are
+  lowered independently and reach them by symbol. The link drops those nothing
+  calls.
 
 #### Type Descriptors
 
@@ -15494,8 +15505,8 @@ Nothing a module emits depends on a module that imports it:
   every template's body and its dictionary entry are emitted, since another
   module may call a template or pack it as a function value, and the
   entries of its registered methods and its `??` defaults with them, and
-  for the Builtin module the `List(U8)` workers of its `List` templates
-  (Pre-Specialized List(U8) Workers); the
+  for the Builtin module the integer list workers of its `List` templates
+  (Pre-Specialized Integer List Workers); the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
   program whose roots may name modules no unit lowers;
@@ -15609,7 +15620,15 @@ and Per-Module Output is the invariant that makes it possible:
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, which
-  Per-Module Output makes a function of the module and its imports). There
+  Per-Module Output makes a function of the module and its imports), with
+  the digest of those records (`exportRecordsDigest`). An importer's key
+  folds in the module's export digest, which combines that records digest
+  with its imports' export digests (`Digests.recordExportsDigest`), so a
+  restored object's records are not hashed again. This is a semantic
+  interface digest, never a payload-integrity hash. The v2 export digest
+  composition changes hash bytes; object format 18 invalidates the older
+  entries. Its inputs remain the module's own export records and its imports,
+  never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored object and compares the bytes, so a key that misses an input
@@ -15950,6 +15969,29 @@ source traversal, guessed reachability, or persistent cache. Imports used only
 through linked code do not require their private body indexes. Allocation
 failure propagates, and the index is marked complete only after registration of
 all its records succeeds.
+
+A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
+its bodies reach, the top-level unit owning each, and per-binding declaration
+facts) follows the same rule one level down. It is a pure function of the
+module's CIR and promoted local procedures, so it is built on first demand into
+a write-once slot of the module's `BodyAnalyses`, like every other body fact,
+and is never serialized. Publishing a freshly checked module demands it, since
+publication reads it; installing a cached checked entry does not. A consumer
+demands the index of every module whose bodies it reads before reading any:
+LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
+demand, and platform pairing. Boxy registration and preparation demand none:
+its body-metadata index, worker-body builder, capture reader and default-worker
+consumers demand only their own module. Unit worker seeding demands only the
+modules the unit owns. An import used through linked procedures therefore keeps
+its checked body index unbuilt. Reading the index of a module no consumer
+demanded is a compiler invariant violation. A run whose checked modules all
+come from the cache and that lowers nothing, such as a `roc test` whose every
+outcome is reused, builds no index. The index is not filed in the checked
+entry: it is several bytes per CIR node, so reading it back would cost about
+what building it costs, and a run that lowers nothing would still pay it for
+every module. The export interface digest reads only the number of
+defaulted-field defaults, which it counts from the CIR directly
+(`defaultExprCount`).
 
 #### Error-Type Reachability
 

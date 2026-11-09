@@ -76,6 +76,14 @@ pub const CheckedModules = struct {
         for (self.imports) |view| if (view.key.digest().eql(key)) return view;
         return null;
     }
+
+    /// Demand the body index of every module of the set, which a consumer
+    /// does before it reads any of their bodies.
+    pub fn demandBodyIndexes(self: CheckedModules) std.mem.Allocator.Error!void {
+        try self.root.module.bodies().demandIndex();
+        for (self.root.relation_modules) |view| try view.checked_bodies.demandIndex();
+        for (self.imports) |view| try view.checked_bodies.demandIndex();
+    }
 };
 
 /// Dense id of one checked module inside a single lowering's module set; see
