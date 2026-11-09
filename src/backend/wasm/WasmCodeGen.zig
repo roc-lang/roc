@@ -2090,6 +2090,8 @@ pub fn generateModule(
     if (proc_specs.len > 0) {
         self.compileAllProcSpecs(proc_specs) catch return error.OutOfMemory;
     }
+    // Frozen callables can name a drop helper that no procedure body calls.
+    try self.compileStaticDataRcHelpers(self.static_data_rc_helpers);
 
     const root_proc = self.store.getProcSpec(root_proc_id);
     if (!root_proc.args.isEmpty()) {
@@ -7017,7 +7019,7 @@ fn emitProcSpecBody(
     };
 
     if (proc.uses_pending_cell and self.pending_cell == null) {
-        const cell_offset = try self.allocStackMemory(builtins.native_callable.pending_words * 4, 4);
+        const cell_offset = try self.allocStackMemory(builtins.native_callable.pendingByteSize(wasm_word_size), builtins.native_callable.pendingAlignment(wasm_word_size));
         const own_cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(cell_offset);
         try self.emitLocalSet(own_cell);
