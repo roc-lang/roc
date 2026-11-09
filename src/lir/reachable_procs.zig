@@ -311,6 +311,7 @@ const Pass = struct {
             self.visited_plans[index] = true;
 
             switch (self.result.const_plans.items[index]) {
+                .boxed_sequence => |sequence| try self.plan_stack.append(self.allocator, sequence.payload),
                 .pending,
                 .layout_only,
                 .zst,

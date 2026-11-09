@@ -1882,6 +1882,33 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const args = self.store.getLocalSpan(ll.args);
 
             switch (ll.op) {
+                .boxed_sequence_pack => {
+                    const record = GuardedList.at(args, 0);
+                    const size = self.getLayoutSize(self.localLayout(record));
+                    const slot = try self.ensureOnStack(try self.emitValueLocal(record), size);
+                    const offset = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 1)));
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addLeaArg(frame_ptr, slot);
+                    try builder.addImmArg(size);
+                    try builder.addRegArg(offset);
+                    try self.callBuiltin(&builder, .boxed_sequence_pack);
+                    self.codegen.freeGeneral(offset);
+                    return self.scalarRetReg();
+                },
+                .boxed_sequence_unpack => {
+                    const step = try self.ensureInGeneralReg(try self.emitValueLocal(GuardedList.at(args, 0)));
+                    const size = self.getLayoutSize(ll.ret_layout);
+                    const slot = self.codegen.allocStackSlot(size);
+                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                    defer builder.deinit();
+                    try builder.addLeaArg(frame_ptr, slot);
+                    try builder.addRegArg(step);
+                    try builder.addImmArg(size);
+                    try self.callBuiltin(&builder, .boxed_sequence_unpack);
+                    self.codegen.freeGeneral(step);
+                    return self.stackLocationForLayout(ll.ret_layout, slot);
+                },
                 .num_plus, .num_minus, .num_times => unreachable, // source-policy markers that LIR lowering commits through CheckedArithmetic.lowerOp
                 .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
                 // A hint only; this backend emits no code for it.
@@ -14610,6 +14637,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             target_layout: layout.Idx,
             capture_layout: ?layout.Idx,
             on_drop: lir.LIR.ErasedCallableOnDrop,
+            on_copy: lir.LIR.ErasedCallableOnDrop,
             reuse: ?LocalId,
             reuse_unique: bool,
         ) Allocator.Error!ValueLocation {
@@ -14671,6 +14699,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         original_on_drop_reg,
                     );
                     self.codegen.freeGeneral(original_on_drop_reg);
+                    const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
+                    try self.emitStore(.w64, frame_ptr, capture_src_slot + @as(i32, @intCast(@offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy"))), original_on_copy_reg);
+                    self.codegen.freeGeneral(original_on_copy_reg);
                 }
 
                 if (capture) |capture_local| {
@@ -14746,7 +14777,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addImmArg(@backingInt(update_mode));
                     try self.callBuiltin(&builder, .erased_callable_repack);
                 }
-                return try self.scalarRetReg();
+                const result = try self.scalarRetReg();
+                try self.writeErasedCaptureMetadata(try self.ensureInGeneralReg(result), base_capture_size, on_copy);
+                return result;
             }
 
             const payload_size = builtins.erased_callable.payloadSize(base_capture_size);
@@ -14810,12 +14843,16 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     original_on_drop_reg,
                 );
                 self.codegen.freeGeneral(original_on_drop_reg);
+                const original_on_copy_reg = try self.materializeErasedCallableOnDrop(on_copy);
+                try self.emitStore(.w64, heap_ptr, @intCast(builtins.erased_callable.capture_offset + @offsetOf(builtins.erased_callable.HotReloadCaptureHeader, "original_on_copy")), original_on_copy_reg);
+                self.codegen.freeGeneral(original_on_copy_reg);
             } else {
                 const on_drop_reg = try self.materializeErasedCallableOnDrop(on_drop);
                 try self.emitStore(.w64, heap_ptr, @intCast(@sizeOf(usize)), on_drop_reg);
                 self.codegen.freeGeneral(on_drop_reg);
             }
 
+            try self.writeErasedCaptureMetadata(heap_ptr, base_capture_size, on_copy);
             if (capture) |capture_local| {
                 const layout_idx = capture_layout orelse unreachable; // the presence check at the top of generatePackedErasedFn pairs capture with capture_layout
                 const capture_loc = self.requireExactValueLocationToLayout(
@@ -14844,6 +14881,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const result_reg = try self.allocTempGeneral();
             try self.emitLoad(.w64, result_reg, frame_ptr, heap_ptr_slot);
             return .{ .general_reg = result_reg };
+        }
+
+        fn writeErasedCaptureMetadata(self: *Self, ptr: GeneralReg, size: u32, on_copy: lir.LIR.ErasedCallableOnDrop) Allocator.Error!void {
+            const reg = if (self.hotReloadEnabled()) blk: {
+                const result = try self.allocTempGeneral();
+                try self.emitBuiltinAddress(result, .hot_reload_erased_callable_copy);
+                break :blk result;
+            } else try self.materializeErasedCallableOnDrop(on_copy);
+            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "on_copy")), reg);
+            try self.codegen.emitLoadImm(reg, size);
+            try self.emitStore(.w64, ptr, @intCast(@offsetOf(builtins.erased_callable.Payload, "capture_size")), reg);
+            self.codegen.freeGeneral(reg);
         }
 
         fn materializeErasedCallableOnDrop(
@@ -18171,7 +18220,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         self.codegen.freeGeneral(reg);
                         try builder.addMemArg(frame_ptr, slot);
                         try builder.addMemArg(frame_ptr, drop_slot);
+                        const copy_slot = self.codegen.allocStackSlot(8);
+                        const copy_reg = try self.allocTempGeneral();
+                        try self.emitBuiltinAddress(copy_reg, .hot_reload_erased_callable_copy);
+                        try self.emitStore(.w64, frame_ptr, copy_slot, copy_reg);
+                        self.codegen.freeGeneral(copy_reg);
+                        try builder.addMemArg(frame_ptr, copy_slot);
                     } else {
+                        try builder.addImmArg(0);
                         try builder.addImmArg(0);
                         try builder.addImmArg(0);
                     }
@@ -18247,6 +18303,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// list operation.
         fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
             return switch (op) {
+                .boxed_sequence_pack, .boxed_sequence_unpack => null,
                 .list_capacity => .capacity,
                 .list_slack_unique => .slack_unique,
                 .list_owned_unique => .owned_unique,
@@ -18295,6 +18352,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const extra = self.store.stmtRowOrDefault(assign.extra);
 
             switch (assign.op) {
+                .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // these operations never carry a list element descriptor
                 .list_prefetch => return,
                 .list_len => {
                     const reg = try self.allocTempGeneral();
@@ -20950,6 +21008,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.localLayout(assign_stmt.target),
                                 assign.capture_layout,
                                 assign.on_drop,
+                                assign.on_copy,
                                 assign.reuse,
                                 assign.reuse_unique,
                             );

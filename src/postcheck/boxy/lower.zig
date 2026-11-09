@@ -3731,11 +3731,27 @@ pub fn run(allocator: Allocator, input: Input) Allocator.Error!Output {
 /// Output"). Finish this closure and publish its exports before lowering
 /// command roots, whose private helpers are not an interface for importers.
 fn seedUnitWorkers(program: *Program) Allocator.Error!void {
+    // Procedure-alias normalization can retire a callable-evaluation request
+    // while retaining its template identity. Only the producer's live requests
+    // authorize exporting an entry wrapper; a retained template is not a root.
+    const views = program.modules.views.items;
+    const requested = try program.allocator.alloc([]bool, views.len);
+    defer program.allocator.free(requested);
+    var initialized: usize = 0;
+    defer for (requested[0..initialized]) |marks| program.allocator.free(marks);
+    for (views, requested) |view, *marks| {
+        marks.* = try program.allocator.alloc(bool, view.view.compile_time_roots.roots.len);
+        initialized += 1;
+        @memset(marks.*, false);
+        for (view.view.root_requests.compile_time_requests) |request| {
+            if (request.compile_time_root) |root| marks.*[@backingInt(root)] = true;
+        }
+    }
     for (program.modules.views.items) |*view| {
         if (!program.ownsModule(view.index)) continue;
         try view.bodies().demandIndex();
         for (view.view.checked_procedure_templates.templates.items, 0..) |template, index| {
-            if (!unitEmitsTemplate(view, template)) continue;
+            if (!unitEmitsTemplate(view, template, requested[@backingInt(view.index)])) continue;
             if (try templateRejected(program, view, template)) continue;
             const worker = try program.templateWorker(view.index, @fromBackingInt(@intCast(index)));
             _ = try program.methodEntryWorker(worker);
@@ -3754,7 +3770,9 @@ fn seedUnitWorkers(program: *Program) Allocator.Error!void {
                 .local_proc, .structural, .callable_binding => continue,
             };
             const owner = program.moduleByKey(.{ .bytes = template.artifact.bytes });
-            if (try templateRejected(program, owner, owner.view.checked_procedure_templates.get(template.template))) continue;
+            const definition = owner.view.checked_procedure_templates.get(template.template);
+            if (!unitEmitsTemplate(owner, definition, requested[@backingInt(owner.index)])) continue;
+            if (try templateRejected(program, owner, definition)) continue;
             const worker = try program.templateRefWorker(template);
             if (program.worker(worker).imported) continue;
             _ = try program.methodEntryWorker(worker);
@@ -3781,12 +3799,12 @@ fn templateRejected(program: *Program, view: *const types.ModuleView, template: 
 /// every template another object may call or compose, which leaves out the
 /// wrappers of `expect` and REPL roots. Nothing reaches those but a test
 /// plan's or a REPL's own roots, and each of those lowers as one program.
-fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate) bool {
+fn unitEmitsTemplate(view: *const types.ModuleView, template: checked.CheckedProcedureTemplate, requested: []const bool) bool {
     return switch (template.body) {
         .checked_body, .intrinsic_wrapper, .unimplemented => true,
         .entry_wrapper => |wrapper_id| switch (view.view.compile_time_roots.root(view.view.entry_wrappers.get(wrapper_id).root).kind) {
             .expect, .repl_expr => false,
-            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => true,
+            .callable_binding, .constant, .hoisted_constant, .hoisted_validation, .numeral_conversion, .quote_conversion, .literal_argument => requested[@backingInt(view.view.entry_wrappers.get(wrapper_id).root)],
         },
     };
 }

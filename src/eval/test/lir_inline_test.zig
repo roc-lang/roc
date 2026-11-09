@@ -8,6 +8,7 @@ const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const postcheck = @import("postcheck");
+const static_materialization = @import("static_data");
 const helpers = eval.test_helpers;
 
 const Allocator = std.mem.Allocator;
@@ -18,7 +19,7 @@ const LayoutIdx = layout_mod.Idx;
 const MonoAst = postcheck.Monotype.Ast;
 const MonoLower = postcheck.Monotype.Lower;
 
-const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || error{
+const TestError = helpers.TestHelperError || eval.BuiltinModules.InitError || lir.CheckedPipeline.LowerResourceError || static_materialization.MaterializationError || error{
     TestExpectedEqual,
     TestUnexpectedResult,
     MissingRootProcedure,
@@ -712,6 +713,8 @@ fn runLoweredWithHostEvents(
     defer static_data.deinit();
     var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &lowered.lir_result.store);
     defer static_strings.deinit();
+    var static_data = try FrozenStaticData.init(allocator, lowered);
+    defer static_data.deinit();
     var interpreter = try eval.Interpreter.init(
         allocator,
         &lowered.lir_result.store,
@@ -722,6 +725,7 @@ fn runLoweredWithHostEvents(
     defer interpreter.deinit();
     static_data.install(&interpreter);
 
+    static_data.install(&interpreter);
     const arg_layouts = try mainProcArgLayouts(allocator, lowered);
     defer allocator.free(arg_layouts);
 
@@ -13314,7 +13318,7 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        var found_packed_local = false;
+        var found_packed = false;
         // Verify the product itself, not an incidental descriptor byte string:
         // descriptors may live in the static image rather than inline literals.
         for (result.store.getLocals()) |local| {
@@ -13326,10 +13330,18 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
             const second = info.fields.get(1).layout;
             if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) {
                 try std.testing.expectEqual(@as(u32, 16), info.size());
-                found_packed_local = true;
+                found_packed = true;
             }
         }
-        try std.testing.expect(found_packed_local);
+        // Boxy can publish the packed node directly as readonly data rather
+        // than execute a literal constructor in a procedure.
+        for (result.static_data_values.items) |definition| {
+            const stored = definition.stored orelse continue;
+            if (!stored.module.eql(lowered.resources.checked_artifact.key.digest())) continue;
+            const value = lowered.resources.checked_artifact.const_store.get(stored.node);
+            if (value == .list and value.list == .packed_bytes and value.list.packed_bytes.len == 2) found_packed = true;
+        }
+        try std.testing.expect(found_packed);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
@@ -14145,6 +14157,8 @@ fn dictInsertLoopInterpreterPeakBytes(lowered: *const lir.CheckedPipeline.Lowere
         defer static_data.deinit();
         var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
         defer static_strings.deinit();
+        var static_data = try FrozenStaticData.init(allocator, lowered);
+        defer static_data.deinit();
         var interpreter = try eval.Interpreter.init(allocator, &result.store, &result.layouts, static_strings.view(), runtime_env.get_ops());
         defer interpreter.deinit();
         static_data.install(&interpreter);

@@ -23008,21 +23008,6 @@ pub fn pairCheckedPlatform(
         result.pairing_types = .{ .images = try images.toOwnedSlice(session) };
     }
 
-    // Pairing can turn a requirement lookup (and aliases forwarding to it)
-    // into a direct procedure. Publish the recipe before classifying calls
-    // and roots, and retain it in the pairing's owned/cacheable columns.
-    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
-    publishCallableEvalForwarding(
-        &result.callable_eval_templates,
-        result.bodies(),
-        &result.resolved_value_refs,
-        &result.compile_time_roots,
-        result.key,
-        &result.top_level_procedure_bindings,
-        &.{},
-        available_artifacts,
-        &relations,
-    );
 
     // A requirement lookup whose binding the app rejected produces no value,
     // and a call of a requirement the binding classifies may become direct.
@@ -32622,6 +32607,9 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
+    /// Live root requests after checked procedure-alias normalization.
+    /// Retained entry-wrapper templates are not themselves evaluation requests.
+    root_requests: *const RootRequestTable = &no_root_requests,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -32630,6 +32618,7 @@ pub const ImportedModuleView = struct {
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
+const no_root_requests: RootRequestTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -32644,6 +32633,7 @@ const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .
 /// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
+        .root_requests = &artifact.root_requests,
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
         .key = artifact.key,
         .module_env = artifact.moduleEnvConst(),
@@ -35719,7 +35709,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     try std.testing.expect(try checkedTypeIdsContainIdentityVariables(allocator, &store, &.{root}));
 }
 
-test "provided callable-containing record constant is a data export, not a runtime root" {
+test "provided record constant with an unboxed function is rejected before publication" {
     const source =
         \\platform ""
         \\    requires {}
@@ -35733,11 +35723,9 @@ test "provided callable-containing record constant is a data export, not a runti
         \\table_for_host = { f: |value| value + 1 }
     ;
 
-    try expectProvidedExportKind(source, .{
-        .procedure_roots = 0,
-        .data_exports = 1,
-        .procedure_exports = 0,
-    });
+    var env = try @import("test/TestEnv.zig").init("Platform", source);
+    defer env.deinit();
+    try env.assertOneTypeError("Hosted Function Requires Boxed Lambda");
 }
 
 test "provided procedure remains a runtime root" {
@@ -35750,6 +35738,27 @@ test "provided procedure remains a runtime root" {
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
+test "provided evaluated function binding remains a procedure signature" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_add_one": add_one_for_host }
+        \\
+        \\make : I64 -> (I64 -> I64)
+        \\make = |amount| |value| value + amount
+        \\add_one_for_host : I64 -> I64
+        \\add_one_for_host = make(1)
     ;
 
     try expectProvidedExportKind(source, .{

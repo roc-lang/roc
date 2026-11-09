@@ -7155,8 +7155,9 @@ const Builder = struct {
     /// one type, and the host's single C signature covers every instantiation
     /// because each variable position is a pointer at runtime. For those, the
     /// declaration's variable slots accept whatever the request instantiated
-    /// them to, while every position the declaration made concrete is still
-    /// compared exactly.
+    /// them to. Directly boxed sequences compare their public item types, not
+    /// the private representations hidden in their captures. The checker has
+    /// already rejected bare sequences at this boundary.
     fn hostedExternMatchesDeclaredAbi(
         self: *Builder,
         declared_fn_ty: Type.TypeId,
@@ -7173,9 +7174,9 @@ const Builder = struct {
         declared_checked_fn_ty: checked.CheckedTypeId,
     ) Allocator.Error!Type.TypeMatchMode {
         return if (try self.hostedDeclarationIsGeneric(view, declared_checked_fn_ty))
-            .declared_variable_slots_match_any
+            .host_abi_variable_slots_match_any
         else
-            .exact;
+            .host_abi;
     }
 
     /// Whether a hosted declaration's checked type still contains type

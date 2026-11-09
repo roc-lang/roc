@@ -19648,7 +19648,7 @@ fn checkPlatformHostedSection(self: *Self) std.mem.Allocator.Error!void {
     for (self.cir.provides_entries.items.items) |provides_entry| {
         const symbol_text = self.cir.getString(provides_entry.ffi_symbol);
         try self.checkHostSymbol(symbol_text, &symbols);
-        try self.checkProvidesEntryHostBoundaryRows(provides_entry);
+        try self.checkProvidesEntryHostBoundary(provides_entry);
     }
 
     for (section) |entry| {
@@ -19760,7 +19760,7 @@ fn hostedEntryDisplayName(
         allocator.dupe(u8, func_name);
 }
 
-fn checkProvidesEntryHostBoundaryRows(
+fn checkProvidesEntryHostBoundary(
     self: *Self,
     provides_entry: ModuleEnv.ProvidesEntry,
 ) std.mem.Allocator.Error!void {
@@ -19772,6 +19772,44 @@ fn checkProvidesEntryHostBoundaryRows(
 }
 
 fn checkHostBoundaryType(self: *Self, var_: Var, region: Region) std.mem.Allocator.Error!void {
+    const boundary = @import("host_boundary.zig");
+    const Context = struct {
+        check: *Self,
+
+        pub fn builtin(ctx: @This(), nominal: types_mod.NominalType) boundary.Builtin {
+            if (!nominal.originIsBuiltin()) return .other;
+            if (ctx.check.builtin_ctx.builtin_indices) |indices| {
+                const source_decl = nominal.sourceDeclOptional() orelse return .other;
+                if (source_decl == @backingInt(indices.iter_type)) return .iter;
+                if (source_decl == @backingInt(indices.stream_type)) return .stream;
+            }
+            return switch (ctx.check.builtinNominalDeclForBuiltinSourceDecl(nominal.sourceDeclOptional()) orelse return .other) {
+                .box => .box,
+                .list => .list,
+                .dict, .set, .try_type, .fields, .field, .numeral, .num => .other,
+            };
+        }
+
+        pub fn fieldName(ctx: @This(), ident: Ident.Idx) []const u8 {
+            return ctx.check.cir.getIdent(ident);
+        }
+
+        pub fn hasBacking(ctx: @This(), nominal: types_mod.NominalType) bool {
+            return ctx.check.nominalDeclBackingTemplate(nominal) != null;
+        }
+    };
+    if (try boundary.findViolation(self.gpa, self.types, var_, true, Context{ .check = self })) |violation| {
+        defer self.gpa.free(violation.path);
+        _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
+            .region = region,
+            .path = try self.problems.putExtraString(violation.path),
+            .kind = switch (violation.kind) {
+                .function => .function,
+                .iter => .iter,
+                .stream => .stream,
+            },
+        } });
+    }
     if (try self.varViolatesHostBoundaryRule(.closed_rows, var_)) {
         _ = try self.problems.appendProblem(.{ .host_boundary_open_row = .{
             .region = region,
@@ -30911,12 +30949,6 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 if (!hostedAnnotationIsEffectful(self.cir, annotation_idx)) {
                     _ = try self.problems.appendProblem(.{ .hosted_function_not_effectful = .{
                         .region = self.cir.store.getAnnotationRegion(annotation_idx),
-                    } });
-                }
-                if (try self.varContainsUnboxedFunctionInHostedSignature(annotation_var)) {
-                    const region = self.cir.store.getAnnotationRegion(annotation_idx);
-                    _ = try self.problems.appendProblem(.{ .hosted_unboxed_function = .{
-                        .region = region,
                     } });
                 }
                 if (try self.varHasUnboxedTypeVariableInHostedSignature(annotation_var)) {
@@ -52815,11 +52847,6 @@ fn nominalDictKeyValueVars(self: *Self, nominal_type: types_mod.NominalType) ?Di
     return .{ .key = args[0], .value = args[1] };
 }
 
-fn varContainsUnboxedFunctionInHostedSignature(self: *Self, var_: Var) std.mem.Allocator.Error!bool {
-    self.var_set.clearRetainingCapacity();
-    return try self.varContainsUnboxedFunctionInHostedSignatureInternal(var_, true, &self.var_set);
-}
-
 /// Per nominal declaration, which of its formals its backing uses outside
 /// every `Box`: an argument in such a position is laid out where the host sees
 /// it, while an argument used only inside a `Box` is behind a pointer.
@@ -53176,65 +53203,6 @@ const HostBoundaryScan = struct {
 
     pub fn exit(_: *HostBoundaryScan, _: Leaf, _: ?bool) Allocator.Error!void {}
 };
-
-fn varContainsUnboxedFunctionInHostedSignatureInternal(
-    self: *Self,
-    var_: Var,
-    allow_top_fn: bool,
-    visited: *collections.DenseMap(Var, void),
-) std.mem.Allocator.Error!bool {
-    // The signature's own top-level function (through aliases) is allowed;
-    // every function below it must be boxed. Vars are searched in the order a
-    // left-to-right walk reaches them: each popped var pushes its children
-    // last-first.
-    const Item = struct { var_: Var, top_fn_allowed: bool };
-    var pending: std.ArrayList(Item) = .empty;
-    defer pending.deinit(self.gpa);
-    try pending.append(self.gpa, .{ .var_ = var_, .top_fn_allowed = allow_top_fn });
-    while (pending.pop()) |item| {
-        const resolved = self.types.resolveVar(item.var_);
-        // Cycle guard: recursive nominal/structural types would otherwise walk
-        // forever through their backing vars. A var already visited
-        // contributes no new unboxed function we haven't already considered.
-        if (visited.contains(resolved.var_)) continue;
-        try visited.put(resolved.var_, {});
-        const start = pending.items.len;
-        switch (resolved.desc.content) {
-            .structure => |flat_type| switch (flat_type) {
-                .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    if (!item.top_fn_allowed) return true;
-                    for (self.types.sliceVars(func.args)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    try pending.append(self.gpa, .{ .var_ = func.ret, .top_fn_allowed = false });
-                },
-                .empty_record, .empty_tag_union => {},
-                .record => |record| {
-                    const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                    for (fields_slice.items(.presence)) |presence| try pending.append(self.gpa, .{ .var_ = presence.typeVar(), .top_fn_allowed = false });
-                },
-                .tuple => |tuple| {
-                    for (self.types.sliceVars(tuple.elems)) |elem_var| try pending.append(self.gpa, .{ .var_ = elem_var, .top_fn_allowed = false });
-                },
-                .tag_union => |tag_union| {
-                    const tags_slice = self.types.getTagsSlice(tag_union.tags);
-                    for (tags_slice.items(.args)) |tag_args| {
-                        for (self.types.sliceVars(tag_args)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    }
-                },
-                .nominal_type => |nominal| {
-                    if (self.nominalIsBuiltinDecl(nominal, .box)) continue;
-                    for (self.types.sliceNominalArgs(nominal)) |arg_var| try pending.append(self.gpa, .{ .var_ = arg_var, .top_fn_allowed = false });
-                    // Formals in the template are rigid leaves (never functions)
-                    // standing for the args checked above.
-                    if (self.nominalDeclBackingTemplate(nominal)) |template| try pending.append(self.gpa, .{ .var_ = template, .top_fn_allowed = false });
-                },
-            },
-            .alias => |alias| try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias), .top_fn_allowed = item.top_fn_allowed }),
-            .flex, .rigid, .err, .field_presence => {},
-        }
-        std.mem.reverse(Item, pending.items[start..]);
-    }
-    return false;
-}
 
 fn varSupportsStructuralDeriveInternal(
     self: *Self,

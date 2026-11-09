@@ -147,7 +147,7 @@ const Decoder = struct {
         while (plan == .named) plan = self.program.const_plans.items[@backingInt(plan.named.backing)];
         switch (plan) {
             .str => {},
-            .zst, .scalar, .list, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxy_fn, .fn_value, .erased_fn => return null,
+            .zst, .scalar, .list, .named, .tuple, .record, .tag_union, .pending, .layout_only, .box, .boxed_sequence, .boxy_fn, .fn_value, .erased_fn => return null,
         }
         if (layout_idx != .str) return null;
         const size = self.word();

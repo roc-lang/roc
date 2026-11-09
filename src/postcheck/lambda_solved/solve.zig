@@ -2581,6 +2581,7 @@ const Solver = struct {
         args: []const Type.TypeVarId,
     ) Allocator.Error!void {
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => Common.invariant("LIR-only sequence operation reached lambda solving"),
             .box_box => {
                 expectLowLevelArity(op, args, 1);
                 try self.unify(args[0], try self.boxElem(expected));
@@ -3748,7 +3749,12 @@ const Solver = struct {
             .erased => |left_erased| {
                 if (right == .erased) {
                     const right_erased = right.erased;
-                    if (!std.mem.eql(u8, left_erased.source_fn_ty.bytes[0..], right_erased.source_fn_ty.bytes[0..])) {
+                    if (left_erased.abi_fn != null and right_erased.abi_fn != null) {
+                        // Recursive signatures reached through different graph
+                        // sharing can have different source digests. Concrete
+                        // ABI types remain authoritative and must unify.
+                        try self.pushUnifyPair(stack, left_erased.abi_fn.?, right_erased.abi_fn.?);
+                    } else if (!std.mem.eql(u8, left_erased.source_fn_ty.bytes[0..], right_erased.source_fn_ty.bytes[0..])) {
                         Common.invariant("erased callable source function types failed Lambda Solved unification");
                     }
                     const merged = try self.mergeLambdaSets(left_erased.members, right_erased.members);

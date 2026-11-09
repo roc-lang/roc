@@ -6177,7 +6177,7 @@ const DevProgram = struct {
         errdefer splice.deinit();
         splice.reserveStaticData(&static_layout);
         if (options.boxy_linked_images) |images| splice.external = .{ .context = images, .resolve = BoxyLinkedImages.external };
-        const static_rc_helpers = try static_data_exports.collectRequiredRcHelpers(allocator, materialized);
+        const static_rc_helpers = try static_data_exports.collectEvaluationRcHelpers(allocator, materialized, lowered.lir_result.erased_fns.items);
         defer allocator.free(static_rc_helpers);
         var artifacts = try compileProcedures(allocator, &codegen, evaluation_demand, static_rc_helpers, options);
         errdefer artifacts.deinit();
