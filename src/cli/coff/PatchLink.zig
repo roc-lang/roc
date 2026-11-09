@@ -334,10 +334,10 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
         kept_host_sections += 1;
         number.* = kept_host_sections;
     }
+    const section_count = numberSections(sections.items, kept_host_sections);
     for (debug_host_index, debug_index) |host_index, out_index| {
-        if (host_index) |index| host_number[index] = @intCast(kept_host_sections + 1 + (out_index orelse unreachable)); // a host debug section is kept with its contents
+        if (host_index) |index| host_number[index] = sections.items[out_index orelse unreachable].number; // a host debug section is kept with its contents
     }
-    const section_count: u16 = kept_host_sections + @as(u16, @intCast(sections.items.len));
     const headers_needed: u64 = exe.section_headers_offset + @as(u64, section_count) * section_header_size;
     // When the header page cannot hold the headers, the host's section
     // contents move one page down the file.
@@ -427,9 +427,9 @@ pub fn link(gpa: Allocator, arena: Allocator, std_io: std.Io, inputs: Inputs, ou
     // first wave copied.
     const fan_out_started = now(std_io);
     var app_section_numbers: [3]u16 = undefined;
-    app_section_numbers[0] = kept_host_sections + 1 + @as(u16, @intCast(text_index));
-    app_section_numbers[1] = kept_host_sections + 1 + @as(u16, @intCast(data_index));
-    app_section_numbers[2] = kept_host_sections + 1 + @as(u16, @intCast(unwind_index));
+    app_section_numbers[0] = sections.items[text_index].number;
+    app_section_numbers[1] = sections.items[data_index].number;
+    app_section_numbers[2] = sections.items[unwind_index].number;
     const context: Context = .{
         .out = mapped,
         .images = images.items,
@@ -640,6 +640,8 @@ const OutSection = struct {
     content_size: u64,
     characteristics: u32,
     raw_offset: u64 = 0,
+    /// One-based PE section number; zero when the region has no virtual extent.
+    number: u16 = 0,
 
     fn rawSize(self: OutSection) u64 {
         return std.mem.alignForward(u64, self.content_size, page_size);
@@ -650,6 +652,19 @@ const OutSection = struct {
         return std.mem.alignForward(u64, self.rva + self.virtual_size, page_size);
     }
 };
+
+/// Windows rejects zero-extent section headers. Keep logical placement indices
+/// separate from PE numbers so omitted regions cannot shift symbols or directories.
+fn numberSections(sections: []OutSection, kept_host_sections: u16) u16 {
+    var number = kept_host_sections;
+    for (sections) |*section| {
+        section.number = 0;
+        if (section.virtual_size == 0) continue;
+        number += 1;
+        section.number = number;
+    }
+    return number;
+}
 
 fn addSection(gpa: Allocator, sections: *std.ArrayList(OutSection), name: []const u8, rva: u64, virtual_size: u64, content_size: u64, characteristics: u32) Allocator.Error!usize {
     try sections.append(gpa, .{ .name = name, .rva = rva, .virtual_size = virtual_size, .content_size = content_size, .characteristics = characteristics });
@@ -761,10 +776,11 @@ fn writeHeaders(out: []u8, exe: HostPrelink.Executable, layout: HeaderLayout) vo
         countSection(section.characteristics, section.virtual_size, section.raw_size, &size_of_code, &size_of_initialized, &size_of_uninitialized);
     }
     _ = &size_of_code;
-    for (layout.sections, 0..) |section, index| {
-        const number = layout.section_count - layout.sections.len + index;
-        const entry = headers[number * section_header_size ..][0..section_header_size];
-        writeSectionHeader(entry, &section.header_name, section.rva, section.virtual_size, section.rawSize(), section.raw_offset, section.characteristics);
+    for (layout.sections) |section| {
+        if (section.number == 0) continue;
+        const entry = headers[(section.number - 1) * section_header_size ..][0..section_header_size];
+        const raw_offset = if (section.rawSize() == 0) 0 else section.raw_offset;
+        writeSectionHeader(entry, &section.header_name, section.rva, section.virtual_size, section.rawSize(), raw_offset, section.characteristics);
         countSection(section.characteristics, section.virtual_size, section.rawSize(), &size_of_code, &size_of_initialized, &size_of_uninitialized);
     }
     std.mem.writeInt(u32, optional[4..8], @intCast(size_of_code), .little);
@@ -988,4 +1004,67 @@ test "base relocation blocks group words by page and pad to a word" {
     try std.testing.expectEqual(@as(u16, 0), std.mem.readInt(u16, out.items[14..16], .little));
     try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, out.items[16..20], .little));
     try std.testing.expectEqual(@as(u32, 12), std.mem.readInt(u32, out.items[20..24], .little));
+}
+
+test "PE headers omit empty regions and retain zero-fill-only sections" {
+    var sections = [_]OutSection{
+        .{ .name = text_section_name, .rva = 0x1000, .virtual_size = 1, .content_size = 1, .raw_offset = 0x1000, .characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE },
+        .{ .name = data_section_name, .rva = 0x2000, .virtual_size = 0, .content_size = 0, .raw_offset = 0x2000, .characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE },
+        .{ .name = ".bss", .rva = 0x2000, .virtual_size = 16, .content_size = 0, .raw_offset = 0x2000, .characteristics = IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE },
+        .{ .name = unwind_section_name, .rva = 0x3000, .virtual_size = 12, .content_size = 12, .raw_offset = 0x2000, .characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ },
+        .{ .name = ".rocrelo", .rva = 0x4000, .virtual_size = 0, .content_size = 0, .raw_offset = 0x3000, .characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ },
+    };
+    for (&sections) |*section| @memcpy(section.header_name[0..section.name.len], section.name);
+    // Section numbers are shared with symbol output, not logical array indices.
+    try std.testing.expectEqual(@as(u16, 7), numberSections(&sections, 4));
+    for (sections, [_]u16{ 5, 0, 6, 7, 0 }) |section, expected| try std.testing.expectEqual(expected, section.number);
+    const count = numberSections(&sections, 0);
+    try std.testing.expectEqual(@as(u16, 3), count);
+
+    var out: [4096]u8 = @splat(0);
+    const exe: HostPrelink.Executable = .{
+        .machine = HostPrelink.IMAGE_FILE_MACHINE_AMD64,
+        .coff_header_offset = 0,
+        .optional_header_size = 240,
+        .section_headers_offset = 260,
+        .sections = &.{},
+        .image_base = 0x140000000,
+        .section_alignment = 4096,
+        .file_alignment = 4096,
+        .size_of_headers = 4096,
+        .size_of_image = 0x4000,
+        .symtab_offset = 0,
+        .symbol_count = 0,
+        .directories = @splat(.{ .rva = 0, .size = 0 }),
+    };
+    writeHeaders(&out, exe, .{
+        .host_section_headers = &.{},
+        .file_shift = 0,
+        .size_of_headers = 4096,
+        .section_count = count,
+        .host_number = &.{},
+        .sections = &sections,
+        .size_of_image = 0x4000,
+        .symtab_offset = 0,
+        .symbol_count = 0,
+        .exception_rva = 0x3000,
+        .exception_size = 12,
+        .relocation_rva = 0x4000,
+        .relocation_size = 0,
+    });
+    try std.testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, out[2..4], .little));
+    for ([_]usize{ 0, 2, 3 }, 0..) |logical, physical| {
+        const section = sections[logical];
+        const header = out[exe.section_headers_offset + physical * section_header_size ..][0..section_header_size];
+        try std.testing.expectEqualStrings(&section.header_name, header[0..8]);
+        try std.testing.expectEqual(@as(u32, @intCast(section.virtual_size)), std.mem.readInt(u32, header[8..12], .little));
+        try std.testing.expectEqual(@as(u32, @intCast(section.rva)), std.mem.readInt(u32, header[12..16], .little));
+        try std.testing.expectEqual(@as(u32, @intCast(section.rawSize())), std.mem.readInt(u32, header[16..20], .little));
+        try std.testing.expectEqual(@as(u32, @intCast(if (section.rawSize() == 0) 0 else section.raw_offset)), std.mem.readInt(u32, header[20..24], .little));
+    }
+    // Empty relocation output leaves no directory; unwind RVAs do not move.
+    const optional = out[20..260];
+    try std.testing.expectEqual(@as(u32, 0x3000), std.mem.readInt(u32, optional[112 + HostPrelink.Executable.exception_directory * 8 ..][0..4], .little));
+    try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, optional[112 + HostPrelink.Executable.base_relocation_directory * 8 ..][0..4], .little));
+    try std.testing.expectEqual(@as(u32, 16), std.mem.readInt(u32, optional[12..16], .little));
 }

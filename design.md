@@ -25883,7 +25883,10 @@ the link is image relative: a 32-bit image-relative field (`rva32`) takes
 it as is, an absolute field adds the image base. The build id is written
 into the host's CodeView debug entry. When the host's header page cannot
 hold the inserted section headers, the host's section contents move one
-page down the file.
+page down the file. Regions with no virtual extent have no PE section header:
+Windows rejects empty mapped sections. Headers and symbols share dense section
+numbers for the remaining regions, including zero-fill-only regions, without
+changing their image-relative placement.
 
 ## Watch Mode For Check And Test
 
