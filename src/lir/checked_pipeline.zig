@@ -2005,7 +2005,7 @@ pub const PreparedBoxy = struct {
             runtime_schemas: postcheck.SolvedLirLower.RuntimeSchemaStore,
         } = .{
             .lir_result = output.lir_result,
-            .runtime_schemas = postcheck.SolvedLirLower.RuntimeSchemaStore.init(allocator),
+            .runtime_schemas = output.runtime_schemas,
         };
         defer lowered.runtime_schemas.deinit();
         var frozen: ?LirProgram.FrozenStaticData = .{ .allocator = allocator, .exports = output.static_data };

@@ -808,6 +808,8 @@ const CustomCase = enum {
     glue_unlisted_hosted_declaration,
     glue_try_box_model_unknown_payload,
     glue_unresolved_by_value_errors,
+    glue_unresolved_arg_by_value_errors,
+    glue_frozen_generator,
     glue_record_function_field,
     glue_recursive_slot_box,
     glue_generic_callable_arg,
@@ -2697,6 +2699,8 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: platform hosted declaration missing from the hosted section stops without panic", .body = .{ .custom = .glue_unlisted_hosted_declaration } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: ZigGlue sizes an unknown Box payload as a pointer at both widths", .body = .{ .custom = .glue_try_box_model_unknown_payload } },
     .{ .id = 0, .suite = .glue, .name = "issue 9824: glue reports an error for a by-value unresolved type variable", .body = .{ .custom = .glue_unresolved_by_value_errors } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12760: glue reports an error for a by-value unresolved argument", .body = .{ .custom = .glue_unresolved_arg_by_value_errors } },
+    .{ .id = 0, .suite = .glue, .name = "glue regression: frozen generator data survives both strategies and all optimization modes", .body = .{ .custom = .glue_frozen_generator } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: opaque nominal record with a function field is a boxed payload", .body = .{ .custom = .glue_record_function_field } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
@@ -6587,6 +6591,8 @@ fn runCustomCase(
         .glue_unlisted_hosted_declaration => customGlueUnlistedHostedDeclaration(io, allocator, &env, &timer, timeout_ms),
         .glue_try_box_model_unknown_payload => customGlueTryBoxModelUnknownPayload(io, allocator, &env, &timer, timeout_ms),
         .glue_unresolved_by_value_errors => customGlueUnresolvedByValueErrors(io, allocator, &env, &timer, timeout_ms),
+        .glue_unresolved_arg_by_value_errors => customGlueUnresolvedArgByValueErrors(io, allocator, &env, &timer, timeout_ms),
+        .glue_frozen_generator => customGlueFrozenGenerator(io, allocator, &env, &timer, timeout_ms),
         .glue_record_function_field => customGlueRecordFunctionField(io, allocator, &env, &timer, timeout_ms),
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
@@ -17544,7 +17550,9 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         return customInfraFailure(allocator, timer, "failed to create spec dir: {}", .{err});
     const spec_main = std.fs.path.join(allocator, &.{ spec_dir, "main.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate spec path: {}", .{err});
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = spec_main, .data = "app [make_glue] { pf: platform glue }\n\nimport pf.Types\nimport pf.File\n\nmake_glue : List(Types) -> Try(List(File), Str)\nmake_glue = |_types| Ok([File.{ name: \"generated.txt\", content: \"installed glue ran\" }])\n" }) catch |err|
+    const source = std.Io.Dir.cwd().readFileAlloc(io, "test/glue/frozen-generator/main.roc", allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read frozen generator: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = spec_main, .data = source }) catch |err|
         return customInfraFailure(allocator, timer, "failed to write glue spec: {}", .{err});
 
     const serve_dir = createWorkSubdir(io, allocator, env, "glue-serve") catch |err|
@@ -17594,7 +17602,7 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
     const url = std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}", .{ port, bundle_filename }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate url: {}", .{err});
 
-    // 1. Install: detects the glue spec and builds the plugin dylib with
+    // 1. Install: detects the glue spec and builds the self-contained object with
     //    --opt=speed (the only download in this test).
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "install", "glue_tool", url },
@@ -17611,11 +17619,12 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         return customInfraFailure(allocator, timer, "failed to create glue out dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "glue_tool", glue_out, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
+        .contains = &.{.{ .stream = .stdout, .text = "callable.txt" }},
     })) |failure| return failure;
+    if (checkFrozenGlueOutput(io, allocator, timer, glue_out)) |failure| return failure;
 
     // 3. Desert island: delete the cache; the installed spec source and
-    //    prebuilt dylib must still work (the glue platform is embedded, and
+    //    prebuilt object must still work (the glue platform is embedded, and
     //    the server is gone).
     std.Io.Dir.cwd().deleteTree(io, env.dirs.roc_cache_dir) catch |err|
         return customInfraFailure(allocator, timer, "failed to delete cache dir: {}", .{err});
@@ -17623,8 +17632,9 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         return customInfraFailure(allocator, timer, "failed to create glue out dir: {}", .{err});
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "glue", "glue_tool", glue_out2, "test/fx/platform/main.roc" },
-        .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
+        .contains = &.{.{ .stream = .stdout, .text = "callable.txt" }},
     })) |failure| return failure;
+    if (checkFrozenGlueOutput(io, allocator, timer, glue_out2)) |failure| return failure;
 
     // Both invocations return an immutable file list from the loaded plugin.
     // Its bytes must be copied before that plugin image is unloaded.
@@ -18961,6 +18971,57 @@ fn customGlueUnresolvedByValueErrors(io: std.Io, allocator: Allocator, env: *con
     return null;
 }
 
+fn customGlueUnresolvedArgByValueErrors(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    // Repro for https://github.com/roc-lang/roc/issues/12760:
+    // an app-chosen type passed by value has no committed memory layout, so
+    // glue must report an error naming the provided function.
+    const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
+        return customInfraFailure(allocator, timer, "failed to create glue output dir: {}", .{err});
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "glue", "--no-cache", "src/glue/src/ZigGlue.roc", output_dir, "test/glue/unresolved-arg-by-value/main.roc" },
+        .exit = .failure,
+        .stderr_min_len = 1,
+        .contains = &.{
+            .{ .stream = .stderr, .text = "unresolved type variable" },
+            .{ .stream = .stderr, .text = "no committed memory layout" },
+            .{ .stream = .stderr, .text = "render_for_host" },
+        },
+        .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "unreachable" }, .{ .stream = .stderr, .text = "invariant violated" } },
+    })) |failure| return failure;
+    return null;
+}
+
+fn checkFrozenGlueOutput(io: std.Io, allocator: Allocator, timer: *harness.Timer, output_dir: []const u8) ?TestResult {
+    const text = "a frozen string longer than the inline Roc string representation";
+    for ([_][]const u8{ "long.txt", "nested.txt", "callable.txt" }, [_][]const u8{ text, text, text ++ "!" }) |name, expected| {
+        const path = std.fs.path.join(allocator, &.{ output_dir, name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+        const actual = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err|
+            return customFailure(allocator, timer, "failed to read {s}: {}", .{ name, err });
+        if (!std.mem.eql(u8, expected, actual)) {
+            return customFailure(allocator, timer, "{s}: expected {s}, got {s}", .{ name, expected, actual });
+        }
+    }
+    return null;
+}
+
+fn customGlueFrozenGenerator(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    for ([_][]const u8{ "--specialize=yes", "--specialize=no" }, 0..) |strategy, strategy_index| {
+        for ([_][]const u8{ "--opt=dev", "--opt=size", "--opt=speed" }, 0..) |opt, opt_index| {
+            const name = std.fmt.allocPrint(allocator, "frozen-{d}-{d}", .{ strategy_index, opt_index }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate directory name: {}", .{err});
+            const output_dir = createWorkSubdir(io, allocator, env, name) catch |err|
+                return customInfraFailure(allocator, timer, "failed to create output dir: {}", .{err});
+            if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+                .args = &.{ "glue", "--no-cache", strategy, opt, "test/glue/frozen-generator/main.roc", output_dir, "test/glue/payload-free-tag-union/main.roc" },
+                .contains = &.{.{ .stream = .stdout, .text = "callable.txt" }},
+            })) |failure| return failure;
+            if (checkFrozenGlueOutput(io, allocator, timer, output_dir)) |failure| return failure;
+        }
+    }
+    return null;
+}
+
 fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A platform whose provided entrypoint returns an opaque nominal record
     // holding a function-typed field. Layout selection stores such a record
@@ -18996,7 +19057,7 @@ fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const C
         "        increfErasedCallable(value.@\"first\", amount);",
         "if (@sizeOf(Value) != 8) @compileError",
         "if (@sizeOf(Value) != 4) @compileError",
-        "pub extern fn shape(arg0: *anyopaque) callconv(.c) *Value;",
+        "pub extern fn shape() callconv(.c) *Value;",
         "if (T == *Value) return RocBoxRelease(*Value, Value, ValueRelease);",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {
@@ -19442,7 +19503,7 @@ fn customGlueRustProvidedContextCallableOutcome(io: std.Io, allocator: Allocator
     for ([_][]const u8{
         "pub struct AbiSourceOutcome",
         "pub stream: core::mem::ManuallyDrop<RocErasedCallable>",
-        "pub fn roc_make_outcome(arg0: u64, arg1: *mut c_void) -> AbiSourceOutcome;",
+        "pub fn roc_make_outcome(arg0: u64, arg1: RocBox) -> AbiSourceOutcome;",
         "pub struct AbiSourceStep {",
     }) |needle| {
         if (std.mem.find(u8, generated, needle) == null) {

@@ -299,6 +299,10 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             gpa,
             stderr,
             lowered,
+            .{
+                .root = CheckedArtifact.loweringViewWithRelations(root_artifact, spec.relation_artifacts),
+                .imports = spec.imported_artifacts,
+            },
             glue_proc,
             arg_layouts,
             &types_list,
@@ -405,6 +409,7 @@ fn compileGlueSpec(
         return error.BuildEnvInit;
     };
     errdefer build_env.deinit();
+    build_env.setSpecializationStrategy(specialization_strategy);
     if (!no_cache) build_env.enableDefaultCacheManager(false) catch {
         return error.BuildEnvInit;
     };
@@ -550,7 +555,10 @@ fn buildGlueSpecPluginFileInner(
     defer spec.deinit(gpa);
 
     const stamp = gluePluginStamp(spec.root_artifact.executableIdentity(), .lss);
-    const object = try buildGluePlugin(gpa, &spec.lowered, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
+    const object = try buildGluePlugin(gpa, &spec.lowered, .{
+        .root = CheckedArtifact.loweringViewWithRelations(spec.root_artifact, spec.relation_artifacts),
+        .imports = spec.imported_artifacts,
+    }, spec.glue_proc, spec.arg_layouts, stamp, opt, std_io);
     defer gpa.free(object);
     std.Io.Dir.cwd().writeFile(std_io, .{ .sub_path = output_path, .data = object }) catch return error.CompilationFailed;
 }
@@ -590,6 +598,7 @@ fn runGlueSpecPlugin(
     gpa: Allocator,
     stderr: *std.Io.Writer,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    modules: compile.static_data_exports.ModuleViews,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
     types_list: *RocList,
@@ -603,7 +612,7 @@ fn runGlueSpecPlugin(
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
-    const plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args, std_io);
+    const plugin = try getOrBuildGluePlugin(gpa, lowered, modules, glue_proc, arg_layouts, stamp, args, std_io);
     defer plugin.deinit(gpa);
     var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
     defer lib.deinit();
@@ -643,6 +652,7 @@ fn runGlueSpecPlugin(
 fn getOrBuildGluePlugin(
     gpa: Allocator,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    modules: compile.static_data_exports.ModuleViews,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
     stamp: GluePluginStampV1,
@@ -654,7 +664,7 @@ fn getOrBuildGluePlugin(
         return .{ .bytes = bytes };
     }
 
-    return .{ .bytes = try buildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args.opt, std_io) };
+    return .{ .bytes = try buildGluePlugin(gpa, lowered, modules, glue_proc, arg_layouts, stamp, args.opt, std_io) };
 }
 
 /// The bytes of a plugin object file, or null when it cannot be read.
@@ -665,12 +675,27 @@ fn readPluginFile(gpa: Allocator, path: []const u8, std_io: std.Io) ?[]u8 {
 fn buildGluePlugin(
     gpa: Allocator,
     lowered: *lir.CheckedPipeline.LoweredProgram,
+    modules: compile.static_data_exports.ModuleViews,
     glue_proc: lir.LirProcSpecId,
     arg_layouts: []const layout.Idx,
     stamp: GluePluginStampV1,
     opt: GlueOpt,
     std_io: std.Io,
 ) GlueError![]u8 {
+    // Saved generators cannot borrow this process's frozen-data addresses.
+    // Materialize only when building, never when loading an installed object.
+    const static_data = compile.static_data_exports.buildStaticDataForWidth(
+        gpa,
+        modules,
+        lowered,
+        base.target.TargetUsize.native,
+        .{},
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => unreachable, // Glue executes at the supported native pointer width.
+    };
+    defer compile.static_data_exports.deinitStaticData(gpa, static_data);
+
     const proc = lowered.lir_result.store.getProcSpec(glue_proc);
     const entrypoints = [_]llvm_compile.MonoLlvmCodeGen.Entrypoint{.{
         .symbol_name = builtins.shim_symbols.roc_make_glue,
@@ -695,6 +720,12 @@ fn buildGluePlugin(
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
         defer codegen.deinit();
+
+        codegen.embed_static_data = true;
+        try codegen.setStaticDataExports(static_data);
+        const static_procs = try compile.static_data_exports.collectReferencedProcs(gpa, static_data);
+        defer gpa.free(static_procs);
+        codegen.static_data_procs = static_procs;
 
         break :generate codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
@@ -1340,16 +1371,13 @@ const ArtifactKeyMap = std.AutoHashMap(CheckedArtifact.CheckedModuleDigest, *con
 
 /// Where a checked type sits inside the value being converted.
 ///
-/// A type held by value inside a composite must have a committed layout of
-/// its own, so an unresolved type variable there is a glue error. Behind a
+/// A type held by value, including a boundary argument, result, or provided
+/// value, must have a committed layout of its own. Behind a
 /// heap indirection (a list element or a box payload) the host only ever sees
-/// a pointer, so a variable is an opaque pointer target. A boundary root (a
-/// hosted or provided function's argument or result, a provided value) that
-/// is itself a bare variable is likewise an opaque pointer to the host.
+/// a pointer, so a variable can remain an opaque pointer target.
 const ValuePosition = enum {
     by_value,
     heap_indirect,
-    boundary,
 };
 
 const TypeTableKey = struct {
@@ -2079,7 +2107,15 @@ const TypeTable = struct {
         if (self.template_bindings.count() != 0 and try self.mentionsBoundFormal(src.artifact, src.checked_type)) {
             return error.UnresolvedByValue;
         }
-        const idx = try self.getOrInsert(src.artifact, src.checked_type, .boundary);
+        const idx = self.getOrInsert(src.artifact, src.checked_type, .by_value) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.UnresolvedByValue => {
+                // A bare unresolved root has no enclosing composite to name
+                // the error. Keep a more specific inner diagnostic if present.
+                try self.recordUnresolvedByValue(src.artifact, src.checked_type);
+                return error.UnresolvedByValue;
+            },
+        };
         const slot = try self.roots.getOrPut(self.gpa, idx);
         if (!slot.found_existing) {
             slot.value_ptr.* = .{ .artifact = src.artifact, .checked_type = src.checked_type };
@@ -2151,6 +2187,16 @@ const TypeTable = struct {
         }
     }
 
+    /// Reuse a completed conversion, not its previous use's permission to be
+    /// opaque. Nominal wrappers can memoize an unknown backing just like bare
+    /// variables. Recursive opens are handled before either memo lookup.
+    fn reuseEntry(self: *const TypeTable, idx: u64, position: ValuePosition) error{UnresolvedByValue}!u64 {
+        if (position == .by_value and self.entries.items[@intCast(idx)].repr == .unknown) {
+            return error.UnresolvedByValue;
+        }
+        return idx;
+    }
+
     /// Get an existing type table index for a checked type, or insert a new entry.
     /// Pre-registers a placeholder before conversion to prevent infinite recursion
     /// on cyclic types (the placeholder is updated in-place after conversion).
@@ -2192,7 +2238,7 @@ const TypeTable = struct {
         const idx: u64 = idx: {
             if (self.open_ctx != 0) {
                 const mkey = OpenMemoKey{ .ctx = self.open_ctx, .artifact_key = artifact.key, .checked_type = checked_type };
-                if (self.open_memo.get(mkey)) |existing| return existing;
+                if (self.open_memo.get(mkey)) |existing| return self.reuseEntry(existing, position);
                 const reserved: u64 = @intCast(self.entries.items.len);
                 try self.entries.append(self.gpa, .{
                     .repr = .{ .unknown = .{ .name = "" } },
@@ -2202,7 +2248,7 @@ const TypeTable = struct {
                 break :idx reserved;
             }
             const key = TypeTableKey{ .artifact_key = artifact.key, .checked_type = checked_type };
-            if (self.var_map.get(key)) |existing| return existing;
+            if (self.var_map.get(key)) |existing| return self.reuseEntry(existing, position);
             const reserved: u64 = @intCast(self.entries.items.len);
             try self.entries.append(self.gpa, .{
                 .repr = .{ .unknown = .{ .name = "" } },
@@ -3034,8 +3080,7 @@ const TypeTable = struct {
 
     /// A checked type variable that checking left unresolved. One with a
     /// default has the representation `defaultedVariableRepr` assigns; one
-    /// without is only representable behind a heap indirection or at the
-    /// boundary itself, where the host sees a pointer.
+    /// without is only representable behind a heap indirection.
     fn convertTypeVariable(
         self: *TypeTable,
         variable: CheckedArtifact.CheckedTypeVariable,
@@ -3044,7 +3089,7 @@ const TypeTable = struct {
     ) TypeTableError!CollectedTypeRepr {
         if (defaultedVariableRepr(variable)) |repr| return repr;
         return switch (position) {
-            .heap_indirect, .boundary => .{ .unknown = .{ .name = try self.gpa.dupe(u8, kind_name) } },
+            .heap_indirect => .{ .unknown = .{ .name = try self.gpa.dupe(u8, kind_name) } },
             .by_value => error.UnresolvedByValue,
         };
     }
@@ -4658,18 +4703,135 @@ fn moduleLocalMemberName(
     return try allocator.dupe(u8, source_name[module_name.len + 1 ..]);
 }
 
+test "issue 12760: boundary layout requirements survive memoization and callable speculation" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\platform "boundary-layout"
+        \\    requires { [Model : model] for program : { render : model -> Str } }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_probe": probe }
+        \\    targets: {}
+        \\
+        \\Alias(a) :: a
+        \\Wrapper(a) := a
+        \\probe : Model, Alias(Model), Wrapper(Model), Box(Model), (Model -> Model), (U64 -> U64) -> Model
+        \\probe = |model, _, _, _, _, _| model
+    });
+    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const path = try tmp.dir.realPathFileAlloc(io, "main.roc", gpa);
+    defer gpa.free(path);
+    var env = try BuildEnv.init(gpa, .single_threaded, 1, RocTarget.detectNative(), cwd, io);
+    defer env.deinit();
+    try env.build(path);
+    var diagnostics = std.Io.Writer.Allocating.init(gpa);
+    defer diagnostics.deinit();
+    const counts = try env.renderDiagnostics(&diagnostics.writer, reporting.ReportingConfig.initMarkdown());
+    if (counts.errors != 0) std.debug.print("{s}", .{diagnostics.written()});
+    try std.testing.expectEqual(@as(u32, 0), counts.errors);
+    const modules = try env.getModulesInSerializationOrder(gpa);
+    defer gpa.free(modules);
+    var artifacts = ArtifactKeyMap.init(gpa);
+    defer artifacts.deinit();
+    var platform: ?*const CheckedArtifact.CheckedModuleArtifact = null;
+    for (modules) |mod| {
+        const artifact = mod.semantic.checked_artifact orelse continue;
+        try artifacts.put(artifact.key.digest(), artifact);
+        if (mod.is_platform_main) platform = artifact;
+    }
+    const artifact = platform orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(usize, 1), artifact.provided_exports.exports.len);
+    const procedure = artifact.provided_exports.exports[0].procedure;
+    const signature = CheckedArtifact.checkedFunctionPayload(&artifact.checked_types, procedure.checked_type, "test provided procedure");
+    try std.testing.expectEqual(@as(usize, 6), signature.args.len);
+
+    // Signature conversion visits the result first. Both kinds of procedure
+    // boundary reject an unresolved result, before registering any arguments.
+    for ([_]bool{ false, true }) |hosted| {
+        var result_table = TypeTable.init(gpa, &artifacts);
+        defer result_table.deinit();
+        result_table.boundary_value_name = "probe";
+        if (hosted) {
+            try std.testing.expectError(error.UnresolvedByValue, result_table.collectHostedFunctionMetadata(artifact, procedure.checked_type));
+        } else {
+            try std.testing.expectError(error.UnresolvedByValue, result_table.providedProcedureSignature(artifact, procedure.checked_type));
+        }
+        try std.testing.expectEqual(@as(usize, 0), result_table.roots.count());
+        try std.testing.expect(std.mem.find(u8, result_table.unresolved_error.?, "probe") != null);
+    }
+
+    // Exercise bare variables, aliases and nominal backings in both memo
+    // tables, with either the opaque use or the rejected value use first.
+    for (signature.args[0..3]) |ty| {
+        for ([_]u32{ 0, 1 }) |open_ctx| {
+            for ([_]bool{ false, true }) |opaque_first| {
+                var table = TypeTable.init(gpa, &artifacts);
+                defer table.deinit();
+                table.open_ctx = open_ctx;
+                table.next_open_ctx = open_ctx;
+                table.boundary_value_name = "probe";
+                const first = if (opaque_first) try table.getOrInsert(artifact, ty, .heap_indirect) else null;
+                const mark = table.beginSpeculation();
+                try std.testing.expectError(error.UnresolvedByValue, table.getOrInsertRoot(artifact, ty));
+                try std.testing.expect(table.unresolved_error != null);
+                try std.testing.expect(std.mem.find(u8, table.unresolved_error.?, "probe") != null);
+                table.rollbackSpeculation(mark);
+                table.endSpeculation();
+                try std.testing.expectEqual(@as(usize, 0), table.roots.count());
+                const indirect = try table.getOrInsert(artifact, ty, .heap_indirect);
+                if (first) |existing| try std.testing.expectEqual(existing, indirect);
+                try std.testing.expect(table.entries.items[@intCast(indirect)].repr == .unknown);
+                const entry_count = table.entries.items.len;
+                try std.testing.expectEqual(indirect, try table.getOrInsert(artifact, ty, .heap_indirect));
+                try std.testing.expectEqual(entry_count, table.entries.items.len);
+                // Reusing a nominal's unknown entry by value must fail even
+                // inside a composite, not just at getOrInsertRoot.
+                try std.testing.expectError(error.UnresolvedByValue, table.getOrInsert(artifact, ty, .by_value));
+                try std.testing.expectEqual(entry_count, table.entries.items.len);
+            }
+        }
+    }
+
+    var table = TypeTable.init(gpa, &artifacts);
+    defer table.deinit();
+    // The same unknown type can still be carried behind a real box. A stored
+    // callable stays representable, but must not advertise a fabricated ABI.
+    const boxed = try table.getOrInsertRoot(artifact, signature.args[3]);
+    try std.testing.expect(table.entries.items[@intCast(boxed)].repr == .box);
+    const before_callable = table.entries.items.len;
+    const opaque_callable = try table.getOrInsertRoot(artifact, signature.args[4]);
+    try std.testing.expect(table.entries.items[@intCast(opaque_callable)].repr.erased_callable.signature == null);
+    try std.testing.expect(table.unresolved_error == null);
+    try std.testing.expectEqual(before_callable + 1, table.entries.items.len);
+    const concrete_callable = try table.getOrInsertRoot(artifact, signature.args[5]);
+    try std.testing.expect(table.entries.items[@intCast(concrete_callable)].repr.erased_callable.signature != null);
+    try std.testing.expect(table.unresolved_error == null);
+    try std.testing.expectEqual(boxed, try table.getOrInsertRoot(artifact, signature.args[3]));
+
+    // Checking's defaults still commit a standalone representation.
+    try std.testing.expect((try table.convertTypeVariable(.{ .row_default = .empty_record }, .by_value, "flex")) == .unit);
+    try std.testing.expect((try table.convertTypeVariable(.{ .row_default = .empty_tag_union }, .by_value, "rigid")) == .unit);
+    try std.testing.expect((try table.convertTypeVariable(.{ .numeric_default_phase = .mono_specialization }, .by_value, "flex")) == .dec);
+}
+
 // Lock the schema-directed marshaller against the actual checked glue platform.
 // No Zig extern record mirror participates in this boundary.
 test "glue platform marshalling schema matches checked Roc records" {
     const gpa = std.testing.allocator;
     var diagnostics = std.Io.Writer.Allocating.init(gpa);
     defer diagnostics.deinit();
-    var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), .lss, std.testing.io) catch |err| {
-        std.debug.print("{s}", .{diagnostics.written()});
-        return err;
-    };
-    defer spec.deinit(gpa);
-    try checkGluePlatformMarshallingSchema(&spec);
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var spec = compileGlueSpec(gpa, &diagnostics.writer, "src/glue/src/DebugGlue.roc", true, reporting.ReportingConfig.initMarkdown(), strategy, std.testing.io) catch |err| {
+            std.debug.print("{s}", .{diagnostics.written()});
+            return err;
+        };
+        defer spec.deinit(gpa);
+        try checkGluePlatformMarshallingSchema(&spec);
+    }
 }
 
 const GlueSchemaLockError = error{GlueSchemaMismatch};
