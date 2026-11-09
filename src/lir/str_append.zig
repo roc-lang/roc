@@ -280,7 +280,7 @@ test "str append variant keeps a dynamic parameter's descriptor binding" {
     const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = rendered } }, .test_fixture);
     const inspect = try store.addCFStmt(.{ .dyn = .{
         .target = rendered,
-        .data = try store.addStmtRow(LIR.DynOp, .{ .inspect = .{ .value = value, .desc = desc } }),
+        .data = try store.addStmtRow(LIR.DynOp, .{ .inspect = .{ .value = value, .desc = desc, .names = desc } }),
         .next = callee_ret,
     } }, .test_fixture);
     const callee = try store.addProcSpec(.{

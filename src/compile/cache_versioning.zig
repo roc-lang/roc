@@ -24,10 +24,8 @@ const PlatformPairing = check.CheckedArtifact.PlatformPairing;
 
 /// A kind of persisted cache entry.
 pub const Entry = enum {
-    /// One fully checked module: an env body and an artifact body.
+    /// One combined checking entry: source env, publication inputs, and artifact.
     checked_module,
-    /// Solved source and checker-owned publication inputs, before evaluation.
-    inference,
     /// One exact platform/app composition's changed columns, written in the
     /// checked-module envelope with an empty env body.
     platform_pairing,
@@ -39,9 +37,10 @@ pub const Entry = enum {
 /// Layout fingerprint of `ModuleEnv.Serialized`.
 pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.Serialized, Constants.CACHE_VERSION);
 
-/// Version of the checked-module envelope: its magic, header layout, and body
-/// order. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 14;
+/// Version of the checked-module envelope and opaque body encodings not
+/// reflected in layout fingerprints. Version 16 stores Boxy callable capture
+/// graphs, including descriptor scopes. Platform-pairing entries share it.
+const checked_envelope_version: u32 = 16;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -50,15 +49,10 @@ const canonicalized_envelope_version: u32 = 3;
 /// The running compiler's admission hash for `entry`.
 pub fn entryVersionHash(comptime entry: Entry) [32]u8 {
     return comptime switch (entry) {
-        .inference => compose(
-            "roc-inference-entry-v1",
-            &.{ 1, check.CheckingDependencies.format_version },
-            &.{ module_env_layout, check.rootLayoutVersionHash(check.InferenceOutput.Serialized, 1) },
-        ),
         .checked_module => compose(
             "roc-checked-module-entry-v1",
             &.{checked_envelope_version},
-            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout },
+            &.{ CheckedModuleArtifact.SERIALIZED_VERSION_HASH, module_env_layout, check.rootLayoutVersionHash(check.CheckingReuse.Serialized, 1) },
         ),
         .platform_pairing => compose(
             "roc-platform-pairing-entry-v1",
@@ -118,7 +112,6 @@ fn splitmix64(x: u64) u64 {
 test "every entry kind has a distinct admission hash" {
     const hashes = [_][32]u8{
         entryVersionHash(.checked_module),
-        entryVersionHash(.inference),
         entryVersionHash(.platform_pairing),
         entryVersionHash(.canonicalized_module),
     };
@@ -146,8 +139,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0xE3, 0x93, 0x2D, 0x2E, 0x0C, 0x17, 0x19, 0x73, 0x4E, 0xCA, 0x06, 0x93, 0xEB, 0x37, 0x3E, 0xDF,
-        0x6E, 0xB3, 0x3E, 0xF6, 0xBF, 0x85, 0x38, 0x15, 0x67, 0x8D, 0x44, 0xB9, 0x33, 0x20, 0xBD, 0x28,
+        0xC6, 0xBD, 0x8D, 0xDF, 0x69, 0x9F, 0x14, 0xCE, 0xB7, 0xCB, 0xCD, 0x19, 0x2F, 0x6B, 0x6E, 0xC7,
+        0x76, 0x6B, 0xD8, 0xE3, 0xD4, 0x97, 0x04, 0x5F, 0x59, 0x4C, 0xD9, 0x10, 0xC0, 0xD5, 0xF1, 0x95,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }

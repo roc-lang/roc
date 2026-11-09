@@ -1,5 +1,5 @@
 //! Generated structural codecs under `.boxy` (design.md "Dictionaries",
-//! "Workers And Hidden Parameters", "Function Values"): the parser and
+//! "Workers And Hidden Inputs", "Function Values"): the parser and
 //! encoder workers of one checked generated-codec derivation, and the
 //! compiler-owned serialization intrinsics they hand to format methods.
 //!
@@ -634,6 +634,34 @@ fn planNames(program: *Program, family_index: u32) Allocator.Error!void {
 
 // -- Pieces --
 
+/// Mix what piece `index`'s worker is a function of into `hasher`, in terms
+/// every lowering shares: its kind, its family's derivation, its operands
+/// by content, and its signature's and captures' types
+/// (`Program.generatedWorkerIdentity`).
+pub fn hashPieceContent(program: *Program, hasher: *base.TypeDigestHasher, index: u32) Allocator.Error!void {
+    const piece = program.codec.pieces.items[index];
+    hasher.update(&[_]u8{@backingInt(piece.kind)});
+    hasher.update(std.mem.asBytes(&pieceFamilyRoot(program, piece)));
+    switch (pieceOperands(piece.kind)) {
+        .none => {},
+        .types => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.b)));
+        },
+        .type_and_name => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            const text = program.store.nameText(@fromBackingInt(piece.b));
+            hasher.update(std.mem.asBytes(&@as(u64, text.len)));
+            hasher.update(text);
+        },
+        .type_and_word => {
+            hasher.update(&try program.typeContent(@fromBackingInt(piece.a)));
+            hasher.update(std.mem.asBytes(&piece.b));
+        },
+    }
+    try program.hashTypes(hasher, program.codec.piece_captures.items[index]);
+}
+
 /// The worker of `piece`, created on first request.
 fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []const TypeId, ret: TypeId, captures: []const TypeId, erased: bool) Allocator.Error!WorkerId {
     const scheme_vars: []const checked.CheckedTypeId = if (piece.family == no_family) &.{} else program.codec.families.items[piece.family].env.vars;
@@ -647,7 +675,7 @@ fn pieceWorker(program: *Program, module: ModuleIndex, piece: Piece, params: []c
     const id: WorkerId = @fromBackingInt(@intCast(program.workers.items.len));
     const proc = try program.result.store.addProcSpec(.{
         .name = program.result.store.freshSyntheticSymbol(),
-        .identity = program.programLocalIdentity("boxy.codec", @backingInt(id)),
+        .identity = try program.generatedWorkerIdentity(key, module, @backingInt(id), try std.mem.concat(arena, TypeId, &.{ params, &.{ret} })),
         .emission_unit = .isolated,
         .args = .empty(),
         .ret_layout = .zst,
@@ -724,7 +752,7 @@ fn callbackWorker(program: *Program, family_index: u32, piece: Piece, fn_ty: Typ
 
 /// The dictionary of structural parser or encoder evidence: the erased
 /// constructor of the evidence's derivation.
-pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!LocalId {
+pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) Allocator.Error!Body.Word {
     const id = structural.generated_codec_derivation orelse invariant("structural codec evidence names no generated derivation");
     const family = try familyFor(b.program, b.module, id);
     return try constructorAt(b, family, try b.convert(structural.callable_ty));
@@ -732,7 +760,7 @@ pub fn dictionary(b: *Builder, structural: static_dispatch.StructuralEvidence) A
 
 /// The dictionary of generated derivation `id` of `module_index` at the
 /// method callable type `callable`.
-pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!LocalId {
+pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.GeneratedCodecDerivationId, callable: TypeId) Allocator.Error!Body.Word {
     const family = try familyFor(b.program, module_index, id);
     return try constructorAt(b, family, callable);
 }
@@ -740,7 +768,7 @@ pub fn dictionaryAt(b: *Builder, module_index: ModuleIndex, id: static_dispatch.
 /// A family's constructor at a use whose constructor type is `actual`:
 /// the immortal callable capturing the family's local procedure values at
 /// the use's types, then its variables' descriptors, adapted to `actual`.
-fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!LocalId {
+fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Body.Word {
     const fam_ = b.program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.constructor_fn, actual, fam_.env.vars.len);
     defer b.allocator.free(bound);
@@ -748,67 +776,38 @@ fn constructorAt(b: *Builder, family: u32, actual: TypeId) Allocator.Error!Local
         .back_edge => |word| return word,
         .composing => |index| index,
     };
-    const composed = try composeConstructorIn(b, family, bound, composition);
-    return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
-}
-
-/// A family's constructor composed with its variables at `bound`.
-fn composeConstructor(b: *Builder, family: u32, bound: []const TypeId) Allocator.Error!LocalId {
-    const constructor_ty = try b.program.substitute(b.allocator, b.program.codec.families.items[family].constructor_fn, bound);
-    const composition = switch (try b.beginCodecComposition(family, bound, constructor_ty)) {
-        .back_edge => invariant("a stored codec constructor is restored while it is being composed"),
-        .composing => |index| index,
-    };
-    return try composeConstructorIn(b, family, bound, composition);
-}
-
-/// Composition `composition` of a family's constructor at `bound`.
-fn composeConstructorIn(b: *Builder, family: u32, bound: []const TypeId, composition: u32) Allocator.Error!LocalId {
-    const fam_ = b.program.codec.families.items[family];
-    const captures = try b.allocator.alloc(LocalId, fam_.locals.items.len + bound.len);
+    const captures = try b.allocator.alloc(Body.Word, fam_.locals.items.len + 1);
     defer b.allocator.free(captures);
     if (fam_.locals.items.len != 0) {
         if (fam_.module != b.module) invariant("a generated codec calling local procedures is used outside the module declaring them");
         const table = b.view.view.static_dispatch_plans;
-        // The function values are built in the entry chain, where the
-        // constructor that holds them is composed.
-        const saved = b.immortal_closures;
-        b.immortal_closures = true;
-        defer b.immortal_closures = saved;
+        // The constructor is immortal, and so are the function values it
+        // holds.
         for (fam_.locals.items, captures[0..fam_.locals.items.len]) |local, *value| {
             const fn_ty = try b.program.substitute(b.allocator, local.fn_ty, bound);
-            value.* = try b.emitIntoEntry(Builder.localMethodValue, .{ table.evidenceNode(local.node), fn_ty });
+            value.* = try b.localMethodWord(table.evidenceNode(local.node), fn_ty);
         }
     }
-    for (bound, captures[fam_.locals.items.len..]) |ty, *desc| desc.* = try b.descOf(ty);
-    const composed = try b.composeDictionary(try constructorWorker(b.program, family), captures);
-    try b.finishCodecComposition(composition, composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound));
-    return composed;
+    // The constructor captures the local procedures' function values, then
+    // its type table at the descriptors of its family's types.
+    const constructor = try constructorWorker(b.program, family);
+    const descs = try b.descWords(bound);
+    const words: []const Body.Word = if (descs.len == 0) captures[0..fam_.locals.items.len] else blk: {
+        captures[fam_.locals.items.len] = try b.tableWord(constructor, descs);
+        break :blk captures[0 .. fam_.locals.items.len + 1];
+    };
+    const composed: Body.Word = .{ .recipe = try b.recipes.intern(.{ .callable = .{ .entry = constructor, .captures = words } }) };
+    b.finishCodecComposition(composition, composed);
+    return try b.adaptDictionary(composed, try b.program.substitute(b.allocator, fam_.constructor_fn, bound), actual);
 }
 
-/// The function values of family `family`'s local procedures at its
-/// variables' types `bound`, built in this body's innermost declaration
-/// context, into `out`.
+/// The function values of a family's local procedures in the active declaration.
 pub fn localValues(b: *Builder, family: u32, bound: []const TypeId, out: []LocalId) Allocator.Error!void {
     const fam_ = b.program.codec.families.items[family];
     const table = b.view.view.static_dispatch_plans;
     for (fam_.locals.items, out) |local, *value| {
         value.* = try b.localMethodValue(table.evidenceNode(local.node), try b.program.substitute(b.allocator, local.fn_ty, bound));
     }
-}
-
-/// A stored constructor of worker `worker` composed again with its
-/// variables at `bound`, and its type there.
-pub fn restoreConstructor(b: *Builder, worker: WorkerId, bound: []const TypeId) Allocator.Error!struct { composed: LocalId, ty: TypeId } {
-    const piece = switch (b.program.worker(worker).key) {
-        .codec => |index| b.program.codec.pieces.items[index],
-        .template, .adapter, .default, .lambda, .method_entry, .structural, .structural_map, .root, .static_data, .crash_dictionary, .convert, .literal_thunk, .root_slot => invariant("a stored codec constructor's worker is no codec piece"),
-    };
-    if (piece.kind != .constructor) invariant("a stored codec constructor's worker is no constructor");
-    return .{
-        .composed = try composeConstructor(b, piece.family, bound),
-        .ty = try b.program.substitute(b.allocator, b.program.codec.families.items[piece.family].constructor_fn, bound),
-    };
 }
 
 /// A structural `parser_for`/`encoder_for` dispatch: the derivation's
@@ -818,7 +817,7 @@ pub fn dispatch(b: *Builder, call_plan: static_dispatch.StaticDispatchCallPlan, 
     if (operands.len != 1) invariant("a structural codec dispatch does not take one encoding");
     const family = try familyFor(b.program, b.module, id);
     const fn_ty = try b.convert(call_plan.callable_ty);
-    const constructor = try constructorAt(b, family, fn_ty);
+    const constructor = try b.materialize(try constructorAt(b, family, fn_ty));
     try b.push(.{ .finish_erased_call = .{ .fn_ty = fn_ty, .arg_count = 1, .result = result_ty } });
     try b.pushOperand(operands[0], operand_types[0]);
     try b.pushValue(constructor);
@@ -909,8 +908,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const fam_ = program.codec.families.items[family];
     const bound = try b.relateVariables(fam_.runtime_fn, fn_ty, fam_.env.vars.len);
     defer b.allocator.free(bound);
-    const descs = try program.arena.allocator().alloc(LocalId, bound.len);
-    for (bound, descs) |ty, *desc| desc.* = try b.descOf(ty);
+    const descs = try b.descWords(bound);
     try b.push(.{ .finish_restore_closure = .{ .worker = worker, .count = @intCast(captures.len), .descs = descs, .dicts = &.{}, .capture_types = captures, .worker_ty = try program.substitute(b.allocator, fam_.runtime_fn, bound), .ty = fn_ty } });
     // The local procedures' function values follow the names; compile-time
     // evaluation stores none of them, as a local procedure is a procedure
@@ -959,7 +957,7 @@ pub fn lowerIntrinsic(b: *Builder, intrinsic: checked.IntrinsicId, params: []con
         // The descriptor-guided walkers (design.md "Dynamic Values In LIR").
         .str_inspect => blk: {
             const text = try b.closedLocal(.str);
-            try b.emitDyn(text, .{ .inspect = .{ .value = params[0], .desc = try b.descOf(worker.params[0]) } });
+            try b.emitDyn(text, .{ .inspect = .{ .value = params[0], .desc = try b.descOf(worker.params[0]), .names = try b.namesOf(worker.params[0]) } });
             break :blk text;
         },
         .structural_eq => blk: {
@@ -1307,13 +1305,20 @@ const Gen = struct {
                 }
                 const template = switch (node.target.kind) {
                     .procedure => |procedure| procedure.template,
+                    // A method bound to a computed callable is a call of the
+                    // function value its root evaluated.
+                    .callable_binding => |binding| {
+                        const value = try b.callableBindingMethodValue(binding, callable.fn_ty);
+                        const ret_ty = fnRet(program_, callable.fn_ty);
+                        return .{ .value = try b.emitErasedCall(value, callable.fn_ty, args, ret_ty), .ty = ret_ty };
+                    },
                     .local_proc => invariant("a generated codec's local procedure call has no local value"),
                     .structural => invariant("a generated codec call's callable evidence names a structural target"),
                 };
                 const callee = try program_.templateRefWorker(template);
                 // The edge's substitution names each scheme variable's
                 // instantiation, and the target's own evidence is the edge's
-                // nested evidence (design.md "Workers And Hidden Parameters").
+                // nested evidence (design.md "Workers And Hidden Inputs").
                 const target_worker = program_.worker(callee).*;
                 const nested: []const static_dispatch.CheckedEvidence = if (target_worker.dictionary_params.len == 0) &.{} else switch (node.nested) {
                     .resolved => table.nestedEvidence(node),
@@ -1330,14 +1335,10 @@ const Gen = struct {
                 };
                 defer b.allocator.free(instance.hidden);
                 const ret_ty = fnRet(program_, callable.fn_ty);
-                const call_args = try b.allocator.dupe(LocalId, args);
-                defer b.allocator.free(call_args);
                 // The result is adapted to the call's own type, since a
                 // sealed row of it may be widened here (design.md "Sealed
                 // Result Rows").
-                const passed = try b.callDescriptorArgs(callee, instance.bound);
-                defer b.allocator.free(passed);
-                const all = try std.mem.concat(b.allocator, LocalId, &.{ call_args, instance.hidden, passed });
+                const all = try b.callArgs(args, callee, instance.hidden);
                 defer b.allocator.free(all);
                 const target = try self.local(instance.ret);
                 try b.emitLinear(.{ .assign_call = .{ .target = target, .proc = target_worker.proc, .args = try b.store.addLocalSpan(all), .next = undefined } });
@@ -1349,7 +1350,9 @@ const Gen = struct {
     /// Call the family helper for `value_ty` at result type `ret_ty`.
     fn callHelper(self: *Gen, kind: Kind, value_ty: TypeId, ret_ty: TypeId, explicit: []const LocalId) Allocator.Error!LocalId {
         const worker = try helperWorker(self.program(), self.family, kind, value_ty, ret_ty);
-        const all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names }, self.b.var_descs });
+        const explicit_all = try std.mem.concat(self.b.allocator, LocalId, &.{ explicit, &.{ self.encoding, self.names } });
+        defer self.b.allocator.free(explicit_all);
+        const all = try self.b.callArgs(explicit_all, worker, try self.familyInputs());
         defer self.b.allocator.free(all);
         const target = try self.local(ret_ty);
         try self.b.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program().worker(worker).proc, .args = try self.b.store.addLocalSpan(all), .next = undefined } });
@@ -1365,6 +1368,12 @@ const Gen = struct {
         const capture_types = try std.mem.concat(self.b.allocator, TypeId, &.{ value_types, &.{ fam_.encoding, fam_.names_ty } });
         defer self.b.allocator.free(capture_types);
         return try self.packFamilyClosure(worker, captured, capture_types);
+    }
+
+    /// The inputs of the family's workers: the descriptors of its types,
+    /// which this worker's are.
+    fn familyInputs(self: *Gen) Allocator.Error![]Body.Word {
+        return try self.b.descInputWords(0, self.b.var_descs.len);
     }
 
     /// Renamed name `index` of the family's names.
@@ -1402,12 +1411,13 @@ const Gen = struct {
         const worker = b.currentWorker().*;
         b.entry_hole = try b.newHole();
         const entry = b.entry_hole;
-        // Explicit parameters, then the family's descriptors.
-        const params = try b.allocator.alloc(LocalId, worker.params.len + worker.scheme_vars.len);
-        b.var_descs = try b.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
-        for (b.var_descs, params[worker.params.len..]) |*desc, *param| {
-            desc.* = try b.closedLocal(.opaque_ptr);
-            param.* = desc.*;
+        // Explicit parameters, then the type table, which holds the
+        // family's descriptors.
+        const has_table = b.program.inputCount(b.worker_id) != 0;
+        const params = try b.allocator.alloc(LocalId, worker.params.len + @intFromBool(has_table));
+        if (has_table) {
+            params[worker.params.len] = try b.closedLocal(.opaque_ptr);
+            try b.beginTable(params[worker.params.len], 0);
         }
         for (params[0..worker.params.len], worker.params) |*param, ty| param.* = try b.localOf(ty, .param);
         const ret_layout = try self.resultLayout(worker.ret);
@@ -1434,8 +1444,10 @@ const Gen = struct {
         const b = self.b;
         const worker = b.currentWorker().*;
         if (!try b.allClosed(worker.capture_types)) return try self.beginDynamicErased(worker);
-        // Captured values, then the family's descriptors.
-        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + worker.scheme_vars.len);
+        // Captured values, then the type table, which holds the family's
+        // descriptors.
+        const has_table = b.program.inputCount(b.worker_id) != 0;
+        const capture_layouts = try b.allocator.alloc(layout.Idx, worker.capture_types.len + @intFromBool(has_table));
         defer b.allocator.free(capture_layouts);
         var all_zero_sized = true;
         for (capture_layouts, 0..) |*slot, index| {
@@ -1452,7 +1464,7 @@ const Gen = struct {
                 try b.emitEntry(.{ .assign_struct = .{ .target = capture.*, .fields = LIR.LocalSpan.empty(), .next = undefined } });
             }
         }
-        b.var_descs = try b.program.arena.allocator().dupe(LocalId, start.captures[worker.capture_types.len..]);
+        if (has_table) try b.beginTable(start.captures[worker.capture_types.len], 0);
         return try self.finishErasedStart(worker, start);
     }
 
@@ -1463,12 +1475,11 @@ const Gen = struct {
         const b = self.b;
         b.entry_hole = try b.newHole();
         const capture_ptr = try b.closedLocal(.opaque_ptr);
-        b.var_descs = try b.program.arena.allocator().alloc(LocalId, worker.scheme_vars.len);
         const start: Builder.ErasedStart = .{
             .entry = b.entry_hole,
             .body_start = undefined,
             .capture_ptr = capture_ptr,
-            .captures = try b.dynamicCaptures(worker, capture_ptr),
+            .captures = try b.dynamicCaptures(worker, capture_ptr, @intFromBool(b.program.inputCount(b.worker_id) != 0)),
             .args = &.{},
             .record = null,
             .ret_layout = undefined,
@@ -1491,8 +1502,9 @@ const Gen = struct {
     /// A family callable of `worker` capturing `values` (of `value_types`),
     /// then the family's descriptors.
     fn packFamilyClosure(self: *Gen, worker: WorkerId, values: []const LocalId, value_types: []const TypeId) Allocator.Error!LocalId {
-        if (try self.b.allClosed(value_types)) return try self.b.packClosure(worker, values, value_types, self.b.var_descs, &.{});
-        return try self.b.packDynamicClosure(worker, values, value_types, self.b.var_descs, &.{});
+        const inputs = try self.familyInputs();
+        if (try self.b.allClosed(value_types)) return try self.b.packClosure(worker, values, value_types, inputs);
+        return try self.b.packDynamicClosure(worker, values, value_types, inputs);
     }
 
     fn finishErased(self: *Gen, frame: Erased) Allocator.Error!void {
@@ -2753,7 +2765,7 @@ const Gen = struct {
         const fields_ty = try self.fieldsTypeOf(iter_ty);
         const u64_ty = try self.u64Ty();
         const worker = try pieceWorker(program_, self.b.module, .{ .family = no_family, .kind = .field_names_step, .a = @backingInt(iter_ty), .b = @intFromBool(filtered) }, &.{}, fnRet(program_, step_fn), &.{ fields_ty, u64_ty, u64_ty }, true);
-        const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{}, &.{});
+        const step = try self.b.packClosure(worker, &.{ fields, position, size }, &.{ fields_ty, u64_ty, u64_ty }, &.{});
         // `len_if_known : Try(U64, [Unknown])`.
         const len = if (filtered) blk: {
             const parts = (try tryParts(program_, len_ty)) orelse invariant("an iterator's len_if_known is not a Try");

@@ -210,17 +210,19 @@ const TestCalls = struct {
 
     const RocOps = erased.RocOps;
 
-    fn step(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
-        const pending = callerCell(@ptrCast(out)).?;
+    // Match the runtime's tagged-word invocation ABI. Declaring an aligned
+    // output pointer here would incorrectly promise its low bit is zero.
+    fn step(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
+        const pending = callerCell(@ptrFromInt(out)).?;
         const remaining = std.mem.readInt(u64, args.?[0..8], .little);
         if (remaining == 0) {
             std.mem.writeInt(u64, ret.?[0..8], 42, .little);
             return;
         }
-        const closure = erased.allocate(&step, &drop, 0, ops);
+        const closure = erased.allocate(@ptrCast(&step), &drop, 0, ops);
         var next: [8]u8 = undefined;
         std.mem.writeInt(u64, &next, remaining - 1, .little);
-        deferCall(pending, &step, closure, &next, next.len, false);
+        deferCall(pending, @ptrCast(&step), closure, &next, next.len, false);
     }
 
     /// Like `step`, with an argument block too large for the cell, whose
@@ -367,9 +369,10 @@ const TestCalls = struct {
     }
 
     /// A host's callable, which writes the ABI's descriptor output.
-    fn writesOutput(_: *RocOps, ret: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: *?*const anyopaque) callconv(.c) void {
+    fn writesOutput(_: *RocOps, ret: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: ?[*]u8, out: usize) callconv(.c) void {
         std.mem.writeInt(u64, ret.?[0..8], 7, .little);
-        out.* = @ptrFromInt(0xdead_bee8);
+        const output: *align(1) ?*const anyopaque = @ptrFromInt(out);
+        output.* = @ptrFromInt(0xdead_bee8);
     }
 };
 
@@ -382,7 +385,7 @@ test "native callable trampoline preserves arguments and releases every deferred
     var args: [8]u8 = undefined;
     std.mem.writeInt(u64, &args, 10000, .little);
     var result: [8]u8 = undefined;
-    call(&TestCalls.step, &result, &args, null, null);
+    call(@ptrCast(&TestCalls.step), &result, &args, null, null);
     try std.testing.expectEqual(@as(u64, 42), std.mem.readInt(u64, &result, .little));
     try std.testing.expectEqual(@as(usize, 10000), TestCalls.drops.load(.monotonic));
     try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
@@ -488,7 +491,7 @@ test "a callable writing its descriptor output leaves the cell's pending call al
     defer host.leave(saved);
     var cell: Pending = .{};
     var result: [8]u8 = undefined;
-    invoke(&cell, &TestCalls.writesOutput, &result, null, null, null);
+    invoke(&cell, @ptrCast(&TestCalls.writesOutput), &result, null, null, null);
     try std.testing.expectEqual(@as(?erased.CallableFnPtr, null), cell.callable);
     try std.testing.expectEqual(@as(?[*]u8, null), cell.closure);
     try std.testing.expectEqual(@as(?[*]u8, null), cell.args);
@@ -507,7 +510,7 @@ fn runChain(failed: *std.atomic.Value(bool)) void {
     var args: [8]u8 = undefined;
     std.mem.writeInt(u64, &args, 20000, .little);
     var result: [8]u8 = undefined;
-    call(&TestCalls.step, &result, &args, null, null);
+    call(@ptrCast(&TestCalls.step), &result, &args, null, null);
     if (std.mem.readInt(u64, &result, .little) != 42) failed.store(true, .monotonic);
 }
 
@@ -517,4 +520,91 @@ test "threads driving deferred calls at once keep their chains apart" {
     for (&threads) |*thread| thread.* = try std.Thread.spawn(.{}, runChain, .{&failed});
     for (threads) |thread| thread.join();
     try std.testing.expect(!failed.load(.monotonic));
+}
+
+const PacketTest = struct {
+    fn read(ops: *erased.RocOps, ret: ?[*]u8, args: ?[*]const u8, _: ?[*]u8, reuse: ?[*]u8, out: usize) callconv(.c) void {
+        if (reuse) |owned| erased.decref(owned, ops);
+        const bytes = args.?;
+        const len: usize = bytes[0];
+        const pending = callerCell(@ptrFromInt(out)).?;
+        // Cross the representation boundary in both directions. Reading
+        // the current packet AFTER deferral catches aliasing of active and
+        // pending storage, even when both packets fit inline.
+        if (len > 1) {
+            var next: [97]u8 = undefined;
+            const next_len: usize = if (len == 97) 33 else if (len == 33) 32 else if (len == 32) 31 else 1;
+            @memset(next[0..next_len], @intCast(next_len));
+            const closure = erased.allocate(@ptrCast(&read), &TestCalls.drop, 0, ops);
+            deferCall(pending, @ptrCast(&read), closure, &next, next_len, false);
+        }
+        if (len == 33) {
+            var nested: [8]u8 = undefined;
+            call(@ptrCast(&TestCalls.writesOutput), &nested, null, null, null);
+            if (std.mem.readInt(u64, &nested, .little) != 7) {
+                ret.?[0] = 0;
+                return;
+            }
+        }
+        for (bytes[0..len]) |byte| {
+            if (byte != len) {
+                ret.?[0] = 0;
+                return;
+            }
+        }
+        ret.?[0] += 1;
+    }
+};
+
+test "native callable packets preserve active bytes across inline and heap transitions" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    for ([_]usize{ 1, 31, 32, 33, 97 }, [_]u8{ 1, 2, 3, 4, 5 }) |len, expected| {
+        var cell: Pending = .{};
+        var source: [97]u8 = undefined;
+        @memset(source[0..len], @intCast(len));
+        const closure = erased.allocate(@ptrCast(&PacketTest.read), &TestCalls.drop, 0, env.getOps());
+        const before = env.getAllocationCount();
+        deferCall(&cell, @ptrCast(&PacketTest.read), closure, &source, len, false);
+        try std.testing.expectEqual(before + @intFromBool(len > inline_args_bytes), env.getAllocationCount());
+        @memset(&source, 0); // Deferral owns the bytes, not the source address.
+        var result = [_]u8{0};
+        drive(&cell, &result);
+        try std.testing.expectEqual(expected, result[0]);
+        try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+        try std.testing.expectEqual(@as(?erased.CallableFnPtr, null), cell.callable);
+    }
+}
+
+test "native callable empty packet makes no argument allocation" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    var cell: Pending = .{};
+    const closure = erased.allocate(@ptrCast(&TestCalls.writesOutput), &TestCalls.drop, 0, env.getOps());
+    const before = env.getAllocationCount();
+    deferCall(&cell, @ptrCast(&TestCalls.writesOutput), closure, null, 0, false);
+    try std.testing.expectEqual(before, env.getAllocationCount());
+    var result: [8]u8 = undefined;
+    drive(&cell, &result);
+    try std.testing.expectEqual(@as(u64, 7), std.mem.readInt(u64, &result, .little));
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "native callable inline packet preserves explicit closure ownership transfer" {
+    var env = @import("utils.zig").TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const saved = host.enter(env.getOps(), null);
+    defer host.leave(saved);
+    var cell: Pending = .{};
+    const closure = erased.allocate(@ptrCast(&PacketTest.read), &TestCalls.drop, 0, env.getOps());
+    const args = [_]u8{1};
+    deferCall(&cell, @ptrCast(&PacketTest.read), closure, &args, args.len, true);
+    var result = [_]u8{0};
+    drive(&cell, &result);
+    try std.testing.expectEqual(@as(u8, 1), result[0]);
+    try std.testing.expectEqual(@as(usize, 0), env.getAllocationCount());
 }

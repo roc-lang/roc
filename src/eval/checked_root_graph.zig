@@ -228,6 +228,13 @@ const Walker = struct {
         return self.by_key.get(key.bytes);
     }
 
+    /// A dispatch to a method bound to a computed callable reads the root
+    /// that evaluates the callable.
+    fn readCallableBinding(self: *Walker, binding: static_dispatch.CallableBindingTarget) Allocator.Error!void {
+        const module = self.moduleOf(binding.module) orelse return;
+        try self.readRoot(module, self.modules[module].callable_eval_templates.get(binding.template).root);
+    }
+
     fn pushTemplate(self: *Walker, ref: canonical.ProcedureTemplateRef) Allocator.Error!void {
         const module = self.moduleOf(ref.artifact) orelse return;
         try self.pending.append(self.allocator, .{ .module = module, .template = ref.template });
@@ -316,6 +323,7 @@ const Walker = struct {
             const node = plans.evidenceNode(id);
             switch (node.target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
+                .callable_binding => |binding| try self.readCallableBinding(binding),
                 .local_proc, .structural => {},
             }
             switch (node.nested) {
@@ -352,6 +360,7 @@ const Walker = struct {
             .literal => {},
             .node => |id| switch (artifact.static_dispatch_plans.evidenceNode(id).target.kind) {
                 .procedure => |procedure| try self.pushTemplate(procedure.template),
+                .callable_binding => |binding| try self.readCallableBinding(binding),
                 .local_proc, .structural => {},
             },
             .use => |expr| {

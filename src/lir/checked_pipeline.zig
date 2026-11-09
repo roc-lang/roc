@@ -89,6 +89,7 @@ pub const BoxyExportInterfaces = postcheck.Boxy.Lower.ExportInterfaces;
 pub const boxyTemplateWorkerIdentity = postcheck.Boxy.Lower.templateWorkerIdentity;
 /// What reading a `.boxy` program's function values takes after lowering.
 pub const BoxyStoredFunctions = postcheck.Boxy.StoredFn.Retained;
+pub const BoxyFunctionMetadata = postcheck.Boxy.StoredFn;
 /// The names the modules of one link give their workers and nominal types.
 pub const BoxyModuleNames = postcheck.Boxy.Types.ModuleNames;
 
@@ -187,9 +188,8 @@ pub const TargetConfig = struct {
     /// With `boxy_compile_time`, the roots hold function values
     /// (`postcheck.Boxy.Lower.Input.stored_functions`).
     boxy_stored_functions: bool = false,
-    /// The consumer reads composition sites
-    /// (`postcheck.Boxy.Lower.Input.composition_sites`).
-    boxy_composition_sites: bool = true,
+    /// Content identity of a compiler-only module unit's function/type metadata.
+    boxy_function_unit: ?[32]u8 = null,
     /// The compilation session evaluates the program's literal roots.
     literal_roots: bool = false,
     inline_mode: InlineMode = .none,
@@ -1456,7 +1456,6 @@ pub fn prepareCheckedModulesMonotype(
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled() or ProcCensus.enabled(),
                 .post_check_executor = target.post_check_executor,
-                .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .demand_driven_comptime_roots = target.demand_driven_comptime_roots,
                 .validate_every_comptime_root = target.validate_every_comptime_root,
@@ -1920,8 +1919,7 @@ fn finishLoweredOutput(
 
     try TailDrive.run(allocator, &lowered.lir_result.store, &.{entered_from_outside.items});
 
-    // ARC settled every read that named a fresh form, so a fresh-form
-    // procedure no read chose is now unreferenced.
+    // Retain only procedures and data referenced after ARC.
     if (frozen.*) |*data| {
         try ReachableProcs.runWithFrozen(&lowered.lir_result, data);
     } else {
@@ -1996,7 +1994,7 @@ pub const PreparedBoxy = struct {
             .host_boundary_digests = target.host_boundary_digests,
             .compile_time = target.boxy_compile_time,
             .stored_functions = target.boxy_stored_functions,
-            .composition_sites = target.boxy_composition_sites,
+            .function_unit = target.boxy_function_unit,
             .unit = if (target.boxy_unit) |unit| .{ .module = unit } else .program,
         });
         boxy_timing_scope.end();
@@ -2364,7 +2362,6 @@ test "adopting completed compile-time values drops their initializers and identi
         .bytes = try allocator.alloc(u8, 0),
         .alignment = 1,
         .relocations = try allocator.alloc(LirProgram.StaticDataRelocation, 0),
-        .empty_list_capacities = try allocator.alloc(LirProgram.EmptyListCapacity, 0),
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 

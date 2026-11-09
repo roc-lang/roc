@@ -29,7 +29,8 @@ pub const MAGIC: u32 = 0x56454452;
 /// with its sites, and the words its loader rebases.
 /// v11: an image composed from COFF unit images carries its function table
 /// and unwind information.
-pub const FORMAT_VERSION: u32 = 11;
+/// v12: a data symbol lives in its image's data section or the static pool.
+pub const FORMAT_VERSION: u32 = 12;
 
 /// Maximum bytes reserved per host jump stub on the supported dev-shim hosts.
 /// The machine-code shim owns the per-arch emitted sizes and asserts at compile
@@ -78,7 +79,9 @@ pub const Header = extern struct {
     data_relocations: ArrayRef,
     symbol_names: ArrayRef,
     data: ArrayRef,
-    mutable_data: ArrayRef,
+    /// An image composed from unit images: their writable data and
+    /// zero-fill, on pages of its own. Empty otherwise.
+    writable_data: ArrayRef,
     data_symbols: ArrayRef,
     /// This image's static pool chunk: its `StaticDataPool.Chunk` header
     /// through the end of the image, which holds the data section. Empty when
@@ -183,8 +186,6 @@ pub const DataLocation = enum(u32) {
     image = 0,
     /// In the hot-reload static pool; `data_offset` is relative to the mapping base.
     pool = 1,
-    /// In this image's writable section, never in the static pool.
-    mutable_image = 2,
 };
 
 /// Description of one exported static data symbol in the run image.
@@ -249,7 +250,8 @@ pub const ProgramView = struct {
     data_relocations: []const DataRelocationRecord,
     symbol_names: []const u8,
     data: []u8,
-    mutable_data: []u8 = &.{},
+    /// See `Header.writable_data`.
+    writable_data: []u8 = &.{},
     data_symbols: []const DataSymbol,
     page_size: usize,
     /// The whole shared mapping, which pooled data symbols point into.
@@ -287,7 +289,6 @@ pub const ProgramView = struct {
     pub fn dataSymbolBytes(self: *const ProgramView, symbol: DataSymbol) ImageError![]u8 {
         const container = switch (try symbol.dataLocation()) {
             .image => self.data,
-            .mutable_image => self.mutable_data,
             .pool => self.mapping,
         };
         const data_offset = try asBoundedOffset(symbol.data_offset, container.len);
@@ -381,7 +382,7 @@ pub fn writeToSharedMemory(
         const alignment = StaticDataPool.exportAlignment(data_export);
         if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
         const data_offset, const location: DataLocation = switch (placement) {
-            .local => |local| .{ local.data_offset, if (local.mutable) .mutable_image else .image },
+            .local => |local| .{ local.data_offset, .image },
             .pooled => |pooled| .{ pooled, .pool },
         };
         data_symbols.appendAssumeCapacity(.{
@@ -393,7 +394,7 @@ pub fn writeToSharedMemory(
             .location = @backingInt(location),
         });
         // A pooled entry's relocations were applied when its own image loaded.
-        if (location == .pool or location == .mutable_image) continue;
+        if (location == .pool) continue;
 
         for (data_export.relocations) |relocation| {
             if (relocation.offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
@@ -466,15 +467,6 @@ pub fn writeToSharedMemory(
     const function_stubs = try image_allocator.alignedAlloc(u8, .@"16", function_stub_len);
     @memset(function_stubs, 0);
 
-    // Mutable slots live outside both executable/readonly pages and the pool
-    // chunk, so replacing an image also replaces its initially empty caches.
-    const mutable_copy: []u8 = if (plan.mutable_data_len == 0) &.{} else try allocRuntimeAlignedBytes(
-        image_allocator,
-        std.mem.Alignment.fromByteUnits(@max(page_size, plan.max_mutable_alignment)),
-        plan.mutable_data_len,
-    );
-    @memset(mutable_copy, 0);
-
     // The chunk starts on its own page so that reclaiming the rest of the
     // image never hands out a page the pool still uses.
     const has_chunk = plan.listed_count > 0;
@@ -493,10 +485,7 @@ pub fn writeToSharedMemory(
     @memset(data_copy, 0);
     for (data_exports, plan.placements) |data_export, placement| {
         switch (placement) {
-            .local => |local| {
-                const destination = if (local.mutable) mutable_copy else data_copy;
-                @memcpy(destination[local.data_offset..][0..data_export.bytes.len], data_export.bytes);
-            },
+            .local => |local| @memcpy(data_copy[local.data_offset..][0..data_export.bytes.len], data_export.bytes),
             .pooled => {},
         }
     }
@@ -560,7 +549,6 @@ pub fn writeToSharedMemory(
         symbol_names_copy,
         bytesOfSlice(data_symbols_copy),
         executable,
-        mutable_copy,
         if (chunk) |chunk_header| bytesOf(chunk_header) else &.{},
         bytesOfSlice(chunk_entries),
         bytesOfSlice(chunk_relocations),
@@ -586,7 +574,7 @@ pub fn writeToSharedMemory(
         .data_relocations = try arrayRef(base_ptr, bytesOfSlice(data_relocation_copy)),
         .symbol_names = try arrayRef(base_ptr, symbol_names_copy),
         .data = try arrayRef(base_ptr, data_copy),
-        .mutable_data = try arrayRef(base_ptr, mutable_copy),
+        .writable_data = ArrayRef.empty(),
         .data_symbols = try arrayRef(base_ptr, bytesOfSlice(data_symbols_copy)),
         .static_pool = static_pool,
         .static_code_references = @intFromBool(plan.static_code_references),
@@ -692,7 +680,6 @@ pub fn requiredCapacityFromOffset(
     capacity = try addAllocationCapacity(capacity, @alignOf(DataSymbol), try mulNoOverflow(data_exports.len, @sizeOf(DataSymbol)));
     capacity = try addAllocationCapacity(capacity, page_size, code.len);
     capacity = try addAllocationCapacity(capacity, 16, function_stub_len);
-    if (plan.mutable_data_len != 0) capacity = try addAllocationCapacity(capacity, @max(page_size, plan.max_mutable_alignment), plan.mutable_data_len);
     if (plan.listed_count > 0) capacity = try addAllocationCapacity(capacity, page_size, @sizeOf(Chunk));
     capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Entry), try mulNoOverflow(plan.listed_count, @sizeOf(StaticDataPool.Entry)));
     capacity = try addAllocationCapacity(capacity, @alignOf(StaticDataPool.Relocation), try mulNoOverflow(plan.listed_relocation_count, @sizeOf(StaticDataPool.Relocation)));
@@ -840,7 +827,7 @@ pub fn allocComposed(image_allocator: Allocator, base_ptr: [*]align(1) u8, page_
         .data_relocations = ArrayRef.empty(),
         .symbol_names = try arrayRef(base_ptr, symbol_names),
         .data = ArrayRef.empty(),
-        .mutable_data = try arrayRef(base_ptr, writable),
+        .writable_data = try arrayRef(base_ptr, writable),
         .data_symbols = ArrayRef.empty(),
         .static_pool = ArrayRef.empty(),
         .static_code_references = 1,
@@ -888,7 +875,7 @@ pub fn viewMappedImage(header: *const Header, base_ptr: [*]align(1) u8, image_bo
         .data_relocations = try sliceFromRef(DataRelocationRecord, base_ptr, image_size, header.data_relocations),
         .symbol_names = try bytesFromRef(base_ptr, image_size, header.symbol_names),
         .data = try bytesFromRef(base_ptr, image_size, header.data),
-        .mutable_data = try bytesFromRef(base_ptr, image_size, header.mutable_data),
+        .writable_data = try bytesFromRef(base_ptr, image_size, header.writable_data),
         .data_symbols = try sliceFromRef(DataSymbol, base_ptr, image_size, header.data_symbols),
         .page_size = page_size,
         .mapping = base_ptr[0..mapping_size],
@@ -1332,6 +1319,29 @@ test "static pool reuse requires identical bytes outside pointer slots" {
     try std.testing.expectEqualSlices(u8, &first_bytes, try first.view.dataSymbolBytes(try poolTestSymbol(&first.view, "roc__s")));
 }
 
+test "static pool plan places address cycles locally and pools what reaches none" {
+    const slot = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0 };
+    // a -> b -> a is a cycle; c -> a reaches it; d stands alone.
+    const to_b = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__b" }};
+    const to_a = [_]StaticDataRelocation{.{ .offset = 0, .target_symbol_name = "roc__a" }};
+    const exports = [_]StaticDataExport{
+        .{ .symbol_name = "roc__a", .bytes = &slot, .alignment = 8, .relocations = &to_b },
+        .{ .symbol_name = "roc__b", .bytes = &slot, .alignment = 8, .relocations = &to_a },
+        .{ .symbol_name = "roc__c", .bytes = &slot, .alignment = 8, .relocations = &to_a },
+        .{ .symbol_name = "roc__d", .bytes = "alone", .alignment = 1 },
+    };
+    var plan = try StaticDataPool.Plan.init(std.testing.allocator, &exports, true);
+    defer plan.deinit();
+    try std.testing.expectEqualSlices(bool, &.{ false, false, false, true }, plan.poolable);
+    // Both cycle members come before the export pointing into the cycle.
+    var seen_c = false;
+    for (plan.order) |i| {
+        if (i == 2) seen_c = true;
+        if (i < 2) try std.testing.expect(!seen_c);
+    }
+    for (plan.placements) |placement| try std.testing.expect(placement == .local);
+}
+
 test "static pool reuse stays within code-to-data displacement range" {
     const exports = [_]StaticDataExport{.{ .symbol_name = "roc__s", .bytes = "reachable", .alignment = 1 }};
     const page_size = std.heap.page_size_min;
@@ -1352,33 +1362,4 @@ test "static pool reuse stays within code-to-data displacement range" {
     const far_start: usize = @as(usize, std.math.maxInt(i32)) + mapping.len;
     try far.reusePool(&exports, pool, far_start, far_start + page_size);
     try std.testing.expect(far.placements[0] == .local);
-}
-
-test "boxy composition slots occupy separate pages and start empty in each run image" {
-    const page = std.heap.page_size_min;
-    const mapping = try std.testing.allocator.alignedAlloc(u8, .fromByteUnits(page), 64 * page);
-    defer std.testing.allocator.free(mapping);
-    @memset(mapping, 0);
-    const exports = [_]StaticDataExport{
-        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
-        .{ .symbol_name = "constant", .bytes = "readonly", .alignment = 1 },
-    };
-    const first = try writePoolTestImage(mapping, page, page, &exports, .empty);
-    const site = try poolTestSymbol(&first.view, "site");
-    try std.testing.expectEqual(DataLocation.mutable_image, try site.dataLocation());
-    const bytes = try first.view.dataSymbolBytes(site);
-    try std.testing.expectEqualSlices(u8, exports[0].bytes, bytes);
-    try std.testing.expectEqual(@as(usize, 0), @intFromPtr(bytes.ptr) % page);
-    try std.testing.expect(@intFromPtr(bytes.ptr) >= @intFromPtr(first.view.executable.ptr) + first.view.executable.len);
-    try std.testing.expect(@intFromPtr(bytes.ptr) + page <= @intFromPtr(first.view.data.ptr));
-    try std.testing.expect(@intFromPtr(bytes.ptr) - @intFromPtr(mapping.ptr) < first.header.static_pool.offset);
-    bytes[0] = 99;
-    const second = try writePoolTestImage(mapping, @intCast(first.header.image_size), page, &exports, .{
-        .mapping = mapping,
-        .head_offset = first.header.static_pool.offset,
-    });
-    const fresh = try second.view.dataSymbolBytes(try poolTestSymbol(&second.view, "site"));
-    try std.testing.expect(@intFromPtr(fresh.ptr) != @intFromPtr(bytes.ptr));
-    try std.testing.expectEqualSlices(u8, exports[0].bytes, fresh);
-    try std.testing.expectEqual(DataLocation.pool, try (try poolTestSymbol(&second.view, "constant")).dataLocation());
 }

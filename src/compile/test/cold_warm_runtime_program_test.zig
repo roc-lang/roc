@@ -8,6 +8,7 @@
 const std = @import("std");
 const build_options = @import("build_options");
 const collections = @import("collections");
+const check = @import("check");
 const eval = @import("eval");
 const lir = @import("lir");
 const roc_target = @import("roc_target");
@@ -58,6 +59,15 @@ const Built = struct {
     /// evaluating compile-time roots.
     respecialized: bool,
     cache_hits: u32,
+    lss_functions: usize,
+    boxy_functions: usize,
+    pending_boxy_functions: usize,
+    /// Only ids/tags, never pointers into the coordinator's artifact.
+    first_lss_function: ?struct { root: check.CheckedArtifact.ComptimeRootId, payload: check.CheckedArtifact.CompileTimeRootPayload },
+    first_boxy_function: ?check.CheckedArtifact.StoredConstTemplate,
+    debug_observations: usize,
+    static_callables: usize,
+    invalid_static_parts: usize,
 };
 
 fn buildWithCache(gpa: std.mem.Allocator, cache_dir: []const u8, app_path: []const u8) BuildError!Built {
@@ -82,6 +92,7 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = target.specialization_strategy;
     var arena_impl = collections.SingleThreadArena.init(gpa);
     defer arena_impl.deinit();
     try coord.start();
@@ -109,7 +120,42 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     if (runtime.frozen_static_data) |frozen| for (frozen.exports) |item| {
         try out.writer.print("frozen {s} {x}\n", .{ item.symbol_name, item.bytes });
     };
-    return .{ .program = try out.toOwnedSlice(), .respecialized = respecialized, .cache_hits = coord.getBuildStats().cache_hits };
+    var facts: Built = .{
+        .program = undefined,
+        .respecialized = respecialized,
+        .cache_hits = coord.getBuildStats().cache_hits,
+        .lss_functions = 0,
+        .boxy_functions = 0,
+        .pending_boxy_functions = 0,
+        .first_lss_function = null,
+        .first_boxy_function = null,
+        .debug_observations = coord.appRootCheckedArtifact().compile_time_debug.entries.len,
+        .static_callables = 0,
+        .invalid_static_parts = 0,
+    };
+    for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+        if (root.lss_value_has_functions or root.payload == .fn_value) {
+            facts.lss_functions += 1;
+            if (root.needsEvaluation(.boxy)) facts.pending_boxy_functions += 1;
+            if (facts.first_lss_function == null and root.kind == .constant) facts.first_lss_function = .{ .root = root.id, .payload = root.payload };
+        }
+        if (root.boxy_value) |stored| {
+            facts.boxy_functions += 1;
+            if (facts.first_boxy_function == null and root.kind == .constant) facts.first_boxy_function = stored;
+        }
+    }
+    for (result.static_data_values.items) |value| {
+        if (value.parts) |parts| {
+            if (parts.kind == .callable) facts.static_callables += 1;
+            if (value.initializer != null) facts.invalid_static_parts += 1;
+            for (parts.children) |child| {
+                const index = @backingInt(child);
+                if (index >= result.static_data_values.items.len or result.static_data_values.items[index].initializer != null) facts.invalid_static_parts += 1;
+            }
+        }
+    }
+    facts.program = try out.toOwnedSlice();
+    return facts;
 }
 
 fn reportErrors(coord: *Coordinator) error{TestUnexpectedResult} {
@@ -216,6 +262,83 @@ test "a function value a constant holds lowers the same whether evaluated or rea
         \\    Ok({})
         \\}
     );
+}
+
+test "strategy root readiness preserves nested callable representations across a shared cache" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "cache");
+    try tmp.dir.createDirPath(io, "app/.roc_echo_platform");
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/main.roc", .data = platform_main });
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/.roc_echo_platform/Echo.roc", .data = platform_echo });
+    try tmp.dir.writeFile(io, .{ .sub_path = "app/main.roc", .data =
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\make : U64 -> (U64 -> U64)
+        \\make = |offset| |value| value + offset
+        \\stored : { first : (U64 -> U64), second : (U64 -> U64) }
+        \\stored = {
+        \\    dbg "strategy root produced"
+        \\    { first: make(7), second: make(11) }
+        \\}
+        \\main! = |args| {
+        \\    first = stored.first
+        \\    second = stored.second
+        \\    Echo.line!(Str.inspect(first(List.len(args))))
+        \\    Echo.line!(Str.inspect(second(List.len(args))))
+        \\    Ok({})
+        \\}
+    });
+    const cache = try tmp.dir.realPathFileAlloc(io, "cache", gpa);
+    defer gpa.free(cache);
+    const app = try tmp.dir.realPathFileAlloc(io, "app/main.roc", gpa);
+    defer gpa.free(app);
+    const first = try buildWithCacheAtTarget(gpa, cache, app, dev_target);
+    defer gpa.free(first.program);
+    try std.testing.expect(first.lss_functions > 0);
+    try std.testing.expect(first.first_lss_function != null);
+    try std.testing.expect(first.first_lss_function.?.payload == .const_node);
+    try std.testing.expectEqual(first.lss_functions, first.pending_boxy_functions);
+    try std.testing.expectEqual(@as(usize, 0), first.boxy_functions);
+    try std.testing.expect(first.debug_observations > 0);
+
+    const same_lss = try buildWithCacheAtTarget(gpa, cache, app, dev_target);
+    defer gpa.free(same_lss.program);
+    try std.testing.expect(same_lss.cache_hits > 0);
+    try std.testing.expectEqualDeep(first.first_lss_function, same_lss.first_lss_function);
+
+    var boxy_target = dev_target;
+    boxy_target.specialization_strategy = .boxy;
+    const boxy = try buildWithCacheAtTarget(gpa, cache, app, boxy_target);
+    defer gpa.free(boxy.program);
+    try std.testing.expect(boxy.cache_hits > 0);
+    try std.testing.expect(boxy.boxy_functions > 0);
+    try std.testing.expect(boxy.first_boxy_function != null);
+    try std.testing.expectEqual(@as(usize, 0), boxy.pending_boxy_functions);
+    try std.testing.expectEqualDeep(first.first_lss_function, boxy.first_lss_function);
+    try std.testing.expectEqual(first.lss_functions, boxy.lss_functions);
+    try std.testing.expectEqual(first.debug_observations, boxy.debug_observations);
+    // These are always-active RF assertions over the emitted immutable graph,
+    // not an expectation that a debug invariant happens to catch the bug.
+    try std.testing.expect(boxy.static_callables > 0);
+    try std.testing.expectEqual(@as(usize, 0), boxy.invalid_static_parts);
+
+    const same_boxy = try buildWithCacheAtTarget(gpa, cache, app, boxy_target);
+    defer gpa.free(same_boxy.program);
+    try std.testing.expect(same_boxy.cache_hits > 0);
+    try std.testing.expectEqualDeep(boxy.first_boxy_function, same_boxy.first_boxy_function);
+    try std.testing.expectEqualDeep(first.first_lss_function, same_boxy.first_lss_function);
+    try std.testing.expectEqual(@as(usize, 0), same_boxy.invalid_static_parts);
+
+    const last = try buildWithCacheAtTarget(gpa, cache, app, dev_target);
+    defer gpa.free(last.program);
+    try std.testing.expect(last.cache_hits > 0);
+    try std.testing.expectEqualDeep(first.first_lss_function, last.first_lss_function);
+    try std.testing.expectEqualDeep(boxy.first_boxy_function, last.first_boxy_function);
+    try std.testing.expectEqual(first.debug_observations, last.debug_observations);
 }
 
 test "issue 12595 shared row callables lower identically from fresh and stored values" {

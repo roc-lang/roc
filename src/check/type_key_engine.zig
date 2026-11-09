@@ -34,6 +34,60 @@ const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const TypeDigestHasher = base.TypeDigestHasher;
 
+/// Requested retained allocation bytes, including spare capacity. Excludes
+/// allocator bookkeeping and inline storage in the owner. Diagnostic only.
+pub fn listRetainedBytes(list: anytype) usize {
+    return list.capacity * @sizeOf(@TypeOf(list.items[0]));
+}
+
+/// Requested allocation bytes held by a dense map's columns and allocated sparse
+/// chunks, including spare capacity but excluding allocator bookkeeping.
+pub fn denseRetainedBytes(map: anytype) usize {
+    var bytes = listRetainedBytes(map.sparse_chunks) + listRetainedBytes(map.active_keys) + listRetainedBytes(map.values);
+    for (map.sparse_chunks.items) |chunk| if (chunk) |ptr| {
+        bytes += @sizeOf(@TypeOf(ptr.*));
+    };
+    return bytes;
+}
+
+/// Requested allocation bytes held by a stack's entries, page directory and
+/// allocated pages, including spare capacity but excluding allocator bookkeeping.
+pub fn stackRetainedBytes(stack: anytype) usize {
+    var bytes = listRetainedBytes(stack.entries) + listRetainedBytes(stack.pages);
+    for (stack.pages.items) |page| if (page) |ptr| {
+        bytes += @sizeOf(@TypeOf(ptr.*));
+    };
+    return bytes;
+}
+
+/// Mirrors std.HashMapUnmanaged.allocate's single-allocation layout. The
+/// accounting test compares this with allocator-observed bytes, including
+/// header, metadata and alignment, so a toolchain layout change is detected.
+pub fn hashRetainedBytes(comptime K: type, comptime V: type, map: anytype) usize {
+    const cap: usize = map.capacity();
+    if (cap == 0) return 0;
+    const Header = struct { values: [*]V, keys: [*]K, capacity: @TypeOf(map).Size };
+    const Metadata = @typeInfo(@typeInfo(@TypeOf(map.metadata)).optional.child).pointer.child;
+    const key_align = if (@sizeOf(K) == 0) 1 else @alignOf(K);
+    const val_align = if (@sizeOf(V) == 0) 1 else @alignOf(V);
+    const keys_start = std.mem.alignForward(usize, @sizeOf(Header) + cap * @sizeOf(Metadata), key_align);
+    const vals_start = std.mem.alignForward(usize, keys_start + cap * @sizeOf(K), val_align);
+    return std.mem.alignForward(usize, vals_start + cap * @sizeOf(V), @max(@alignOf(Header), key_align, val_align));
+}
+
+/// Retained allocation bytes grouped by key-engine data and reusable scratch.
+pub const RetainedBytes = struct {
+    descriptions: usize = 0,
+    class_index: usize = 0,
+    summaries: usize = 0,
+    identity_maps: usize = 0,
+    scratch: usize = 0,
+
+    pub fn persistent(self: RetainedBytes) usize {
+        return self.descriptions + self.class_index + self.summaries + self.identity_maps;
+    }
+};
+
 /// No node, class, or map entry.
 pub const nil: u32 = std.math.maxInt(u32);
 
@@ -1373,6 +1427,28 @@ pub fn Engine(comptime Adapter: type) type {
             state.defined += summary.nvars;
         }
 
+        /// Call only while the owning writer is idle or locked. Counts owned
+        /// allocations without computing any keys or changing memo state.
+        pub fn retainedBytes(self: *const Self) RetainedBytes {
+            var result: RetainedBytes = .{};
+            inline for (.{ "bytes", "items", "descs" }) |field| result.descriptions += listRetainedBytes(@field(self.store, field));
+            result.class_index = denseRetainedBytes(self.node_info) +
+                listRetainedBytes(self.classes) + listRetainedBytes(self.class_children) +
+                hashRetainedBytes(u32, void, self.class_by_step) +
+                hashRetainedBytes(Span, u32, self.class_by_walk) + listRetainedBytes(self.walk_bytes);
+            result.summaries = listRetainedBytes(self.summaries) + listRetainedBytes(self.scc_cyclic);
+            result.identity_maps = listRetainedBytes(self.maps.nodes);
+            inline for (.{
+                "pending",        "tarjan_low",       "tarjan_on_stack",   "tarjan_stack", "tarjan_frames", "scc_members",
+                "signature",      "step_words",       "state_nodes",       "state_class",  "local_class",   "local_globals",
+                "block_existing", "next_local_class", "local_group_bytes", "dfs_frames",   "buf",           "walk_frames",
+                "active",         "entries",          "pairs",
+            }) |field| result.scratch += listRetainedBytes(@field(self, field));
+            inline for (.{ "local_of", "state_of_class", "dfs_index" }) |field| result.scratch += denseRetainedBytes(@field(self, field));
+            result.scratch += hashRetainedBytes(Span, u32, self.local_groups) + listRetainedBytes(self.maps.walk_stack);
+            return result;
+        }
+
         /// The number of classes known so far.
         pub fn classCount(self: *const Self) u32 {
             return @intCast(self.classes.items.len);
@@ -1407,4 +1483,37 @@ pub fn appendVarint(buf: *std.ArrayListUnmanaged(u8), gpa: Allocator, value: u32
     var rest = value;
     while (rest >= 0x80) : (rest >>= 7) try buf.append(gpa, @as(u8, @truncate(rest)) | 0x80);
     try buf.append(gpa, @truncate(rest));
+}
+
+test "type key retained byte accounting matches actual allocations" {
+    var counted = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counted.allocator();
+    var map: std.AutoHashMapUnmanaged(u32, u64) = .empty;
+    defer map.deinit(gpa);
+    var empty_values: std.AutoHashMapUnmanaged(u32, void) = .empty;
+    defer empty_values.deinit(gpa);
+    var dense = collections.DenseMap(u32, u64).init(gpa);
+    defer dense.deinit();
+    var stack = collections.IndexedStack(u32).init(gpa);
+    defer stack.deinit();
+    try std.testing.expectEqual(@as(usize, 0), hashRetainedBytes(u32, u64, map));
+    for (0..3) |round| {
+        for (0..140) |i| {
+            const key: u32 = @intCast(round * 1000 + i);
+            try map.put(gpa, key, key);
+            try empty_values.put(gpa, key, {});
+            try dense.put(key, key);
+            try stack.push(key);
+        }
+        const expected = counted.allocated_bytes - counted.freed_bytes;
+        const actual = hashRetainedBytes(u32, u64, map) + hashRetainedBytes(u32, void, empty_values) +
+            denseRetainedBytes(dense) + stackRetainedBytes(stack);
+        try std.testing.expectEqual(expected, actual);
+        map.clearRetainingCapacity();
+        empty_values.clearRetainingCapacity();
+        dense.clearRetainingCapacity();
+        stack.clearRetainingCapacity();
+        try std.testing.expectEqual(expected, hashRetainedBytes(u32, u64, map) + hashRetainedBytes(u32, void, empty_values) +
+            denseRetainedBytes(dense) + stackRetainedBytes(stack));
+    }
 }

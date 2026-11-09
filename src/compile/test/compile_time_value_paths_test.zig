@@ -185,18 +185,6 @@ fn countLowLevel(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usize 
     return count;
 }
 
-fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
-    for (result.store.getCFStmts()) |stmt| {
-        if (stmt != .assign_literal) continue;
-        switch (stmt.assign_literal.value) {
-            .i64_literal => |literal| if (literal.value == value) return true,
-            .i128_literal => |id| if (result.store.stmtRow(id).value == value) return true,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref => {},
-        }
-    }
-    return false;
-}
-
 test "two equal compile-time tables freeze to one backing in the continued runtime program" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
@@ -245,7 +233,7 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
 }
 
-test "an empty compile-time list read beside other lists still lowers as its capacity request" {
+test "an empty compile-time list stays immutable even when a consumer appends" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -278,12 +266,10 @@ test "an empty compile-time list read beside other lists still lowers as its cap
     defer lowered.deinit();
 
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The buffer is the `with_capacity` it was evaluated with, and no
-        // list reaches static data: the buffer is a construction and the
-        // other lists are read only by the expects the runtime omits.
-        try std.testing.expect(countLowLevel(result, .list_with_capacity) >= 1);
-        try std.testing.expect(hasIntLiteral(result, 64));
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        // The completed empty value remains a slot. Only the program's
+        // append may allocate; no capacity request reconstructs the read.
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+        try std.testing.expect(countListSlots(result) > 0);
     }
 }
 
@@ -298,7 +284,7 @@ fn checkedListOpUniqueMasks(result: *const lir.Program.Result, out: *std.ArrayLi
     }
 }
 
-test "a compile-time table only read stays static data, with no fresh build" {
+test "a compile-time table only read stays immutable data" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -318,15 +304,14 @@ test "a compile-time table only read stays static data, with no fresh build" {
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // Both reads only borrow the table: it rides in static data and no
-        // fresh build survives ARC's choice.
+        // Both reads borrow the same immutable table.
         try std.testing.expect(countListSlots(result) > 0);
         try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_unsafe));
         try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
     }
 }
 
-test "a compile-time table consumed by an in-place write is built fresh and mutated without a copy" {
+test "a compile-time table consumed by a write stays immutable and requires copy-on-write" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -346,26 +331,23 @@ test "a compile-time table consumed by an in-place write is built fresh and muta
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The read's value is the argument `List.append` may extend in
-        // place, so the read takes its fresh form: the table's slot is gone,
-        // the fresh build seeds one item and fills the rest as a range copy
-        // rather than looping (the program's own append is the other
-        // unchecked append), and the append is proven unique.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        // An update cannot turn the read into a constructor or make the
+        // immutable table uniquely owned.
+        try std.testing.expect(countListSlots(result) > 0);
         try std.testing.expect(countLowLevel(result, .list_append_unsafe) >= 1);
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_with_capacity));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
         var masks: std.ArrayList(u64) = .empty;
         defer masks.deinit(gpa);
         try checkedListOpUniqueMasks(result, &masks, gpa);
         // The append's reserve is the one checked list operation, and its
-        // list argument is proven unique.
+        // immutable input must not be proven unique.
         try std.testing.expectEqual(@as(usize, 1), masks.items.len);
-        try std.testing.expectEqual(@as(u64, 1), masks.items[0] & 1);
+        try std.testing.expectEqual(@as(u64, 0), masks.items[0] & 1);
     }
 }
 
-test "a compile-time table consumed through an uninlined builtin wrapper is still built fresh" {
+test "a compile-time table consumed through an uninlined builtin wrapper stays immutable" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -385,17 +367,14 @@ test "a compile-time table consumed through an uninlined builtin wrapper is stil
     , .none);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The reserve that checks the list sits in `List.append`'s own
-        // procedure, whose seed mask names its list parameter; the seed
-        // composes to the read's procedure, so the read is still needed
-        // and takes its fresh form, and the reserve's runtime check finds
-        // the fresh list unique.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        // Calling through a wrapper does not authorize reconstruction.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
     }
 }
 
-test "a compile-time table re-bound from a helper's returned record field each iteration is built fresh" {
+test "a compile-time table re-bound through a helper starts from immutable data" {
     if (is_freestanding) return error.SkipZigTest;
     const gpa = std.testing.allocator;
     var arena = base.SingleThreadArena.init(gpa);
@@ -423,13 +402,11 @@ test "a compile-time table re-bound from a helper's returned record field each i
     , .wrappers);
     defer lowered.deinit();
     for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
-        // The loop variable is the read's value on entry and the helper's
-        // returned field on every later iteration; the origin follows the
-        // value through the call, the record and the take, so the value
-        // the helper's append checks is born of the read, and the read
-        // takes its fresh form.
-        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
-        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        // The loop starts from the immutable table. Later iterations may
+        // reuse a copy made by the update, but never reconstruct the constant.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
     }
 }
 

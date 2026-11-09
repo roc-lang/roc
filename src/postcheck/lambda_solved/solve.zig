@@ -1257,9 +1257,7 @@ const Solver = struct {
             .nominal => |backing| return if (cursor == 0) .{ .expr = .{ .id = backing, .generated_backing = true } } else null,
             .static_data_candidate => |candidate| switch (candidate.value) {
                 .runtime => |runtime| return if (cursor == 0) .{ .expr = .{ .id = runtime, .generated_backing = true } } else null,
-                // A stored list's repeated item is one of its items, as a
-                // list literal's items are.
-                .stored => |stored| return if (cursor == 0) if (stored.uniform_item) |item| .{ .expr = .{ .id = item } } else null else null,
+                .stored => return null,
             },
             .let_ => |let_| {
                 if (cursor == 0) return .{ .expr = .{ .id = let_.value } };
@@ -1281,7 +1279,7 @@ const Solver = struct {
             },
             .static_data_candidate => |candidate| switch (candidate.value) {
                 .runtime => |runtime| if (cursor == 0) return .{ .expr = .{ .id = runtime, .expected = expected } },
-                .stored => |stored| if (cursor == 0) if (stored.uniform_item) |item| return .{ .expr = .{ .id = item, .expected = try self.listElem(expected) } },
+                .stored => {},
             },
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .expr = .{ .id = boundary.value } };

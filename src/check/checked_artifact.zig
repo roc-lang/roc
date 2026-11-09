@@ -17,6 +17,7 @@ const checked_ids = @import("checked_ids.zig");
 const static_dispatch = @import("static_dispatch_registry.zig");
 const dispatch_evidence = @import("dispatch_evidence.zig");
 const checked_traverse = @import("checked_traverse.zig");
+const checked_reachability = @import("checked_reachability.zig");
 const canonical = @import("canonical_names.zig");
 
 /// A reference to a checked module artifact by its identity digest.
@@ -1633,6 +1634,9 @@ const CompileTimeRequestScheduler = struct {
             .literal => {},
             .node => |id| switch (self.static_dispatch_plans.evidenceNode(id).target.kind) {
                 .procedure => |procedure| try self.collectTemplateDependencies(procedure.template),
+                .callable_binding => |binding| if (binding.module.eql(self.artifact_key.digest())) {
+                    try self.addRootDependency(self.callable_eval_templates.get(binding.template).root);
+                },
                 .local_proc, .structural => {},
             },
             .use => |expr| {
@@ -1977,65 +1981,55 @@ fn verifyCompileTimeRequestsScheduled(
 /// already checked at the application, so they count as concrete).
 const ConcreteRootWalk = enum { value_graph, decl_template };
 
+const NonConcreteRootTraversal = checked_reachability.AnyReachable(NonConcreteRootScan.Key, NonConcreteRootScan);
+
 fn checkedTypeIsConcreteCompileTimeRoot(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var active = collections.DenseMap(CheckedTypeId, void).init(allocator);
-    defer active.deinit();
-    var scan = ConcreteRootScan{ .checked_types = checked_types, .active = &active };
-    return ConcreteRootScan.Eval.run(allocator, &scan, .{ .ty = .{ .walk = .value_graph, .id = root } });
+    var scan = NonConcreteRootScan{ .checked_types = checked_types };
+    var traversal = NonConcreteRootTraversal.init(allocator, &scan);
+    defer traversal.deinit();
+    return !try traversal.visit(.{ .walk = .value_graph, .id = root });
 }
 
-/// Whether a checked type is concrete enough to be a compile-time root. A
-/// type reached again while it is still being walked (a recursive type)
-/// counts as concrete.
-const ConcreteRootScan = struct {
+/// Whether a reached checked type makes its root non-concrete. Declaration
+/// formals and value variables have different meanings, so the mode is part
+/// of the key. Complete recursive components share one exact answer.
+const NonConcreteRootScan = struct {
     checked_types: *const CheckedTypeStore,
-    /// The types on the path currently being walked.
-    active: *collections.DenseMap(CheckedTypeId, void),
+    const Key = struct { walk: ConcreteRootWalk, id: CheckedTypeId };
 
-    const Leaf = union(enum) {
-        ty: struct { walk: ConcreteRootWalk, id: CheckedTypeId },
-        decided: bool,
-    };
-    const Eval = collections.AnyAll.Evaluation(Leaf, ConcreteRootScan);
-
-    fn addSpan(items: Eval.Items, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
-        for (ids) |id| try items.add(.{ .ty = .{ .walk = walk, .id = id } });
+    fn addSpan(items: anytype, walk: ConcreteRootWalk, ids: []const CheckedTypeId) Allocator.Error!void {
+        for (ids) |id| try items.add(.{ .walk = walk, .id = id });
     }
 
-    pub fn enter(scan: *ConcreteRootScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
+    pub fn visit(scan: *NonConcreteRootScan, items: anytype, ty: Key) Allocator.Error!?bool {
         const checked_types = scan.checked_types;
-        const ty = switch (leaf) {
-            .decided => |value| return .{ .value = value },
-            .ty => |ty| ty,
-        };
         const walk = ty.walk;
-        if (scan.active.contains(ty.id)) return .{ .value = true };
-
+        base.dev_diagnostics.countTestWork(.checked_root_concreteness_nodes, 1);
         switch (checked_types.payload(ty.id)) {
             .pending => checkedArtifactInvariant("compile-time root checked type was pending", .{}),
-            .field_kind, .err => return .{ .value = false },
-            .flex => return .{ .value = false },
-            .rigid => return .{ .value = walk == .decl_template },
+            .field_kind, .err => return true,
+            .flex => return true,
+            .rigid => return walk != .decl_template,
             .empty_record,
             .empty_tag_union,
-            => return .{ .value = true },
+            => return false,
             .alias => |alias| {
                 try addSpan(items, walk, alias.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = alias.backing } });
+                try items.add(.{ .walk = walk, .id = alias.backing });
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
                     if (field.kind.tag == .undetermined) {
-                        try items.add(.{ .decided = false });
-                        break;
+                        return true;
                     }
-                    try items.add(.{ .ty = .{ .walk = walk, .id = field.ty } });
-                } else try items.add(.{ .ty = .{ .walk = walk, .id = record.ext } });
+                    try items.add(.{ .walk = walk, .id = field.ty });
+                }
+                try items.add(.{ .walk = walk, .id = record.ext });
             },
             .tuple => |items_ids| try addSpan(items, walk, items_ids),
             .nominal => |nominal| {
@@ -2071,7 +2065,7 @@ const ConcreteRootScan = struct {
                     // Declaration formals stand for the args checked above, so they
                     // count as concrete while walking the backing template.
                     if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                        try items.add(.{ .ty = .{ .walk = .decl_template, .id = backing } });
+                        try items.add(.{ .walk = .decl_template, .id = backing });
                     }
                 }
             },
@@ -2079,22 +2073,17 @@ const ConcreteRootScan = struct {
             // args and return contain no identity variables.
             .function => |function| {
                 try addSpan(items, walk, function.args);
-                try items.add(.{ .ty = .{ .walk = walk, .id = function.ret } });
+                try items.add(.{ .walk = walk, .id = function.ret });
             },
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
                     try addSpan(items, walk, tag.args);
                 }
-                try items.add(.{ .ty = .{ .walk = walk, .id = tag_union.ext } });
+                try items.add(.{ .walk = walk, .id = tag_union.ext });
             },
         }
-        try scan.active.put(ty.id, {});
-        return .{ .group = .all };
-    }
-
-    pub fn exit(scan: *ConcreteRootScan, leaf: Leaf, _: ?bool) Allocator.Error!void {
-        _ = scan.active.remove(leaf.ty.id);
+        return null;
     }
 };
 
@@ -11262,7 +11251,7 @@ pub const TopLevelProcedureBindingRef = enum(u32) { _ };
 /// Id for a top-level procedure binding.
 pub const TopLevelProcedureBindingId = TopLevelProcedureBindingRef;
 /// Public `CallableEvalTemplateId` declaration.
-pub const CallableEvalTemplateId = enum(u32) { _ };
+pub const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 /// Public `DirectProcedureBinding` declaration.
 pub const DirectProcedureBinding = struct {
@@ -14326,7 +14315,7 @@ const EvidencePass = struct {
                 };
                 const evidence_var: Var = @fromBackingInt(@intCast(source_call.evidence_var));
                 switch (target.kind) {
-                    .procedure, .local_proc => {
+                    .procedure, .local_proc, .callable_binding => {
                         const node_id = try self.evidenceNodeForTarget(
                             target,
                             call.dispatcher_ty,
@@ -14392,7 +14381,7 @@ const EvidencePass = struct {
                         }
                         const node = self.evidence_nodes.items[raw_node];
                         switch (node.target.kind) {
-                            .procedure, .local_proc => {},
+                            .procedure, .local_proc, .callable_binding => {},
                             .structural => checkedArtifactInvariant(
                                 "checked generated codec callable resolution named a structural target",
                                 .{},
@@ -15400,7 +15389,7 @@ const EvidencePass = struct {
                 }
                 break :blk .{ .resolved = .{ .structural = try self.structuralDerivation(kind, constraint_fn_var) } };
             },
-            .procedure, .local_proc => .{ .node = .{
+            .procedure, .local_proc, .callable_binding => .{ .node = .{
                 .target = target,
                 .dispatcher_ty = dispatcher_ty,
                 .constraint_fn_var = constraint_fn_var,
@@ -15419,7 +15408,7 @@ const EvidencePass = struct {
     fn procedureEvidenceView(self: *EvidencePass, target: static_dispatch.MethodTarget) ProcedureEvidenceView {
         const procedure = switch (target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
+            .local_proc, .structural, .callable_binding => checkedArtifactInvariant("procedure evidence view requested for a non-procedure target", .{}),
         };
         const target_key = procedure.template.artifact;
         const table: *const CheckedProcedureTemplateTable = imported: {
@@ -15674,7 +15663,7 @@ const EvidencePass = struct {
 
         const procedure_schema: ?ProcedureEvidenceSchema = switch (target.kind) {
             .procedure => self.procedureEvidenceSchema(target),
-            .local_proc, .structural => null,
+            .local_proc, .structural, .callable_binding => null,
         };
         if (target.alias != null) {
             // The dispatch edge instantiated the alias's scheme, whose
@@ -16098,7 +16087,7 @@ const EvidencePass = struct {
                         !self.procedureEvidenceView(self.evidence_nodes.items[@backingInt(id)].target).template.callable_determines_scheme,
                     .from_target, .requires_record => true,
                 },
-                .local_proc, .structural => true,
+                .local_proc, .structural, .callable_binding => true,
             },
             .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => true,
         };
@@ -17633,6 +17622,11 @@ pub const CheckedProcedureTemplate = struct {
     /// Monotype specializes the template over only this much of each
     /// variable's substitution (design.md "Specialization By Demand").
     demands: artifact_serialize.Span = .{},
+    /// The `scheme_vars` slots that are sealed (design.md "Sealed Result
+    /// Rows"), ascending (a range into
+    /// `CheckedProcedureTemplateTable.sealed_slots_pool`). Boxy binds such a
+    /// variable to the empty row and passes no descriptor for it.
+    sealed_slots: artifact_serialize.Span = .{},
 };
 
 fn checkedTypeIsClosedTagRow(
@@ -17766,6 +17760,8 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_types: []CheckedTypeId = &.{},
     /// Flat pool backing each template's `demands` span.
     demand_pool: []SchemeVarDemand = &.{},
+    /// Flat pool backing each template's `sealed_slots` span.
+    sealed_slots_pool: []u32 = &.{},
 
     pub const Serialized = extern struct {
         templates: SerializedSlice(CheckedProcedureTemplate) = .{},
@@ -17786,6 +17782,7 @@ pub const CheckedProcedureTemplateTable = struct {
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
         demand_pool: SerializedSlice(SchemeVarDemand) = .{},
+        sealed_slots_pool: SerializedSlice(u32) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -18074,6 +18071,16 @@ pub const CheckedProcedureTemplateTable = struct {
     /// demands, in slot order.
     pub fn templateDemands(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const SchemeVarDemand {
         return self.demand_pool[template.demands.start .. template.demands.start + template.demands.len];
+    }
+
+    /// The `scheme_vars` slots of a template that are sealed, ascending.
+    pub fn templateSealedSlots(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const u32 {
+        return self.sealed_slots_pool[template.sealed_slots.start .. template.sealed_slots.start + template.sealed_slots.len];
+    }
+
+    /// A template's evidence parameters, in canonical order.
+    pub fn templateEvidenceParams(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const static_dispatch.EvidenceParamRecord {
+        return self.evidence_params_pool[template.evidence_params.start .. template.evidence_params.start + template.evidence_params.len];
     }
 
     /// The quantified variables of a generalized-local scope's scheme, in
@@ -20657,7 +20664,9 @@ fn directEvidenceEnter(
             states[raw_node] = .parametric;
             return .{ .decided = false };
         },
-        .procedure => {},
+        // A stored top-level value is the one value every specialization
+        // calls.
+        .procedure, .callable_binding => {},
         .structural => checkedArtifactInvariant("direct evidence closure contained a structural target", .{}),
     }
     switch (node.nested) {
@@ -21047,8 +21056,9 @@ fn publishLiteralArgumentRoots(
                     }),
                     // A method declared in a function body is called through
                     // its function value, whose scheme its construction or
-                    // use instantiates.
-                    .local_proc, .structural => {},
+                    // use instantiates; a computed callable is a monomorphic
+                    // value, which instantiates nothing.
+                    .local_proc, .structural, .callable_binding => {},
                 }
                 switch (node.nested) {
                     .resolved => try self.entries(self.plans.nestedEvidence(node)),
@@ -21092,7 +21102,7 @@ fn publishLiteralArgumentRoots(
             const alias = node.target.alias orelse checkedArtifactInvariant("an alias-instantiated target has no alias binding", .{});
             switch (node.target.kind) {
                 .procedure => {},
-                .local_proc, .structural => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
+                .local_proc, .structural, .callable_binding => checkedArtifactInvariant("an alias-instantiated target is not a procedure", .{}),
             }
             // The module that declares the alias binding composes the
             // chain; the procedure it reaches may be another module's.
@@ -21827,7 +21837,7 @@ fn checkedDispatchPlanNeedsRelation(
                 .graph_participating, .intrinsic => true,
                 .procedure, .low_level => false,
             },
-            .local_proc => false,
+            .local_proc, .callable_binding => false,
             .structural => checkedArtifactInvariant("direct checked call targeted a structural derivation", .{}),
         },
         .direct_pending => checkedArtifactInvariant("unfinalized direct call reached template classification", .{}),
@@ -21933,6 +21943,7 @@ fn projectResolvedDispatchTargetCallable(
 ) Allocator.Error!CheckedTypeId {
     const target_key = switch (target.kind) {
         .local_proc => return target.callable_ty,
+        .callable_binding => |binding| binding.module,
         .structural => checkedArtifactInvariant("structural method registry result was published as a direct callable target", .{}),
         .procedure => |procedure| procedure.template.artifact,
     };
@@ -22705,6 +22716,7 @@ pub const PlatformPairing = struct {
                 // Persisted as `templates`; the rest is borrowed.
                 "checked_procedure_templates",
                 // Pairing-independent checked metadata: borrowed from the platform.
+                "has_expects",
                 "evaluation_diagnostics",
                 "checked_const_bodies",
                 "exported_procedure_templates",
@@ -23020,7 +23032,12 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
+        if (request.evaluation_order == null) continue;
+        // A paired platform may inherit a semantically completed value but
+        // still need the other strategy's function representation. Keep its
+        // declared request so that strategy can run the producer later.
+        const root = result.compile_time_roots.root(request.compile_time_root.?);
+        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
@@ -23735,34 +23752,38 @@ fn testCheckedModuleKey(byte: u8) CheckedModuleArtifactKey {
     return key;
 }
 
-/// Whether no type reachable from `root` holds a callable. The answer is the
-/// conjunction of every reachable type's own verdict, so each is visited once
-/// from an explicit work list.
+const CallableRootTraversal = checked_reachability.AnyReachable(CheckedTypeId, CallableRootScan);
+
+/// Whether no type reachable from `root` holds a callable. One-off consumers
+/// own one analysis; root publication shares its analysis across the batch.
 fn checkedTypeHasNoReachableCallableSlots(
     allocator: Allocator,
     checked_types: *const CheckedTypeStore,
     root: CheckedTypeId,
 ) Allocator.Error!bool {
-    var visited = collections.DenseMap(CheckedTypeId, void).init(allocator);
-    defer visited.deinit();
-    var pending: std.ArrayListUnmanaged(CheckedTypeId) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, root);
-    while (pending.pop()) |ty| {
-        if (visited.contains(ty)) continue;
-        try visited.put(ty, {});
+    var scan = CallableRootScan{ .checked_types = checked_types };
+    var traversal = CallableRootTraversal.init(allocator, &scan);
+    defer traversal.deinit();
+    return !try traversal.visit(root);
+}
 
+const CallableRootScan = struct {
+    checked_types: *const CheckedTypeStore,
+
+    pub fn visit(self: *CallableRootScan, children: anytype, ty: CheckedTypeId) Allocator.Error!?bool {
+        const checked_types = self.checked_types;
+        base.dev_diagnostics.countTestWork(.checked_root_callable_nodes, 1);
         switch (checked_types.payload(ty)) {
             .pending => checkedArtifactInvariant("callable-slot proof reached pending checked type", .{}),
             .field_kind, .err => {},
             .flex,
             .rigid,
             .function,
-            => return false,
+            => return true,
             .empty_record,
             .empty_tag_union,
             => {},
-            .alias => |alias| try pending.append(allocator, alias.backing),
+            .alias => |alias| try children.add(alias.backing),
             .nominal => |nominal| {
                 if (nominal.builtin) |builtin_nominal| {
                     switch (builtin_nominal) {
@@ -23801,51 +23822,51 @@ fn checkedTypeHasNoReachableCallableSlots(
                         .box,
                         => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin container nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .try_ => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Try nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .set => {
                             if (nominal.args.len != 1) checkedArtifactInvariant("builtin Set nominal had non-unary args", .{});
-                            try pending.append(allocator, nominal.args[0]);
+                            try children.add(nominal.args[0]);
                         },
                         .dict => {
                             if (nominal.args.len != 2) checkedArtifactInvariant("builtin Dict nominal had non-binary args", .{});
-                            try pending.appendSlice(allocator, nominal.args[0..2]);
+                            try children.addSlice(nominal.args[0..2]);
                         },
                         .iter, .stream => {
                             if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                                try pending.append(allocator, backing);
+                                try children.add(backing);
                             }
                         },
                     }
-                    continue;
+                    return null;
                 }
                 if (checked_types.nominalBackingTemplateForPayload(nominal)) |backing| {
-                    try pending.append(allocator, backing);
+                    try children.add(backing);
                 }
             },
             .record => |record| {
                 for (0..record.fields.len()) |field_index| {
                     const field = record.fields.get(field_index);
-                    try pending.append(allocator, field.ty);
+                    try children.add(field.ty);
                 }
-                try pending.append(allocator, record.ext);
+                try children.add(record.ext);
             },
-            .tuple => |items| try pending.appendSlice(allocator, items),
+            .tuple => |items| try children.addSlice(items),
             .tag_union => |tag_union| {
                 for (0..tag_union.tags.len()) |tag_index| {
                     const tag = tag_union.tags.get(tag_index);
-                    try pending.appendSlice(allocator, tag.args);
+                    try children.addSlice(tag.args);
                 }
-                try pending.append(allocator, tag_union.ext);
+                try children.add(tag_union.ext);
             },
         }
+        return null;
     }
-    return true;
-}
+};
 
 /// Public `ComptimeRootId` declaration.
 pub const ComptimeRootId = checked_ids.ComptimeRootId;
@@ -24043,8 +24064,31 @@ pub const CompileTimeRoot = struct {
     literal_argument: ?LiteralArgumentRoot = null,
     /// The value a `.boxy` compilation stored for a root holding a function
     /// value (design.md "Stored Function Values"). Only `.boxy` programs read
-    /// it: to a `.lss` compilation the root stays `unevaluated`.
+    /// it. Until LSS produces its own form, its payload stays `unevaluated`.
     boxy_value: ?StoredConstTemplate = null,
+    /// The LSS producer's constant plan contains a function, possibly inside
+    /// an aggregate. Boxy must produce its own capture graph for this root.
+    /// Readiness never traverses a stored value or rediscovers its type.
+    lss_value_has_functions: bool = false,
+
+    /// The payload available to this strategy. A completed function in the
+    /// other strategy's representation is still pending for this producer.
+    pub fn payloadFor(self: CompileTimeRoot, strategy: base.SpecializationStrategy) CompileTimeRootPayload {
+        if (strategy == .boxy) {
+            if (self.boxy_value) |stored| return .{ .const_node = stored.node };
+            if (self.payload == .fn_value or self.lss_value_has_functions) return .pending;
+        }
+        return self.payload;
+    }
+
+    /// Whether this strategy still needs the root's producer to run.
+    pub fn needsEvaluation(self: CompileTimeRoot, strategy: base.SpecializationStrategy) bool {
+        if (strategy == .lss and self.kind == .literal_argument) return false;
+        return switch (self.payloadFor(strategy)) {
+            .pending, .unevaluated => true,
+            .const_node, .fn_value, .discarded, .expect, .runtime => false,
+        };
+    }
 
     /// The expression the root evaluates itself, or null when its entry
     /// evaluates a lowering-side construct instead: the one its
@@ -24358,6 +24402,7 @@ pub const CompileTimeRootTable = struct {
         }
         verifyCompileTimeRootPayloadMatchesKind(self.roots[index], payload);
         self.roots[index].payload = payload;
+        self.roots[index].lss_value_has_functions = false;
     }
 
     pub fn deinit(self: *CompileTimeRootTable, allocator: Allocator) void {
@@ -24444,7 +24489,14 @@ fn publishCompileTimeRootRequestEligibility(
     checked_types: *const CheckedTypePublication,
     roots: []CompileTimeRoot,
 ) Allocator.Error!void {
+    var concrete_context = NonConcreteRootScan{ .checked_types = &checked_types.store };
+    var concrete = NonConcreteRootTraversal.init(allocator, &concrete_context);
+    defer concrete.deinit();
+    var callable_context = CallableRootScan{ .checked_types = &checked_types.store };
+    var callable = CallableRootTraversal.init(allocator, &callable_context);
+    defer callable.deinit();
     for (roots) |*root| {
+        base.dev_diagnostics.countTestWork(.checked_root_eligibility_queries, 1);
         const producer_callable_type_is_fixed = switch (root.kind) {
             .callable_binding => true,
             .constant => switch (root.source) {
@@ -24460,12 +24512,8 @@ fn publishCompileTimeRootRequestEligibility(
             .literal_argument,
             => false,
         };
-        const context_free = try checkedTypeIsContextFreeCompileTimeRoot(
-            allocator,
-            &checked_types.store,
-            producer_callable_type_is_fixed,
-            root.checked_type,
-        );
+        const context_free = !try concrete.visit(.{ .walk = .value_graph, .id = root.checked_type }) and
+            (producer_callable_type_is_fixed or !try callable.visit(root.checked_type));
         root.request_eligibility = if (context_free) .eligible else .ineligible;
     }
 }
@@ -24832,6 +24880,350 @@ const NominalFormalReach = struct {
         }
     };
 };
+
+/// Give every procedure template its sealed scheme-variable slots
+/// (`CheckedProcedureTemplate.sealed_slots`).
+fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView, templates: *CheckedProcedureTemplateTable) Allocator.Error!void {
+    var walk = SealedSchemeSlots.init(allocator, checked_types);
+    defer walk.deinit();
+    var slots: std.ArrayList(u32) = .empty;
+    errdefer slots.deinit(allocator);
+    for (templates.templates.items) |*template| {
+        const start: u32 = @intCast(slots.items.len);
+        const evidence_params = templates.templateEvidenceParams(template);
+        try walk.append(templates.templateSchemeVars(template), template.checked_fn_root, evidence_params, &slots);
+        template.sealed_slots = .{ .start = start, .len = @intCast(slots.items.len - start) };
+    }
+    allocator.free(templates.sealed_slots_pool);
+    templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
+}
+
+/// Compute every sealed scheme-variable slot of one template together. A type
+/// can occur on both a coercible result path and an externally involved path;
+/// the visited key therefore includes the traversal mode.
+const SealedSchemeSlots = struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    candidates: collections.DenseMapUnmanaged(CheckedTypeId, bool) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, u8) = .empty,
+    pending: std.ArrayList(Step) = .empty,
+    expanded: if (builtin.is_test) usize else void = if (builtin.is_test) 0 else {},
+
+    const Mode = enum(u3) { argument, ordinary, result };
+    const Step = struct { ty: CheckedTypeId, mode: Mode };
+
+    fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeSlots {
+        return .{ .allocator = allocator, .types = checked_types };
+    }
+
+    fn deinit(self: *SealedSchemeSlots) void {
+        self.candidates.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+    }
+
+    fn append(
+        self: *SealedSchemeSlots,
+        variables: []const CheckedTypeId,
+        fn_root: CheckedTypeId,
+        evidence_params: []const static_dispatch.EvidenceParamRecord,
+        slots: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        self.candidates.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        self.pending.clearRetainingCapacity();
+        if (builtin.is_test) self.expanded = 0;
+        for (variables) |variable| {
+            const payload = self.types.payload(variable);
+            const bounded = switch (payload) {
+                .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+                .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+            };
+            if (bounded) try self.candidates.put(self.allocator, variable, true);
+        }
+        var remaining = self.candidates.count();
+        if (remaining == 0) return;
+
+        var root = fn_root;
+        const signature = while (true) switch (self.types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |found| break found,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return,
+        };
+        // LIFO: inspect arguments, then evidence, before walking the result.
+        // A small external occurrence can disqualify every candidate without
+        // traversing an unrelated, arbitrarily large result graph.
+        try self.push(signature.ret, .result);
+        for (evidence_params) |param| try self.push(param.callable_ty, .ordinary);
+        try self.pushSlice(signature.args, .argument);
+        while (self.pending.pop()) |step| {
+            if (builtin.is_test) self.expanded += 1;
+            // Candidates are flex leaves. An ordinary or argument occurrence
+            // disqualifies every scheme slot naming this exact variable.
+            if (self.candidates.getPtr(step.ty)) |eligible| {
+                if (step.mode != .result and eligible.*) {
+                    eligible.* = false;
+                    remaining -= 1;
+                    if (remaining == 0) return;
+                }
+                continue;
+            }
+            const payload = self.types.payload(step.ty);
+            switch (step.mode) {
+                .argument, .ordinary => {
+                    if (step.mode == .argument) switch (payload) {
+                        .nominal => |nominal| switch (nominal.representation) {
+                            .local_box_payload_capability, .imported_box_payload_capability => return,
+                            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                        },
+                        .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+                    };
+                    try self.pushChildren(payload, step.mode);
+                },
+                .result => switch (payload) {
+                    .alias => |alias| try self.push(alias.backing, .result),
+                    .tag_union => |tag_union| {
+                        for (0..tag_union.tags.len()) |tag_index| try self.pushSlice(tag_union.tags.get(tag_index).args, .result);
+                        try self.push(tag_union.ext, .result);
+                    },
+                    .nominal => |nominal| switch (nominal.representation) {
+                        .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                            try self.push(nominal.args[0], .ordinary);
+                            try self.push(nominal.args[1], .result);
+                        } else {
+                            try self.pushSlice(nominal.args, .ordinary);
+                        },
+                        .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => try self.pushSlice(nominal.args, .ordinary),
+                    },
+                    .record, .tuple, .function => try self.push(step.ty, .ordinary),
+                    .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                },
+            }
+        }
+        // The map records facts about variables, not slot numbers. Retain
+        // original order and every slot even when two slots name one variable.
+        for (variables, 0..) |variable, slot| {
+            if (self.candidates.get(variable) orelse false) try slots.append(self.allocator, @intCast(slot));
+        }
+    }
+
+    fn push(self: *SealedSchemeSlots, ty: CheckedTypeId, mode: Mode) Allocator.Error!void {
+        const entry = try self.seen.getOrPut(self.allocator, ty);
+        if (!entry.found_existing) entry.value_ptr.* = 0;
+        const bit = @as(u8, 1) << @backingInt(mode);
+        if (entry.value_ptr.* & bit != 0) return;
+        entry.value_ptr.* |= bit;
+        try self.pending.append(self.allocator, .{ .ty = ty, .mode = mode });
+    }
+
+    fn pushSlice(self: *SealedSchemeSlots, ids: []const CheckedTypeId, mode: Mode) Allocator.Error!void {
+        for (ids) |id| try self.push(id, mode);
+    }
+
+    fn pushChildren(self: *SealedSchemeSlots, payload: CheckedTypePayload, mode: Mode) Allocator.Error!void {
+        switch (payload) {
+            .alias => |alias| {
+                try self.pushSlice(alias.args, mode);
+                try self.push(alias.backing, mode);
+            },
+            .record => |record| {
+                for (0..record.fields.len()) |index| try self.push(record.fields.get(index).ty, mode);
+                try self.push(record.ext, mode);
+            },
+            .tuple => |items| try self.pushSlice(items, mode),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |index| try self.pushSlice(tag_union.tags.get(index).args, mode);
+                try self.push(tag_union.ext, mode);
+            },
+            .function => |inner| {
+                try self.pushSlice(inner.args, mode);
+                try self.push(inner.ret, mode);
+            },
+            .nominal => |nominal| try self.pushSlice(nominal.args, mode),
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+};
+
+/// Independent scalar oracle, compiled only for tests. Kept unchanged from
+/// the original per-variable implementation to check the batched producer.
+/// Whether a procedure template's scheme variable is SEALED (design.md
+/// "Sealed Result Rows"), over one module's checked types. The walks share
+/// scratch the walk owns, so a query allocates only to grow it.
+pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
+    allocator: Allocator,
+    types: CheckedTypeStoreView,
+    pending: std.ArrayList(CheckedTypeId) = .empty,
+    seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+    reached: std.ArrayList(CheckedTypeId) = .empty,
+    reached_seen: collections.DenseMapUnmanaged(CheckedTypeId, void) = .empty,
+
+    pub fn init(allocator: Allocator, checked_types: CheckedTypeStoreView) SealedSchemeVarWalk {
+        return .{ .allocator = allocator, .types = checked_types };
+    }
+
+    pub fn deinit(self: *SealedSchemeVarWalk) void {
+        self.pending.deinit(self.allocator);
+        self.seen.deinit(self.allocator);
+        self.reached.deinit(self.allocator);
+        self.reached_seen.deinit(self.allocator);
+    }
+
+    /// Whether scheme variable `variable` of the function type `fn_root` is
+    /// sealed: a flex tag-row tail that an annotation bounds, whose row
+    /// default is the empty row, and whose constraints closing the row
+    /// discharges, and that nothing the worker exchanges with code outside
+    /// it involves.
+    pub fn sealed(self: *SealedSchemeVarWalk, variable: CheckedTypeId, fn_root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord) Allocator.Error!bool {
+        const payload = self.types.payload(variable);
+        const bounded = switch (payload) {
+            .flex => |flex| flex.bounded_row_ext and flex.row_default == .empty_tag_union and payload.variableSealsToRowDefault(),
+            .rigid, .pending, .field_kind, .err, .alias, .record, .tuple, .nominal, .function, .empty_record, .tag_union, .empty_tag_union => false,
+        };
+        if (!bounded) return false;
+        // Polarity also opens a row in a callback's parameter, which the
+        // definition produces but which no instantiation of its result
+        // converts: a variable at such a position, or anywhere else outside
+        // the result's reach, keeps its descriptor.
+        if (try self.occursOutsideResultReach(fn_root, variable)) return false;
+        // A callable the worker receives from its caller carries the caller's
+        // instantiation of every variable its interface mentions. A function
+        // parameter shows that interface and is excluded above; a `where`
+        // dictionary's interface is its evidence parameter's callable, and a
+        // nominal over a callable payload hides its callable's interface in
+        // its methods, so a parameter holding one may involve any variable.
+        for (evidence_params) |param| {
+            if (try self.mentionsVariable(param.callable_ty, variable)) return false;
+        }
+        return !try self.argumentsHoldCallablePayload(fn_root);
+    }
+
+    fn function(self: *const SealedSchemeVarWalk, fn_root: CheckedTypeId) ?CheckedFunctionType {
+        var root = fn_root;
+        while (true) switch (self.types.payload(root)) {
+            .alias => |alias| root = alias.backing,
+            .function => |found| return found,
+            .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .nominal, .empty_record, .tag_union, .empty_tag_union => return null,
+        };
+    }
+
+    /// Whether any argument of the function type `fn_root` holds a nominal
+    /// over a callable payload (`local_box_payload_capability`,
+    /// `imported_box_payload_capability`): a function value whose
+    /// interface the signature does not show.
+    fn argumentsHoldCallablePayload(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId) Allocator.Error!bool {
+        const signature = self.function(fn_root) orelse return true;
+        const allocator = self.allocator;
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.pending.appendSlice(allocator, signature.args);
+        while (self.pending.pop()) |ty| {
+            if ((try self.seen.getOrPut(allocator, ty)).found_existing) continue;
+            const payload = self.types.payload(ty);
+            switch (payload) {
+                .nominal => |nominal| switch (nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                },
+                .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+            }
+            try self.pushChildren(payload);
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs in the function type `fn_root` anywhere but
+    /// along its result's coercion reach: an argument, or a position under
+    /// the result that a row coercion does not reach (design.md "Row
+    /// Coercion Primitive": the root row, tag payload rows, the error
+    /// argument of a `Try`, and alias backings are reached; records, tuples,
+    /// lists, boxes, functions, and other named types' arguments are not).
+    fn occursOutsideResultReach(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
+        const signature = self.function(fn_root) orelse return true;
+        const allocator = self.allocator;
+        for (signature.args) |arg| {
+            if (try self.mentionsVariable(arg, variable)) return true;
+        }
+        // Reached positions under the result, in which only the variable's
+        // own occurrence as a row extension is on the reach.
+        self.reached.clearRetainingCapacity();
+        self.reached_seen.clearRetainingCapacity();
+        try self.reached.append(allocator, signature.ret);
+        while (self.reached.pop()) |ty| {
+            if (ty == variable) continue;
+            if ((try self.reached_seen.getOrPut(allocator, ty)).found_existing) continue;
+            switch (self.types.payload(ty)) {
+                .alias => |alias| try self.reached.append(allocator, alias.backing),
+                .tag_union => |tag_union| {
+                    for (0..tag_union.tags.len()) |tag_index| {
+                        const tag = tag_union.tags.get(tag_index);
+                        try self.reached.appendSlice(allocator, tag.args);
+                    }
+                    try self.reached.append(allocator, tag_union.ext);
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .builtin => |builtin_nominal| if (builtinRuntimeEncoding(builtin_nominal) == .try_nominal and nominal.args.len == 2) {
+                        if (try self.mentionsVariable(nominal.args[0], variable)) return true;
+                        try self.reached.append(allocator, nominal.args[1]);
+                    } else {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
+                    },
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {
+                        for (nominal.args) |arg| if (try self.mentionsVariable(arg, variable)) return true;
+                    },
+                },
+                .flex, .rigid, .pending, .field_kind, .err, .empty_record, .empty_tag_union => {},
+                .record, .tuple, .function => if (try self.mentionsVariable(ty, variable)) return true,
+            }
+        }
+        return false;
+    }
+
+    /// Whether `variable` occurs anywhere in `root`.
+    fn mentionsVariable(self: *SealedSchemeVarWalk, root: CheckedTypeId, variable: CheckedTypeId) Allocator.Error!bool {
+        self.pending.clearRetainingCapacity();
+        self.seen.clearRetainingCapacity();
+        try self.pending.append(self.allocator, root);
+        while (self.pending.pop()) |ty| {
+            if (ty == variable) return true;
+            if ((try self.seen.getOrPut(self.allocator, ty)).found_existing) continue;
+            try self.pushChildren(self.types.payload(ty));
+        }
+        return false;
+    }
+
+    /// Push every type `payload` names onto `pending`.
+    fn pushChildren(self: *SealedSchemeVarWalk, payload: CheckedTypePayload) Allocator.Error!void {
+        const allocator = self.allocator;
+        switch (payload) {
+            .alias => |alias| {
+                try self.pending.appendSlice(allocator, alias.args);
+                try self.pending.append(allocator, alias.backing);
+            },
+            .record => |record| {
+                for (0..record.fields.len()) |field_index| {
+                    const field = record.fields.get(field_index);
+                    try self.pending.append(allocator, field.ty);
+                }
+                try self.pending.append(allocator, record.ext);
+            },
+            .tuple => |items| try self.pending.appendSlice(allocator, items),
+            .tag_union => |tag_union| {
+                for (0..tag_union.tags.len()) |tag_index| {
+                    const tag = tag_union.tags.get(tag_index);
+                    try self.pending.appendSlice(allocator, tag.args);
+                }
+                try self.pending.append(allocator, tag_union.ext);
+            },
+            .function => |inner| {
+                try self.pending.appendSlice(allocator, inner.args);
+                try self.pending.append(allocator, inner.ret);
+            },
+            .nominal => |nominal| try self.pending.appendSlice(allocator, nominal.args),
+            .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
+        }
+    }
+} else void;
 
 /// Computes every local procedure template's demand vector: for each
 /// quantified variable of its scheme, the most its body asks of the type a
@@ -25443,7 +25835,7 @@ const TemplateDemandPass = struct {
         if (node.target.alias != null) return null;
         const procedure = switch (node.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => return null,
+            .local_proc, .structural, .callable_binding => return null,
         };
         switch (procedure.runtime_target) {
             .procedure, .low_level => {},
@@ -29796,6 +30188,8 @@ pub const CompileTimeRootReadTable = struct {
 
 /// Checked module publication, including typed stores and compile-time observations.
 pub const CheckedModuleArtifact = struct {
+    /// Presence recorded by the body producer; native unit selection never rescans.
+    has_expects: bool = false,
     key: CheckedModuleArtifactKey,
     /// Hash of the module's source inputs: the one `key` input not otherwise
     /// held by the artifact.
@@ -29974,10 +30368,7 @@ pub const CheckedModuleArtifact = struct {
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
             const root = request.compile_time_root orelse continue;
-            const payload = self.compile_time_roots.root(root).payload;
-            if (payload != .unevaluated and payload != .pending) continue;
-            if (strategy == .boxy and self.compile_time_roots.root(root).boxy_value != null) continue;
-            return true;
+            if (self.compile_time_roots.root(root).needsEvaluation(strategy)) return true;
         }
         return false;
     }
@@ -29985,10 +30376,10 @@ pub const CheckedModuleArtifact = struct {
     /// Reopen a finalized artifact so this compilation can evaluate the roots
     /// earlier compilations did not demand (design.md "Demand-Driven
     /// Compile-Time Evaluation"). The evaluation columns move into storage
-    /// this artifact owns, every unevaluated root awaits evaluation again,
+    /// this artifact owns, this strategy's unevaluated roots await evaluation,
     /// and the artifact awaits finalization. Roots this compilation does not
     /// demand either return to `unevaluated` when it seals the artifact.
-    pub fn reopenForEvaluation(self: *CheckedModuleArtifact) Allocator.Error!void {
+    pub fn reopenForEvaluation(self: *CheckedModuleArtifact, strategy: base.SpecializationStrategy) Allocator.Error!void {
         if (self.evaluation_state != .finalized) checkedArtifactInvariant("only a finalized artifact can be reopened for evaluation", .{});
         if (self.reopened_arena != null) checkedArtifactInvariant("checked artifact was reopened for evaluation twice", .{});
         // A relocated cache entry's columns alias its buffer and a pairing
@@ -30022,7 +30413,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
         for (self.compile_time_roots.roots) |*root| {
-            if (root.payload == .unevaluated) root.payload = .pending;
+            if (root.payload == .unevaluated and root.needsEvaluation(strategy)) root.payload = .pending;
         }
         self.evaluation_state = .prepared;
     }
@@ -30120,6 +30511,7 @@ pub const CheckedModuleArtifact = struct {
         key: CheckedModuleArtifactKey,
         source_hash: [32]u8,
         module_identity: ModuleIdentitySerialized,
+        has_expects: artifact_serialize.SerializedScalar(bool, false),
         direct_import_module_keys: SerializedSlice(CheckedModuleArtifactKey),
         canonical_names: canonical.CanonicalNameStore.Serialized,
         checking_context_identity: CheckingContextIdentity.Serialized,
@@ -30183,7 +30575,7 @@ pub const CheckedModuleArtifact = struct {
             // POD inline `key`/`source_hash`/`module_identity` contribute 0. Fixed at
             // compile time, independent of stored data size. Bodies are the module's
             // CIR, so no body column contributes a pointer.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 222);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 223);
         }
 
         /// Every field but the inline POD `key`, `source_hash`, and
@@ -30306,7 +30698,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 114;
+    const serialized_layout_version: u32 = 115;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -30426,7 +30818,9 @@ pub const CheckedModuleArtifact = struct {
             index -= 1;
             const name = fields[index];
             const Store = @FieldType(CheckedModuleArtifact, name);
-            if (comptime @typeInfo(Store) == .pointer) {
+            if (comptime Store == bool) {
+                // Inline publication facts own no allocation.
+            } else if (comptime @typeInfo(Store) == .pointer) {
                 allocator.free(@field(self, name));
             } else if (comptime @typeInfo(@TypeOf(Store.deinit)).@"fn".param_types.len == 1) {
                 @field(self, name).deinit();
@@ -31410,7 +31804,7 @@ pub const CheckedModuleArtifact = struct {
             const entry_target = entry.target orelse continue;
             const procedure = switch (entry_target.kind) {
                 .procedure => |procedure| procedure,
-                .local_proc, .structural => continue,
+                .local_proc, .structural, .callable_binding => continue,
             };
             // A method bound to another module's procedure
             // (`method = Other.function`) names that module's template, which
@@ -33352,7 +33746,7 @@ pub fn checkedModuleKeyFromModuleEnv(
 /// Inference admission is deliberately separate from artifact identity. The
 /// producer-owned checking scope supplies dependency facts and owner equality;
 /// the full imported implementation keys continue to key every publication.
-pub fn inferenceKeyFromModuleEnv(
+pub fn typingCacheKeyFromModuleEnv(
     module_env: *const ModuleEnv,
     scope_hash: [32]u8,
     platform_requirement_owner: ?u32,
@@ -33362,7 +33756,7 @@ pub fn inferenceKeyFromModuleEnv(
     missing_public_types: []const []const u8,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
-    hasher.update("roc-inference-inputs-v2");
+    hasher.update("roc-combined-typing-inputs-v1");
     hasher.update(&hashModuleSourceInputs(module_env));
     hasher.update(&scope_hash);
     hashByteSlice(&hasher, module_env.module_name);
@@ -33376,13 +33770,7 @@ pub fn inferenceKeyFromModuleEnv(
     hasher.update(&source_pin_validation);
     hashU32(&hasher, @intCast(explicit_roots.len));
     for (explicit_roots) |root| hashExplicitRootRequestInput(&hasher, root);
-    const imports = module_env.imports.imports.items.items;
-    hashU32(&hasher, @intCast(imports.len));
-    for (imports, 0..) |name, i| {
-        hashByteSlice(&hasher, module_env.getString(name));
-        const import_idx: CIR.Import.Idx = @fromBackingInt(@as(u32, @intCast(i)));
-        hashU32(&hasher, module_env.imports.getResolvedModule(import_idx) orelse std.math.maxInt(u32));
-    }
+    // Source inputs name imports; scope_hash names resolution and owner equality.
     hashU32(&hasher, @intCast(missing_public_types.len));
     for (missing_public_types) |name| hashByteSlice(&hasher, name);
     return hasher.finalResult();
@@ -33460,13 +33848,16 @@ fn publicationDefaultExprs(
     return defaults.toOwnedSlice(allocator);
 }
 
-/// Resolves a method bound by reference (`method = f`) for
+/// Resolves a method binding that is no procedure of its own for
 /// `MethodRegistry.fromModule`, from the resolved value references and
-/// procedure bindings publication already holds: the method's value is
-/// followed through exact procedure aliases, in this module and the modules
-/// they forward into, to the procedure it reaches. This is the chain Monotype
-/// and Boxy compose an alias-bound method's instantiation along (design.md
-/// "Procedure Aliases").
+/// procedure bindings publication already holds. A binding by reference
+/// (`method = f`) is followed through exact procedure aliases, in this module
+/// and the modules they forward into, to the procedure it reaches: the chain
+/// Monotype and Boxy compose an alias-bound method's instantiation along. A
+/// top-level binding whose value no procedure stands behind (`method =
+/// make()`, or a reference to such a binding) is its own callable-eval
+/// template, whose compile-time root evaluates the method's function value
+/// (design.md "Procedure Aliases").
 const MethodBindingTargets = struct {
     allocator: Allocator,
     module: TypedCIR.Module,
@@ -33474,6 +33865,7 @@ const MethodBindingTargets = struct {
     names: *const canonical.CanonicalNameStore,
     module_index: *const ModuleIndex,
     resolved_value_refs: *const ResolvedValueRefTable,
+    top_level_values: *const TopLevelValueTable,
     procedure_bindings: *const TopLevelProcedureBindingTable,
     callable_eval_templates: *const CallableEvalTemplateTable,
     templates: *const CheckedProcedureTemplateTable,
@@ -33491,6 +33883,7 @@ const MethodBindingTargets = struct {
 
     pub fn methodBindingTarget(
         self: *MethodBindingTargets,
+        binding: ModuleEnv.MethodBinding,
         binding_expr: CIR.Expr.Idx,
         method_owner: static_dispatch.MethodOwner,
     ) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
@@ -33503,7 +33896,7 @@ const MethodBindingTargets = struct {
             const ref_id = refs.lookupIdByExpr(expr) orelse {
                 // The binding's value is not a reference.
                 if (view != null) checkedArtifactInvariant("a forwarded procedure alias lookup had no resolved reference", .{});
-                return null;
+                return self.computedCallableTarget(binding);
             };
             const use: ProcedureUseTemplate = switch (refs.records[@backingInt(ref_id)].ref) {
                 .local_proc => |local| {
@@ -33544,19 +33937,51 @@ const MethodBindingTargets = struct {
                     };
                     return self.procedureTarget(body.view, direct.proc_value, template, use, method_owner);
                 },
-                // An alias of a computed callable is not a forward: the
-                // method's value is evaluated, not a procedure.
+                // A reference to a computed callable is not a forward: the
+                // method calls that binding's evaluated value.
                 .callable_eval_template => |template_id| {
                     const template = if (body.view) |imported|
                         imported.callable_eval_templates.templates[@backingInt(template_id)]
                     else
                         self.callable_eval_templates.get(template_id);
-                    expr = template.forwarded_lookup orelse return null;
+                    expr = template.forwarded_lookup orelse return .{ .target = .{
+                        .kind = .{ .callable_binding = .{
+                            .module = if (body.view) |imported| imported.key.digest() else self.artifact_key.digest(),
+                            .template = template_id,
+                        } },
+                        .callable = .{ .template_root = template.checked_fn_root },
+                    } };
                     view = body.view;
                 },
                 .checked_error => return .rejected,
             }
         }
+    }
+
+    /// The method's own callable-eval template, for a top-level binding whose
+    /// value is not a reference and whose callable no procedure stands behind.
+    /// Checking forwards a top-level binding only to a directly callable
+    /// procedure, so a binding reached here has no forward. A binding that is
+    /// not function-typed, or one in a function body, is an associated value,
+    /// not a method target (design.md "Methods Never Capture").
+    fn computedCallableTarget(self: *const MethodBindingTargets, binding: ModuleEnv.MethodBinding) ?static_dispatch.ReferencedMethodTarget {
+        if (self.module.nodeTag(binding.type_node_idx) != .def) return null;
+        const top_level = self.top_level_values.lookupByDef(binding.def_idx) orelse return null;
+        const procedure_binding = switch (top_level.value) {
+            .procedure_binding => |procedure_binding| procedure_binding,
+            .const_ref => return null,
+        };
+        const template_id = switch (self.procedure_bindings.get(procedure_binding).body) {
+            .callable_eval_template => |template_id| template_id,
+            .direct_template => checkedArtifactInvariant("a method binding with its own procedure template reached computed-callable resolution", .{}),
+            .checked_error => return .rejected,
+        };
+        const template = self.callable_eval_templates.get(template_id);
+        if (template.forwarded_lookup != null) checkedArtifactInvariant("a forwarding procedure alias reached computed-callable resolution", .{});
+        return .{ .target = .{
+            .kind = .{ .callable_binding = .{ .module = self.artifact_key.digest(), .template = template_id } },
+            .callable = .{ .template_root = template.checked_fn_root },
+        } };
     }
 
     /// The target of the procedure `template`, owned by `view` (null for this
@@ -33961,6 +34386,7 @@ pub fn publishFromTypedModule(
         .names = &canonical_names,
         .module_index = module_index,
         .resolved_value_refs = &resolved_value_refs,
+        .top_level_values = &top_level_values,
         .procedure_bindings = &top_level_procedure_bindings,
         .callable_eval_templates = &callable_eval_templates,
         .templates = &checked_procedure_templates,
@@ -34115,6 +34541,7 @@ pub fn publishFromTypedModule(
         defer demand_pass.deinit();
         try demand_pass.publish();
     }
+    try publishSealedSlots(allocator, checked_types.view(), &checked_procedure_templates);
     template_iterator_refs.deinit(allocator);
     plan_build_data.deinit(allocator);
 
@@ -34373,6 +34800,7 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
         .evaluation_state = .prepared,
+        .has_expects = analyses.index.has_expects,
         .body_analyses = analyses,
     };
     // The artifact owns the key slots from here on, and its views name its
@@ -35874,6 +36302,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     @memset(&key.bytes, 0xEE);
 
     const artifact = CheckedModuleArtifact{
+        .has_expects = true,
         .key = key,
         .source_hash = @as([32]u8, @splat(0x5c)),
         .canonical_names = canonical_names_src,
@@ -35922,6 +36351,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
     defer loaded.deinitRetainingModuleEnv(gpa);
 
     // POD inline fields survive byte-identically.
+    try std.testing.expect(loaded.has_expects);
     try std.testing.expectEqualSlices(u8, &key.bytes, &loaded.key.bytes);
     try std.testing.expectEqualSlices(u8, &artifact.source_hash, &loaded.source_hash);
     try std.testing.expectEqualSlices(u8, &identity.stable_hash, &loaded.module_identity.stable_hash);
@@ -36040,8 +36470,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xA0, 0xDF, 0x27, 0x98, 0xCA, 0x45, 0x9C, 0xF2, 0x9E, 0x6F, 0xF4, 0x2C, 0x63, 0x4F, 0x06, 0x59,
-        0xF2, 0x5D, 0x09, 0xA3, 0x92, 0x57, 0x4E, 0xEA, 0xBC, 0xEF, 0xFE, 0x2E, 0x97, 0x19, 0x93, 0xCE,
+        0x61, 0x55, 0x27, 0xC1, 0x3A, 0x4B, 0x3E, 0x8B, 0x2D, 0x14, 0x98, 0x64, 0x49, 0x71, 0x0A, 0x99,
+        0x6F, 0x1E, 0xF2, 0xCB, 0x90, 0xCE, 0x3B, 0x80, 0xBE, 0xD8, 0x04, 0xA8, 0xDE, 0x82, 0x0A, 0x73,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -36833,4 +37263,406 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "root eligibility shares complete recursive proofs without conflating template and value variables" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    const a: CheckedTypeId = type_ids.fromSynthesized(0);
+    const b: CheckedTypeId = type_ids.fromSynthesized(1);
+    const variable: CheckedTypeId = type_ids.fromSynthesized(2);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ b, variable }) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{a}) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .rigid = .{} }));
+    var context = NonConcreteRootScan{ .checked_types = &store };
+    var traversal = NonConcreteRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(!try traversal.visit(.{ .walk = .decl_template, .id = a }));
+    try std.testing.expect(!try traversal.visit(.{ .walk = .decl_template, .id = b }));
+    try std.testing.expect(try traversal.visit(.{ .walk = .value_graph, .id = a }));
+    try std.testing.expect(try traversal.visit(.{ .walk = .value_graph, .id = b }));
+    try std.testing.expectEqual(@as(usize, 6), traversal.nodes.items.len);
+}
+
+test "root eligibility callable proofs propagate through an entire recursive component" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    const a: CheckedTypeId = type_ids.fromSynthesized(0);
+    const b: CheckedTypeId = type_ids.fromSynthesized(1);
+    const callable: CheckedTypeId = type_ids.fromSynthesized(2);
+    const empty: CheckedTypeId = type_ids.fromSynthesized(3);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ b, callable }) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{a}) }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .function = .{ .kind = .pure, .ret = empty } }));
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    var context = CallableRootScan{ .checked_types = &store };
+    var traversal = CallableRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(try traversal.visit(a));
+    try std.testing.expect(try traversal.visit(b));
+    try std.testing.expect(!try traversal.visit(empty));
+    try std.testing.expectEqual(@as(usize, 4), traversal.nodes.items.len);
+}
+
+test "root eligibility shared type DAG is expanded once across all roots" {
+    const allocator = std.testing.allocator;
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try store.payloads.append(allocator, try store.commitPayload(allocator, .empty_record));
+    for (1..64) |index| {
+        const previous: CheckedTypeId = type_ids.fromSynthesized(@intCast(index - 1));
+        try store.payloads.append(allocator, try store.commitPayload(allocator, .{ .tuple = try allocator.dupe(CheckedTypeId, &.{ previous, previous }) }));
+    }
+    var context = NonConcreteRootScan{ .checked_types = &store };
+    var traversal = NonConcreteRootTraversal.init(allocator, &context);
+    defer traversal.deinit();
+    try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(63) }));
+    for (0..64) |index| try std.testing.expect(!try traversal.visit(.{ .walk = .value_graph, .id = type_ids.fromSynthesized(@intCast(index)) }));
+    try std.testing.expectEqual(@as(usize, 64), traversal.nodes.items.len);
+}
+
+const SealedSlotsFixture = struct {
+    store: CheckedTypeStore = .{},
+    names: canonical.CanonicalNameStore = canonical.CanonicalNameStore.init(std.testing.allocator),
+    const allocator = std.testing.allocator;
+
+    fn deinit(self: *SealedSlotsFixture) void {
+        self.store.deinit(allocator);
+        self.names.deinit();
+    }
+
+    fn origin(self: *SealedSlotsFixture) Allocator.Error!canonical.ModuleIdentityId {
+        const identity = testCheckedModuleKey(1).digest();
+        return self.names.internModuleIdentity(&identity.bytes);
+    }
+
+    /// Commit explicit synthetic graph rows, allowing forward edges in cycle
+    /// tests without asking structural interning to traverse unfinished rows.
+    fn add(self: *SealedSlotsFixture, payload: CheckedTypePayloadBuild) Allocator.Error!CheckedTypeId {
+        self.store.key_names = &self.names;
+        var owned = payload;
+        const stored = self.store.commitPayload(allocator, owned) catch |err| {
+            deinitCheckedTypePayloadBuild(allocator, &owned);
+            return err;
+        };
+        const id = type_ids.fromSynthesized(self.store.payloads.items.len);
+        try self.store.payloads.append(allocator, stored);
+        return id;
+    }
+
+    fn variable(self: *SealedSlotsFixture) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    }
+
+    fn function(self: *SealedSlotsFixture, args: []const CheckedTypeId, ret: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .function = .{ .kind = .pure, .args = try allocator.dupe(CheckedTypeId, args), .ret = ret } });
+    }
+
+    fn tuple(self: *SealedSlotsFixture, items: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        return self.add(.{ .tuple = try allocator.dupe(CheckedTypeId, items) });
+    }
+
+    fn record(self: *SealedSlotsFixture, value: CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internRecordFieldLabel("value");
+        const fields = try allocator.alloc(CheckedRecordField, 1);
+        fields[0] = .{ .name = name, .ty = value };
+        return self.add(.{ .record = .{ .fields = fields, .ext = ext } });
+    }
+
+    fn tag(self: *SealedSlotsFixture, args: []const CheckedTypeId, ext: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTagLabel("Tag");
+        const tags = try allocator.alloc(CheckedTag, 1);
+        const copied = allocator.dupe(CheckedTypeId, args) catch |err| {
+            allocator.free(tags);
+            return err;
+        };
+        tags[0] = .{ .name = name, .args = copied };
+        return self.add(.{ .tag_union = .{ .tags = tags, .ext = ext } });
+    }
+
+    fn alias(self: *SealedSlotsFixture, args: []const CheckedTypeId, backing: CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTypeName("Alias");
+        const origin_module = try self.origin();
+        return self.add(.{ .alias = .{
+            .name = name,
+            .origin_module = origin_module,
+            .owner_module = testCheckedModuleKey(1).digest(),
+            .backing = backing,
+            .args = try allocator.dupe(CheckedTypeId, args),
+        } });
+    }
+
+    fn nominal(self: *SealedSlotsFixture, representation: CheckedNominalRepresentationRef, args: []const CheckedTypeId) Allocator.Error!CheckedTypeId {
+        const name = try self.names.internTypeName("Nominal");
+        const origin_module = try self.origin();
+        return self.add(.{ .nominal = .{
+            .name = name,
+            .origin_module = origin_module,
+            .owner_module = testCheckedModuleKey(1).digest(),
+            .source_decl = 0,
+            .builtin = if (representation == .builtin) representation.builtin else null,
+            .is_opaque = false,
+            .representation = representation,
+            .args = try allocator.dupe(CheckedTypeId, args),
+        } });
+    }
+
+    fn evidence(self: *SealedSlotsFixture, callable: CheckedTypeId, dispatcher: CheckedTypeId) Allocator.Error!static_dispatch.EvidenceParamRecord {
+        return .{ .method = try self.names.internMethodName("apply"), .dispatcher_ty = dispatcher, .callable_ty = callable, .slot = null };
+    }
+
+    fn expectSlots(self: *SealedSlotsFixture, variables: []const CheckedTypeId, root: CheckedTypeId, evidence_params: []const static_dispatch.EvidenceParamRecord, expected: []const u32) (Allocator.Error || error{TestExpectedEqual})!void {
+        var scalar = SealedSchemeVarWalk.init(allocator, self.store.view());
+        defer scalar.deinit();
+        var scalar_slots: std.ArrayList(u32) = .empty;
+        defer scalar_slots.deinit(allocator);
+        for (variables, 0..) |variable_id, slot| {
+            if (try scalar.sealed(variable_id, root, evidence_params)) try scalar_slots.append(allocator, @intCast(slot));
+        }
+        try std.testing.expectEqualSlices(u32, expected, scalar_slots.items);
+        var batch = SealedSchemeSlots.init(allocator, self.store.view());
+        defer batch.deinit();
+        var actual: std.ArrayList(u32) = .empty;
+        defer actual.deinit(allocator);
+        // Publication appends to a shared pool. Preserve the previous row.
+        try actual.append(allocator, 99);
+        try batch.append(variables, root, evidence_params, &actual);
+        try std.testing.expectEqual(@as(u32, 99), actual.items[0]);
+        try std.testing.expectEqualSlices(u32, scalar_slots.items, actual.items[1..]);
+    }
+};
+
+test "sealed slot batching preserves bounded eligibility and duplicate slot order" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const a = try f.variable();
+    const b = try f.variable();
+    const rigid = try f.add(.{ .rigid = .{ .bounded_row_ext = true, .row_default = .empty_tag_union } });
+    const unbounded = try f.add(.{ .flex = .{ .row_default = .empty_tag_union } });
+    const record_row = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_record } });
+    const numeric = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .numeric_default_phase = .mono_specialization } });
+    const callable = try f.function(&.{unit}, unit);
+    const constraints = [_]CheckedStaticDispatchConstraint{.{ .fn_name = try f.names.internMethodName("apply"), .fn_ty = callable, .origin = .method_call }};
+    const constrained = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const discharged = try f.add(.{ .flex = .{ .bounded_row_ext = true, .row_default = .empty_tag_union, .row_default_discharges_constraints = true, .constraints = try SealedSlotsFixture.allocator.dupe(CheckedStaticDispatchConstraint, &constraints) } });
+    const variables = [_]CheckedTypeId{ b, a, b, rigid, unbounded, record_row, numeric, constrained, discharged };
+    try f.expectSlots(&variables, callable, &.{}, &.{ 0, 1, 2, 8 });
+    try f.expectSlots(&variables, try f.function(&.{a}, unit), &.{}, &.{ 0, 2, 8 });
+    try f.expectSlots(&variables, unit, &.{}, &.{});
+}
+
+test "sealed slot batching separates full and result reach for aliases Try and containers" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    const a = try f.variable();
+    const b = try f.variable();
+    const c = try f.variable();
+    const variables = [_]CheckedTypeId{ a, b, c };
+    const row = try f.tag(&.{b}, a);
+    try f.expectSlots(&variables, try f.function(&.{unit}, row), &.{}, &.{ 0, 1, 2 });
+    // Result aliases expose only backing. Full paths expose args AND backing.
+    const alias = try f.alias(&.{c}, row);
+    try f.expectSlots(&variables, try f.function(&.{unit}, alias), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&variables, try f.function(&.{alias}, alias), &.{}, &.{});
+    // A candidate need not occur positively in the result. Alias arguments
+    // are ignored there even when the backing never mentions the candidate.
+    const only_argument = try f.alias(&.{a}, unit);
+    try f.expectSlots(&variables, try f.function(&.{unit}, only_argument), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&variables, try f.function(&.{only_argument}, unit), &.{}, &.{ 1, 2 });
+    const alias_evidence = [_]static_dispatch.EvidenceParamRecord{try f.evidence(only_argument, unit)};
+    try f.expectSlots(&variables, try f.function(&.{unit}, unit), &alias_evidence, &.{ 1, 2 });
+    const try_result = try f.nominal(.{ .builtin = .try_ }, &.{ a, b });
+    try f.expectSlots(&variables, try f.function(&.{unit}, try_result), &.{}, &.{ 1, 2 });
+    const success_row = try f.tag(&.{}, a);
+    const error_row = try f.tag(&.{}, b);
+    try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, &.{ success_row, error_row })), &.{}, &.{ 1, 2 });
+    // The Try exception applies only at exactly two arguments.
+    for ([_][]const CheckedTypeId{ &.{a}, &.{ a, b, c } }, [_][]const u32{ &.{ 1, 2 }, &.{} }) |args, expected| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.nominal(.{ .builtin = .try_ }, args)), &.{}, expected);
+    }
+    const containers = [_]CheckedTypeId{
+        try f.record(a, unit),
+        try f.tuple(&.{a}),
+        try f.function(&.{a}, unit),
+        try f.nominal(.{ .builtin = .list }, &.{a}),
+        try f.nominal(.{ .builtin = .box }, &.{a}),
+        try f.nominal(.opaque_without_backing, &.{a}),
+    };
+    for (containers) |container| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, container), &.{}, &.{ 1, 2 });
+        // One row can be reached both directly and beneath a forbidden container.
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.tag(&.{ container, a }, empty)), &.{}, &.{ 1, 2 });
+    }
+    const record_of_row = try f.record(row, unit);
+    for ([_][]const CheckedTypeId{ &.{ row, record_of_row }, &.{ record_of_row, row } }) |paths| {
+        try f.expectSlots(&variables, try f.function(&.{unit}, try f.tag(paths, empty)), &.{}, &.{2});
+    }
+    const callback = try f.function(&.{a}, unit);
+    try f.expectSlots(&variables, try f.function(&.{callback}, row), &.{}, &.{ 1, 2 });
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(try f.function(&.{unit}, b), c)};
+    // Only callable_ty is searched; dispatcher_ty alone does not disqualify c.
+    try f.expectSlots(&variables, try f.function(&.{unit}, row), &evidence_params, &.{ 0, 2 });
+    const aliased_function = try f.alias(&.{a}, try f.function(&.{unit}, row));
+    try f.expectSlots(&variables, aliased_function, &.{}, &.{ 0, 1, 2 });
+}
+
+test "sealed slot batching restricts hidden callable veto to arguments" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const a = try f.variable();
+    const b = try f.variable();
+    // Both scalar and batch walks inspect only these representation tags;
+    // they never resolve a capability entry or read its id.
+    const representations = [_]CheckedNominalRepresentationRef{
+        .{ .local_box_payload_capability = .{ .capability = undefined } },
+        .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = undefined } },
+    };
+    for (representations) |representation| {
+        const hidden = try f.nominal(representation, &.{});
+        const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(hidden, unit)};
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, hidden), &evidence_params, &.{ 0, 1 });
+        // Ordinary/result visits must not suppress the argument-mode veto.
+        try f.expectSlots(&.{ a, b }, try f.function(&.{hidden}, hidden), &evidence_params, &.{});
+        const nested = try f.record(hidden, unit);
+        try f.expectSlots(&.{ a, b }, try f.function(&.{nested}, a), &.{}, &.{});
+        const mentions_a = try f.nominal(representation, &.{a});
+        try f.expectSlots(&.{ a, b }, try f.function(&.{unit}, mentions_a), &.{}, &.{1});
+        const vetoed = try f.function(&.{ a, hidden }, b);
+        const eligible = try f.function(&.{unit}, b);
+        var batch = SealedSchemeSlots.init(SealedSlotsFixture.allocator, f.store.view());
+        defer batch.deinit();
+        var slots: std.ArrayList(u32) = .empty;
+        defer slots.deinit(SealedSlotsFixture.allocator);
+        try batch.append(&.{ a, b }, vetoed, &.{}, &slots);
+        try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+        // A veto can leave pending argument work. The next template must not
+        // inherit that work, candidate decisions, or visited modes.
+        try batch.append(&.{ a, b }, eligible, &.{}, &slots);
+        try std.testing.expectEqualSlices(u32, &.{ 0, 1 }, slots.items);
+    }
+}
+
+test "sealed slot batching handles recursive graphs in both reach modes" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const a = try f.variable();
+    const b = try f.variable();
+    const c = try f.variable();
+    const left = type_ids.fromSynthesized(f.store.payloads.items.len);
+    const right = type_ids.fromSynthesized(f.store.payloads.items.len + 1);
+    try std.testing.expectEqual(left, try f.tag(&.{right}, a));
+    try std.testing.expectEqual(right, try f.tag(&.{left}, b));
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &.{}, &.{ 0, 1, 2 });
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{right}, left), &.{}, &.{2});
+    const evidence_params = [_]static_dispatch.EvidenceParamRecord{try f.evidence(right, c)};
+    try f.expectSlots(&.{ a, b, c }, try f.function(&.{}, left), &evidence_params, &.{2});
+}
+
+test "sealed slot batching visits shared type graphs independently of candidate count" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const allocator = SealedSlotsFixture.allocator;
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    var variables: [32]CheckedTypeId = undefined;
+    for (&variables) |*variable| variable.* = try f.variable();
+    var graph = unit;
+    for (0..64) |_| graph = try f.tuple(&.{ graph, graph });
+    const result = try f.tag(&variables, empty);
+    const root = try f.function(&.{ graph, graph }, result);
+    const blocked = try f.function(&variables, result);
+    var batch = SealedSchemeSlots.init(allocator, f.store.view());
+    defer batch.deinit();
+    var slots: std.ArrayList(u32) = .empty;
+    defer slots.deinit(allocator);
+    try batch.append(variables[0..1], root, &.{}, &slots);
+    try std.testing.expectEqualSlices(u32, &.{0}, slots.items);
+    const one_candidate_visits = batch.expanded;
+    slots.clearRetainingCapacity();
+    try batch.append(&variables, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 32), slots.items.len);
+    for (slots.items, 0..) |slot, index| try std.testing.expectEqual(@as(u32, @intCast(index)), slot);
+    try std.testing.expectEqual(one_candidate_visits, batch.expanded);
+    // 65 argument nodes and 34 result nodes, despite duplicate edges/roots.
+    try std.testing.expectEqual(@as(usize, 99), batch.expanded);
+    try f.expectSlots(&variables, root, &.{}, slots.items);
+    slots.clearRetainingCapacity();
+    try batch.append(&variables, blocked, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+    try batch.append(&variables, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 32), slots.items.len);
+    slots.clearRetainingCapacity();
+    try batch.append(&.{unit}, root, &.{}, &slots);
+    try std.testing.expectEqual(@as(usize, 0), batch.expanded);
+    try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+}
+
+test "sealed slot batching stops at disqualifying arguments before unrelated results" {
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const allocator = SealedSlotsFixture.allocator;
+    const unit = try f.add(.empty_record);
+    const variable = try f.variable();
+    const callback = try f.function(&.{variable}, unit);
+    for ([_]usize{ 16, 128, 1024 }) |depth| {
+        var result = unit;
+        for (0..depth) |_| result = try f.tuple(&.{ result, result });
+        const root = try f.function(&.{callback}, result);
+        var batch = SealedSchemeSlots.init(allocator, f.store.view());
+        defer batch.deinit();
+        var slots: std.ArrayList(u32) = .empty;
+        defer slots.deinit(allocator);
+        // Two output slots still name just one distinct candidate. The one
+        // callback occurrence disqualifies both before result traversal starts.
+        try batch.append(&.{ variable, variable }, root, &.{}, &slots);
+        try std.testing.expectEqual(@as(usize, 0), slots.items.len);
+        try std.testing.expectEqual(@as(usize, 3), batch.expanded);
+        try f.expectSlots(&.{ variable, variable }, root, &.{}, &.{});
+    }
+}
+
+test "sealed slot batching releases scratch and partial output under allocation failure" {
+    // Build the immutable graph before introducing allocation failures. The
+    // sweep tests only the batch and its output pool, not fixture construction.
+    var f = SealedSlotsFixture{};
+    defer f.deinit();
+    const unit = try f.add(.empty_record);
+    const empty = try f.add(.empty_tag_union);
+    var variables: [24]CheckedTypeId = undefined;
+    for (&variables) |*variable| variable.* = try f.variable();
+    var graph = unit;
+    for (0..64) |_| graph = try f.tuple(&.{ graph, graph });
+    const result = try f.tag(&variables, empty);
+    const root = try f.function(&.{graph}, result);
+    const blocked = try f.function(&variables, result);
+    // Argument-mode veto reads the representation tag, never its capability id.
+    const hidden = try f.nominal(.{ .local_box_payload_capability = .{ .capability = undefined } }, &.{});
+    const vetoed = try f.function(&.{ variables[0], hidden }, result);
+    const Attempt = struct {
+        fn run(failing: Allocator, view: CheckedTypeStoreView, vars: []const CheckedTypeId, eligible_root: CheckedTypeId, blocked_root: CheckedTypeId, vetoed_root: CheckedTypeId) (Allocator.Error || error{TestExpectedEqual})!void {
+            var batch = SealedSchemeSlots.init(failing, view);
+            defer batch.deinit();
+            var slots: std.ArrayList(u32) = .empty;
+            defer slots.deinit(failing);
+            try slots.append(failing, 99);
+            try batch.append(vars, blocked_root, &.{}, &slots);
+            try batch.append(vars, vetoed_root, &.{}, &slots);
+            try std.testing.expectEqualSlices(u32, &.{99}, slots.items);
+            // Output growth can fail after several slot indices were appended.
+            try batch.append(vars, eligible_root, &.{}, &slots);
+            try std.testing.expectEqual(vars.len + 1, slots.items.len);
+            try std.testing.expectEqual(@as(u32, 99), slots.items[0]);
+            for (slots.items[1..], 0..) |slot, index| try std.testing.expectEqual(@as(u32, @intCast(index)), slot);
+        }
+    };
+    // As in the publication OOM regression, disallow allocator-dependent
+    // in-place growth so the sweep has deterministic allocation points.
+    var no_resize = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ f.store.view(), variables[0..], root, blocked, vetoed });
 }

@@ -1,5 +1,5 @@
-//! Hand-built `.boxy` LIR programs: dynamic locals, descriptor composition,
-//! dynamic values, dictionaries, and list operations that take an element
+//! Hand-built `.boxy` LIR programs: dynamic locals, type table reads,
+//! dynamic values, dictionaries, and list operations that take an item
 //! descriptor (design.md "`.boxy` Runtime Lowering"). Each runs on the
 //! interpreter, on the LLVM backend, and, where this host has a native code
 //! generator, on the dev backend, all in this process; every backend must
@@ -69,7 +69,10 @@ var name_ok = testName("Ok");
 /// An immortal object a static-data slot addresses.
 const StaticObject = union(enum) {
     desc: *const TypeDesc,
-    name: *const Name,
+    /// The names block of the type `desc` describes (`boxy.Names`).
+    names: struct { names: *const boxy.Names, desc: *const TypeDesc },
+    /// A type table whose words address these descriptors.
+    table: []const *const TypeDesc,
 };
 
 /// Builds procedures statement by statement, last statement first.
@@ -79,10 +82,16 @@ const Builder = struct {
     /// The static data values: pointers to immortal objects.
     statics: std.ArrayList(usize) = .empty,
     cells: std.ArrayList(*usize) = .empty,
+    /// The words of each native type table, and the descriptors each
+    /// table's words address.
+    tables: std.ArrayList([]usize) = .empty,
+    table_descs: std.ArrayList([]*const TypeDesc) = .empty,
     /// The object each static slot addresses, which the wasm program
     /// serializes at its own pointer width.
     objects: std.ArrayList(StaticObject) = .empty,
     proc_locals: std.ArrayList(LocalId) = .empty,
+    /// The program's descriptors, laid out at its pointer width.
+    descs: boxy.test_descs.Builder,
     dynamic: layout_mod.Idx,
     next_identity: u32 = 1,
     next_join_point: u32 = 0,
@@ -94,7 +103,11 @@ const Builder = struct {
         const dynamic = try layouts.insertLayout(layout_mod.Layout.dynamic());
         var store = LirStore.init(allocator);
         store.runtime_contract = .boxy;
-        return .{ .store = store, .layouts = layouts, .dynamic = dynamic };
+        const width: boxy.desc.PointerWidth = switch (target_usize) {
+            .u32 => .u32,
+            .u64 => .u64,
+        };
+        return .{ .store = store, .layouts = layouts, .dynamic = dynamic, .descs = .init(allocator, width) };
     }
 
     fn deinit(self: *Builder) void {
@@ -102,7 +115,12 @@ const Builder = struct {
         self.statics.deinit(allocator);
         for (self.cells.items) |cell| allocator.destroy(cell);
         self.cells.deinit(allocator);
+        for (self.tables.items) |words| allocator.free(words);
+        self.tables.deinit(allocator);
+        for (self.table_descs.items) |descs| allocator.free(descs);
+        self.table_descs.deinit(allocator);
         self.objects.deinit(allocator);
+        self.descs.deinit();
         self.layouts.deinit();
         self.store.deinit();
     }
@@ -173,14 +191,30 @@ const Builder = struct {
         return self.literal(target, .{ .str_literal = try self.store.insertStringView(text, 0, @intCast(text.len)) }, next);
     }
 
-    /// `target` = the address of an immortal object (a static descriptor or
-    /// name), read as static data.
-    fn static(self: *Builder, target: LocalId, object: StaticObject, next: CFStmtId) TestError!CFStmtId {
+    /// `target` = the address of an immortal object (a static descriptor,
+    /// names block, or table), read as static data.
+    fn static(self: *Builder, target: LocalId, given: StaticObject, next: CFStmtId) TestError!CFStmtId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.statics.items.len));
+        // A table's descriptors outlive the caller's slice of them.
+        const object: StaticObject = switch (given) {
+            .desc, .names => given,
+            .table => |descs| blk: {
+                const owned = try allocator.dupe(*const TypeDesc, descs);
+                errdefer allocator.free(owned);
+                try self.table_descs.append(allocator, owned);
+                break :blk .{ .table = owned };
+            },
+        };
         const cell = try allocator.create(usize);
         cell.* = switch (object) {
             .desc => |desc| @intFromPtr(desc),
-            .name => |name| @intFromPtr(name),
+            .names => |block| @intFromPtr(block.names),
+            .table => |descs| blk: {
+                const words = try allocator.alloc(usize, descs.len);
+                try self.tables.append(allocator, words);
+                for (words, descs) |*word, desc| word.* = @intFromPtr(desc);
+                break :blk @intFromPtr(words.ptr);
+            },
         };
         try self.cells.append(allocator, cell);
         try self.statics.append(allocator, @intFromPtr(cell));
@@ -190,41 +224,210 @@ const Builder = struct {
 
     /// The static data of the wasm program: each slot's word addresses its
     /// object, serialized in the descriptor format at the wasm32 pointer
-    /// width (`roc__d{slot}_1`), and a name's text follows (`roc__d{slot}_2`).
+    /// width: a descriptor and everything it reaches, a names block and its
+    /// names, or a table's words and their descriptors, each object once
+    /// (`WasmObjects`).
     fn wasmStaticData(self: *Builder) TestError![]StaticDataExport {
-        var exports: std.ArrayList(StaticDataExport) = .empty;
-        errdefer {
-            for (exports.items) |item| freeExport(item);
-            exports.deinit(allocator);
-        }
+        var objects: WasmObjects = .{};
+        errdefer objects.deinit();
+        defer objects.symbols.deinit(allocator);
         for (self.objects.items, 0..) |object, slot| {
             const id: LIR.StaticDataId = @fromBackingInt(@intCast(slot));
             const slot_name = try lir.Program.staticDataSymbolName(allocator, id);
             errdefer allocator.free(slot_name);
-            const object_name = try std.fmt.allocPrint(allocator, "roc__d{d}_1", .{slot});
-            errdefer allocator.free(object_name);
-            try exports.append(allocator, try wordExport(slot_name, object_name));
-            switch (object) {
-                .desc => |desc| try exports.append(allocator, try descExport(object_name, desc)),
-                .name => |name| {
-                    const text_name = try std.fmt.allocPrint(allocator, "roc__d{d}_2", .{slot});
-                    errdefer allocator.free(text_name);
-                    try exports.append(allocator, try nameExport(object_name, text_name, name));
-                    try exports.append(allocator, .{
-                        .symbol_name = text_name,
-                        .bytes = try allocator.dupe(u8, name.text()),
-                        .alignment = 1,
-                        .is_exported = false,
-                        .relocations = try allocator.alloc(StaticDataRelocation, 0),
-                    });
+            const target = switch (object) {
+                .desc => |desc| try objects.desc(desc),
+                .names => |block| try objects.names(block.names, block.desc),
+                .table => |descs| blk: {
+                    const bytes = try allocator.alloc(u8, descs.len * wasm_word_size);
+                    errdefer allocator.free(bytes);
+                    @memset(bytes, 0);
+                    const relocations = try allocator.alloc(StaticDataRelocation, descs.len);
+                    errdefer allocator.free(relocations);
+                    for (descs, relocations, 0..) |desc, *relocation, index| {
+                        relocation.* = .{ .offset = LIR.tableEntryOffset(@intCast(index), wasm_word_size), .target_symbol_name = try objects.desc(desc) };
+                    }
+                    break :blk try objects.add(bytes, wasm_word_size, relocations);
                 },
-            }
+            };
+            try objects.exports.append(allocator, try wordExport(slot_name, target));
         }
-        return exports.toOwnedSlice(allocator);
+        return objects.exports.toOwnedSlice(allocator);
     }
 
+    /// Objects serialized at the wasm32 width, each under one symbol
+    /// (`roc__w{index}`), by the address of the native object it encodes.
+    const WasmObjects = struct {
+        exports: std.ArrayList(StaticDataExport) = .empty,
+        symbols: std.AutoHashMapUnmanaged(usize, []const u8) = .empty,
+
+        /// Free the exports; the symbol map is freed apart from them.
+        fn deinit(self: *WasmObjects) void {
+            for (self.exports.items) |item| freeExport(item);
+            self.exports.deinit(allocator);
+        }
+
+        /// Export `bytes` under a fresh symbol, which the caller's
+        /// relocations may name before the export they target.
+        fn add(self: *WasmObjects, bytes: []u8, alignment: u32, relocations: []StaticDataRelocation) TestError![]const u8 {
+            const symbol = try std.fmt.allocPrint(allocator, "roc__w{d}", .{self.exports.items.len});
+            try self.exports.append(allocator, .{
+                .symbol_name = symbol,
+                .bytes = bytes,
+                .alignment = alignment,
+                .is_exported = false,
+                .relocations = relocations,
+            });
+            return symbol;
+        }
+
+        /// The symbol of `name` and its text.
+        fn name(self: *WasmObjects, value: *const Name) TestError![]const u8 {
+            if (self.symbols.get(@intFromPtr(value))) |known| return known;
+            const text = try self.add(try allocator.dupe(u8, value.text()), 1, try allocator.alloc(StaticDataRelocation, 0));
+            const name_layout = boxy.desc.externLayout(Name, .u32);
+            const bytes = try allocator.alloc(u8, name_layout.size);
+            @memset(bytes, 0);
+            @memcpy(bytes[name_layout.of(.id)..][0..32], &boxy.desc.nameIdDigest(value.id));
+            std.mem.writeInt(u32, bytes[name_layout.of(.len)..][0..4], value.len, .little);
+            const relocations = try allocator.alloc(StaticDataRelocation, 1);
+            relocations[0] = .{ .offset = name_layout.of(.bytes), .target_symbol_name = text };
+            const symbol = try self.add(bytes, name_layout.alignment, relocations);
+            try self.symbols.put(allocator, @intFromPtr(value), symbol);
+            return symbol;
+        }
+
+        /// The symbol of the names block `value` of the type `of` describes,
+        /// and of everything it reaches, walked alongside `of`.
+        fn names(self: *WasmObjects, value: *const boxy.Names, of: *const TypeDesc) TestError![]const u8 {
+            if (self.symbols.get(@intFromPtr(value))) |known| return known;
+            const names_layout = boxy.Names.layout(.u32);
+            const bytes = try allocator.alloc(u8, names_layout.size);
+            @memset(bytes, 0);
+            const relocations = try allocator.alloc(StaticDataRelocation, 2);
+            const symbol = try self.add(bytes, names_layout.alignment, relocations);
+            // Reserved first: a recursive type's names block reaches itself.
+            try self.symbols.put(allocator, @intFromPtr(value), symbol);
+            var count: usize = 0;
+            if (value.child) |child| {
+                relocations[count] = .{ .offset = names_layout.of(.child), .target_symbol_name = try self.names(child, of.child.?) };
+                count += 1;
+            }
+            if (value.entries != null) {
+                const entry_layout = boxy.desc.NamesEntry.layout(.u32);
+                const entry_bytes = try allocator.alloc(u8, of.count * entry_layout.size);
+                @memset(entry_bytes, 0);
+                var entry_relocations: std.ArrayList(StaticDataRelocation) = .empty;
+                for (0..of.count) |index| {
+                    const entry = value.entry(index);
+                    const component = if (of.kind == .tag_union) of.variants()[index].payload else of.fields()[index].desc;
+                    const at: u32 = @intCast(index * entry_layout.size);
+                    if (entry.label) |label| try entry_relocations.append(allocator, .{ .offset = at + entry_layout.of(.label), .target_symbol_name = try self.name(label) });
+                    if (entry.names) |child| try entry_relocations.append(allocator, .{ .offset = at + entry_layout.of(.names), .target_symbol_name = try self.names(child, component) });
+                }
+                relocations[count] = .{ .offset = names_layout.of(.entries), .target_symbol_name = try self.add(entry_bytes, entry_layout.alignment, try entry_relocations.toOwnedSlice(allocator)) };
+                count += 1;
+            }
+            const at = for (self.exports.items, 0..) |item, index| {
+                if (item.symbol_name.ptr == symbol.ptr) break index;
+            } else unreachable; // `add` exported the symbol above
+            self.exports.items[at].relocations = try allocator.realloc(relocations, count);
+            return symbol;
+        }
+
+        /// The symbol of `value` and of everything it reaches. A `Str` or
+        /// function leaf is the native one, whose size is the wasm32 width's
+        /// there; every other descriptor is laid out at the wasm32 width
+        /// already (`test_descs.Builder`).
+        fn desc(self: *WasmObjects, value: *const TypeDesc) TestError![]const u8 {
+            if (self.symbols.get(@intFromPtr(value))) |known| return known;
+            std.debug.assert(value.methods == null);
+            const desc_layout = TypeDesc.layout(.u32);
+            const bytes = try allocator.alloc(u8, desc_layout.size);
+            @memset(bytes, 0);
+            const relocations = try allocator.alloc(StaticDataRelocation, 3);
+            const symbol = try self.add(bytes, desc_layout.alignment, relocations);
+            // Reserved first: a recursive type's descriptor reaches itself.
+            try self.symbols.put(allocator, @intFromPtr(value), symbol);
+            const size: u32, const alignment: u32 = switch (value.kind) {
+                .str => .{ RocStr.word_count * wasm_word_size, wasm_word_size },
+                .erased_callable => .{ wasm_word_size, wasm_word_size },
+                .zst, .scalar, .bool, .list, .box, .record, .tuple, .tag_union, .nominal, .recursive_box => .{ value.size, value.alignment },
+            };
+            std.mem.writeInt(u32, bytes[desc_layout.of(.size)..][0..4], size, .little);
+            std.mem.writeInt(u32, bytes[desc_layout.of(.alignment)..][0..4], alignment, .little);
+            bytes[desc_layout.of(.kind)] = @backingInt(value.kind);
+            bytes[desc_layout.of(.scalar)] = @backingInt(value.scalar);
+            bytes[desc_layout.of(.sort_key)] = value.sort_key;
+            bytes[desc_layout.of(.flags)] = @bitCast(value.flags);
+            std.mem.writeInt(u32, bytes[desc_layout.of(.count)..][0..4], value.count, .little);
+            std.mem.writeInt(u32, bytes[desc_layout.of(.discriminant_offset)..][0..4], value.discriminant_offset, .little);
+            std.mem.writeInt(u32, bytes[desc_layout.of(.discriminant_size)..][0..4], value.discriminant_size, .little);
+            var count: usize = 0;
+            if (value.child) |child| {
+                relocations[count] = .{ .offset = desc_layout.of(.child), .target_symbol_name = try self.desc(child) };
+                count += 1;
+            }
+            const entries: ?[]const u8 = switch (value.kind) {
+                .record, .tuple => if (value.count == 0) null else try self.fields(value),
+                .tag_union => if (value.count == 0) null else try self.variants(value),
+                .zst, .scalar, .str, .bool, .list, .box, .erased_callable, .nominal, .recursive_box => null,
+            };
+            if (entries) |target| {
+                relocations[count] = .{ .offset = desc_layout.of(.entries), .target_symbol_name = target };
+                count += 1;
+            }
+            // The export's relocations are the ones written.
+            const at = for (self.exports.items, 0..) |item, index| {
+                if (item.symbol_name.ptr == symbol.ptr) break index;
+            } else unreachable; // `add` exported the symbol above
+            self.exports.items[at].relocations = try allocator.realloc(relocations, count);
+            return symbol;
+        }
+
+        /// The symbol of a record's or tuple's field table and the trailer
+        /// of its reference-holding slots.
+        fn fields(self: *WasmObjects, value: *const TypeDesc) TestError![]const u8 {
+            const field_layout = boxy.Field.layout(.u32);
+            const slots = value.refcountedFieldSlots();
+            const trailer_words: usize = if (value.flags.contains_refcounted) slots.len + 1 else 0;
+            const table_size = value.count * field_layout.size;
+            const bytes = try allocator.alloc(u8, table_size + trailer_words * 4);
+            @memset(bytes, 0);
+            var relocations: std.ArrayList(StaticDataRelocation) = .empty;
+            for (value.fields(), 0..) |field, index| {
+                const at: u32 = @intCast(index * field_layout.size);
+                std.mem.writeInt(u32, bytes[at + field_layout.of(.field_index) ..][0..4], field.field_index, .little);
+                std.mem.writeInt(u32, bytes[at + field_layout.of(.offset) ..][0..4], field.offset, .little);
+                std.mem.writeInt(u32, bytes[at + field_layout.of(.is_padding) ..][0..4], field.is_padding, .little);
+                std.mem.writeInt(u32, bytes[at + field_layout.of(.field_slot) ..][0..4], field.field_slot, .little);
+                try relocations.append(allocator, .{ .offset = at + field_layout.of(.desc), .target_symbol_name = try self.desc(field.desc) });
+            }
+            if (trailer_words != 0) {
+                std.mem.writeInt(u32, bytes[table_size..][0..4], @intCast(slots.len), .little);
+                for (slots, 0..) |slot, index| std.mem.writeInt(u32, bytes[table_size + 4 * (index + 1) ..][0..4], slot, .little);
+            }
+            return try self.add(bytes, field_layout.alignment, try relocations.toOwnedSlice(allocator));
+        }
+
+        /// The symbol of a tag union's variant table.
+        fn variants(self: *WasmObjects, value: *const TypeDesc) TestError![]const u8 {
+            const variant_layout = boxy.Variant.layout(.u32);
+            const bytes = try allocator.alloc(u8, value.count * variant_layout.size);
+            @memset(bytes, 0);
+            var relocations: std.ArrayList(StaticDataRelocation) = .empty;
+            for (value.variants(), 0..) |variant, index| {
+                const at: u32 = @intCast(index * variant_layout.size);
+                std.mem.writeInt(u32, bytes[at + variant_layout.of(.discriminant) ..][0..4], variant.discriminant, .little);
+                std.mem.writeInt(u32, bytes[at + variant_layout.of(.payload_count) ..][0..4], variant.payload_count, .little);
+                try relocations.append(allocator, .{ .offset = at + variant_layout.of(.payload), .target_symbol_name = try self.desc(variant.payload) });
+            }
+            return try self.add(bytes, variant_layout.alignment, try relocations.toOwnedSlice(allocator));
+        }
+    };
+
     /// A pointer-sized word holding the address of `target`.
-    fn wordExport(symbol_name: []u8, target: []const u8) TestError!StaticDataExport {
+    fn wordExport(symbol_name: []const u8, target: []const u8) TestError!StaticDataExport {
         const relocations = try allocator.alloc(StaticDataRelocation, 1);
         errdefer allocator.free(relocations);
         relocations[0] = .{ .offset = 0, .target_symbol_name = target };
@@ -234,50 +437,6 @@ const Builder = struct {
             .symbol_name = symbol_name,
             .bytes = bytes,
             .alignment = wasm_word_size,
-            .is_exported = false,
-            .relocations = relocations,
-        };
-    }
-
-    /// A leaf descriptor (one without children) at the wasm32 width: a
-    /// `Str` is three words there, every other leaf keeps its native size.
-    fn descExport(symbol_name: []u8, desc: *const TypeDesc) TestError!StaticDataExport {
-        std.debug.assert(desc.child == null and desc.entries == null and desc.name == null and desc.methods == null);
-        const desc_layout = TypeDesc.layout(.u32);
-        const bytes = try allocator.alloc(u8, desc_layout.size);
-        errdefer allocator.free(bytes);
-        @memset(bytes, 0);
-        const size: u32 = if (desc.kind == .str) RocStr.word_count * wasm_word_size else desc.size;
-        const alignment: u32 = if (desc.kind == .str) wasm_word_size else desc.alignment;
-        std.mem.writeInt(u32, bytes[desc_layout.of(.size)..][0..4], size, .little);
-        std.mem.writeInt(u32, bytes[desc_layout.of(.alignment)..][0..4], alignment, .little);
-        bytes[desc_layout.of(.kind)] = @backingInt(desc.kind);
-        bytes[desc_layout.of(.scalar)] = @backingInt(desc.scalar);
-        bytes[desc_layout.of(.sort_key)] = desc.sort_key;
-        bytes[desc_layout.of(.flags)] = @bitCast(desc.flags);
-        return .{
-            .symbol_name = symbol_name,
-            .bytes = bytes,
-            .alignment = desc_layout.alignment,
-            .is_exported = false,
-            .relocations = try allocator.alloc(StaticDataRelocation, 0),
-        };
-    }
-
-    fn nameExport(symbol_name: []u8, text_symbol: []const u8, name: *const Name) TestError!StaticDataExport {
-        const name_layout = boxy.desc.externLayout(Name, .u32);
-        const bytes = try allocator.alloc(u8, name_layout.size);
-        errdefer allocator.free(bytes);
-        @memset(bytes, 0);
-        @memcpy(bytes[name_layout.of(.id)..][0..32], &boxy.desc.nameIdDigest(name.id));
-        std.mem.writeInt(u32, bytes[name_layout.of(.len)..][0..4], name.len, .little);
-        const relocations = try allocator.alloc(StaticDataRelocation, 1);
-        errdefer allocator.free(relocations);
-        relocations[0] = .{ .offset = name_layout.of(.bytes), .target_symbol_name = text_symbol };
-        return .{
-            .symbol_name = symbol_name,
-            .bytes = bytes,
-            .alignment = name_layout.alignment,
             .is_exported = false,
             .relocations = relocations,
         };
@@ -332,6 +491,21 @@ const Builder = struct {
         return self.store.addCFStmt(.{ .decref = .{
             .value = value,
             .rc = .{ .concrete = .{ .op = .decref, .layout_idx = self.store.getLocal(value).layout_idx } },
+            .next = next,
+        } }, .test_fixture);
+    }
+
+    /// `target` = an erased callable of `worker` whose capture is the word
+    /// `capture`.
+    fn packClosure(self: *Builder, target: LocalId, worker: LirProcSpecId, capture: LocalId, next: CFStmtId) TestError!CFStmtId {
+        return self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+            .target = target,
+            .data = try self.store.addStmtRow(LIR.PackedErasedFnData, .{
+                .proc = worker,
+                .capture = capture,
+                .capture_layout = .opaque_ptr,
+                .on_drop = .none,
+            }),
             .next = next,
         } }, .test_fixture);
     }
@@ -519,7 +693,7 @@ const IdentityProgram = struct {
         const int_desc = try b.local(.opaque_ptr);
         const int_arg = try b.local(.i64);
         const int_out = try b.local(.i64);
-        const int_body = try b.static(int_desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.int(int_arg, -42, try b.call(int_out, id, &.{ int_arg, int_desc }, try b.ret(int_out))));
+        const int_body = try b.static(int_desc, .{ .desc = boxy.desc.scalarDesc(.i64) }, try b.int(int_arg, -42, try b.call(int_out, id, &.{ int_arg, int_desc }, try b.ret(int_out))));
         const int_proc = try b.proc(&.{}, int_body, .i64, .{});
 
         const str_desc = try b.local(.opaque_ptr);
@@ -527,7 +701,7 @@ const IdentityProgram = struct {
         const right = try b.local(.str);
         const joined = try b.local(.str);
         const str_out = try b.local(.str);
-        const str_body = try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "joined at runtime", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.call(str_out, id, &.{ joined, str_desc }, try b.ret(str_out))))));
+        const str_body = try b.static(str_desc, .{ .desc = b.descs.str() }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "joined at runtime", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.call(str_out, id, &.{ joined, str_desc }, try b.ret(str_out))))));
         const str_proc = try b.proc(&.{}, str_body, .str, .{});
         return .{ .int_proc = int_proc, .str_proc = str_proc };
     }
@@ -559,34 +733,85 @@ test "boxy wasm: a generic identity over I64 and Str" {
     try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, joined at runtime");
 }
 
-/// Composes `{ a : I64, b : Str }` and builds one in a dynamic frame local.
+/// `id : a -> a` reading its descriptor from word 1 of its type table, the
+/// one hidden argument it takes; word 0 describes another type, so a read
+/// of the wrong word returns the wrong bytes.
+const TableIdentityProgram = struct {
+    int_proc: LirProcSpecId,
+    str_proc: LirProcSpecId,
+
+    fn build(b: *Builder) TestError!TableIdentityProgram {
+        const table = try b.local(.opaque_ptr);
+        const desc = try b.local(.opaque_ptr);
+        const x = try b.dynLocal(desc, .param);
+        const result = try b.dynLocal(desc, .result);
+        const id = try b.proc(&.{ x, table }, try b.dyn(desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.ret(x)), b.dynamic, .{ .dyn_result = result });
+
+        const int_table = try b.local(.opaque_ptr);
+        const int_arg = try b.local(.i64);
+        const int_out = try b.local(.i64);
+        const int_body = try b.static(int_table, .{ .table = &.{ b.descs.str(), boxy.desc.scalarDesc(.i64) } }, try b.int(int_arg, -42, try b.call(int_out, id, &.{ int_arg, int_table }, try b.ret(int_out))));
+        const int_proc = try b.proc(&.{}, int_body, .i64, .{});
+
+        const str_table = try b.local(.opaque_ptr);
+        const left = try b.local(.str);
+        const right = try b.local(.str);
+        const str_arg = try b.local(.str);
+        const str_out = try b.local(.str);
+        const str_body = try b.static(str_table, .{ .table = &.{ boxy.desc.scalarDesc(.i64), b.descs.str() } }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "read through a table", try b.lowLevel(str_arg, .str_concat, &.{ left, right }, false, try b.call(str_out, id, &.{ str_arg, str_table }, try b.ret(str_out))))));
+        const str_proc = try b.proc(&.{}, str_body, .str, .{});
+        return .{ .int_proc = int_proc, .str_proc = str_proc };
+    }
+};
+
+test "boxy interpreter: a generic identity reads its descriptor from its type table" {
+    var b = try Builder.init(.native);
+    defer b.deinit();
+    const program = try TableIdentityProgram.build(&b);
+
+    var run: Run = undefined;
+    try run.init(&b);
+    defer run.deinit();
+
+    const int_result = try run.eval(program.int_proc, .i64);
+    try std.testing.expectEqual(@as(i64, -42), int_result.value.read(i64));
+
+    const str_result = try run.eval(program.str_proc, .str);
+    try std.testing.expectEqualStrings("a string long enough to live on the heap, read through a table", readStr(str_result.value));
+    run.interpreter.dropValue(str_result.value, .str);
+    try run.env.checkForLeaks();
+}
+
+test "boxy wasm: a generic identity reads its descriptor from its type table" {
+    var b = try Builder.init(.u32);
+    defer b.deinit();
+    const program = try TableIdentityProgram.build(&b);
+    try expectWasmInt(&b, program.int_proc, .i64, -42);
+    try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, read through a table");
+}
+
+/// Builds `{ a : I64, b : Str }` in a dynamic frame local.
 const RecordFixture = struct {
     record_desc: LocalId,
+    record_names: LocalId,
     record: LocalId,
 
-    /// Statements composing the descriptor and building the record, then
+    /// Statements reading the descriptor and building the record, then
     /// `next`.
     fn build(b: *Builder, next_after: fn (*Builder, RecordFixture) TestError!CFStmtId) TestError!CFStmtId {
-        const int_desc = try b.local(.opaque_ptr);
-        const str_desc = try b.local(.opaque_ptr);
-        const a = try b.local(.opaque_ptr);
-        const n_b = try b.local(.opaque_ptr);
         const record_desc = try b.local(.opaque_ptr);
+        const record_names = try b.local(.opaque_ptr);
         const record = try b.dynLocal(record_desc, .frame);
         const x = try b.local(.i64);
         const s = try b.local(.str);
-        const fixture: RecordFixture = .{ .record_desc = record_desc, .record = record };
+        const fixture: RecordFixture = .{ .record_desc = record_desc, .record_names = record_names, .record = record };
         const rest = try next_after(b, fixture);
-        return b.static(int_desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.static(a, .{ .name = &name_a }, try b.static(n_b, .{ .name = &name_b }, try b.dyn(record_desc, .{
-            .desc_record = .{
-                // Names in any order; the runtime orders by name.
-                .names = try b.span(&.{ n_b, a }),
-                .descs = try b.span(&.{ str_desc, int_desc }),
-            },
-        }, try b.dyn(null, .frame_alloc, try b.int(x, 7, try b.str(s, "hi", try b.dyn(record, .{ .record = .{
+        // Fields in any order; the descriptor orders them by name.
+        const desc = b.descs.record(&.{ .{ .name = &name_b, .desc = b.descs.str() }, .{ .name = &name_a, .desc = boxy.desc.scalarDesc(.i64) } });
+        return b.static(record_desc, .{ .desc = desc }, try b.static(record_names, .{ .names = .{ .names = b.descs.names(desc).?, .desc = desc } }, try b.dyn(null, .frame_alloc, try b.int(x, 7, try b.str(s, "hi", try b.dyn(record, .{ .record = .{
             .desc = record_desc,
             .fields = try b.span(&.{ x, s }),
-        } }, rest)))))))));
+        } }, rest))))));
     }
 };
 
@@ -597,9 +822,11 @@ const RecordReadProgram = struct {
     fn build(b: *Builder) TestError!RecordReadProgram {
         const ReadInt = struct {
             fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
-                const a = try builder.local(.opaque_ptr);
+                // `a` ranks first; its position arrives in a local, as a
+                // type table word does.
+                const a = try builder.local(.u32);
                 const out = try builder.local(.i64);
-                return builder.static(a, .{ .name = &name_a }, try builder.dyn(out, .{ .field_addr_named = .{ .base = f.record, .desc = f.record_desc, .name = a } }, try builder.ret(out)));
+                return builder.int(a, 0, try builder.dyn(out, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = .{ .local = a } } }, try builder.ret(out)));
             }
         };
         const int_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadInt.next), .i64, .{});
@@ -609,7 +836,7 @@ const RecordReadProgram = struct {
                 const field_desc = try builder.local(.opaque_ptr);
                 const view = try builder.dynLocal(field_desc, .view);
                 const out = try builder.local(.str);
-                return builder.static(field_desc, .{ .desc = boxy.compose.strDesc() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = 1 } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
+                return builder.static(field_desc, .{ .desc = builder.descs.str() }, try builder.dyn(view, .{ .field_addr = .{ .base = f.record, .desc = f.record_desc, .field_index = .{ .immediate = 1 } } }, try builder.dyn(out, .{ .copy = .{ .src = view, .desc = field_desc } }, try builder.ret(out))));
             }
         };
         const str_proc = try b.proc(&.{}, try RecordFixture.build(b, ReadStr.next), .str, .{});
@@ -664,7 +891,7 @@ const RecordValueProgram = struct {
         const Inspect = struct {
             fn next(builder: *Builder, f: RecordFixture) TestError!CFStmtId {
                 const out = try builder.local(.str);
-                return builder.dyn(out, .{ .inspect = .{ .value = f.record, .desc = f.record_desc } }, try builder.ret(out));
+                return builder.dyn(out, .{ .inspect = .{ .value = f.record, .desc = f.record_desc, .names = f.record_names } }, try builder.ret(out));
             }
         };
         const inspect_proc = try b.proc(&.{}, try RecordFixture.build(b, Inspect.next), .str, .{});
@@ -704,16 +931,14 @@ test "boxy wasm: eq, hash, and inspect of a dynamic record" {
     try expectWasmStr(&b, program.inspect_proc, "{ a: 7, b: \"hi\" }");
 }
 
-/// Procedures reading a tag union's discriminant, a tag's discriminant
-/// under its descriptor, and a payload, in that order.
-fn buildTagUnionProgram(b: *Builder) TestError![3]LirProcSpecId {
-    const Proc = enum { discriminant, discriminant_of, payload };
-    var procs: [3]LirProcSpecId = undefined;
-    inline for (.{ Proc.discriminant, Proc.discriminant_of, Proc.payload }, 0..) |which, index| {
-        const int_desc = try b.local(.opaque_ptr);
-        const str_desc = try b.local(.opaque_ptr);
-        const err = try b.local(.opaque_ptr);
-        const ok = try b.local(.opaque_ptr);
+/// Procedures reading a tag union's discriminant and a payload, in that
+/// order, of a value built by its discriminant, which arrives in a local as
+/// a type table word does.
+fn buildTagUnionProgram(b: *Builder) TestError![2]LirProcSpecId {
+    const Proc = enum { discriminant, payload };
+    var procs: [2]LirProcSpecId = undefined;
+    inline for (.{ Proc.discriminant, Proc.payload }, 0..) |which, index| {
+        const ok = try b.local(.u32);
         const union_desc = try b.local(.opaque_ptr);
         const value = try b.dynLocal(union_desc, .frame);
         const x = try b.local(.i64);
@@ -722,20 +947,14 @@ fn buildTagUnionProgram(b: *Builder) TestError![3]LirProcSpecId {
                 const out = try b.local(.u32);
                 break :blk try b.dyn(out, .{ .tag_discriminant = .{ .base = value, .desc = union_desc } }, try b.ret(out));
             },
-            .discriminant_of => blk: {
-                const out = try b.local(.u32);
-                break :blk try b.dyn(out, .{ .tag_discriminant_of = .{ .desc = union_desc, .name = ok } }, try b.ret(out));
-            },
             .payload => blk: {
                 const out = try b.local(.i64);
                 break :blk try b.dyn(out, .{ .tag_payload_addr = .{ .base = value, .desc = union_desc, .payload_index = 0 } }, try b.ret(out));
             },
         };
-        const body = try b.static(int_desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.static(err, .{ .name = &name_err }, try b.static(ok, .{ .name = &name_ok }, try b.dyn(union_desc, .{ .desc_tag_union = .{
-            .names = try b.span(&.{ ok, err }),
-            .payload_counts = try b.store.addU32Span(&.{ 1, 1 }),
-            .payloads = try b.span(&.{ int_desc, str_desc }),
-        } }, try b.dyn(null, .frame_alloc, try b.int(x, 1234, try b.dyn(value, .{ .tag = .{ .desc = union_desc, .name = ok, .payloads = try b.span(&.{x}) } }, tail))))))));
+        const desc = b.descs.tagUnion(&.{ .{ .name = &name_ok, .payloads = &.{boxy.desc.scalarDesc(.i64)} }, .{ .name = &name_err, .payloads = &.{b.descs.str()} } });
+        // Tags are ordered by name: Err = 0, Ok = 1.
+        const body = try b.int(ok, 1, try b.static(union_desc, .{ .desc = desc }, try b.dyn(null, .frame_alloc, try b.int(x, 1234, try b.dyn(value, .{ .tag = .{ .desc = union_desc, .discriminant = .{ .local = ok }, .payloads = try b.span(&.{x}) } }, tail)))));
         procs[index] = try b.proc(&.{}, body, if (which == .payload) .i64 else .u32, .{});
     }
     return procs;
@@ -749,10 +968,8 @@ test "boxy interpreter: a tag union's discriminant and payload" {
     var run: Run = undefined;
     try run.init(&b);
     defer run.deinit();
-    // Tags are ordered by name: Err = 0, Ok = 1.
     try std.testing.expectEqual(@as(u32, 1), (try run.eval(procs[0], .u32)).value.read(u32));
-    try std.testing.expectEqual(@as(u32, 1), (try run.eval(procs[1], .u32)).value.read(u32));
-    try std.testing.expectEqual(@as(i64, 1234), (try run.eval(procs[2], .i64)).value.read(i64));
+    try std.testing.expectEqual(@as(i64, 1234), (try run.eval(procs[1], .i64)).value.read(i64));
     try run.env.checkForLeaks();
 }
 
@@ -761,8 +978,7 @@ test "boxy wasm: a tag union's discriminant and payload" {
     defer b.deinit();
     const procs = try buildTagUnionProgram(&b);
     try expectWasmInt(&b, procs[0], .u32, 1);
-    try expectWasmInt(&b, procs[1], .u32, 1);
-    try expectWasmInt(&b, procs[2], .i64, 1234);
+    try expectWasmInt(&b, procs[1], .i64, 1234);
 }
 
 /// acc = 5; i = 3; loop { if i == 0 then return acc else i -= 1; acc = acc }
@@ -788,7 +1004,7 @@ fn buildJoinProgram(b: *Builder) TestError!LirProcSpecId {
     const params = try b.span(&.{ acc, i });
     const enter = try b.setLocal(acc, start, .initialize_join_param, try b.setLocal(i, i_init, .initialize_join_param, jump));
     const join = try b.store.addCFStmt(.{ .join = .{ .id = join_id, .params = params, .body = loop_body, .remainder = enter } }, .test_fixture);
-    const body = try b.static(desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.dyn(null, .frame_alloc, try b.int(start, 5, try b.int(i_init, 3, join))));
+    const body = try b.static(desc, .{ .desc = boxy.desc.scalarDesc(.i64) }, try b.dyn(null, .frame_alloc, try b.int(start, 5, try b.int(i_init, 3, join))));
     return b.proc(&.{}, body, .i64, .{ .join_points = &.{.{ .id = join_id, .params = params, .body = loop_body }} });
 }
 
@@ -834,7 +1050,7 @@ fn buildListProgram(b: *Builder) TestError![2]LirProcSpecId {
                 break :blk try b.int(index_local, 1, try b.lowLevel(elem, .list_get_unsafe, &.{ list, index_local, elem_desc }, true, try b.dyn(out, .{ .copy = .{ .src = elem, .desc = elem_desc } }, try b.decref(list, try b.ret(out)))));
             },
         };
-        const body = try b.static(elem_desc, .{ .desc = boxy.compose.strDesc() }, try b.dyn(list_desc, .{ .desc_list = .{ .elem = elem_desc } }, try b.dyn(null, .frame_alloc, try b.str(s1, "first", try b.str(s2, "second", try b.setLocal(x, s1, .replace_existing, try b.setLocal(y, s2, .replace_existing, try b.dyn(list, .{ .list = .{ .elem_desc = elem_desc, .elems = try b.span(&.{ x, y }) } }, tail))))))));
+        const body = try b.static(elem_desc, .{ .desc = b.descs.str() }, try b.static(list_desc, .{ .desc = b.descs.list(b.descs.str()) }, try b.dyn(null, .frame_alloc, try b.str(s1, "first", try b.str(s2, "second", try b.setLocal(x, s1, .replace_existing, try b.setLocal(y, s2, .replace_existing, try b.dyn(list, .{ .list = .{ .elem_desc = elem_desc, .elems = try b.span(&.{ x, y }) } }, tail))))))));
         procs[index] = try b.proc(&.{}, body, if (which == .len) .u64 else .str, .{});
     }
     return procs;
@@ -861,32 +1077,33 @@ test "boxy wasm: list operations through an element descriptor" {
     try expectWasmStr(&b, procs[1], "second");
 }
 
-/// A caller of `\(x) -> x`, a worker over a type variable whose descriptor
-/// is its one capture, through a composed dictionary record.
+/// A caller of `\(x) -> x`, a worker over a type variable whose type table
+/// is its one capture: the table's words describe the variable and the
+/// worker's argument record.
 fn buildDictionaryProgram(b: *Builder) TestError!LirProcSpecId {
     const capture = try b.local(.opaque_ptr);
+    const table = try b.local(.opaque_ptr);
     const elem_desc = try b.local(.opaque_ptr);
     const args_desc = try b.local(.opaque_ptr);
     const args = try b.dynLocal(args_desc, .param);
     const x = try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const worker_body = try b.lowLevel(elem_desc, .erased_capture_load, &.{capture}, false, try b.dyn(args_desc, .{ .desc_args = .{ .elems = try b.span(&.{elem_desc}) } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x))));
+    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)))));
     const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
 
     const record_layout = try b.layouts.putTuple(&.{b.layouts.getLayout(.i64)});
-    const int_desc = try b.local(.opaque_ptr);
-    const dict = try b.local(.opaque_ptr);
-    const dict_again = try b.local(.opaque_ptr);
-    const methods = try b.local(.opaque_ptr);
+    const int_table = try b.local(.opaque_ptr);
     const closure = try b.local(try b.layouts.insertErasedCallable());
     const value = try b.local(.i64);
     const record = try b.local(record_layout);
     const out = try b.local(.i64);
-    const body = try b.static(int_desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.dyn(dict, .{ .dict_compose = .{ .worker = worker, .captures = try b.span(&.{int_desc}) } }, try b.dyn(dict_again, .{ .dict_compose = .{ .worker = worker, .captures = try b.span(&.{int_desc}) } }, try b.dyn(methods, .{ .dict_record = .{ .methods = try b.span(&.{ dict, dict_again }) } }, try b.dyn(closure, .{ .dict_method = .{ .dict = methods, .index = 1 } }, try b.int(value, 31337, try b.store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try b.span(&.{value}), .next = try b.dyn(out, .{ .call_erased = .{ .closure = closure, .args = record } }, try b.ret(out)) } }, .test_fixture)))))));
+    const int_desc = boxy.desc.scalarDesc(.i64);
+    const call = try b.dyn(out, .{ .call_erased = .{ .closure = closure, .args = record } }, try b.decref(closure, try b.ret(out)));
+    const body = try b.static(int_table, .{ .table = &.{ int_desc, b.descs.args(&.{int_desc}) } }, try b.packClosure(closure, worker, int_table, try b.int(value, 31337, try b.store.addCFStmt(.{ .assign_struct = .{ .target = record, .fields = try b.span(&.{value}), .next = call } }, .test_fixture))));
     return b.proc(&.{}, body, .i64, .{});
 }
 
-test "boxy interpreter: a composed dictionary called through the erased record ABI" {
+test "boxy interpreter: a closure over a type table called through the erased record ABI" {
     var b = try Builder.init(.native);
     defer b.deinit();
     const caller = try buildDictionaryProgram(&b);
@@ -899,7 +1116,7 @@ test "boxy interpreter: a composed dictionary called through the erased record A
     try run.env.checkForLeaks();
 }
 
-test "boxy wasm: a composed dictionary called through the erased record ABI" {
+test "boxy wasm: a closure over a type table called through the erased record ABI" {
     var b = try Builder.init(.u32);
     defer b.deinit();
     try expectWasmInt(&b, try buildDictionaryProgram(&b), .i64, 31337);
@@ -933,13 +1150,13 @@ const TailProgram = struct {
         const right = try b.local(.str);
         const joined = try b.local(.str);
         const str_out = try b.local(.str);
-        const str_body = try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "moved by a tail call", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.call(str_out, hop, &.{ joined, str_desc }, try b.ret(str_out))))));
+        const str_body = try b.static(str_desc, .{ .desc = b.descs.str() }, try b.str(left, "a string long enough to live on the heap, ", try b.str(right, "moved by a tail call", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.call(str_out, hop, &.{ joined, str_desc }, try b.ret(str_out))))));
         const str_proc = try b.proc(&.{}, str_body, .str, .{});
 
         const int_desc = try b.local(.opaque_ptr);
         const int_arg = try b.local(.i64);
         const int_out = try b.local(.i64);
-        const int_body = try b.static(int_desc, .{ .desc = boxy.compose.scalarDesc(.i64) }, try b.int(int_arg, 77, try b.call(int_out, hop, &.{ int_arg, int_desc }, try b.ret(int_out))));
+        const int_body = try b.static(int_desc, .{ .desc = boxy.desc.scalarDesc(.i64) }, try b.int(int_arg, 77, try b.call(int_out, hop, &.{ int_arg, int_desc }, try b.ret(int_out))));
         const int_proc = try b.proc(&.{}, int_body, .i64, .{});
         return .{ .int_proc = int_proc, .str_proc = str_proc };
     }
@@ -968,68 +1185,6 @@ test "boxy wasm: a frame-replacing call moves a dynamic argument out of the repl
     try expectWasmStr(&b, program.str_proc, "a string long enough to live on the heap, moved by a tail call");
 }
 
-test "boxy composition site hits bypass the interner and operand changes replace the entry" {
-    if (comptime !backend.host_lir_codegen_available) return error.SkipZigTest;
-    var b = try Builder.init(.native);
-    defer b.deinit();
-    const elem = try b.local(.opaque_ptr);
-    const result = try b.local(.opaque_ptr);
-    var site: boxy.compose.CompositionSite = .{};
-    const site_id: LIR.StaticDataId = @fromBackingInt(@intCast(b.statics.items.len));
-    try b.statics.append(allocator, @intFromPtr(&site));
-    const compose_stmt = try b.store.addCFStmt(.{ .dyn = .{
-        .target = result,
-        .data = try b.store.addStmtRow(DynOp, .{ .desc_list = .{ .elem = elem } }),
-        .composition_cache = site_id,
-        .next = try b.ret(result),
-    } }, .test_fixture);
-    const body = try b.static(elem, .{ .desc = boxy.compose.scalarDesc(.i64) }, compose_stmt);
-    const root = try b.proc(&.{}, body, .opaque_ptr, .{});
-    const state = try boxy.compiled.InProcessState.create(allocator);
-    defer state.destroy();
-    const entered = state.enter();
-    defer boxy.compiled.InProcessState.leave(entered);
-    var run: Run = undefined;
-    try run.init(&b);
-    defer run.deinit();
-
-    const cold = try run.runDev(root, .opaque_ptr);
-    defer allocator.free(cold);
-    const first = std.mem.readInt(usize, cold[0..@sizeOf(usize)], .little);
-    try std.testing.expectEqual(first, site.load().?.result);
-    // A runtime probe could no longer find the original descriptor. A hit
-    // must still return exactly that descriptor, without growing the table.
-    const table = state.descriptors.table.swap(null, .acq_rel);
-    const before = state.descriptors.len;
-    const hot = try run.runDev(root, .opaque_ptr);
-    defer allocator.free(hot);
-    try std.testing.expectEqual(first, std.mem.readInt(usize, hot[0..@sizeOf(usize)], .little));
-    try std.testing.expectEqual(before, state.descriptors.len);
-    state.descriptors.table.store(table, .release);
-
-    b.cells.items[0].* = @intFromPtr(boxy.compose.strDesc());
-    const changed = try run.runDev(root, .opaque_ptr);
-    defer allocator.free(changed);
-    const second = std.mem.readInt(usize, changed[0..@sizeOf(usize)], .little);
-    try std.testing.expect(first != second);
-    try std.testing.expectEqual(boxy.compose.strDesc(), @as(*const TypeDesc, @ptrFromInt(second)).child.?);
-    b.cells.items[0].* = @intFromPtr(boxy.compose.scalarDesc(.i64));
-    const again = try run.runDev(root, .opaque_ptr);
-    defer allocator.free(again);
-    try std.testing.expectEqual(first, std.mem.readInt(usize, again[0..@sizeOf(usize)], .little));
-
-    // The interpreter owns a separate slot even when it runs this same LIR.
-    const interpreted = (try run.interpreter.eval(.{ .proc_id = root, .ret_layout = .opaque_ptr })).value.read(usize);
-    const interpreter_cache = boxy.compiled.descriptorCache();
-    const interpreted_table = interpreter_cache.table.swap(null, .acq_rel);
-    const interpreted_count = interpreter_cache.len;
-    const interpreted_hot = (try run.interpreter.eval(.{ .proc_id = root, .ret_layout = .opaque_ptr })).value.read(usize);
-    try std.testing.expectEqual(interpreted, interpreted_hot);
-    try std.testing.expectEqual(interpreted_count, interpreter_cache.len);
-    interpreter_cache.table.store(interpreted_table, .release);
-    try run.env.checkForLeaks();
-}
-
 /// Return a one-field generic record either directly in the caller's result
 /// storage or from a distinct frame local. Its heap string is moved out again
 /// by the caller, so every backend must preserve exactly one owned reference.
@@ -1047,17 +1202,13 @@ fn buildReturnedRecordProgram(b: *Builder, in_result: bool) TestError!struct { w
 
     const str_desc = try b.local(.opaque_ptr);
     const desc = try b.local(.opaque_ptr);
-    const field_name = try b.local(.opaque_ptr);
     const record = try b.dynLocal(desc, .frame);
     const field = try b.dynLocal(str_desc, .view);
     const left = try b.local(.str);
     const right = try b.local(.str);
     const joined = try b.local(.str);
     const out = try b.local(.str);
-    const body = try b.static(str_desc, .{ .desc = boxy.compose.strDesc() }, try b.static(field_name, .{ .name = &name_a }, try b.dyn(desc, .{ .desc_record = .{
-        .names = try b.span(&.{field_name}),
-        .descs = try b.span(&.{str_desc}),
-    } }, try b.dyn(null, .frame_alloc, try b.str(left, "a returned record containing a heap string, ", try b.str(right, "still owned after returning", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, try b.call(record, worker, &.{ joined, str_desc, desc }, try b.dyn(field, .{ .field_addr = .{ .base = record, .desc = desc, .field_index = 0 } }, try b.dyn(out, .{ .copy = .{ .src = field, .desc = str_desc } }, try b.ret(out))))))))))));
+    const body = try b.static(str_desc, .{ .desc = b.descs.str() }, try b.static(desc, .{ .desc = b.descs.record(&.{.{ .name = &name_a, .desc = b.descs.str() }}) }, try b.dyn(null, .frame_alloc, try b.str(left, "a returned record containing a heap string, ", try b.str(right, "still owned after returning", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, try b.call(record, worker, &.{ joined, str_desc, desc }, try b.dyn(field, .{ .field_addr = .{ .base = record, .desc = desc, .field_index = .{ .immediate = 0 } } }, try b.dyn(out, .{ .copy = .{ .src = field, .desc = str_desc } }, try b.ret(out)))))))))));
     return .{ .worker = worker, .root = try b.proc(&.{}, body, .str, .{}) };
 }
 
@@ -1100,16 +1251,18 @@ test "boxy wasm dynamic returns preserve a heap string in either result storage"
 /// the deferred runtime's copy out of the caller's frame.
 fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: bool, direct_entry: bool) TestError!LirProcSpecId {
     const capture = try b.local(.opaque_ptr);
+    const table = try b.local(.opaque_ptr);
     const elem_desc = try b.local(.opaque_ptr);
     const args_desc = try b.local(.opaque_ptr);
     const args = try b.dynLocal(if (direct_entry) elem_desc else args_desc, .param);
     const x = if (direct_entry) args else try b.dynLocal(elem_desc, .view);
     const result = try b.dynLocal(elem_desc, .result);
-    const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .desc_args = .{ .elems = try b.span(&.{elem_desc}) } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = 0 } }, try b.ret(x)));
-    const worker_body = try b.lowLevel(elem_desc, .erased_capture_load, &.{capture}, false, use_arg);
+    const use_arg = if (direct_entry) try b.ret(x) else try b.dyn(args_desc, .{ .table_entry = .{ .table = table, .index = 1 } }, try b.dyn(x, .{ .field_addr = .{ .base = args, .desc = args_desc, .field_index = .{ .immediate = 0 } } }, try b.ret(x)));
+    const worker_body = try b.lowLevel(table, .erased_capture_load, &.{capture}, false, try b.dyn(elem_desc, .{ .table_entry = .{ .table = table, .index = 0 } }, use_arg));
     const worker = try b.proc(&.{ args, capture }, worker_body, b.dynamic, .{ .dyn_result = result, .abi = .erased_record, .erased_capture_arg = capture });
 
     const desc = try b.local(.opaque_ptr);
+    const desc_table = try b.local(.opaque_ptr);
     const closure = try b.local(try b.layouts.insertErasedCallable());
     const left = try b.local(.str);
     const right = try b.local(.str);
@@ -1117,7 +1270,8 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     const arg = if (dynamic) try b.dynLocal(desc, .frame) else joined;
     const out = try b.local(.str);
     const final = if (reuse) try b.local(.str) else out;
-    var next = try b.ret(final);
+    // A deferred call owns one reference to the closure until it is driven.
+    var next = if (deferred) try b.ret(final) else try b.decref(closure, try b.ret(final));
     if (reuse) next = try b.lowLevel(final, .str_concat, &.{ out, joined }, false, try b.decref(joined, next));
     next = try b.dyn(out, .{ .call_erased = .{
         .closure = closure,
@@ -1134,8 +1288,9 @@ fn buildUnaryArgumentProgram(b: *Builder, dynamic: bool, reuse: bool, deferred: 
     if (dynamic) next = try b.dyn(arg, .{ .copy = .{ .src = joined, .desc = desc } }, next);
     next = try b.str(left, "a heap string passed ", try b.str(right, "without a temporary argument record", try b.lowLevel(joined, .str_concat, &.{ left, right }, false, try b.decref(right, next))));
     next = try b.dyn(null, .frame_alloc, next);
-    next = try b.dyn(closure, .{ .dict_compose = .{ .worker = worker, .captures = try b.span(&.{desc}) } }, next);
-    next = try b.static(desc, .{ .desc = boxy.compose.strDesc() }, next);
+    next = try b.packClosure(closure, worker, desc_table, next);
+    next = try b.static(desc_table, .{ .table = &.{ b.descs.str(), b.descs.args(&.{b.descs.str()}) } }, next);
+    next = try b.static(desc, .{ .desc = b.descs.str() }, next);
     return b.proc(&.{}, next, .str, .{ .uses_pending_cell = deferred });
 }
 

@@ -139,6 +139,9 @@ pub const Digests = struct {
             hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
             hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
             hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
+            // An importer fills the worker's tables from its needs.
+            hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
+            hasher.update(record.table_needs);
         }
         self.hashImportedExports(&hasher, artifact);
         try self.exports.put(self.gpa, artifact.key.bytes, hasher.finalResult());
@@ -238,6 +241,7 @@ pub const Digests = struct {
             hashTag(hasher, @tagName(std.meta.activeTag(target.kind)));
             switch (target.kind) {
                 .procedure => |procedure| self.hashTemplateRef(hasher, artifact, procedure.template),
+                .callable_binding => |binding| hashBytes(hasher, std.mem.asBytes(&@backingInt(binding.template))),
                 .local_proc, .structural => {},
             }
         }
@@ -259,7 +263,7 @@ pub const Digests = struct {
         };
     }
 
-    /// The name of `ref`'s worker, and the hidden parameters a call to it
+    /// The name of `ref`'s worker, and the hidden inputs a call to it
     /// passes when `artifact` declares it. An imported template's are part of
     /// its own module's interface.
     fn hashTemplateRef(self: *const Digests, hasher: *Sha256, artifact: *const Artifact, ref: canonical.ProcedureTemplateRef) void {
@@ -312,15 +316,12 @@ pub const Digests = struct {
 
     fn hashRootValue(self: *Digests, hasher: *Sha256, artifact: *const Artifact, root: CheckedArtifact.CompileTimeRoot) Allocator.Error!void {
         const context: ValueContext = .{ .digests = self, .artifact = artifact };
-        hashTag(hasher, @tagName(std.meta.activeTag(root.payload)));
-        switch (root.payload) {
+        const payload = root.payloadFor(.boxy);
+        hashTag(hasher, @tagName(std.meta.activeTag(payload)));
+        switch (payload) {
             .const_node => |node| try artifact.const_store.hashGraph(node, hasher, context),
             .fn_value => |id| hasher.update(&context.fnValueDigest(id)),
             .pending, .unevaluated, .discarded, .expect, .runtime => {},
-        }
-        if (root.boxy_value) |stored| {
-            hashTag(hasher, "boxy_value");
-            try artifact.const_store.hashGraph(stored.node, hasher, context);
         }
     }
 };

@@ -41,8 +41,12 @@ pub const Var = enum {
     dev_excerpt_roundtrip,
     /// Append one record to the named file per in-process LLVM object compile.
     test_llvm_object_compile_count_file,
+    /// Run the independent ARC certifier in a diagnostics-enabled compiler.
+    verify_arc,
     /// Print deterministic work counters for one test command.
     test_command_work,
+    /// Aggregate test allocations by their first sixteen native stack frames.
+    profile_allocations,
     /// Write the bytes of a dev run's first run image, as published and
     /// before the shim loads it, to the named file.
     dump_run_image,
@@ -53,6 +57,12 @@ pub const Var = enum {
     /// Write every wasm unit image a wasm build restores or builds into the
     /// named directory, one file per unit named by its unit key.
     dump_wasm_unit_images,
+    /// Append `<start> <size> <name>` for every function of each unit image
+    /// the compiler loads into its own process (`roc test`'s and compile-time
+    /// evaluation's) to `/tmp/perf-<pid>.map`, so `perf` names them: by the
+    /// readable name a lowering of the process recorded (`notePerfName`),
+    /// otherwise by symbol.
+    perf_map,
 
     /// The variable's name in the environment.
     pub fn envName(comptime self: Var) [:0]const u8 {
@@ -68,16 +78,31 @@ pub const Var = enum {
             .ctfe_demand_trace => "ROC_CTFE_DEMAND_TRACE",
             .dev_excerpt_roundtrip => "ROC_DEV_EXCERPT_ROUNDTRIP",
             .test_llvm_object_compile_count_file => "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE",
+            .verify_arc => "ROC_VERIFY_ARC",
             .test_command_work => "ROC_TEST_COMMAND_WORK",
+            .profile_allocations => "ROC_PROFILE_ALLOCATIONS",
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
+            .perf_map => "ROC_PERF_MAP",
         };
     }
 };
 
 /// Stage-owned counters used to prove complete-command reuse skips producers.
 pub const TestWork = enum {
+    ctfe_function_unit_hits,
+    ctfe_function_unit_builds,
+    ctfe_function_metadata_bytes,
+    boxy_body_index_available_modules,
+    boxy_body_index_prepared_modules,
+    boxy_body_index_rows,
+    checked_root_eligibility_queries,
+    checked_root_concreteness_nodes,
+    checked_root_callable_nodes,
+    checked_type_digest_requests,
+    checked_type_digest_walks,
+    checked_type_digest_nodes,
     specialization,
     ctfe_execution,
     second_specialization,
@@ -131,6 +156,57 @@ fn Cached(comptime variable: Var) type {
             return value.load(.monotonic);
         }
     };
+}
+
+/// The readable name of each procedure a lowering of this process named, by
+/// the procedure's symbol, which the perf map (`perf_map`) writes in place of
+/// the symbol. Lowering and the images the map covers share the process.
+const perf_names = struct {
+    var mutex: std.atomic.Mutex = .unlocked;
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    var by_symbol: std.StringHashMapUnmanaged([]const u8) = .empty;
+
+    fn lock() void {
+        while (!mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+};
+
+/// Record `name` as the readable name of the procedure whose symbol is
+/// `symbol`, when `perf_map` is set. A symbol keeps the first name it gets;
+/// a failure to allocate leaves it unnamed.
+pub fn notePerfName(symbol: []const u8, name: []const u8) void {
+    if (!isSet(.perf_map)) return;
+    recordPerfName(symbol, name);
+}
+
+fn recordPerfName(symbol: []const u8, name: []const u8) void {
+    perf_names.lock();
+    defer perf_names.mutex.unlock();
+    const a = perf_names.arena.allocator();
+    if (perf_names.by_symbol.contains(symbol)) return;
+    const owned_symbol = a.dupe(u8, symbol) catch return;
+    const owned_name = a.dupe(u8, name) catch return;
+    perf_names.by_symbol.put(a, owned_symbol, owned_name) catch return;
+}
+
+/// The readable name a lowering recorded for the procedure whose symbol is
+/// `symbol`, if any. Only `perf_map` touches the table.
+pub fn perfName(symbol: []const u8) ?[]const u8 {
+    if (!isSet(.perf_map)) return null;
+    return lookupPerfName(symbol);
+}
+
+fn lookupPerfName(symbol: []const u8) ?[]const u8 {
+    perf_names.lock();
+    defer perf_names.mutex.unlock();
+    return perf_names.by_symbol.get(symbol);
+}
+
+test "a procedure keeps the first readable name recorded for its symbol" {
+    recordPerfName("roc__ptest_symbol_one", "Pdf.render");
+    recordPerfName("roc__ptest_symbol_one", "Pdf.other");
+    try std.testing.expectEqualStrings("Pdf.render", lookupPerfName("roc__ptest_symbol_one").?);
+    try std.testing.expect(lookupPerfName("roc__ptest_symbol_two") == null);
 }
 
 /// Called only by owners of Boxy-only work, never by the specialized path.

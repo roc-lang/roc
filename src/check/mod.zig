@@ -28,6 +28,7 @@ pub const CheckedNames = CanonicalNames;
 pub const CanonicalTypeKeys = @import("canonical_type_keys.zig");
 pub const StaticDispatchRegistry = @import("static_dispatch_registry.zig");
 pub const CheckedTraverse = @import("checked_traverse.zig");
+pub const CheckedReachability = @import("checked_reachability.zig");
 pub const HoistRoots = @import("can").HoistRoots;
 pub const RequirementSolution = @import("requirement_solution.zig");
 pub const ConstStore = @import("const_store.zig");
@@ -39,7 +40,8 @@ pub const BodyAnalyses = @import("body_analyses.zig");
 /// Import-facing checking identities and explicit binding to current owners.
 pub const CheckingDependencies = @import("checking_dependencies.zig");
 pub const CheckingInterface = @import("checking_interface.zig");
-pub const InferenceOutput = @import("inference_output.zig");
+/// Pre-evaluation inputs stored in the combined checking entry.
+pub const CheckingReuse = @import("checking_reuse.zig");
 /// Comptime layout fingerprint for a registered serialization root (recurses into
 /// nested aggregates and `SerializedElement`s), so every admitted blob invalidates on
 /// any layout change, not just a top-level one.
@@ -58,7 +60,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("callable_checking.zig"));
     std.testing.refAllDecls(@import("checking_dependencies.zig"));
     std.testing.refAllDecls(@import("checking_interface.zig"));
-    std.testing.refAllDecls(@import("inference_output.zig"));
+    std.testing.refAllDecls(@import("checking_reuse.zig"));
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("exhaustiveness_context.zig"));
@@ -94,6 +96,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/hoist_roots_test.zig"));
     std.testing.refAllDecls(@import("test/capturing_method_test.zig"));
     std.testing.refAllDecls(@import("test/local_type_escape_test.zig"));
+    std.testing.refAllDecls(@import("test/local_value_method_test.zig"));
     std.testing.refAllDecls(@import("test/num_type_requirements_test.zig"));
     std.testing.refAllDecls(@import("test/custom_num_type_test.zig"));
     std.testing.refAllDecls(@import("test/builtin_low_level_types_test.zig"));

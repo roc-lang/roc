@@ -25,6 +25,7 @@ const Var = types.Var;
 pub const NumericDefaultPhase = types.literal_defaulting.NumericDefaultPhase;
 const CheckedTypeId = checked_ids.CheckedTypeId;
 const DispatchScopeId = checked_ids.DispatchScopeId;
+const CallableEvalTemplateId = checked_ids.CallableEvalTemplateId;
 
 const DispatchExprTag = enum {
     e_dispatch_call,
@@ -678,10 +679,24 @@ pub const LocalProcedureMethodTarget = struct {
     dispatch_scope: ?DispatchScopeId = null,
 };
 
+/// The callable-eval template of a method bound to a computed callable, in
+/// the module that declares the method: the registry's own.
+pub const CallableBindingTarget = struct {
+    module: canonical.CheckedModuleDigest,
+    template: CallableEvalTemplateId,
+};
+
 /// Public `MethodTargetKind` declaration.
 pub const MethodTargetKind = union(enum(u8)) {
     procedure: ProcedureMethodTarget,
     local_proc: LocalProcedureMethodTarget,
+    /// A top-level method binding whose callable no procedure stands behind
+    /// (`to_inspect = make()`): its compile-time root evaluates the function
+    /// value, and a dispatch calls that value, as a call of the binding by
+    /// name does. The binding is a value, so it is monomorphic: the target
+    /// carries no scheme, no evidence, and no alias (design.md "Procedure
+    /// Aliases").
+    callable_binding: CallableBindingTarget,
     structural: StructuralKind,
 };
 
@@ -856,10 +871,11 @@ pub const MethodRegistry = struct {
         self.* = .{};
     }
 
-    /// `referenced_targets` resolves a method bound by reference
-    /// (`method = f`): `methodBindingTarget(binding_expr, method_owner)`
-    /// returns the `ReferencedMethodTarget` its value reaches, or null for an
-    /// associated value that is not a callable.
+    /// `referenced_targets` resolves a method binding that is no procedure
+    /// of its own: `methodBindingTarget(binding, binding_expr, method_owner)`
+    /// returns the `ReferencedMethodTarget` its value reaches (through
+    /// references, or its own compile-time root for a computed callable), or
+    /// null for an associated value that is not a callable.
     pub fn fromModule(
         allocator: Allocator,
         module: TypedCIR.Module,
@@ -992,9 +1008,10 @@ pub const MethodRegistry = struct {
                 },
                 // Inspection calls an override from rendering workers and
                 // generic code that never hold a local procedure's declaration
-                // context, so only a procedure can be one.
+                // context, so only a procedure or a stored top-level value
+                // can be one.
                 .inspect_override = if (entry.key.methodIdent().eql(module_env.idents.to_inspect) and
-                    std.meta.activeTag(target_kind) == .procedure)
+                    (std.meta.activeTag(target_kind) == .procedure or std.meta.activeTag(target_kind) == .callable_binding))
                     try inspectOverrideCallableType(allocator, module, names, checked_types, method_owner, def_idx)
                 else
                     null,
@@ -1028,7 +1045,7 @@ fn methodTargetCallableVar(
     target_kind: MethodTargetKind,
 ) Var {
     return switch (target_kind) {
-        .procedure => module.defType(def_idx),
+        .procedure, .callable_binding => module.defType(def_idx),
         .structural => ModuleEnv.varFrom(binding.type_node_idx),
         .local_proc => blk: {
             const raw_node = @backingInt(binding.type_node_idx);
@@ -1103,8 +1120,9 @@ fn methodAliasForBinding(
     return .{ .module = owner_artifact, .binding = .{ .local = .{ .lookup = expr } } };
 }
 
-/// What a method bound by reference reaches, or null when its value is not
-/// a reference (a computed value, or a constant).
+/// What a method binding that is no procedure of its own reaches: the
+/// procedure its references reach, its own computed callable, or null for an
+/// associated value that is not a callable.
 fn referencedMethodTarget(
     module: TypedCIR.Module,
     referenced_targets: anytype,
@@ -1112,7 +1130,7 @@ fn referencedMethodTarget(
     method_owner: MethodOwner,
 ) Allocator.Error!?ReferencedMethodTarget {
     const expr_idx = methodBindingExpr(module, binding) orelse return null;
-    return try referenced_targets.methodBindingTarget(expr_idx, method_owner);
+    return try referenced_targets.methodBindingTarget(binding, expr_idx, method_owner);
 }
 
 fn unsupportedGeneratedMethodBinding(

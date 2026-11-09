@@ -252,7 +252,7 @@ pub const Store = struct {
 
     /// Reusable worklist buffers for `instantiate.Instantiator`'s explicit
     /// graph-copy machine. Runtime-only scratch: never serialized, cloned, or
-    /// relocated; capacity persists across instantiations against this store.
+    /// relocated; capacity persists across instantiations until sealing.
     instantiate_scratch: instantiate.Scratch = .{},
 
     /// For each frozen class (see `DescriptorFlags.frozen`), keyed by its
@@ -328,7 +328,8 @@ pub const Store = struct {
     /// Every static-dispatch relation the unifier folded into a retained
     /// same-name relation, by raw constraint function var. Checking publishes
     /// these so a folded relation's dispatch names the retained relation's
-    /// target instantiation.
+    /// target instantiation. Sealing releases this journal after checking has
+    /// published the selected relations into ModuleEnv.
     static_dispatch_relation_merges: std.ArrayListUnmanaged(StaticDispatchRelationMerge) = .empty,
     /// Unused room reserved directly after a constraint range, keyed by the
     /// range's end and holding the room's end, so a receiver whose
@@ -408,13 +409,15 @@ pub const Store = struct {
 
     /// Make this store read-only: checking has solved it, and every later
     /// stage only reads it. Sealing happens at a quiescent point, with no
-    /// savepoint open and no class frozen.
+    /// savepoint open and no class frozen. All checked outputs have been
+    /// published; only checker-owned buffers are released at this boundary.
     pub fn seal(self: *Self) void {
         if (std.debug.runtime_safety) {
             if (self.sealed) base.invariant("a type store was sealed twice", .{});
             if (self.savepoint_active) base.invariant("a type store was sealed with a savepoint open", .{});
             if (self.frozen_anchors.count() != 0) base.invariant("a type store was sealed with a frozen class", .{});
         }
+        self.releaseCheckerBuffers();
         self.sealed = true;
     }
 
@@ -570,10 +573,44 @@ pub const Store = struct {
         try self.union_ranks.items.ensureTotalCapacity(self.gpa, capacity);
     }
 
+    /// Release buffers used only while solving. Sealing calls this after the
+    /// final canonicalization and checked-output publication; destruction also
+    /// calls it for an unfinished store. Reset every owner so destroying a
+    /// sealed store is safe. Solved columns and their borrowed slices stay put.
+    fn releaseCheckerBuffers(self: *Self) void {
+        self.instantiate_scratch.deinit(self.gpa);
+        self.instantiate_scratch = .{};
+        self.frozen_anchors.deinit();
+        self.frozen_anchors = .init(self.gpa);
+        self.class_watch.deinit(self.gpa);
+        self.class_watch = .{};
+        self.settled_descs.deinit(self.gpa);
+        self.settled_descs = .{};
+        self.detach_members_scratch.deinit(self.gpa);
+        self.detach_members_scratch = .empty;
+        self.slot_trail.deinit(self.gpa);
+        self.slot_trail = .empty;
+        self.desc_trail.deinit(self.gpa);
+        self.desc_trail = .empty;
+        self.root_meta_trail.deinit(self.gpa);
+        self.root_meta_trail = .empty;
+        self.union_rank_trail.deinit(self.gpa);
+        self.union_rank_trail = .empty;
+        self.derived_map_plans_undo.deinit(self.gpa);
+        self.derived_map_plans_undo = .empty;
+        self.free_descs.deinit(self.gpa);
+        self.free_descs = .empty;
+        self.pending_free_descs.deinit(self.gpa);
+        self.pending_free_descs = .empty;
+        self.static_dispatch_relation_merges.deinit(self.gpa);
+        self.static_dispatch_relation_merges = .empty;
+        self.static_dispatch_constraint_room.deinit(self.gpa);
+        self.static_dispatch_constraint_room = .empty;
+    }
+
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
-        self.frozen_anchors.deinit();
-        self.detach_members_scratch.deinit(self.gpa);
+        self.releaseCheckerBuffers();
         // slots & descriptors
         self.descs.deinit(self.gpa);
         self.slots.deinit(self.gpa);
@@ -588,27 +625,11 @@ pub const Store = struct {
         self.numeral_infos.deinit(self.gpa);
         self.interpolation_metadata.deinit(self.gpa);
         self.static_dispatch_constraints.deinit(self.gpa);
-        self.static_dispatch_relation_merges.deinit(self.gpa);
-        self.static_dispatch_constraint_room.deinit(self.gpa);
 
         // nominal declaration table
         self.nominal_decls.deinit(self.gpa);
         self.nominal_decl_index.deinit(self.gpa);
         self.derived_map_plans.deinit(self.gpa);
-
-        // instantiation worklist scratch
-        self.instantiate_scratch.deinit(self.gpa);
-        self.class_watch.deinit(self.gpa);
-        self.settled_descs.deinit(self.gpa);
-
-        // speculation undo trail
-        self.slot_trail.deinit(self.gpa);
-        self.desc_trail.deinit(self.gpa);
-        self.root_meta_trail.deinit(self.gpa);
-        self.union_rank_trail.deinit(self.gpa);
-        self.derived_map_plans_undo.deinit(self.gpa);
-        self.free_descs.deinit(self.gpa);
-        self.pending_free_descs.deinit(self.gpa);
     }
 
     /// Clone this store into fresh owned memory.
@@ -998,7 +1019,8 @@ pub const Store = struct {
         for (vars) |var_| try self.settled_descs.insert(self.gpa, self.resolveVar(var_).desc_idx);
     }
 
-    /// Whether `var_`'s class is settled (see `markSettled`).
+    /// Whether a checking scan recorded `var_`'s class as settled (see
+    /// `markSettled`). This scan hint is discarded when checking seals the store.
     pub fn isSettled(self: *const Self, var_: Var) bool {
         return self.settled_descs.contains(self.resolveVar(var_).desc_idx);
     }
@@ -3130,8 +3152,33 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
         .ext = inner_tags,
     } } });
 
+    // Sealing retires a real committed probe and a thawed freeze, while the
+    // selected plan and nominal backing remain part of the solved store.
+    const callable = try store.fresh();
+    const joined = try store.fresh();
+    const plan = testDerivedMapPlan(5, 1);
+    try store.setDerivedMapPlan(callable, plan);
+    var savepoint = try store.createSavepoint();
+    try store.union_(callable, joined, .{ .content = .{ .flex = Flex.init() }, .rank = Rank.outermost });
+    store.commitSavepoint(&savepoint);
+    const checked_callable = store.resolveVar(callable).var_;
+    try store.freezeClass(checked_callable);
+    try store.thawFrozenClasses();
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(1);
+    const decl = try store.registerNominalDecl(try testNominalDecl(origin, 7, elem_alias));
+    try store.markSettled(&.{elem});
+
     try store.canonicalizeAndSeal(&idents);
     try std.testing.expect(store.isSealed());
+    try std.testing.expectEqual(checked_callable, store.resolveVar(callable).var_);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(callable).?);
+    try std.testing.expectEqual(plan, store.derivedMapPlan(joined).?);
+    try std.testing.expectEqual(decl, store.lookupNominalDeclByKey(origin, 7).?);
+    try std.testing.expectEqual(elem, store.getNominalDecl(decl).backing);
+    try std.testing.expectEqual(@as(usize, 0), store.desc_trail.capacity);
+    try std.testing.expectEqual(@as(usize, 0), store.derived_map_plans_undo.capacity);
+    try std.testing.expectEqual(@as(usize, 0), store.frozen_anchors.capacity());
+    try std.testing.expect(!store.isSettled(elem));
 
     const record = store.resolveVar(outer).desc.content.structure.record;
     try std.testing.expectEqual(tail, record.ext);
@@ -3148,6 +3195,63 @@ test "canonicalizing for seal gives children representatives and flattens rows" 
     try std.testing.expectEqual(err_name, tags.items(.name)[0]);
     try std.testing.expectEqual(ok_name, tags.items(.name)[1]);
     try std.testing.expectEqualSlices(Var, &.{elem}, store.sliceVars(tags.items(.args)[1]));
+}
+
+test "sealing releases checker-only buffers without allocating" {
+    var counter = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const gpa = counter.allocator();
+    {
+        var store = try Store.init(gpa);
+        defer store.deinit();
+        const value = try store.fresh();
+        const alias = try store.freshRedirect(value);
+        const solved_bytes = counter.allocated_bytes - counter.freed_bytes;
+        const retained = store;
+
+        // Reserve every checker buffer, including capacity in empty lists and
+        // maps returned to the nested-instantiation pool. None of this storage
+        // is needed to answer reads of the solved type graph.
+        inline for (.{ "frames", "value_stack", "pending_tags", "pending_fields", "pending_parts", "reach_edges", "reach_stack", "marker_pending", "marker_binders" }) |field| {
+            try @field(store.instantiate_scratch, field).ensureTotalCapacity(gpa, 8);
+        }
+        store.instantiate_scratch.reach_heads = .init(gpa);
+        try store.instantiate_scratch.reach_heads.?.put(value, 0);
+        store.instantiate_scratch.reach_state = .init(gpa);
+        try store.instantiate_scratch.reach_state.?.put(value, true);
+        store.instantiate_scratch.marker_visited = .init(gpa);
+        {
+            const pool = &store.instantiate_scratch.marker_visited.?;
+            var visited = pool.acquire();
+            defer pool.release(&visited);
+            try visited.put(value, 1);
+        }
+        try store.freezeClass(value);
+        try store.thawFrozenClasses();
+        try store.markSettled(&.{value});
+        try store.class_watch.watched.resize(gpa, 8, false);
+        try store.class_watch.watched_list.ensureTotalCapacity(gpa, 8);
+        inline for (.{ "detach_members_scratch", "slot_trail", "desc_trail", "root_meta_trail", "union_rank_trail", "derived_map_plans_undo", "free_descs", "pending_free_descs" }) |field| {
+            try @field(store, field).ensureTotalCapacity(gpa, 8);
+        }
+        try store.static_dispatch_constraint_room.ensureTotalCapacity(gpa, 8);
+        try store.static_dispatch_relation_merges.append(gpa, .{ .dropped_fn_var = alias, .retained_fn_var = value });
+        try std.testing.expect(counter.allocated_bytes - counter.freed_bytes > solved_bytes);
+        const allocations_before_seal = counter.allocated_bytes;
+
+        store.seal();
+
+        try std.testing.expectEqual(allocations_before_seal, counter.allocated_bytes);
+        try std.testing.expectEqual(solved_bytes, counter.allocated_bytes - counter.freed_bytes);
+        try std.testing.expectEqual(value, store.resolveVar(alias).var_);
+        // Every serialized column keeps its storage and length. The full
+        // CompactWriter roundtrip below also checks content across sealing.
+        inline for (@typeInfo(Store.Serialized).@"struct".field_names) |field_name| {
+            if (comptime !std.mem.eql(u8, field_name, "gpa")) {
+                try std.testing.expectEqualDeep(@field(retained, field_name), @field(store, field_name));
+            }
+        }
+    }
+    try std.testing.expectEqual(counter.allocated_bytes, counter.freed_bytes);
 }
 
 /// A sealed store holding `a`, a redirect to the flex `b`, for the sealing
@@ -4325,6 +4429,23 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     const serialized = try writer.appendAlloc(gpa, Store.Serialized);
     try serialized.serialize(&original, gpa, &writer);
+
+    // Sealing releases checker state without changing any serialized solved
+    // data. Compare fresh serialization plans on each side of the boundary.
+    const before_seal = try gpa.alloc(u8, writer.total_bytes);
+    defer gpa.free(before_seal);
+    _ = try writer.writeToBuffer(before_seal);
+    try original.freezeClass(flex);
+    try original.thawFrozenClasses();
+    try original.markSettled(&.{flex});
+    original.seal();
+    var sealed_writer = CompactWriter.init();
+    defer sealed_writer.deinit(gpa);
+    try (try sealed_writer.appendAlloc(gpa, Store.Serialized)).serialize(&original, gpa, &sealed_writer);
+    const after_seal = try gpa.alloc(u8, sealed_writer.total_bytes);
+    defer gpa.free(after_seal);
+    _ = try sealed_writer.writeToBuffer(after_seal);
+    try std.testing.expectEqualSlices(u8, before_seal, after_seal);
 
     // Write to file
     try writer.writeGather(file, io);
