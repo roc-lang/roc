@@ -80,13 +80,15 @@ assigned `x`
 4.0
 ```
 
-In Unix shells, use `printf` for the same thing:
+In Unix (like Linux or MacOS) shells, use `printf` for the same thing:
 
 ```bash
 printf 'x = 1 + 1\nx * 2\n' | roc repl
 ```
 
-Diagnostics from piped input are written to stderr, so tools can read successful results from stdout separately from parse and type errors. If you want plain diagnostics without ANSI color codes, use `roc repl --no-color` or set `NO_COLOR` environment variable.
+Diagnostics from piped input are written to stderr, so tools can read successful results from [stdout](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)) separately from parse and type errors. 
+
+> Note: If you want plain diagnostics without ANSI color codes, use `roc repl --no-color` or set `NO_COLOR` environment variable.
 
 ## The `main!` function
 
@@ -104,15 +106,18 @@ This defines our program's entrypoint. The code inside the curly braces will run
 ## Pure and effectful functions
 
 That `|_args| { ... }` is Roc syntax for an anonymous function with one argument, named `_args`. (If it had multiple arguments, 
-it would look like `|arg1, arg2| { ... }` instead.) Functions in Roc are ordinary values, just
-like numbers, strings, or booleans; we can pass them around, put them in collections, and use `=` to name them.
+it would look like `|arg1, arg2| { ... }` instead.) Functions in Roc are ordinary values, like numbers, strings, or booleans. We can do anything you would normally do with them: put them in collections (lists), and use `=` to name them.
 
 We named it `main!` (and not the traditional `main`) because it's a function that runs the 
 [_side effect_](https://en.wikipedia.org/wiki/Side_effect_(computer_science)) of printing to
-[stdout](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)). 
-In Roc, we call functions that can run side effects _effectful functions_,  and by convention 
+[stdout](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)).
+
+In Roc, we call functions that can run side effects _effectful functions_ and by convention 
 we always name them with a `!` at the end of their names. In contrast, 
 [_pure functions_](https://en.wikipedia.org/wiki/Pure_function) don't have a `!` at the end of their names.
+
+A way to remember if a function is pure or not, is to ask yourself the question "will this function always give me the same answer if I run it multiple times? 
+". If the answer is yes, it is probably a pure function. Roc is built so we can take advantage of the many useful properties of pure functions. These are further described [_here_](https://www.roc-lang.org/functional#pure-functions).
 
 ### Constants
 
@@ -123,8 +128,9 @@ name = "Rocco"
 ```
 
 Constants should not be reassigned or shadowed, if you try to do `name =` again in the same scope, 
-`roc` will give a compile-time warning with exit code 2. That way, you can quickly write something with
-shadowing if you want but the non-zero exit code prevents it from ending up in production code because CI will fail.
+`roc` will give you a compile-time warning, so you can iterate on something with shadowing without it breaking production.
+
+> The warning exits with exitcode 2, meaning that it will fail CI, preventing it from ending up in production.
 
 ### String interpolation
 
@@ -146,9 +152,9 @@ echo!("Answer: ${((numerator / denominator) + 1).negate().to_str()}")
 
 ## `for` and `fold`
 
-Sometimes code is easier to understand in a functional style, and other times it's easier to understand
-in an imperative style. Roc has support for both styles, even though its APIs are designed around immutable
-values and a functional style.
+Sometimes code is easier to understand in a functional style (map, fold), and other times it's easier to understand
+in an imperative style (a for loop). Roc has support for both styles, even though its APIs are [designed around immutable
+values and a functional style](https://www.roc-lang.org/functional#no-reassignment).
 
 ### Expect
 
@@ -166,7 +172,7 @@ it runs all of top-level `expect`s in your files, as well as all the files they 
 
 A file run with `roc test` does not need a `main!` function (or an `app` header, which will be introduced shortly).
 
-> Another useful command is `roc fmt`, which formats your source code according to standard Roc style. By design, `roc fmt` has no configuration options at all.
+> Another useful command is `roc fmt`, which formats your source code according to standard Roc style. By design, `roc fmt` has no configuration options at all, so everyone uses one set of styling rules.
 
 ### `for` style
 
@@ -189,7 +195,7 @@ ending in `!` to distinguish them from pure functions, vars begin with `$` to di
 This means any time you see something beginning with `$`, you know it might be reassigned somewhere (such as 
 in a `for` loop), whereas if you don't see the `$`, there's no need to think about that possibility.
 
-Note that vars can only be reassigned inside the function where they were declared. This code would give an error:
+Note that vars can only be reassigned inside the function where they were declared. If you could do that, our function would not be pure anymore! This code would give an error:
 
 ```ruby
 var $count = 0
@@ -214,6 +220,14 @@ You can also implement `digits_to_num` in a functional style using `fold`:
 digits_to_num = |digits| digits.fold(0, |num, digit| (num * 10) + digit)
 ```
 
+The [fold](https://www.roc-lang.org/docs/main/Iter/#fold) function takes two arguments:
+- state: the value that we start with. In this case, 0
+  - A (pure) function that takes the a value of the same type as `state` and outputs another type. In this case, it takes in a `Number` and outputs `Number` as well
+
+Using a fold, you can do the same as a for-loop: take in any iterable and output anything else.
+
+TODO: check actual types
+
 ### Blocks
 
 Note that there are no curly braces in the `digits_to_num` definition. That's because every Roc function has one expression
@@ -233,7 +247,24 @@ answer = {
 
 Block expressions go inside curly braces. They end with an expression (like `inner_constant.abs()` here), 
 and the entire block evaluates to whatever that expression evaluates to. This is why, when we use curly
-braces in functions, the function returns whatever is at the end of the curly braces—that's just how blocks work!
+braces in functions, the function returns whatever is at the end of the curly braces—that's just how blocks work! Because of this, we don't need to use `return` a lot of the time.
+
+### `return` statements
+
+Roc's `return` keyword works the same way it works in most languages: it causes the function to immediately return.
+
+```ruby
+digits_to_num = |digits| {
+    if digits.is_empty() {
+        return 0
+    }
+    
+    # ...the rest of the function would go here
+}
+```
+
+If you use this in a block, you may get a warning if any statements or expressions come after it in the block,
+as they will not be executed!
 
 ### Statements and expressions
 
@@ -261,23 +292,6 @@ echo!({
 ```
 
 An easy way to think of it is that blocks are a way to incorporate statements into your expressions.
-
-### `return` statements
-
-Roc's `return` keyword works the same way it works in most languages: it causes the function to immediately return.
-
-```ruby
-digits_to_num = |digits| {
-    if digits.is_empty() {
-        return 0
-    }
-
-    # ...the rest of the function would go here
-}
-```
-
-If you use this in a block, you may get a warning if any statements or expressions come after it in the block,
-as they will not be executed!
 
 ### `crash` statements
 
@@ -355,12 +369,14 @@ main! = |_args| {
 }
 ```
 
-Although printing is an I/O operation, the `dbg` statement can be used even in pure functions. It works in two different ways:
+Although printing is an I/O operation (which is effectful), the `dbg` statement can be used even in pure functions. It works in two different ways:
 
 - Roc evaluates top-level constants at compile time. If evaluating one calls a pure function containing `dbg`, you'll see the `dbg` output at compile time. (Evaluating known expressions ahead of time is called [constant folding](https://en.wikipedia.org/wiki/Constant_folding).)
 - At runtime, `dbg` may work differently depending on where you're running the program. For example, in this command-line application it will be printed to stderr. However, when running a Roc program that's compiled to WebAssembly and running in the browser, it would likely appear in the browser console instead.
 
-Note that Roc's compile-time evaluation means there is no guarantee that a given `dbg` will run at runtime or at compile time. 
+Note that Roc's compile-time evaluation means there is no guarantee that a given `dbg` will run at runtime or at compile time.
+
+TODO: this is the first time compile time eval is mentioned, right?
 
 ## Conditionals and Collections
 
@@ -369,16 +385,16 @@ Note that Roc's compile-time evaluation means there is no guarantee that a given
 In Roc, `if` can be used as an expression like so:
 
 ```ruby
-name = if str.is_empty() "n/a" else str
+meal = if roc_is_hungry() "elephant" else "deer"
 ```
 
 You can optionally use blocks to make the different branches stand out more:
 
 ```ruby
-name = if str.is_empty() {
-    "n/a" 
+meal = if roc_is_hungry() {
+    "elephant"
 } else {
-    str
+    "deer"
 }
 ```
 
@@ -387,23 +403,23 @@ name = if str.is_empty() {
 You can also create records, like so: 
 
 ```ruby
-record = if str.is_empty() {
-    { name: "n/a", has_name: Bool.False }
+meal = if roc_is_hungry() {
+    { animal: "elephant", quantity: 1 }
 } else {
-    { name: str, has_name: Bool.True }
+    { animal: "deer", quantity: 2 }
 }
 ```
 
 You can "update" a record by creating a new one that has some of its fields changed:
 
 ```ruby
-new_record = { ..record, name: "New Name" }
+new_meal = { ..meal, animal: "goat" }
 ```
 
 You can also destructure a record to bring some of its fields into scope as constants:
 
 ```ruby
-{ name, has_name } = record
+{ animal, quantity } = meal
 ```
 
 ### Lists
@@ -421,6 +437,8 @@ You can get the length of the list by calling `List.len(animals)`, or as a short
 Both of them do the same thing. When you call `.len()`, Roc's type inference knows that the type of `animals` is `List`,
 so it translates that `animals.len()` call into `List.len(animals)` at compile time. `.len()` is known as a _method_ because
 it's a function that is associated with a particular type (in this case, `List`).
+
+The syntax looks a bit like a method call on a class in an Object Oriented language (like Java or C#), but in Roc's case, the call is on a type instead of a class instance.
 
 ### Pattern Matching
 
@@ -456,6 +474,15 @@ That said, you can _tag_ each of them like so:
 ```ruby
 birds_or_numbers = [Bird("eagle"), Number(1)]
 ```
+### Nominal types
+
+Tags don't have to wrap anything, this allows you to use them as enumerations. This is how the `Bool` type is implemented:
+
+```ruby
+Bool := [True, False]
+```
+
+This is called a _nominal_ type definition.
 
 #### Pattern matching on tags
 
@@ -474,7 +501,7 @@ Roc does not have `null`, `nil`, `undefined`, or anything similar. Instead, it u
 represent whether an operation succeeded or failed:
 
 ```ruby
-numbers = [1, 2 ,3 ]
+numbers = [1, 2 ,3]
 number = match numbers.first() {
     Ok(first) => first + 1
     Err(ListWasEmpty) => 0
@@ -482,7 +509,7 @@ number = match numbers.first() {
 ```
 
 Here, `ListWasEmpty` is a tag that isn't wrapping anything. The `List.first` method is just returning it inside the `Err`
-to describe what the failure was. This both makes the code more self-documenting and also lets you distinguish between
+to describe what the failure was. This makes the code more self-documenting and lets you distinguish between
 different error types.
 
 For example:
@@ -504,28 +531,29 @@ answer = match num_or_err {
 Here we have an extra `Err` branch, because `List.first` can return `Err(ListWasEmpty)` if the list was empty,
 whereas `I64.from_str` can return `Err(BadNumStr)`.
 
-> Note: `I64` is a number type—specifically, a 64-bit integer. Roc also supports 8-bit, 16-bit, 32-bit, and 128-bit integers, and they can be either signed (like `I64`) or unsigned (like `U64`). For non-integer types, Roc has `F32` and `F64` for the classic 32-bit and 64-bit binary floating point numbers, and also `Dec` for a 128-bit fixed-point decimal. If you don't specify a number type, Roc uses `Dec` as the default number—which is why in Roc, `0.1 + 0.2 == 0.3` is `True`, whereas [in most languages it isn't](https://rtfeldman.com/0.1-plus-0.2/).
+> Note: `I64` is a number type: a 64-bit integer. Roc also supports 8-bit, 16-bit, 32-bit, and 128-bit integers, and they can be either signed (like `I64`) or unsigned (like `U64`). For non-integer types, Roc has `F32` and `F64` for the classic 32-bit and 64-bit binary floating point numbers, and also `Dec` for a 128-bit fixed-point decimal. If you don't specify a number type, Roc uses the decimal type `Dec` as the default number. This is why, in Roc, `0.1 + 0.2 == 0.3` is `True`, whereas [in most languages it isn't](https://rtfeldman.com/0.1-plus-0.2/).
 
 #### Exhaustiveness
 
-Neither of these `match` expressions had a default `_ =>` branch. They didn't need it because they are already _exhaustive_,
-which means they have covered all possible cases. If a `match` on a known type omits a possible case, the compiler reports
+Neither of these `match` expressions has a default `_ =>` branch. They don't need it because they are already _exhaustive_,
+which means they cover all possible cases. If a `match` on a known type omits a possible case, the compiler reports
 a non-exhaustive match error. If you add `_ =>` after earlier branches have already covered every case, the compiler warns
 that the pattern is redundant.
 
 Roc code tends to avoid `_ =>` default branches because these exhaustiveness errors can be helpful for telling you when
-you've forgotten to handle something. For example, in our second `match` above, if we'd written `_ => 0` instead of
-`Err(ListWasEmpty) => 0`, we would have been silently handling the `Err(BadNumStr)` case using the same logic. That might
-not have been what we wanted! By writing out `Err(ListWasEmpty)` instead of `_ =>`, the compiler would let us know if we
-were forgetting to handle any cases that could come up at runtime.
+you've forgotten to handle something.
+
+For example, in our second `match` above, if we'd written `_ => 0` instead of `Err(ListWasEmpty) => 0`,
+we would have been silently handling the `Err(BadNumStr)` case using the same logic. That might not have been what we wanted!
+By writing out `Err(ListWasEmpty)` instead of `_ =>`, the compiler lets us know when we forget to handle any cases that could come up at runtime.
 
 #### `Try` methods
 
-Both `List.first` and `I64.from_str` are returning an extremely common Roc type, named `Try`. We define and pattern-match
-`Str` values using `"…"`, `List` values using `[…]`, and `Try` values using `Ok` and `Err`. So if I had a function that 
-accepted a `Try` with strings for both its `Ok` and `Err` types, then I could pass it `Ok("foo")` or `Err("bar")`.
+Both `List.first` and `I64.from_str` are returning an extremely common Roc type: `Try`. We define and pattern-match
+`Str` values using `"…"`, `List` values using `[…]`, and `Try` values using `Ok` and `Err`. So if we had a function that 
+accepted a `Try` with strings for both its `Ok` and `Err` types, then we could pass it `Ok("foo")` or `Err("bar")`.
 
-Just like `Str` and `List`, `Try` has methods. Here's an example of one:
+Just like `Str` and `List`, `Try` has methods. For example:
 
 ```
 number = numbers.first().ok_or(0)
@@ -542,16 +570,16 @@ ok_or = |try, fallback| match try {
 }
 ```
 
-It returns the value inside the `Ok` tag, or else the provided fallback value if the `Try` was an `Err` tag instead of `Ok`.
+It returns the value inside the `Ok` tag if the value inside `try` is an `Ok` tag. If `try` contains an `Err` tag, it returns `fallback`.
 
-The underscore pattern inside `Err(_) =>` essentially means to ignore that part of the pattern. You can put underscores
-anywhere in any pattern, including for the entire pattern. This method doesn't want to match a more specific pattern 
+The underscore pattern inside `Err(_) =>` tells Roc to ignore that pattern. You can put underscores in any pattern, including for the entire pattern.
+This method doesn't want to match a more specific pattern 
 (like `Err(ListWasEmpty) =>` earlier) because it wants to be flexible. If it matched a more restrictive pattern, like
-`Err(ListWasEmpty) =>`, then you couldn't use `.ok_or` with `I64.from_str` because it returns `Err(BadNumStr)`.
+`Err(ListWasEmpty) =>`, then you couldn't use `.ok_or` with `I64.from_str` because it returns other tags, like `Err(BadNumStr)`.
 
 #### The `?` postfix operator
 
-It's common to want to early-return an `Err` from a `Try`. It's so common, Roc has a dedicated operator for it:
+It's common to want to early-return an `Err` from a `Try`. It's so common, that Roc has a dedicated operator for it:
 
 ```ruby
 increment_first = |strings| {
@@ -562,7 +590,7 @@ increment_first = |strings| {
 }
 ```
 
-The `?` postfix operator is syntax sugar for "if this is an `Ok`, evaluate to its value; otherwise, `return` the `Err`."
+The `?` postfix operator is syntax sugar for "if this is an `Ok` tag, evaluate to its value; otherwise, `return` the `Err` tag."
 
 The desugared version of the above function would be:
 
@@ -582,13 +610,15 @@ increment_first = |strings| {
 }
 ```
 
-The `?` version is quite a bit more concise!
+As you can see, the `?` version is a lot shorter!
 
 ## Types
 
-So far we haven't seen any types. That's because although Roc is a statically type-checked language, it infers the types
-of everything you write. All type annotations in Roc are optional, but the compiler still infers every type, so you'll
-still get compile-time errors if you mix up types. Technically, Roc has [sound](https://en.wikipedia.org/wiki/Type_safety#Definitions), [decidable](https://en.wikipedia.org/wiki/Type_system), [principal](https://en.wikipedia.org/wiki/Principal_type) static type inference. All Roc values are semantically immutable, making them free of [data races](https://en.wikipedia.org/wiki/Race_condition#Data_race) as well.
+So far we haven't seen any types. That's because even though Roc is a statically type-checked language, it infers the types
+of everything you write. All type annotations in Roc are optional: Roc 'figures out' all of your types, even when you don't tell it what they are,
+so you'll still get compile-time errors if you mix up types.
+
+> Technically, Roc has [sound](https://en.wikipedia.org/wiki/Type_safety#Definitions), [decidable](https://en.wikipedia.org/wiki/Type_system), [principal](https://en.wikipedia.org/wiki/Principal_type) static type inference. All Roc values are semantically immutable, making them free of [data races](https://en.wikipedia.org/wiki/Race_condition#Data_race) as well. All of this means that the Roc compiler will help you avoid a lot of bugs in your programs before you run them.
 
 Roc has a "nonblocking compilation" design philosophy. This means that `roc` will still run your program and `roc test`
 will still run your tests when possible, even if you have compile-time errors—including static type mismatches. The
@@ -599,7 +629,7 @@ Use `roc check && roc` if you want to check for errors first and run the program
 
 ### Type Annotations
 
-You can write type annotations above any constant or `var`, like so:
+Even though you don't have to, you can write type annotations above any constant or `var`, like so:
 
 ```ruby
 name : Str
@@ -609,10 +639,12 @@ is_empty : Bool
 is_empty = name.is_empty()
 ```
 
+Because Roc will figure out all types on its own, you can use this to improve readability, or tell Roc that you mean a narrower type than is possible, for instance: a `U8` instead of a `Dec`.
+
 ### Parameterized types
 
 We noted earlier how all items in a `List` must have compatible types. That's represented in the `List` type 
-using a _type parameter_ like so:
+using a _type parameter_. For example:
 
 ```ruby
 strings : List(Str)
@@ -631,7 +663,7 @@ return types:
 average : Dec, Dec -> Dec
 average = |a, b| (a + b) / 2
 
-# Note that you don't have to write out 2.0 to perform decimal division in Roc; you can just write 2 like normal!
+# Note that you don't have to write out 2.0 to perform decimal division in Roc; you can just write 2!
 
 read_str! : Path => Try(Str, ReadFileErr)
 read_str! = |path| # ...
@@ -641,7 +673,7 @@ read_str! = |path| # ...
 
 ### Type variables
 
-Type variables allow you to write functions that work with any type. They are written as lowercase identifiers (like `a`, `b`, `elem`, etc.) in type annotations:
+Type variables allow you to tell Roc that a function can take any type. They are written as lowercase identifiers (like `a`, `b`, `elem`, etc.) in type annotations:
 
 ```ruby
 # This function works for a list of any type
@@ -650,6 +682,10 @@ type_var = |lst| lst
 ```
 
 The type variable `a` indicates that the function accepts a `List` containing elements of any type, and returns a `List` containing elements of that same type.
+
+Note that Roc will always determine the widest type possible for a function, so if we don't specify the `List` type here, Roc would make its type `a -> a`: any type in, the same type out.
+
+### Where clauses
 
 You can also constrain type variables to types that have specific methods using `where`:
 
@@ -697,9 +733,9 @@ app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/downl
 
 Let's break the header down:
 
-- `app` means this .roc file specifies a Roc _application_ - an executable, as opposed to a bundle of reusable code like a package
-- `[main!]` specifies the application's *entrypoint*. Some applications have multiple entrypoints, but it's most common to have just one—and also it's most common for that one to be named `main!`
-- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `uni: "https://..."` to add a dependency on [unicode](https://github.com/roc-lang/unicode) to process Unicode strings, at which point we'd be able to do things like `import uni.Grapheme` and so on.
+- `app` means this .roc file specifies a Roc _application_: an executable, as opposed to a bundle of reusable code like a _package_
+- `[main!]` specifies the application's *entrypoint*. Some applications have multiple entrypoints, but it's most common to have just one named `main!`
+- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them. For example, we can write `uni: "https://..."` to add a dependency on [unicode](https://github.com/roc-lang/unicode) to process Unicode strings, which means we can use its modules after importing them, for example with `import uni.Grapheme`.
 
 See the [modules documentation](https://www.roc-lang.org/docs/main/langref/modules/) for more examples.
 
