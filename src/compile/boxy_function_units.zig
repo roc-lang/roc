@@ -2,7 +2,6 @@
 //! references. Ordinary object images provide the exact dependency edges; no
 //! source scan or caller-dependent cache payload participates in selection.
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const backend = @import("backend");
 const eval = @import("eval");
@@ -54,9 +53,7 @@ pub const Plan = struct {
             if (!needed[index]) continue;
             const image = images[index];
             for (image.imports()) |import| {
-                // A freestanding compiler links no host functions into its images.
-                const host_function = if (comptime builtin.os.tag == .freestanding) false else backend.dev.HostSplice.hostFunction(image.name(import.name)) != null;
-                if (host_function) continue;
+                if (backend.dev.HostSplice.hostFunction(image.name(import.name)) != null) continue;
                 if (providers.get(image.name(import.name))) |dependency| {
                     std.debug.assert(dependency < index);
                     needed[dependency] = true;
