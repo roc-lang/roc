@@ -9,7 +9,7 @@ ParseErr := [Invalid].{
 }
 
 Format := [Default].{
-	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a), List(Token) -> Try({ value : a, rest : List(Token) }, ParseErr)
+	parse_tag_union : Format, Encoding.ParseTagUnionSpec(a, Format, List(Token), ParseErr), List(Token) -> Try({ value : a, rest : List(Token) }, ParseErr)
 	parse_tag_union = |encoding, spec, state|
 		match state {
 			[TagName(name), .. as rest] =>
