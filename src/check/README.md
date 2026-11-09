@@ -13,3 +13,8 @@ Inhabitedness uses a greatest fixed point to preserve conservative recursive
 payload semantics without enumerating shared paths. Row-only cycles provide no
 constructor witness. General, constructor-payload, and known-absent queries retain
 distinct leaf and open-row policies; only settled answers are memoized.
+
+Diagnostic snapshots freeze type evidence before error poisoning. They preserve
+sharing, recursive identities, and display policy, but render only requested
+roots and tags. Cached checking outcomes retain this frozen evidence so warm and
+cold diagnostics follow the same presentation path.

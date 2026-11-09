@@ -3753,6 +3753,12 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 12241: writing to a list read from a top-level constant allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12241_cached_constant_insert } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12294: reading a top-level list of boxed capturing closures allocates the same in cold, warm, and uncached builds", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12294_cached_capturing_closures } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 12853: a default build after a --specialize=no build in one cache stores a constant holding an imported closure that returns a tag", .timeout_ms = 600_000, .skip = .{ .windows = "test/alloc-count platform does not have Windows host libraries" }, .body = .{ .custom = .issue_12853_specialize_no_then_default_build } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12879: a split payload stays inhabited when its input escapes in an error tag", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/issue_12879_split_map_error_row.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12879: the platform invocation retains split evidence in the interpreter", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "run", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/issue_12879_split_map_error_row.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12879: the platform invocation retains split evidence with specialization", .backend = .dev, .body = .{ .command = .{ .args = &.{ "run", "--opt=dev", "--specialize=yes", "--no-cache" }, .roc_file = "test/cli/issue_12879_split_map_error_row.roc", .exit = .success, .stdout_exact = "1\n" } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12882: encoding a value carried by the app's inferred error row checks cleanly", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12882_encoder_in_error_row.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "No errors found" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12882: an aliased platform entry owns its codec instantiation", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12882_aliased_encoder_entry.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "No errors found" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12882: an unused codec scheme does not acquire an uninstantiated root", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_12882_unused_codec_scheme.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "No errors found" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "demand CTFE: runtime specialization preserves check and build diagnostics", .timeout_ms = 600_000, .body = .{ .custom = .demand_ctfe_diagnostics } },
     .{ .id = 0, .suite = .subcommands, .name = "CTFE static cache: a helper read at compile time and at runtime prints the same result uncached, cold and warm", .timeout_ms = 600_000, .body = .{ .custom = .ctfe_static_cache_runtime } },
@@ -17378,6 +17384,20 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         .args = &.{ "glue", "glue_tool", glue_out2, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
     })) |failure| return failure;
+
+    // Both invocations return an immutable file list from the loaded plugin.
+    // Its bytes must be copied before that plugin image is unloaded.
+    for ([_][]const u8{ glue_out, glue_out2 }) |output_dir| {
+        const output_path = std.fs.path.join(allocator, &.{ output_dir, "generated.txt" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated file path: {}", .{err});
+        defer allocator.free(output_path);
+        const content = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(4096)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated file: {}", .{err});
+        defer allocator.free(content);
+        if (!std.mem.eql(u8, content, "installed glue ran")) {
+            return customFailure(allocator, timer, "installed glue returned incorrect file content: {s}", .{content});
+        }
+    }
 
     // 4. Kind mismatch is a specific error, not a fallback.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{

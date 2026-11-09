@@ -1075,7 +1075,9 @@ const EmissionOwner = struct {
                 try owned_binding_override.set(carrier);
             }
         }
-        for (domain.frame_locals) |local| {
+        // Dismantling also records scalar and prefix reads, which carry no
+        // ownership unit. Only the resource domain can acquire an override.
+        for (domain.resource_locals) |local| {
             if (dismantles.isTakeBinding(local)) try owned_binding_override.set(local);
         }
         // A projected container solved borrowed in the unconditional base
@@ -1086,7 +1088,7 @@ const EmissionOwner = struct {
         var binding_override_changed = true;
         while (binding_override_changed) {
             binding_override_changed = false;
-            for (domain.frame_locals) |local| {
+            for (domain.resource_locals) |local| {
                 if (owned_binding_override.contains(local)) continue;
                 const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
                 if (owned_binding_override.contains(root)) {
@@ -4389,7 +4391,10 @@ const Inserter = struct {
     /// id on purpose: rebinding a name kills only that name's own binding,
     /// never the unit of a value the name merely borrowed (audited for
     /// issue 9703's keying class—see the layer comment above).
-    fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+    /// Bindings include scalar results and descriptor words; only a binding
+    /// with refcounted content can have a previous ownership unit.
+    fn takeRebindTarget(self: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+        if (!self.localContainsRefcounted(target)) return false;
         if (!owned.contains(target)) return false;
         try owned.unset(target);
         return true;

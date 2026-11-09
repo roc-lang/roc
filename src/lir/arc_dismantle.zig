@@ -856,9 +856,9 @@ const Analysis = struct {
         const first = fields.slotBase(field_idx);
         return .{
             .first = view_base + first,
-            // Dynamic products supply their own slot domain. A scalar field
-            // can occupy zero slots there even though its standalone layout
-            // has one; using that layout would take the next field's unit.
+            // Explicit products can give scalar fields no ownership slots.
+            // Their source-authored range, not the target's standalone
+            // layout count, determines which stored units the read observes.
             .count = if (fields.shape != null)
                 fields.slotBase(field_idx + 1) - first
             else

@@ -354,9 +354,7 @@ pub const StaticDataParts = struct {
         tag: u32,
         callable: struct {
             proc: LIR.LirProcSpecId,
-            /// The producer's capture-drop contract remains part of the
-            /// callable ABI even when its allocation is immortal.
-            on_drop: LIR.ErasedCallableOnDrop,
+            on_drop: LIR.ErasedCallableOnDrop = .none,
         },
     },
     children: []LIR.StaticDataId,

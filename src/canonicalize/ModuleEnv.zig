@@ -616,6 +616,11 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// The platform invokes this app binding without a source call.
+        /// `node_idx` names the binding's expression for diagnostics only;
+        /// the platform solution owns this record, not an expression-use table.
+        /// `slot_data` is the instantiated callable's raw type variable.
+        platform_requirement,
         /// A reference to a block-local value binding from inside that
         /// binding's own value. Canonicalization rejects an eager
         /// self-reference, so the reference is delayed through a function and
@@ -866,9 +871,12 @@ pub const PlatformRequirementSolution = struct {
     requires_idx: u32,
     /// The exported app definition the requirement resolved to.
     def: CIR.Def.Idx,
-    /// The requirement type instantiated into the app's store and unified
-    /// against the app definition's expression.
+    /// The solved requirement in the app's store. A function requirement names
+    /// its checked invocation instance, not the uninstantiated binding scheme.
     solved_var: types_mod.Var,
+    /// The checked instantiation used by this implicit platform invocation.
+    /// Null when the binding has neither a substitution nor evidence.
+    scheme_use: ?u32 = null,
     /// Whether the platform declares the requirement at a function type.
     is_function: bool,
     outcome: Outcome,

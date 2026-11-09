@@ -1575,6 +1575,8 @@ const BoxyObjects = struct {
     /// Snapshot units before worker preparation. The program's emitted imports
     /// subsequently select which snapshots actually become compiler-only units.
     fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
+        // Freestanding evaluation has no native unit-image loader.
+        if (comptime is_freestanding) return null;
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
         const objects = (try objectSet(context, module)) orelse return null;
@@ -7739,8 +7741,6 @@ const CompiledBuildFacts = struct {
     reports: []u8,
     /// Every published checked-artifact key, sorted.
     artifact_keys: [][32]u8,
-    /// Producer-selected checked-entry storage keys, distinct from artifact IDs.
-    cache_keys: [][32]u8,
     artifact_digests: [][32]u8,
     checking: []ModuleCheckingFacts,
     rejected_modules: usize,
@@ -7750,7 +7750,6 @@ const CompiledBuildFacts = struct {
     fn deinit(self: *CompiledBuildFacts, allocator: Allocator) void {
         allocator.free(self.reports);
         allocator.free(self.artifact_keys);
-        allocator.free(self.cache_keys);
         allocator.free(self.artifact_digests);
         for (self.checking) |facts| allocator.free(facts.name);
         allocator.free(self.checking);
@@ -7760,6 +7759,8 @@ const CompiledBuildFacts = struct {
 
 const ModuleCheckingFacts = struct {
     name: []const u8,
+    artifact_key: ?[32]u8,
+    storage_key: ?[32]u8,
     inference_runs: u32,
     interfaces_built: u32,
     work: compile_package.CheckingWork,
@@ -7868,8 +7869,6 @@ fn compileAppFactsWithWorkers(
     var failed_modules: usize = 0;
     var keys = std.ArrayList([32]u8).empty;
     errdefer keys.deinit(allocator);
-    var cache_keys = std.ArrayList([32]u8).empty;
-    errdefer cache_keys.deinit(allocator);
     var digests = std.ArrayList([32]u8).empty;
     errdefer digests.deinit(allocator);
     var checking = std.ArrayList(ModuleCheckingFacts).empty;
@@ -7890,7 +7889,6 @@ fn compileAppFactsWithWorkers(
             }
             if (mod.checkedArtifact()) |artifact| {
                 try keys.append(allocator, artifact.key.bytes);
-                if (mod.typing_storage_key) |key| try cache_keys.append(allocator, key.bytes);
                 if (!coord.hasUserErrors()) {
                     // Compare all semantic columns, including evaluated values
                     // and their references.
@@ -7904,6 +7902,8 @@ fn compileAppFactsWithWorkers(
             errdefer allocator.free(name);
             try checking.append(allocator, .{
                 .name = name,
+                .artifact_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null,
+                .storage_key = if (mod.typing_storage_key) |key| key.bytes else null,
                 .inference_runs = mod.inference_runs,
                 .interfaces_built = mod.checking_interfaces_built,
                 .work = mod.checking_work,
@@ -7912,7 +7912,6 @@ fn compileAppFactsWithWorkers(
         }
     }
     std.mem.sort([32]u8, keys.items, {}, lessThanBytes);
-    std.mem.sort([32]u8, cache_keys.items, {}, lessThanBytes);
     std.mem.sort([32]u8, digests.items, {}, lessThanBytes);
 
     return .{
@@ -7921,7 +7920,6 @@ fn compileAppFactsWithWorkers(
         .reports = owned_reports,
         .checking_work = coord.getTimingInfo().checking_work,
         .artifact_keys = try keys.toOwnedSlice(allocator),
-        .cache_keys = try cache_keys.toOwnedSlice(allocator),
         .artifact_digests = try digests.toOwnedSlice(allocator),
         .checking = try checking.toOwnedSlice(allocator),
         .has_errors = coord.hasUserErrors(),
@@ -7941,6 +7939,7 @@ const AppRootIdentity = struct {
     platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
     direct_required_call_count: usize,
+    forwarded_callable_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -8108,6 +8107,10 @@ fn compileAppRootIdentityExpecting(
             direct_required_call_count += 1;
         }
     }
+    var forwarded_callable_count: usize = 0;
+    for (root.callable_eval_templates.templates.items) |template| {
+        if (template.forwarded_lookup != null) forwarded_callable_count += 1;
+    }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
         .compile_time_debug_count = root.compile_time_debug.entries.len,
@@ -8119,6 +8122,7 @@ fn compileAppRootIdentityExpecting(
         .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
         .direct_required_call_count = direct_required_call_count,
+        .forwarded_callable_count = forwarded_callable_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
         .stderr_bytes = stderr_bytes,
@@ -8822,11 +8826,13 @@ test "issue 11389 required procedure aliases forward without compile-time evalua
     defer allocator.free(app);
     var unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
     defer unpaired.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), unpaired.forwarded_callable_count);
     for (0..2) |_| {
         var paired = try compileAppRootIdentityForMode(allocator, cache, app, .executable_artifacts);
         defer paired.deinit(allocator);
         try std.testing.expect(paired.platform_root_publish_count == 0);
         try std.testing.expect(paired.compile_time_request_count == 0);
+        try std.testing.expectEqual(@as(usize, 1), paired.forwarded_callable_count);
     }
 }
 
@@ -10352,14 +10358,21 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.cache_keys) |key| {
-        const in_both = for (unlifted.cache_keys) |other| {
-            if (std.mem.eql(u8, &key, &other)) break true;
-        } else false;
-        if (!in_both) continue;
-        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse return error.TestUnexpectedResult;
+    for (lifted.checking) |facts| {
+        const artifact_key = facts.artifact_key orelse continue;
+        const peer = for (unlifted.checking) |other| {
+            if (other.artifact_key) |other_key| {
+                if (std.mem.eql(u8, &artifact_key, &other_key)) break other;
+            }
+        } else continue;
+        // Storage is indexed by the typing input, not the published artifact's
+        // identity. Shared artifacts must still have identical input keys and
+        // bytes regardless of the importing app.
+        try std.testing.expectEqual(facts.storage_key, peer.storage_key);
+        const key = facts.storage_key orelse continue;
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
         defer allocator.free(from_lifted);
-        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, peer.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);
         try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
         shared_entries += 1;

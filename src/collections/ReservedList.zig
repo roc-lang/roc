@@ -519,8 +519,10 @@ pub fn ReservedColumns(comptime T: type, comptime density: Density) type {
             return @fromBackingInt(index);
         }
 
-        /// Append every row of `rows`.
+        /// Append every row of `rows`. No rows yield the range that starts at
+        /// the first row and holds nothing, so empty ranges compare equal.
         pub fn appendSlice(self: *Self, gpa: Allocator, rows: []const T) Allocator.Error!Range {
+            if (rows.len == 0) return .{ .start = .first, .count = 0 };
             try self.ensureUnusedCapacity(gpa, rows.len);
             const start = self.len();
             for (rows) |row| _ = self.appendAssumeCapacity(row);
@@ -704,6 +706,17 @@ test "a clone holds the same entries in its own storage" {
 }
 
 const Row = struct { wide: u64, narrow: u8, mid: u32 };
+
+test "appending no rows yields the empty range at the first row" {
+    var columns = try ReservedColumns(Row, .dense).init(testing.allocator, 2);
+    defer columns.deinit(testing.allocator);
+    _ = try columns.append(testing.allocator, .{ .wide = 1, .narrow = 2, .mid = 3 });
+    const empty = try columns.appendSlice(testing.allocator, &.{});
+    try testing.expectEqual(@as(u32, 0), @backingInt(empty.start));
+    try testing.expectEqual(@as(u32, 0), empty.count);
+    try testing.expectEqual(@as(usize, 0), columns.sliceRange(empty).len);
+    try testing.expectEqual(@as(u32, 1), columns.len());
+}
 
 test "columns keep rows and field slices" {
     var columns = try ReservedColumns(Row, .dense).init(testing.allocator, 2);

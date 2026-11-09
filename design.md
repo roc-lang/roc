@@ -503,6 +503,9 @@ frozen address relocation when embedding a constant root. Private allocations
 retain hidden visibility and do not become host exports. A combined code/data
 object keeps local binding for private allocations because those references
 remain inside that object.
+Zero-sized definitions still belong to a defined section, even when it has no
+payload bytes; omitting that section must not turn a definition into an external
+declaration.
 
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
@@ -2357,6 +2360,11 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+An ineligible callable root remains an instantiation template: its pending
+payload is not a promise of a stored value. Boxy instantiates its declared
+wrapper at each use's type arguments, including open result rows. An eligible
+pending root instead requires its compile-time producer; runtime lowering
+must never compute that missing value.
 Within each immutable root-output batch, concreteness and reachable
 callable-slot queries reuse completed graph proofs. Concreteness keys include
 whether a node is a value type or a nominal declaration's backing template:
@@ -5403,7 +5411,9 @@ from the bound app procedure kind using the checked output rule;
 callable-evaluation bindings remain indirect unless they are exact procedure
 aliases, which forward (see "Procedure Aliases"). Exact procedure aliases whose
 required bindings are known through the pairing use the checked forwarding
-rule and require no compile-time evaluator. Completed independent roots are
+rule and require no compile-time evaluator. The pairing outputs and caches
+these forwarding proofs; it cannot borrow proofs made before the requirements
+were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
@@ -5434,6 +5444,13 @@ id) for resolution. The locator is valid for exactly as long as the entry that
 stores it, because that entry's content hash covers the referenced module.
 Resolving a type from its key alone (bump, glue) builds the owning module's
 key index on first demand, through the module's index slot.
+
+Within one module, representative type ids preserve variable identity and otherwise
+select the lowest source id, then the lowest synthesized id, with the same
+key. Each settled type remembers that answer atomically, so repeated lowering
+queries do not repeat key-index lookups. Pending synthesized graphs never
+record an answer. These process-local memos are not serialized and pairing
+stores own their synthesized memos independently.
 
 Type digests, type content keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
@@ -5540,11 +5557,11 @@ Generic allocator storage is not assumed to be zero. No bulk initialization,
 debug poisoning, slot destruction scan, huge-page advice or custom fault handler
 touches the mapping. Compile-time checks require the empty slot state to be
 encoded as zero and the atomic state representation to remain compatible.
-A slot's result is read only after its claimant writes it and stores done.
+A slot's result is read only after its claimant writes it and stores `done` with release ordering.
 The identity array and key computation remain unchanged.
 
 Compiler-WASM selects a different storage backend at compile time: a directory
-of fixed 64-slot heap pages, each explicitly initialized before readers can use it.
+of fixed 64-slot heap pages, each explicitly initialized before readers can access it.
 WASM linear memory and its recycling allocator do not provide independent,
 releasable OS mappings. Unsupported native hosts require an explicit backend.
 An allocation failure never changes backends. Storage initialization completes
@@ -5558,7 +5575,7 @@ from reserved virtual key bytes. Neither measures resident RAM. It counts
 successful key computations under the existing writer lock, incrementing only
 after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
-before its slot stores done; quiescent counts equal completed keys. No key
+before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
 
 There is no scheduling edge between modules. A module's analyses are never
@@ -5719,7 +5736,17 @@ inspecting solved type shape or by comparing the eventual runtime value kind.
 A procedure requirement's root evidence follows the complete scheme of its
 recorded app definition, including captured codec requirements. The copied
 platform requirement type supplies the solved interface, not the scheme's
-evidence identity. The pairing's root-request analysis validates a direct
+evidence identity. Once the binding's scheme is complete, checking records a
+source-free invocation with the ordinary scheme-use substitution and validates
+all of its copied requirements. The solved requirement and its identity slots
+name that instance. Checked output consumes the invocation's evidence. An attached
+codec parameter has a variable receiver, so its scheme has no uninstantiated
+root contract: a literal default is not a checked codec derivation. This rule
+also covers unused and aliased procedures, not just platform-bound definitions.
+Explicit composite codec requirements retain their private-validation verdict.
+This is one use, not a second body check or an output-time
+codec derivation. A monomorphic invocation with no evidence needs no record.
+The pairing's root-request analysis validates a direct
 procedure's root vector against the app template's parameter count. Monotype
 selects this root evidence before materializing an edge for a direct call,
 procedure value, or interface relation; downstream specialization receives
@@ -9660,6 +9687,34 @@ Backends receive only ordinary LIR and explicit ARC statements. They must not
 know whether a value originated as a public iterator, a minted iterator,
 forced-dynamic callable state, or a scalarized loop.
 
+## Immutable Diagnostic Captures
+
+Diagnostics capture their type evidence before error poisoning, but render only
+the roots and tags their reports request. A capture retains variable identity,
+recursive references, polarity, naming scope, and literal-constraint display
+policy. Later solver writes, identifier insertion, or another capture's display
+options cannot change its text.
+
+The structural snapshot is the durable source of truth. Completed subgraphs share
+nodes within a capture; recursion markers retain their source identity rather
+than requiring repeated expansion of cyclic subgraphs. Only a capture whose text
+is requested acquires a private `TypeWriter` adapter graph, which restores that
+sharing and recursion without consulting the
+solver. Filling newly allocated presentation nodes is diagnostic construction,
+not a solver-mutating rewrite. Rendered strings have stable owned storage:
+requesting another root cannot invalidate a string already borrowed by a report.
+
+Constraint collection visits each receiver once per rendering and deduplicates
+exact callable identities before formatting. Equal displayed signatures are
+deduplicated without rescanning the accumulated list. These are presentation
+rules, not changes to evidence identity or constraint solving.
+
+Checking capsules retain the immutable capture and already-requested text, not
+an eager rendering of every node. Restored diagnostics use the same rendering
+path. Probe rollback discards speculative captures and rendered-result entries.
+Performance tests count capture and rendering visits as well as duplicate
+comparisons; eliminating one comparison loop alone is not sufficient.
+
 ## Solver-Mutating Rewrites
 
 Pure unification is the authority on what typechecks. Any code that mutates
@@ -10432,7 +10487,10 @@ converts instead (Sealed Result Rows); the checker is the same for both.
 **Where joins come from.** Every place a value's rows flow into another's:
 a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
-function's `Try` result. These are edges between types, not between rows:
+function's `Try` result. Generated `try_sequence` and `try_record_sequence`
+forward the input error payload to either their shared error continuation or
+their own result's error payload; both forms carry the same row-join edge.
+These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
@@ -11472,6 +11530,11 @@ it states the instance's callable, whose types that derivation was built at. So
 a procedure that runs as a root, which has no caller, relates to the instance as
 it would to a use, and a generalized binding nothing uses (`_ = any_parser`)
 still has evidence at its construction.
+Every dispatch relation the private instance copies, including constraints
+attached to its nested variables, belongs to the pending codec relation's
+recorded owner. Shared relations keep their original owner. Registering these
+copies is part of instantiation, before any of them can reach a dispatch drain;
+the later finalization boundary is not their creator.
 This validates in a private copy and rewrites no solved variable the program can
 reach, so it adds no Rewrite Inventory entry (Solver-Mutating Rewrites).
 
@@ -11535,7 +11598,13 @@ module solves, each open row in its data whose tail carries only these
 constraints is grounded to the empty row by unifying the tail with it
 (`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
 value closes when its module finishes checking (Value Rows: Uses Share One
-Row). A function's tail is left open: it
+Row). The module commits its permitted weak-value row defaults after the
+late annotation audit, then drains the dispatch work they create before
+freezing codec derivations or rejecting unresolved scheme requirements.
+A non-generalized tail shared through a function stored in a weak value
+must receive its default before a borrowing scheme is judged unresolved.
+These are the existing value-row commitments, not another whole-module
+finalization pass. A function's generalized tail is left open: it
 generalizes, and each instantiation supplies its row. An instantiation whose
 copy of the tail nothing pins leaves that copy to its row default too, so the
 ambiguity judgment never reports it: `make : U64 -> Set([X, Y])` built with
@@ -13989,7 +14058,11 @@ callable carries the caller's instantiation: a `where` requirement whose
 interface mentions the variable (the dictionary's methods), or any
 parameter holding a nominal over a callable payload, whose callable's
 interface its methods hide from the signature
-(the argument traversal of `SealedSchemeSlots`). A bounded flex that unification
+(the argument traversal of `SealedSchemeSlots`). This includes
+`Encoding.ParseTagUnionSpec`: its nominal exposes the parsed shape, but its
+callback exchanges the format invocation's error row in both arguments and
+results. Sealing the format's row would change that callback's ABI.
+A bounded flex that unification
 tied to a rigid or a closed row is not a flex, so genuine row polymorphism
 (`[A, ..r] -> [A, B, ..r]`) and every other quantified variable keep their
 hidden descriptors.
@@ -14211,6 +14284,11 @@ of the component's type; for a list, box, recursion box, or nominal type the
 names block of its item, payload, or backing. A type with no record field
 or tag in its reach has none (null). Blocks are built by descriptor key, each
 reserved before its components', so a recursive type's block reaches itself.
+Filling follows an explicit worklist, so deep types consume heap storage rather
+than native stack frames. Label reachability reuses the shared demand-driven
+SCC analysis: every reached type is expanded once, and a negative answer is
+stored only after its complete component has no path to a label. Building
+nested unnamed wrappers therefore does not repeatedly traverse their suffixes.
 
 Only code that reflects over a type reads a names block: `dyn_inspect`
 (`Str.inspect`, `dbg`, and the rendered value of a failed `expect`'s `Err`)
@@ -14755,9 +14833,12 @@ descriptor, its second word the capture capacity of the allocation holding it
 (the record's size when the callable is first packed; an allocation repacked
 in place keeps its capacity), and the callable's `on_drop` is the shared
 runtime drop that reads the first word. When every capture is of closed type,
-the capture record has a static layout and `on_drop` is the per-worker helper
-the backend generates for that layout. Zero-capture functions are static,
-immortal callables. The `out_desc` slot of the erased-callable ABI is always
+the capture record has a static layout and `on_drop` names that layout's helper
+only when it contains refcounted data. The callback is optional, not a
+requirement of every exposed callable handle. Immortal static recipe wrappers
+need no callback: their descriptor and callable words own no runtime units,
+and decrementing a static allocation never invokes final-drop logic.
+Zero-capture functions are static, immortal callables. The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
 Completed callable parts carry the producer-selected drop helper along with
@@ -15451,12 +15532,7 @@ previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before
 serialization, since its consumers cannot reopen it. A platform pairing keeps
 the declared requests for inherited values still missing either representation;
-completion under one strategy alone does not remove their producers from the schedule.
-The pairing's request completion bit records this same two-strategy rule, so
-the full request list and its scheduled subset cannot disagree.
-Pairing also records callable-alias forwarding again after binding requirements:
-a requirement that now names a procedure uses the same forwarding rule as an
-already-resolved import, without mutating the unpaired platform's metadata.
+completion by one strategy alone does not remove their producers from the schedule.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization
@@ -17676,7 +17752,9 @@ its final `alias_target`, and a callable-eval template carries its
 `forwarded_lookup` when the lookup reaches a directly callable procedure (an
 ordinary template, a hosted procedure, or another forwarding alias, to a fixed
 point). An alias of a function-valued constant is not a forward; calling it
-calls the evaluated value.
+calls the evaluated value. Root-request output and platform pairing omit
+evaluation only for this explicit forwarding proof, not for the lookup's
+procedure-reference shape: a computed callable alias still needs its value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
@@ -21041,10 +21119,11 @@ callee can return with a call pending, and on each deferred call:
 - `none`: nothing can be pending after the statement.
 - `handed_up`: this procedure returns the value unchanged to a caller that
   makes the pending call, and until then the statement's target holds no
-  value. Only reference-count statements and jumps into a join body may
-  separate the call from the return; a pending call owns its closure and
-  every argument, so running those statements first releases nothing it
-  reads.
+  value. Only reference-count statements, residual-release field reads
+  explicitly marked `arc_dismantle`, and jumps into a join body may separate
+  the call from the return. The field reads neither dismantle, read, nor
+  overwrite the pending result. A pending call owns its closure and every
+  argument, so running that cleanup first releases nothing it reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
@@ -21139,7 +21218,10 @@ function, and `returns_pending` becomes a query of the pending record
 followed by a return. Pending state belongs exclusively to the waiter's
 frame, including its argument packet. Packets of at most 32 bytes occupy
 inline byte storage in the cell; larger packets occupy an exact-sized host
-allocation. The driver copies an inline packet into separate 16-byte-aligned
+allocation. Backends obtain the cell's target-width byte size and alignment
+from `native_callable`: only header words scale with pointer width, never
+the fixed 32-byte inline packet. Compiler-host word counts cannot size it.
+The driver copies an inline packet into separate 16-byte-aligned
 invocation storage before calling, so a subsequent deferral cannot overwrite
 arguments the active callee still reads. Heap packets remain owned by that
 invocation until it returns. Storage selection uses the explicit packet byte

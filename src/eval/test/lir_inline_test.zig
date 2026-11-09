@@ -220,12 +220,15 @@ fn lowerModuleWithOptions(
     );
     errdefer lowered.deinit();
 
-    // Lowering may already freeze some values. The interpreter still needs
-    // the complete image, including internal values built from initializers.
-    const exports = try @import("static_data").buildStaticDataForWidth(allocator, .{
-        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
-        .imports = import_views,
-    }, &lowered, base.target.TargetUsize.native, .{});
+    // These fixtures execute the lowered program. Freeze its closed static
+    // initializers as well as any data produced during compile-time evaluation.
+    const exports = try eval.buildStaticDataForWidth(
+        allocator,
+        .{ .root = check.CheckedArtifact.loweringView(&resources.checked_artifact), .imports = import_views },
+        &lowered,
+        lowered.target_usize,
+        .{},
+    );
     if (lowered.frozen_static_data) |*frozen| frozen.deinit();
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
@@ -395,6 +398,7 @@ const StructuralJsonMonotypeStats = struct {
     functions: usize,
     definitions: usize,
     expressions: usize,
+    static_candidates: usize,
     locals: usize,
     template_misses: u64,
     nested_misses: u64,
@@ -484,10 +488,16 @@ fn structuralJsonMonotypeStatsForSource(
     });
     defer lowered.deinit(allocator);
 
+    var static_candidates: usize = 0;
+    for (lowered.mono.view().exprs) |expr| {
+        if (expr.data == .static_data_candidate) static_candidates += 1;
+    }
+
     return .{
         .functions = lowered.mono.view().fns.len,
         .definitions = lowered.mono.view().defs.len,
         .expressions = lowered.mono.view().exprs.len,
+        .static_candidates = static_candidates,
         .locals = lowered.mono.view().locals.len,
         .template_misses = counters.template_misses,
         .nested_misses = counters.nested_misses,
@@ -1318,8 +1328,8 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
-/// The complete readonly image materialized above, installed with explicit
-/// ownership for every interpreted callable.
+/// Both strategies execute with the immutable values materialized for their
+/// lowered program, including stored builtin values and Boxy metadata.
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
@@ -13269,28 +13279,56 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        // Constant construction can live in the readonly image rather than
-        // an assign_literal. Pin the committed product, not that instruction.
-        var found_product = false;
-        var layouts = result.layouts.layouts.iter();
-        while (layouts.next()) |physical| {
-            if (physical.tag != .struct_) continue;
-            const fields = result.layouts.getStructInfo(physical).fields;
-            if (fields.len != 2) continue;
-            const first = fields.get(0).layout;
-            const second = fields.get(1).layout;
-            if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) found_product = true;
+        var found_packed_local = false;
+        // Verify the product itself, not an incidental descriptor byte string:
+        // descriptors may live in the static image rather than inline literals.
+        for (result.store.getLocals()) |local| {
+            const layout = result.layouts.getLayout(local.layout_idx);
+            if (layout.tag != .struct_) continue;
+            const info = result.layouts.getStructInfo(layout);
+            if (info.fields.len != 2) continue;
+            const first = info.fields.get(0).layout;
+            const second = info.fields.get(1).layout;
+            if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) {
+                try std.testing.expectEqual(@as(u32, 16), info.size());
+                found_packed_local = true;
+            }
         }
-        try std.testing.expect(found_product);
+        try std.testing.expect(found_packed_local);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
+            // The top-level list is now a frozen value, not a bytes_literal
+            // instruction. Pin the two packed, padded Pair elements themselves
+            // before checking that runtime copy-on-write leaves them unchanged.
+            var found_packed = false;
+            for (result.static_data_values.items, 0..) |slot, slot_index| {
+                const slot_layout = result.layouts.getLayout(slot.layout_idx);
+                if (slot_layout.tag != .list) continue;
+                const element = result.layouts.getListInfo(slot_layout);
+                if (element.elem_layout.tag != .struct_) continue;
+                const struct_idx = element.elem_layout.getStruct().idx;
+                if (result.layouts.getStructData(struct_idx).fields.count != 2) continue;
+                if (result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0) != .u8 or
+                    result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1) != .u64) continue;
+                const address = static_data.data.?.addresses[slot_index];
+                const list = (eval.Value{ .ptr = @ptrFromInt(address) }).read(@import("builtins").list.RocList);
+                try std.testing.expectEqual(@as(usize, 2), list.length);
+                try std.testing.expectEqual(@as(u32, 16), element.elem_size);
+                const a_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+                const z_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+                try std.testing.expect(a_offset < element.elem_size and z_offset + @sizeOf(u64) <= element.elem_size);
+                try std.testing.expect(a_offset < z_offset or a_offset >= z_offset + @sizeOf(u64));
+                for (0..list.length) |index| {
+                    const pair = eval.Value{ .ptr = list.bytes.? + index * element.elem_size };
+                    try std.testing.expectEqual(@as(u8, 3), pair.offset(a_offset).read(u8));
+                    try std.testing.expectEqual(@as(u64, 42), pair.offset(z_offset).read(u64));
+                }
+                found_packed = true;
+            }
+            try std.testing.expect(found_packed);
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
             var interpreter = try eval.Interpreter.init(
@@ -13301,10 +13339,7 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             var index: u64 = 1;
             const evaluated = try interpreter.eval(.{
                 .proc_id = try rootProc(&lowered.lowered),
@@ -13555,8 +13590,11 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_encoder_optional_gate_source);
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
-    // Pin the current graph as well as the independently counted helper reuse.
+    // Each of the two restored Values keeps its source static-data candidate,
+    // active-binding reservation, and deferred-use reservation. These six
+    // graph slots do not add helper workers; the counts above and below pin sharing.
     try std.testing.expectEqual(@as(usize, 212), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
     try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
@@ -14254,11 +14292,14 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // The explicit parameter and one type table, which carries both the
-        // row descriptor and its composite descriptor.
-        const args = result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args);
+        const pass_spec = result.store.getProcSpec(procs[0]);
+        // The explicit dynamic parameter and one type table. The row variable
+        // and `[A, ..r]` descriptors are table entries, not separate arguments.
+        const args = result.store.getLocalSpan(pass_spec.args);
         try std.testing.expectEqual(@as(usize, 2), args.len);
-        try std.testing.expectEqual(layout_mod.Idx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
+        try std.testing.expect(result.store.getLocal(GuardedList.at(args, 0)).dyn != null);
+        try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
+        try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }
     {
         const conversions = try procsNamed(allocator, result, "boxy.convert");

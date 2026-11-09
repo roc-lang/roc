@@ -1245,7 +1245,7 @@ test "CTFE code demand retains union identities and omits runtime-only procedure
     try result.static_data_values.append(allocator, .{
         .initializer = null,
         .layout_idx = .opaque_ptr,
-        .parts = .{ .kind = .{ .callable = .{ .proc = procs[2], .on_drop = .none } }, .children = try allocator.alloc(LIR.StaticDataId, 0) },
+        .parts = .{ .kind = .{ .callable = .{ .proc = procs[2] } }, .children = try allocator.alloc(LIR.StaticDataId, 0) },
     });
     var exports = [_]LirProgram.StaticDataExport{.{
         .value_id = callable_slot,

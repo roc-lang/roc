@@ -89,7 +89,9 @@ pub const EvidenceParam = struct {
     /// Producer-authored origin from which a specialization must obtain the
     /// dispatcher's concrete type. `path` is relative to this source.
     source: Source,
-    /// Producer-authored scheme-only codec; no uninstantiated root contract.
+    /// A codec parameter needing a checked use, rather than an uninstantiated
+    /// root contract. Attached variable-receiver codecs and checker-authored
+    /// scheme-only composite codecs both require instantiation.
     requires_instantiation: bool = false,
     /// Assigned once when the owner schema is frozen into the checked pool.
     published_index: ?u32 = null,

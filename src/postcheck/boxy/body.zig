@@ -1621,21 +1621,21 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                const forwards_procedure = if (root.kind == .callable_binding) alias: {
-                    const binding = self.view.view.callable_eval_templates.lookupByRoot(root.id) orelse
-                        invariant("a callable binding root has no callable template");
-                    break :alias binding.forwarded_lookup != null;
+                const forwards = root.kind == .callable_binding and if (root.pattern) |pattern| blk: {
+                    const id = self.program.callable_eval_by_pattern.get(.{ .module = self.module, .pattern = pattern }) orelse break :blk false;
+                    break :blk self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != null;
                 } else false;
-                switch (root.request_eligibility) {
-                    .pending => invariant("an entry wrapper's checked request eligibility is pending"),
-                    // Exact procedure aliases have an explicit forwarding
-                    // decision and no evaluator; their wrapper returns that
-                    // procedure through its checked lookup.
-                    .eligible => if (!forwards_procedure and !self.program.input.compile_time and root.payloadFor(.boxy) == .pending)
-                        invariant("a runtime entry wrapper has no completed Boxy value"),
-                    // A specialization-owned expression has no context-free
-                    // stored value; its entry consumes the worker's arguments.
-                    .ineligible => {},
+                // A construction whose type needs its use context has no
+                // scheduled evaluator result. Its checked wrapper remains a
+                // generic runtime constructor; requested closed roots must
+                // still be complete.
+                const runtime_constructor = root.request_eligibility == .ineligible;
+                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending and !runtime_constructor and
+                    !forwards)
+                {
+                    invariantFmt("a runtime entry wrapper has no completed Boxy value: module={d} root={d} kind={s} source={any} eligibility={s}", .{
+                        @backingInt(self.module), @backingInt(root.id), @tagName(root.kind), root.source, @tagName(root.request_eligibility),
+                    });
                 }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
@@ -2075,7 +2075,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.var_descs.len);
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2209,7 +2209,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.var_descs.len);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
@@ -2968,17 +2968,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payloadFor(.boxy)) {
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
                     .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
-                    .unevaluated, .runtime => {
+                    .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -8182,7 +8185,7 @@ pub const Builder = struct {
             if (table) |local| try fields.append(self.allocator, local);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = .none } }, &.{});
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
         const record = try self.staticPartsLocal(record_layout, .product, fields.items);
         const layouts = &self.program.result.layouts;
         const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))

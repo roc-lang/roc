@@ -85,6 +85,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -132,17 +133,19 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         function_unit: ?[32]u8 = null,
         exports_unrelated: bool,
     };
+    var completed = false;
     for ([_]Case{
         .{ .compile_time = true, .exports_unrelated = false },
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
-    }, 0..) |case, case_index| {
-        if (case_index == 1) {
-            // Runtime producer units consume completed values, unlike the
-            // first case which deliberately lowers pending evaluation roots.
+    }) |case| {
+        // Runtime producers consume completed roots, unlike the evaluator
+        // consumer above whose pending roots are the subject of the test.
+        if (!case.compile_time and !completed) {
             coord.specialization_strategy = .boxy;
             try coord.finishCheckedProgram(.executable_artifacts);
-            try std.testing.expect(!library.hasUnevaluatedRequests(.boxy));
+            try std.testing.expect(!coord.hasUserErrors());
+            completed = true;
         }
         var output = try boxy.run(allocator, .{
             .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
