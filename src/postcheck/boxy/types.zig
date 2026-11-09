@@ -2050,6 +2050,7 @@ test "Boxy error reachability preserves value-error edges and field-kind semanti
     const a = std.testing.allocator;
     var store = checked.CheckedTypeStore{};
     defer store.deinit(a);
+    store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(a, std.testing.io, 0));
     var canonical_names = names.CanonicalNameStore.init(a);
     defer canonical_names.deinit();
     const type_name = try canonical_names.internTypeName("Value");

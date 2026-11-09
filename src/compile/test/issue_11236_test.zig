@@ -229,6 +229,7 @@ test "issue 11236: rejection survives exports and serialization without callable
     const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_use = false;
     const importer_bodies = importer.bodies();
+    try importer_bodies.demandIndex();
     const importer_store = &importer.moduleEnvConst().store;
     for (0..importer_bodies.nodeCount()) |raw| {
         if (importer_bodies.index().nodeKind(@intCast(raw)) != .expr) continue;

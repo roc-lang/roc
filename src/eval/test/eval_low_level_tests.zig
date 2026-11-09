@@ -4724,6 +4724,24 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
+        // Boxy's Try equality defers a pair of heap strings. On wasm32 the
+        // pending cell needs its full fixed-size inline packet, not the
+        // compiler host's word count scaled down to target pointer width.
+        .name = "pending calls - inline packet preserves unrelated live list",
+        .source =
+        \\{
+        \\    units = List.repeat(65.U16, 64)
+        \\    first : Try(Str, U64)
+        \\    first = Ok(Str.repeat("A", 64))
+        \\    second : Try(Str, U64)
+        \\    second = Ok(Str.repeat("A", 64))
+        \\    equal = first == second
+        \\    (equal, units.get(0))
+        \\}
+        ,
+        .expected = .{ .inspect_str = "(True, Ok(65))" },
+    },
+    .{
         .name = "wide UTF decoding - UTF-16 sliced input LE",
         .source = wide_utf_le_test_prefix ++ "\n" ++
             \\Str.from_utf16_le(utf16_bytes(List.drop_first([99.U16, 65, 66, 67], 1))) == Ok("ABC")

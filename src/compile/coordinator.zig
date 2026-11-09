@@ -1575,6 +1575,8 @@ const BoxyObjects = struct {
     /// Snapshot units before worker preparation. The program's emitted imports
     /// subsequently select which snapshots actually become compiler-only units.
     fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
+        // Freestanding evaluation has no native unit-image loader.
+        if (comptime is_freestanding) return null;
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
         const objects = (try objectSet(context, module)) orelse return null;
@@ -1771,10 +1773,6 @@ const BoxyObjects = struct {
         // A host whose units carry images loads them; every other host
         // composes the pieces (`boxy_object_code`).
         std.debug.assert(boxy_unit.producesImage(self.lowering.target) == (eval.CompileTimeFinalization.boxy_object_code == .image));
-        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
-        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
-        try self.pieces.ensureUnusedCapacity(gpa, 1);
-        try self.images.ensureUnusedCapacity(gpa, 1);
         // The image and the pieces become the compilation's once stored;
         // until then a failure releases them with the rest of `built`.
         var code_stored = false;
@@ -1786,6 +1784,10 @@ const BoxyObjects = struct {
             }
         };
         defer built.deinitKeepingCode(gpa);
+        try self.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        try self.replaced_images.ensureUnusedCapacity(gpa, 1);
+        try self.pieces.ensureUnusedCapacity(gpa, 1);
+        try self.images.ensureUnusedCapacity(gpa, 1);
         const code: @FieldType(Object, "code") = switch (eval.CompileTimeFinalization.boxy_object_code) {
             .image => image: {
                 const image = built.image orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its image", .{});
@@ -1793,7 +1795,7 @@ const BoxyObjects = struct {
             },
             .pieces => .{ .pieces = built.pieces orelse Coordinator.coordinatorInvariant("a compile-time evaluation unit was built without its pieces", .{}) },
         };
-        try self.digests.recordExports(artifact, built.exports);
+        try self.digests.recordExportsDigest(artifact, built.exports_digest);
         const symbols = try arena.alloc([]const u8, built.hosted_symbols.len);
         for (built.hosted_symbols, symbols) |symbol, *copy| copy.* = try arena.dupe(u8, symbol);
         code_stored = true;
@@ -7770,6 +7772,8 @@ const CompiledBuildFacts = struct {
 
 const ModuleCheckingFacts = struct {
     name: []const u8,
+    artifact_key: ?[32]u8,
+    storage_key: ?[32]u8,
     inference_runs: u32,
     interfaces_built: u32,
     work: compile_package.CheckingWork,
@@ -7911,6 +7915,8 @@ fn compileAppFactsWithWorkers(
             errdefer allocator.free(name);
             try checking.append(allocator, .{
                 .name = name,
+                .artifact_key = if (mod.checkedArtifact()) |artifact| artifact.key.bytes else null,
+                .storage_key = if (mod.typing_storage_key) |key| key.bytes else null,
                 .inference_runs = mod.inference_runs,
                 .interfaces_built = mod.checking_interfaces_built,
                 .work = mod.checking_work,
@@ -7946,6 +7952,7 @@ const AppRootIdentity = struct {
     platform_pairing_count: u32,
     where_method_scheme_use_count: usize,
     direct_required_call_count: usize,
+    forwarded_callable_count: usize,
     /// The executable root artifact serialized exactly as the checked-module
     /// cache stores it, so tests assert byte identity between fresh and
     /// cache-relocated publications rather than key identity alone.
@@ -8113,6 +8120,10 @@ fn compileAppRootIdentityExpecting(
             direct_required_call_count += 1;
         }
     }
+    var forwarded_callable_count: usize = 0;
+    for (root.callable_eval_templates.templates.items) |template| {
+        if (template.forwarded_lookup != null) forwarded_callable_count += 1;
+    }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
         .compile_time_debug_count = root.compile_time_debug.entries.len,
@@ -8124,6 +8135,7 @@ fn compileAppRootIdentityExpecting(
         .platform_pairing_count = coord.platform_pairing_count,
         .where_method_scheme_use_count = where_method_scheme_use_count,
         .direct_required_call_count = direct_required_call_count,
+        .forwarded_callable_count = forwarded_callable_count,
         .executable_root_bytes = executable_root_bytes,
         .app_root_bytes = app_root_bytes,
         .stderr_bytes = stderr_bytes,
@@ -8827,11 +8839,13 @@ test "issue 11389 required procedure aliases forward without compile-time evalua
     defer allocator.free(app);
     var unpaired = try compileAppRootIdentityForMode(allocator, cache, app, .none);
     defer unpaired.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), unpaired.forwarded_callable_count);
     for (0..2) |_| {
         var paired = try compileAppRootIdentityForMode(allocator, cache, app, .executable_artifacts);
         defer paired.deinit(allocator);
         try std.testing.expect(paired.platform_root_publish_count == 0);
         try std.testing.expect(paired.compile_time_request_count == 0);
+        try std.testing.expectEqual(@as(usize, 1), paired.forwarded_callable_count);
     }
 }
 
@@ -10357,14 +10371,18 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.artifact_keys) |key| {
-        const in_both = for (unlifted.artifact_keys) |other| {
-            if (std.mem.eql(u8, &key, &other)) break true;
-        } else false;
-        if (!in_both) continue;
-        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
+    for (lifted.checking) |module| {
+        const key = module.artifact_key orelse continue;
+        const other = for (unlifted.checking) |candidate| {
+            if (candidate.artifact_key) |other_key| {
+                if (std.mem.eql(u8, &key, &other_key)) break candidate;
+            }
+        } else continue;
+        // Checking inputs name storage; the completed artifact key names
+        // the result, not its filename.
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, module.storage_key orelse continue)) orelse continue;
         defer allocator.free(from_lifted);
-        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, key)) orelse return error.TestUnexpectedResult;
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, other.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);
         try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
         shared_entries += 1;
@@ -13194,6 +13212,97 @@ test "Boxy checked constants share across checkouts and survive unrelated applic
     try std.testing.expectEqual(@as(i64, 15), parser_changed.value);
 }
 
+test "Boxy object record reservation OOM releases the transferred unit" {
+    const allocator = std.testing.allocator;
+    var input_entry: boxy_object_cache.Entry = .{
+        .exports_digest = undefined,
+        .exports = &.{.{
+            .identity = @splat(1),
+            .rc_borrowed_params = 0,
+            .rc_ret_lenders = 0,
+            .rc_read_only_params = 0,
+            .rc_ret_unique_fields = 0,
+            .rc_ret_borrowed = false,
+            .rc_ret_unique = false,
+            .may_leave_pending = false,
+            .rc_ret_conditions = &.{ 3, 9 },
+            .table_needs = "needs",
+        }},
+        .hosted_symbols = &.{"roc_fx_test"},
+        .expect_sites = &.{.{ .module = @splat(1), .region_start = 0, .region_end = 1 }},
+        .test_roots = &.{.{ .module = @splat(1), .root_index = 0, .symbol = 0 }},
+        .pieces = "",
+        .image = "image bytes",
+        .code_locations = "locations",
+        .function_metadata = "metadata",
+    };
+    input_entry.exports_digest = try boxy_object_cache.exportRecordsDigest(allocator, input_entry.exports);
+    const encoded = try boxy_object_cache.encode(allocator, input_entry);
+    defer allocator.free(encoded);
+
+    // Reserve the preceding containers before arming failure, so each of
+    // record's four reservations fails in turn without lowering any code.
+    for (0..4) |reservation| {
+        var failing = std.testing.FailingAllocator.init(allocator, .{});
+        const gpa = failing.allocator();
+        var coordinator: Coordinator = undefined;
+        coordinator.gpa = gpa;
+        // Only fields reached before reservation failure are initialized.
+        // Neither the artifact nor any compiler service is consulted.
+        var objects: BoxyObjects = undefined;
+        objects.coordinator = &coordinator;
+        objects.lowering.target = roc_target.RocTarget.detectNative();
+        objects.arena = .init(gpa);
+        defer objects.arena.deinit();
+        objects.owned_pieces = .empty;
+        defer objects.owned_pieces.deinit(gpa);
+        objects.replaced_images = .empty;
+        defer objects.replaced_images.deinit(gpa);
+        objects.pieces = .empty;
+        defer objects.pieces.deinit(gpa);
+        objects.images = .empty;
+        defer objects.images.deinit(gpa);
+        if (reservation > 0) try objects.owned_pieces.ensureUnusedCapacity(gpa, 1);
+        if (reservation > 1) try objects.replaced_images.ensureUnusedCapacity(gpa, 1);
+        if (reservation > 2) try objects.pieces.ensureUnusedCapacity(gpa, 1);
+        const reserved_bytes = failing.allocated_bytes - failing.freed_bytes;
+
+        const built: boxy_unit.Built = unit: {
+            const pieces = try gpa.create(backend.dev.UnitPieces.Pieces);
+            errdefer gpa.destroy(pieces);
+            const entry = try boxy_object_cache.decode(gpa, encoded);
+            pieces.* = .{
+                .arena = .init(gpa),
+                .set = .{ .arena = .init(gpa), .excerpts = &.{} },
+                .erased_capture_prefix = 0,
+                .source_files = &.{},
+                .exported_data = &.{},
+                .helper_aliases = &.{},
+            };
+            break :unit .{
+                .restored = true,
+                .pieces = pieces,
+                .image = .{ .bytes = @alignCast(entry.image), .code_locations = entry.code_locations, .owner = .owned },
+                .function_metadata = entry.function_metadata,
+                .exports = entry.exports,
+                .exports_digest = entry.exports_digest,
+                .hosted_symbols = entry.hosted_symbols,
+                .expect_sites = entry.expect_sites,
+                .test_roots = entry.test_roots,
+            };
+        };
+        failing.fail_index = failing.alloc_index;
+        var artifact: CheckedArtifact.CheckedModuleArtifact = undefined;
+        try std.testing.expectError(error.OutOfMemory, objects.record(&artifact, built));
+        try std.testing.expect(failing.has_induced_failure);
+        try std.testing.expectEqual(reserved_bytes, failing.allocated_bytes - failing.freed_bytes);
+        try std.testing.expectEqual(@as(usize, 0), objects.owned_pieces.items.len);
+        try std.testing.expectEqual(@as(usize, 0), objects.replaced_images.items.len);
+        try std.testing.expectEqual(@as(u32, 0), objects.pieces.count());
+        try std.testing.expectEqual(@as(u32, 0), objects.images.count());
+    }
+}
+
 test "post-check publication submit OOM accepts no first task" {
     try testPostCheckPublicationOOM(false, true);
 }
@@ -13213,7 +13322,7 @@ test "post-check publication store OOM drains accepted writers before returning"
 /// Exercise the real coordinator queues with both workers occupied. Only the
 /// wake queue uses the failing allocator, armed after all fixture setup, so
 /// failure deterministically occurs at notification growth, without sleeps.
-fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Allocator.Error || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (CoordinatorError || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
     if (comptime !threads_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const previous_lanes = thread_lanes;

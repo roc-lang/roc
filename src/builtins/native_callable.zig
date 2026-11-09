@@ -36,9 +36,28 @@ pub const Pending = extern struct {
 /// Larger packets retain their exact producer-authored length and ownership.
 const inline_capacity = 32;
 
-/// The words of a `Pending`, for backends reserving one in a frame. Only
-/// `callable` needs initializing.
-pub const pending_words = @sizeOf(Pending) / @sizeOf(usize);
+// Every field before inline_args is a pointer-sized word or array of words.
+// Derive their count from the ABI declaration, not from the whole cell size.
+const pending_header_words = @offsetOf(Pending, "inline_args") / @sizeOf(usize);
+
+/// Target-width storage for a `Pending`. Its header consists of pointer-sized
+/// words, but inline argument bytes do not shrink on a 32-bit target.
+/// Only `callable` needs initializing.
+pub fn pendingByteSize(word_size: u32) u32 {
+    return std.mem.alignForward(u32, pending_header_words * word_size + inline_capacity, pendingAlignment(word_size));
+}
+
+/// The pending header requires target-word alignment; inline bytes require no more.
+pub fn pendingAlignment(word_size: u32) u32 {
+    std.debug.assert(word_size == 4 or word_size == 8);
+    return word_size;
+}
+
+comptime {
+    std.debug.assert(@offsetOf(Pending, "inline_args") % @sizeOf(usize) == 0);
+    std.debug.assert(@sizeOf(Pending) == pendingByteSize(@sizeOf(usize)));
+    std.debug.assert(@alignOf(Pending) == pendingAlignment(@sizeOf(usize)));
+}
 
 /// The erased ABI's last argument as this runtime passes it: an address in
 /// `cell` with the low bit set, which a host's aligned output pointer never
@@ -167,6 +186,14 @@ const TestCalls = struct {
         output.* = @ptrFromInt(0xdead_bee8);
     }
 };
+
+test "pending cell storage preserves inline bytes across target pointer widths" {
+    try std.testing.expectEqual(@as(u32, 60), pendingByteSize(4));
+    try std.testing.expectEqual(@as(u32, 88), pendingByteSize(8));
+    try std.testing.expectEqual(@as(u32, 4), pendingAlignment(4));
+    try std.testing.expectEqual(@as(u32, 8), pendingAlignment(8));
+    try std.testing.expectEqual(@sizeOf(Pending), pendingByteSize(@sizeOf(usize)));
+}
 
 test "native callable trampoline preserves arguments and releases every deferred closure" {
     var env = @import("utils.zig").TestEnv.init(std.testing.allocator);

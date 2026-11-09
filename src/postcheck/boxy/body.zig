@@ -565,12 +565,14 @@ pub const Builder = struct {
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
+        try program.module(worker.module).bodies().demandIndex();
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
-        // A `List(U8)` worker's body, and its lambdas', is lowered with the
-        // list item variable bound to `U8` (design.md "Pre-Specialized
-        // List(U8) Workers"): every value of the item type is static.
-        if (worker.list_u8_slot) |slot| bound[slot] = try program.store.primitive(.u8);
+        // An integer list worker's body, and its lambdas', is lowered with
+        // the list item variable bound to its integer type (design.md
+        // "Pre-Specialized Integer List Workers"): every value of the item
+        // type is static.
+        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
         return .{
             .program = program,
             .allocator = program.allocator,
@@ -1621,7 +1623,16 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                if (!self.program.input.compile_time and root.payloadFor(.boxy) == .pending) invariant("a runtime entry wrapper has no completed Boxy value");
+                // Polymorphic constants are explicit evaluation templates,
+                // instantiated at their runtime read rather than CTFE roots.
+                if (!self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
+                    // Exact aliases also compute their already-proven
+                    // procedure reference without an evaluator.
+                    const forwards = for (self.view.view.callable_eval_templates.templates) |alias| {
+                        if (alias.root == wrapper.root) break alias.forwarded_lookup != null;
+                    } else false;
+                    if (!forwards) invariant("a runtime entry wrapper has no completed Boxy value");
+                }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
@@ -2060,7 +2071,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.var_descs.len);
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2194,7 +2205,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.var_descs.len);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
@@ -2477,7 +2488,9 @@ pub const Builder = struct {
         const origin_module = default.origin() orelse invariant("a field default has no declaring module");
         const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
             invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+        const default_bodies = self.program.module(module_index).bodies();
+        try default_bodies.demandIndex();
+        const expr = default_bodies.defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
         const worker = try self.program.defaultWorker(module_index, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);
@@ -2953,17 +2966,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payloadFor(.boxy)) {
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
                     .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
-                    .unevaluated, .runtime => {
+                    .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -4148,6 +4164,9 @@ pub const Builder = struct {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
                     const node = literal_requirement.site.node;
+                    // Forwarding can enter an imported scheme whose linked
+                    // worker needed no body index. Reading its literal does.
+                    try self.bodies().demandIndex();
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
@@ -7348,8 +7367,9 @@ pub const Builder = struct {
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
         }
-        // A `List` template called at `U8` calls its `List(U8)` worker, whose
-        // inputs are the generic worker's.
+        // A `List` template called at a fixed-size integer item type calls
+        // its integer list worker for that type, whose inputs are the
+        // generic worker's.
         const direct = try self.program.directCallTarget(callee, bound);
         try self.argsAtParams(explicit, arg_types, direct, bound, null);
         // The callee's one hidden argument: its type table at the hidden

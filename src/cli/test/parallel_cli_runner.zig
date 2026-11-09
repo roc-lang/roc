@@ -10532,9 +10532,12 @@ fn customBoxyTestOutcomes(io: std.Io, allocator: Allocator, env: *const CaseEnv,
         .{ .roc_file = "test/cli/BoxyLiteralThroughProcedureAlias.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }} },
         .{ .roc_file = "test/cli/BoxyRowAtBoolFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyRowAtBoolFails.roc:17:1" } } },
         .{ .roc_file = "test/cli/BoxyNominalBoxFieldFails.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 2 tests" }, .{ .stream = .stderr, .text = "1 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyNominalBoxFieldFails.roc:25:1" } } },
-        // Monomorphic `List(U8)` operations call the pre-specialized
-        // `List(U8)` workers (design.md "Pre-Specialized List(U8) Workers").
+        // Monomorphic integer list operations call the pre-specialized
+        // integer list workers (design.md "Pre-Specialized Integer List
+        // Workers").
         .{ .roc_file = "test/cli/BoxyListU8Ops.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 21 tests" }, .{ .stream = .stderr, .text = "20 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyListU8Ops.roc:47:1" }, .{ .stream = .stderr, .text = "[dbg] [200, 201, 202]" } } },
+        .{ .roc_file = "test/cli/BoxyListIntOps.roc", .exit = .{ .code = 1 }, .contains = &.{ .{ .stream = .stderr, .text = "Ran 42 tests" }, .{ .stream = .stderr, .text = "41 passed" }, .{ .stream = .stderr, .text = "1 failed" }, .{ .stream = .stderr, .text = "BoxyListIntOps.roc:94:1" }, .{ .stream = .stderr, .text = "[dbg] [-1, 0, 1]" } } },
+        .{ .roc_file = "test/cli/BoxyListIntOwnership.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} },
     };
     for (cases) |case| {
         if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{ .args = &.{ "test", opt_arg, "--specialize=no" }, .roc_file = case.roc_file, .exit = case.exit, .contains = case.contains })) |failure| return failure;
@@ -17378,6 +17381,20 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
         .args = &.{ "glue", "glue_tool", glue_out2, "test/fx/platform/main.roc" },
         .contains = &.{.{ .stream = .stdout, .text = "generated.txt" }},
     })) |failure| return failure;
+
+    // Both invocations return an immutable file list from the loaded plugin.
+    // Its bytes must be copied before that plugin image is unloaded.
+    for ([_][]const u8{ glue_out, glue_out2 }) |output_dir| {
+        const output_path = std.fs.path.join(allocator, &.{ output_dir, "generated.txt" }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate generated file path: {}", .{err});
+        defer allocator.free(output_path);
+        const content = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(4096)) catch |err|
+            return customFailure(allocator, timer, "failed to read generated file: {}", .{err});
+        defer allocator.free(content);
+        if (!std.mem.eql(u8, content, "installed glue ran")) {
+            return customFailure(allocator, timer, "installed glue returned incorrect file content: {s}", .{content});
+        }
+    }
 
     // 4. Kind mismatch is a specific error, not a fallback.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{

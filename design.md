@@ -454,6 +454,9 @@ frozen address relocation when embedding a constant root. Private allocations
 retain hidden visibility and do not become host exports. A combined code/data
 object keeps local binding for private allocations because those references
 remain inside that object.
+Zero-sized definitions still belong to a defined section, even when it has no
+payload bytes; omitting that section must not turn a definition into an external
+declaration.
 
 Definitions retain their assigned symbol IDs through final metadata assembly.
 Object writers borrow immutable section bytes until emission, compute the final
@@ -2305,6 +2308,11 @@ those a cache entry left unevaluated.
 
 Root eligibility consumes the checked producer's types and fixed-callable
 result. It does not mutate solved types or invent evidence from a use site.
+An ineligible callable root remains an instantiation template: its pending
+payload is not a promise of a stored value. Boxy instantiates its declared
+wrapper at each use's type arguments, including open result rows. An eligible
+pending root instead requires its compile-time producer; runtime lowering
+must never compute that missing value.
 Within each immutable root-output batch, concreteness and reachable
 callable-slot queries reuse completed graph proofs. Concreteness keys include
 whether a node is a value type or a nominal declaration's backing template:
@@ -5351,7 +5359,9 @@ from the bound app procedure kind using the checked output rule;
 callable-evaluation bindings remain indirect unless they are exact procedure
 aliases, which forward (see "Procedure Aliases"). Exact procedure aliases whose
 required bindings are known through the pairing use the checked forwarding
-rule and require no compile-time evaluator. Completed independent roots are
+rule and require no compile-time evaluator. The pairing outputs and caches
+these forwarding proofs; it cannot borrow proofs made before the requirements
+were bound. Completed independent roots are
 read as stored values and never evaluated again. A pairing is never serialized
 into the platform's checked module.
 
@@ -5382,6 +5392,13 @@ id) for resolution. The locator is valid for exactly as long as the entry that
 stores it, because that entry's content hash covers the referenced module.
 Resolving a type from its key alone (bump, glue) builds the owning module's
 key index on first demand, through the module's index slot.
+
+Within one module, representative type ids preserve variable identity and otherwise
+select the lowest source id, then the lowest synthesized id, with the same
+key. Each settled type remembers that answer atomically, so repeated lowering
+queries do not repeat key-index lookups. Pending synthesized graphs never
+record an answer. These process-local memos are not serialized and pairing
+stores own their synthesized memos independently.
 
 Type digests, type content keys, recursive layout keys, and derived callable
 and evidence digests use the shared `base.TypeDigestHasher`: SHA-256 over the
@@ -5488,14 +5505,14 @@ Generic allocator storage is not assumed to be zero. No bulk initialization,
 debug poisoning, slot destruction scan, huge-page advice or custom fault handler
 touches the mapping. Compile-time checks require the empty slot state to be
 encoded as zero and the atomic state representation to remain compatible.
-A slot's result is read only after its claimant writes it and publishes done.
+A slot's result is read only after its claimant writes it and stores `done` with release ordering.
 The identity array and key computation remain unchanged.
 
 Compiler-WASM selects a different storage backend at compile time: a directory
-of fixed 64-slot heap pages, each explicitly initialized before publication.
+of fixed 64-slot heap pages, each explicitly initialized before readers can access it.
 WASM linear memory and its recycling allocator do not provide independent,
 releasable OS mappings. Unsupported native hosts require an explicit backend.
-An allocation failure never changes backends. Storage publication completes
+An allocation failure never changes backends. Storage initialization completes
 before the request claims a key or locks the shared writer. Directory, page
 and key claims have distinct kinds where present. Slot addresses never move,
 and their owner releases storage only after all readers finish. Native mapping
@@ -5506,7 +5523,7 @@ from reserved virtual key bytes. Neither measures resident RAM. It counts
 successful key computations under the existing writer lock, incrementing only
 after the key writer succeeds. Key hits do no extra work, and tracing does not
 scan the native mapping. A concurrent snapshot can count a successful result
-before its slot publishes; quiescent counts equal completed keys. No key
+before its slot reaches `done`; quiescent counts equal completed keys. No key
 storage, diagnostic counter or derived result is serialized.
 
 There is no scheduling edge between modules. A module's analyses are never
@@ -10372,7 +10389,10 @@ converts instead (Sealed Result Rows); the checker is the same for both.
 **Where joins come from.** Every place a value's rows flow into another's:
 a row coercion and its value; a lambda's body and its function's result; a
 `return`'s value and its function's result; a `?` return's error row and the
-function's `Try` result. These are edges between types, not between rows:
+function's `Try` result. Generated `try_sequence` and `try_record_sequence`
+forward the input error payload to either their shared error continuation or
+their own result's error payload; both forms carry the same row-join edge.
+These are edges between types, not between rows:
 each edge is descended structurally, so rows at matching positions (a
 `Try`'s error argument, a tag payload, a record field) join too. Lambda
 Solved has every edge as a unification; `.boxy` reads the same edges from the
@@ -13853,7 +13873,8 @@ a nested lambda or closure expression, a generated structural codec
 derivation, or an entry wrapper. Worker identity is the template or expression
 identity; a template is never lowered twice, whatever the number of its uses
 or instantiations, with one declared, bounded exception: a `List` template
-also has a `List(U8)` worker (Pre-Specialized List(U8) Workers). A worker is
+also has one worker per fixed-size integer item type (Pre-Specialized
+Integer List Workers). A worker is
 lowered at its checked definition type, in which its scheme's quantified
 variables appear as type variables.
 
@@ -14059,18 +14080,23 @@ closed operations use their committed layouts. Function values and erased calls
 retain the wrapper and its ordinary calling convention. This is direct lowering
 of a declared primitive, not general body inlining or specialization.
 
-#### Pre-Specialized List(U8) Workers
+#### Pre-Specialized Integer List Workers
 
-Byte lists are the one instantiation pre-specialized under `.boxy`. A
-monomorphic `List(U8)` call into a generic `List` worker would read the item's
-size from its descriptor, copy single bytes through it, and build each `Try`
-result through the descriptor of the result type, which dominates byte-oriented
-programs. So every `List` template has, besides its generic worker, a second
-worker lowered with its list item variable bound to `U8`
-(`TemplateBinding.list_u8`). No other type and no other template gets one,
-and nothing requests one on demand: this is not a specialization mechanism.
+Lists of fixed-size integers are the one family of instantiations
+pre-specialized under `.boxy`. A monomorphic `List(U32)` call into a generic
+`List` worker would read the item's size from its descriptor, copy each item
+through it, and build each `Try` result through the descriptor of the result
+type, which dominates byte- and integer-oriented programs (a decompressor's
+`List(U16)` and `List(U32)` tables). So every `List` template has, besides its
+generic worker, one worker per INTEGER LIST ITEM TYPE, lowered with its list
+item variable bound to that type (`TemplateBinding.list_int`). The integer list
+item types are exactly `U8`, `I8`, `U16`, `I16`, `U32`, `I32`, `U64`, `I64`,
+`U128` and `I128`, in that declared order (`ListIntItem`). No other type (not
+`F32`, `F64`, `Dec`, `Bool`, `Str`, a SIMD vector, or any composite or nominal
+type) and no other template gets one, and nothing requests one on demand: this
+is not a specialization mechanism.
 
-- A template has a `List(U8)` worker exactly when the Builtin module's method
+- A template has integer list workers exactly when the Builtin module's method
   registry names it as a method of `List`, its body is a checked body (a
   template with `provided_low_level` already emits its operation at every
   direct call), and its first parameter's type is `List(item)` for a scheme
@@ -14079,31 +14105,36 @@ and nothing requests one on demand: this is not a specialization mechanism.
   converted signature; it never reads a name or scans a body. Templates with
   other scheme variables (`map : List(a), (a -> b) -> List(b)`) bind only
   the item variable; the rest stay variables of the worker.
-- The worker's body, signature, and the lambdas its scope roots are lowered
-  with the item variable bound to the `U8` type (`Worker.list_u8_slot`), so
-  every value of the item type, and every type over it (`Try(item, e)`,
-  `List(item)`), is closed and lowers as monomorphic code does. Its hidden
-  inputs are the generic worker's in the same order: the item variable's
-  descriptor stays an input, which callers fill with `U8`'s descriptor and
-  the body never reads, and its dictionaries (`is_eq` on items) and literal
-  arguments are supplied as for the generic worker. Call sites, dictionaries,
-  and table recipes therefore need nothing of their own.
+- Each worker's body, signature, and the lambdas its scope roots are lowered
+  with the item variable bound to its integer type (`Worker.list_int`, the
+  slot and the type). The item type and types whose only open component was
+  that item (`List(item)`, or `Try(item, e)` with sealed `e`) are closed and
+  lower as monomorphic code does; other quantified variables remain open.
+  Its hidden inputs are the generic worker's in the same order: the item
+  variable's descriptor stays an input, which callers fill with the integer
+  type's descriptor and the body never reads, and its dictionaries (`is_eq` on
+  items) and literal arguments are supplied as for the generic worker. Call
+  sites, dictionaries, and table recipes therefore need nothing of their own.
 - A direct call of a generic `List` template whose instantiation binds the
-  list item variable to exactly `U8` calls the `List(U8)` worker
-  (`Program.directCallTarget`), with the hidden inputs computed for the generic
-  worker. Every other instantiation, including a variable the caller's own
-  instantiation will make `U8`, calls the generic worker. A function value of
-  the template (`List.get` used as a value, or a dictionary method) is the
-  generic worker's: only direct calls are redirected.
-- The worker's identity is a content identity of its own
-  (`listU8TemplateWorkerIdentity`), distinct from the generic worker's and the
-  same in every object of the link; its readable name is the template's with
-  `@U8` appended (`Builtin.List.get@U8`). Stored-function and table-needs
-  metadata name it with its own worker tag (`template_list_u8`).
-- The Builtin module's unit lowers and exports the `List(U8)` workers of all
-  its `List` templates with the generic workers (Per-Module Output), in
-  template order, since its importers are lowered independently and reach
-  them by symbol. The link drops those nothing calls.
+  list item variable to exactly one integer list item type calls that type's
+  worker (`Program.directCallTarget`), with the hidden inputs computed for the
+  generic worker. Every other instantiation, including a variable the caller's
+  own instantiation will make an integer type, calls the generic worker. A
+  function value of the template (`List.get` used as a value, or a dictionary
+  method) is the generic worker's: only direct calls are redirected.
+- Each worker's identity is a content identity of its own
+  (`listIntTemplateWorkerIdentity`, over the template and the item type),
+  distinct from the generic worker's and the other item types' and the same in
+  every object of the link; its readable name is the template's with the item
+  type appended (`Builtin.List.get@U8`, `Builtin.List.get@I64`).
+  Stored-function and table-needs metadata name it with its own worker tag
+  (`template_list_int`) followed by one byte naming the item type.
+- The Builtin module's unit lowers and exports the integer list workers of
+  all its `List` templates with the generic workers (Per-Module Output), in
+  template order and, within a template, in the declared item type order, so
+  the unit's output is the same whatever the thread count. Its importers are
+  lowered independently and reach them by symbol. The link drops those nothing
+  calls.
 
 #### Type Descriptors
 
@@ -14151,6 +14182,11 @@ of the component's type; for a list, box, recursion box, or nominal type the
 names block of its item, payload, or backing. A type with no record field
 or tag in its reach has none (null). Blocks are built by descriptor key, each
 reserved before its components', so a recursive type's block reaches itself.
+Filling follows an explicit worklist, so deep types consume heap storage rather
+than native stack frames. Label reachability reuses the shared demand-driven
+SCC analysis: every reached type is expanded once, and a negative answer is
+stored only after its complete component has no path to a label. Building
+nested unnamed wrappers therefore does not repeatedly traverse their suffixes.
 
 Only code that reflects over a type reads a names block: `dyn_inspect`
 (`Str.inspect`, `dbg`, and the rendered value of a failed `expect`'s `Err`)
@@ -14411,7 +14447,7 @@ for the cases listed:
   for every other size.
 - `dyn_list_item_addr` is the list's bytes plus `index` times `size`. A
   zero-sized item calls `roc_desc_list_item_addr`, whose address it is.
-- `dyn_field_addr` with an immediate semantic index follows nominal `child`
+- `dyn_field_addr` with an immediate source-field index follows nominal `child`
   links to the record, reads the field's memory slot from that index's
   `entries` row, and adds that field's `offset` to the base. A field whose
   descriptor is a recursion box, and an index held in a `field_index` table
@@ -14695,9 +14731,12 @@ descriptor, its second word the capture capacity of the allocation holding it
 (the record's size when the callable is first packed; an allocation repacked
 in place keeps its capacity), and the callable's `on_drop` is the shared
 runtime drop that reads the first word. When every capture is of closed type,
-the capture record has a static layout and `on_drop` is the per-worker helper
-the backend generates for that layout. Zero-capture functions are static,
-immortal callables. The `out_desc` slot of the erased-callable ABI is always
+the capture record has a static layout and `on_drop` names that layout's helper
+only when it contains refcounted data. The callback is optional, not a
+requirement of every exposed callable handle. Immortal static recipe wrappers
+need no callback: their descriptor and callable words own no runtime units,
+and decrementing a static allocation never invokes final-drop logic.
+Zero-capture functions are static, immortal callables. The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
@@ -14845,8 +14884,8 @@ Nothing a module emits depends on a module that imports it:
   every template's body and its dictionary entry are emitted, since another
   module may call a template or pack it as a function value, and the
   entries of its registered methods and its `??` defaults with them, and
-  for the Builtin module the `List(U8)` workers of its `List` templates
-  (Pre-Specialized List(U8) Workers); the
+  for the Builtin module the integer list workers of its `List` templates
+  (Pre-Specialized Integer List Workers); the
   wrappers of its `expect` and REPL roots are not, since nothing reaches them
   but a test plan's or a REPL's own roots, and each of those lowers as one
   program whose roots may name modules no unit lowers;
@@ -14967,7 +15006,15 @@ and Per-Module Output is the invariant that makes it possible:
   lowered for the module, through the object's machine code, and the few
   words of ARC interface a downstream module compiles against (each exported
   procedure's solved ownership signature and uniqueness data, which
-  Per-Module Output makes a function of the module and its imports). There
+  Per-Module Output makes a function of the module and its imports), with
+  the digest of those records (`exportRecordsDigest`). An importer's key
+  folds in the module's export digest, which combines that records digest
+  with its imports' export digests (`Digests.recordExportsDigest`), so a
+  restored object's records are not hashed again. This is a semantic
+  interface digest, never a payload-integrity hash. The v2 export digest
+  composition changes hash bytes; object format 18 invalidates the older
+  entries. Its inputs remain the module's own export records and its imports,
+  never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
   every restored object and compares the bytes, so a key that misses an input
@@ -15264,6 +15311,29 @@ through linked code do not require their private body indexes. Allocation
 failure propagates, and the index is marked complete only after registration of
 all its records succeeds.
 
+A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
+its bodies reach, the top-level unit owning each, and per-binding declaration
+facts) follows the same rule one level down. It is a pure function of the
+module's CIR and promoted local procedures, so it is built on first demand into
+a write-once slot of the module's `BodyAnalyses`, like every other body fact,
+and is never serialized. Publishing a freshly checked module demands it, since
+publication reads it; installing a cached checked entry does not. A consumer
+demands the index of every module whose bodies it reads before reading any:
+LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
+demand, and platform pairing. Boxy registration and preparation demand none:
+its body-metadata index, worker-body builder, capture reader and default-worker
+consumers demand only their own module. Unit worker seeding demands only the
+modules the unit owns. An import used through linked procedures therefore keeps
+its checked body index unbuilt. Reading the index of a module no consumer
+demanded is a compiler invariant violation. A run whose checked modules all
+come from the cache and that lowers nothing, such as a `roc test` whose every
+outcome is reused, builds no index. The index is not filed in the checked
+entry: it is several bytes per CIR node, so reading it back would cost about
+what building it costs, and a run that lowers nothing would still pay it for
+every module. The export interface digest reads only the number of
+defaulted-field defaults, which it counts from the CIR directly
+(`defaultExprCount`).
+
 #### Error-Type Reachability
 
 Before converting a checked type, Boxy lowering sometimes needs to know whether
@@ -15377,7 +15447,7 @@ read. The module's remaining roots then restore the stored values.
 
 The stored form lives in `CompileTimeRoot.boxy_value`, beside the payload the
 `.lss` evaluator fills, because a recipe means nothing to Monotype. Each producer
-publishes its own function representation without replacing the other's. A
+stores its own function representation without replacing the other's. A
 Boxy-first root leaves the LSS payload `.unevaluated`; an LSS-first root keeps
 its completed payload when Boxy adds its capture graph. The constant writer
 records whether the LSS root's materialization plan contains functions,
@@ -15388,12 +15458,12 @@ representation is pending even when the other strategy has completed its value.
 Coordinator object eligibility, evaluation selection and Boxy reads use this
 same view. Pending reads use the existing compile-time root slots; runtime
 lowering never reconstructs another strategy's callable captures. Non-function
-values remain shared. Publishing another representation replaces that root's
+values remain shared. Storing another representation replaces that root's
 previous debug observations rather than replaying both copies in one command.
 The baked Builtin producer completes both function representations before
 serialization, since its consumers cannot reopen it. A platform pairing keeps
 the declared requests for inherited values still missing either representation;
-semantic completion alone does not remove their producers from the schedule.
+completion by one strategy alone does not remove their producers from the schedule.
 
 A literal in a generic body converts at the first instantiation that fixes
 its type, under either strategy: as a literal root of the specialization
@@ -17613,7 +17683,9 @@ its final `alias_target`, and a callable-eval template carries its
 `forwarded_lookup` when the lookup reaches a directly callable procedure (an
 ordinary template, a hosted procedure, or another forwarding alias, to a fixed
 point). An alias of a function-valued constant is not a forward; calling it
-calls the evaluated value.
+calls the evaluated value. Root-request output and platform pairing omit
+evaluation only for this explicit forwarding proof, not for the lookup's
+procedure-reference shape: a computed callable alias still needs its value.
 
 A call through a forwarding alias is a direct call. Monotype enters the
 alias's scope with the call's use-site evidence and substitution, and requests
@@ -20974,10 +21046,11 @@ callee can return with a call pending, and on each deferred call:
 - `none`: nothing can be pending after the statement.
 - `handed_up`: this procedure returns the value unchanged to a caller that
   makes the pending call, and until then the statement's target holds no
-  value. Only reference-count statements and jumps into a join body may
-  separate the call from the return; a pending call owns its closure and
-  every argument, so running those statements first releases nothing it
-  reads.
+  value. Only reference-count statements, residual-release field reads
+  explicitly marked `arc_dismantle`, and jumps into a join body may separate
+  the call from the return. The field reads neither dismantle, read, nor
+  overwrite the pending result. A pending call owns its closure and every
+  argument, so running that cleanup first releases nothing it reads.
 - `always`: pending calls are made here. This is every use of the value other
   than returning it, and every tail position in a procedure something other
   than Roc code or the erased-call runtime can enter: a root, a dictionary
@@ -21072,7 +21145,10 @@ function, and `returns_pending` becomes a query of the pending record
 followed by a return. Pending state belongs exclusively to the waiter's
 frame, including its argument packet. Packets of at most 32 bytes occupy
 inline byte storage in the cell; larger packets occupy an exact-sized host
-allocation. The driver copies an inline packet into separate 16-byte-aligned
+allocation. Backends obtain the cell's target-width byte size and alignment
+from `native_callable`: only header words scale with pointer width, never
+the fixed 32-byte inline packet. Compiler-host word counts cannot size it.
+The driver copies an inline packet into separate 16-byte-aligned
 invocation storage before calling, so a subsequent deferral cannot overwrite
 arguments the active callee still reads. Heap packets remain owned by that
 invocation until it returns. Storage selection uses the explicit packet byte
