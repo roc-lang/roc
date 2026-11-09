@@ -11260,7 +11260,10 @@ or explicitly translate its domain errors.
 
 Selected methods still settle their own transitive dispatch requirements before
 their errors are related. Generated call evidence records the exact resulting
-callables. Tag-union shape, payload and field-name evidence remains part of the
+callables and target substitutions. A normalized callable row cannot recover
+which overlapping row variables checking selected; lowering carries that
+substitution alongside the nested evidence rather than inferring it again.
+Tag-union shape, payload and field-name evidence remains part of the
 generated spec; it does not authorize a different error representation.
 
 ### Parked Codec Relations Validate A Private Instance
@@ -13357,9 +13360,11 @@ Other solved-graph mutations:
   non-function top-level value's data positions collects open row tails; one
   whose constraints are all `is_eq`/`to_hash` and that did not generalize is
   unified with the empty row through ordinary unification.
-- `validateMissingFieldMethod`—policy: Derived Parser Format-Owned Errors
+- `beginParseErrorMethod`—policy: Derived Parser Format-Owned Errors
   (above). Required record fields demand the format's error-construction method
   through ordinary dispatch and unification, not a compiler-owned error tag.
+  Both `missing_field` and `invalid_value` settle their method requirements and
+  use the same complete-error equality as parsing methods.
 - `constrainDerivedParserFormatError` /
   `constrainDerivedParserErrorEquality`—policy: Derived Parser
   Format-Owned Errors (above). A format or custom parser method's
@@ -24461,6 +24466,11 @@ an optimized body stopped reading is still one the restored body names. If the
 stored set followed the optimized body, a value stored by one `--opt` would be
 unreadable by another command sharing the checked module cache, and by the
 compilation that stored it.
+
+A source capture restores through its checked binder and stored value witness,
+as a constant root does. A stored callable signature can include Lambda Solved
+row joins; those consumer rows do not replace the checked producer contract
+when its body is lowered again.
 
 Two explicit rules establish the set:
 

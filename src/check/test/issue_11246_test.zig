@@ -271,3 +271,60 @@ test "issue 11246: a tag callback cannot hide incompatible payload errors" {
     defer env.deinit();
     try env.assertOneTypeError("Parser Error Type Mismatch");
 }
+
+const error_constructors =
+    \\Format := {}.{
+    \\    parse_u8 : Format, Str -> Try({ value : U8, rest : Str }, [Bad, Absent(Str)])
+    \\    parse_u8 = |_, _| ...
+    \\    parse_tuple_start : Format, Str, U64 -> Try(Str, [Bad, Absent(Str)])
+    \\    parse_tuple_start = |_, _, _| ...
+    \\    parse_tuple_next : Format, Str, U64, U64 -> Try(Str, [Bad, Absent(Str)])
+    \\    parse_tuple_next = |_, _, _, _| ...
+    \\    parse_tuple_end : Format, Str, U64 -> Try(Str, [Bad, Absent(Str)])
+    \\    parse_tuple_end = |_, _, _| ...
+    \\    parse_record_start : Format, Str -> Try([Counted({ len : U64, rest : Str }), Uncounted(Str)], [Bad, Absent(Str)])
+    \\    parse_record_start = |_, _| ...
+    \\    parse_record_field : Format, Encoding.FieldName.FieldNames(_shape), Str -> Try([Done(Str)], [Bad, Absent(Str)])
+    \\    parse_record_field = |_, _, _| ...
+    \\    parse_record_after_field : Format, Str -> Try([Continue(Str), Done(Str)], [Bad, Absent(Str)])
+    \\    parse_record_after_field = |_, _| ...
+    \\    skip_record_field : Format, Str -> Try(Str, [Bad, Absent(Str)])
+    \\    skip_record_field = |_, _| ...
+    \\    rename_field : Format, Str -> Str
+    \\    rename_field = |_, name| name
+    \\    missing_field : Format, Str -> [Bad, Absent(Str)]
+    \\    missing_field = |_, name| Absent(name)
+    \\    invalid_value : Format, Str -> [Bad, Absent(Str)]
+    \\    invalid_value = |_, _| Bad
+    \\}
+    \\expect {
+    \\    Shape : { count : U8, pair : (U8, U8) }
+    \\    parse = Shape.parser_for(Format.{})
+    \\    match parse("") {
+    \\        Ok(_) => True
+    \\        Err(_) => False
+    \\    }
+    \\}
+;
+
+test "format errors: error constructors accept the complete format error" {
+    var env = try TestEnv.init("Test", error_constructors);
+    defer env.deinit();
+    try env.assertNoErrors();
+}
+
+test "format errors: missing_field cannot infer a narrower error" {
+    const input = try std.mem.replaceOwned(u8, std.testing.allocator, error_constructors, "missing_field : Format, Str -> [Bad, Absent(Str)]", "missing_field : Format, Str -> _");
+    defer std.testing.allocator.free(input);
+    var env = try TestEnv.init("Test", input);
+    defer env.deinit();
+    try env.assertOneTypeError("Parser Error Type Mismatch");
+}
+
+test "format errors: invalid_value cannot infer a narrower error" {
+    const input = try std.mem.replaceOwned(u8, std.testing.allocator, error_constructors, "invalid_value : Format, Str -> [Bad, Absent(Str)]", "invalid_value : Format, Str -> _");
+    defer std.testing.allocator.free(input);
+    var env = try TestEnv.init("Test", input);
+    defer env.deinit();
+    try env.assertOneTypeError("Parser Error Type Mismatch");
+}

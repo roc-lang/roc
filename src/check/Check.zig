@@ -56629,16 +56629,8 @@ fn beginParseMethodCheck(self: *Self, inputs: DerivedCodecInputs, check: ParseMe
         .key => |key_var| try self.beginParseKeyMethod(inputs, key_var),
         .str_key => try self.beginParseKeyMethod(inputs, try self.freshStr(inputs.env, inputs.region)),
         .skip_record_field => try self.beginSkipRecordFieldMethod(inputs),
-        .invalid_value => .{ .done = try self.validateInvalidValueMethod(
-            inputs.encoding_var,
-            inputs.state_var,
-            inputs.err_var,
-            inputs.constraint,
-            inputs.env,
-            inputs.region,
-            inputs.failure_expr,
-            inputs.walk,
-        ) },
+        .invalid_value => try self.beginParseErrorMethod(inputs, "invalid_value"),
+        .missing_field => try self.beginParseErrorMethod(inputs, "missing_field"),
     };
 }
 
@@ -57264,31 +57256,6 @@ fn validateEncodeKeyMethod(
     return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, key_var);
 }
 
-fn validateMissingFieldMethod(
-    self: *Self,
-    encoding_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    failure_expr: ?CIR.Expr.Idx,
-    env: *Env,
-    region: Region,
-) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.protocolMethodName("missing_field");
-    const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
-    };
-    const str_var = try self.freshStr(env, region);
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, str_var }, err_var), env, region);
-    const result = try self.unifyInContext(method.var_, expected_fn, env, .{
-        .method_type = .{
-            .constraint_var = encoding_var,
-            .dispatcher_name = method.dispatcher_name,
-            .method_name = method_name,
-        },
-    });
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
-}
-
 /// Report the dedicated derived-parser error-row problem, located at the
 /// expression that introduced the codec relation (the call that fixes the
 /// record type). Built only after the unification has already failed, so the
@@ -57418,25 +57385,25 @@ fn constrainDerivedParserErrorEquality(
     return .ok;
 }
 
-fn validateInvalidValueMethod(
+/// Error constructors obey the same settled whole-error equality as readers.
+fn beginParseErrorMethod(
     self: *Self,
-    encoding_var: Var,
-    state_var: Var,
-    err_var: Var,
-    constraint: StaticDispatchConstraint,
-    env: *Env,
-    region: Region,
-    failure_expr: ?CIR.Expr.Idx,
-    walk: ?*const DerivedCodecWalk,
-) Allocator.Error!DerivedParseValidation {
-    const method_name = try self.protocolMethodName("invalid_value");
-    if (walk) |active_walk| {
-        if (self.hasReusableGeneratedCodecCall(method_name, active_walk)) return .ok;
-    }
+    inputs: DerivedCodecInputs,
+    comptime method_text: []const u8,
+) Allocator.Error!ParseMethodBegin {
+    const encoding_var = inputs.encoding_var;
+    const env = inputs.env;
+    const region = inputs.region;
+    const method_name = try self.protocolMethodName(method_text);
+    if (self.hasReusableGeneratedCodecCall(method_name, inputs.walk)) return .{ .done = .ok };
+    const dispatchers_start = self.instantiation_dispatchers.items.len;
+    const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
-        return try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, constraint, env, failure_expr);
+        return .{ .done = try self.reportDerivedParseMissingMethodAt(encoding_var, method_name, inputs.constraint, env, inputs.failure_expr) };
     };
-    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, state_var }, err_var), env, region);
+    const argument_var = if (comptime std.mem.eql(u8, method_text, "missing_field")) try self.freshStr(env, region) else inputs.state_var;
+    const child_err_var = try self.fresh(env, region);
+    const expected_fn = try self.freshFromContent(try self.types.mkFuncUnbound(&.{ encoding_var, argument_var }, child_err_var), env, region);
     const result = try self.unifyInContext(method.var_, expected_fn, env, .{
         .method_type = .{
             .constraint_var = encoding_var,
@@ -57444,7 +57411,20 @@ fn validateInvalidValueMethod(
             .method_name = method_name,
         },
     });
-    return try self.finishGeneratedCodecMethodValidation(result, method_name, encoding_var, expected_fn, method.var_, null);
+    if (!result.isEstablished()) return .{ .done = .reported_error };
+    return .{ .settle = .{
+        .dispatchers_start = dispatchers_start,
+        .deferred_start = deferred_start,
+        .post = .{ .method = .{
+            .own_error_row = .{ .parent = inputs.err_var, .child = child_err_var },
+            .result = result,
+            .method_name = method_name,
+            .encoding_var = encoding_var,
+            .expected_fn = expected_fn,
+            .method_var = method.var_,
+            .subject_var = null,
+        } },
+    } };
 }
 
 fn beginSkipRecordFieldMethod(self: *Self, inputs: DerivedCodecInputs) Allocator.Error!ParseMethodBegin {
@@ -57938,6 +57918,7 @@ const ParseMethodCheck = union(enum) {
     str_key,
     skip_record_field,
     invalid_value,
+    missing_field,
 };
 
 const DictParseMethod = enum {
@@ -58256,6 +58237,9 @@ fn stepDerivedParse(
                 .fields => {
                     frame.stage = .components;
                     if (try self.validateDerivedParseRecordFields(inputs, record_var, &frame.presences)) |failed| return .{ .done = failed };
+                    if (try self.recordParseNeedsRequiredFieldError(frame.presences.items)) {
+                        return try self.startParseMethodChecks(frame, &.{.missing_field});
+                    }
                 },
                 .components => {},
                 .checked_payload,
@@ -58421,7 +58405,6 @@ fn validateDerivedParseRecordFields(
     field_presences: *std.ArrayListUnmanaged(types_mod.RecordField.Presence),
 ) Allocator.Error!?DerivedParseValidation {
     const encoding_var = inputs.encoding_var;
-    const err_var = inputs.err_var;
     const constraint = inputs.constraint;
     const env = inputs.env;
     const region = inputs.region;
@@ -58438,9 +58421,6 @@ fn validateDerivedParseRecordFields(
     for (field_presences.items) |presence| {
         const field_var = presence.typeVar();
         if (derivedCodecFailed(try self.pinWildcardOptionalParseField(field_var, env, region))) |result| return result;
-    }
-    if (try self.recordParseNeedsRequiredFieldError(field_presences.items)) {
-        if (derivedCodecFailed(try self.validateMissingFieldMethod(encoding_var, err_var, constraint, failure_expr, env, region))) |result| return result;
     }
     return null;
 }

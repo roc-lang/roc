@@ -59522,8 +59522,17 @@ const BodyContext = struct {
             self.source_file_id = previous_source_file_id;
             self.evidence = previous_evidence;
         }
+        var lookup = self.methodLookupForResolvedTarget(node.target);
+        if (checkedTargetSubstitution(call.view, self.builder, node)) |substitution| {
+            // The callable alone does not determine a scheme substitution:
+            // [InvalidJson(Str), ..err] admits both an empty err and an err
+            // containing InvalidJson. Nested parser evidence distinguishes
+            // them. Preserve the selection checked in the derivation rather
+            // than solving those variables again from the callable root.
+            lookup.substitution = .{ .carried = substitution };
+        }
         return try self.methodLookupForEvidencePurpose(
-            self.methodLookupForResolvedTarget(node.target),
+            lookup,
             .body_lowering,
         );
     }
