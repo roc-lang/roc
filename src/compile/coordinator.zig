@@ -1618,8 +1618,9 @@ const BoxyObjects = struct {
     /// Snapshot units before worker preparation. The program's emitted imports
     /// subsequently select which snapshots actually become compiler-only units.
     fn functionObjects(context: *anyopaque, module: *const Artifact) Error!?eval.CompileTimeFinalization.FunctionObjectSource {
-        // Freestanding evaluation has no native unit-image loader.
-        if (comptime is_freestanding) return null;
+        if (comptime eval.CompileTimeFinalization.compilerHostMustUseInterpreterForCtfe()) {
+            Coordinator.coordinatorInvariant("a host that interprets compile-time evaluation planned Boxy function units", .{});
+        }
         const self: *BoxyObjects = @ptrCast(@alignCast(context));
         if (self.function_plans.get(module.key.bytes)) |plan| return plan.source();
         const objects = (try objectSet(context, module)) orelse return null;
@@ -13673,7 +13674,7 @@ test "post-check publication store OOM drains accepted writers before returning"
 /// Exercise the real coordinator queues with both workers occupied. Only the
 /// wake queue uses the failing allocator, armed after all fixture setup, so
 /// failure deterministically occurs at notification growth, without sleeps.
-fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (CoordinatorError || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Allocator.Error || CoordinatorError || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
     if (comptime !threads_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const previous_lanes = thread_lanes;

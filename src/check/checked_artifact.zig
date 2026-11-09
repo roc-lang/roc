@@ -25231,10 +25231,9 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
         };
     }
 
-    /// Whether any argument of the function type `fn_root` holds a nominal
-    /// over a callable payload (`local_box_payload_capability`,
-    /// `imported_box_payload_capability`): a function value whose
-    /// interface the signature does not show.
+    /// Whether any argument of the function type `fn_root` holds a callable
+    /// whose interface the signature does not show
+    /// (`nominalHidesCallableInterface`).
     fn argumentsHoldCallablePayload(self: *SealedSchemeVarWalk, fn_root: CheckedTypeId) Allocator.Error!bool {
         const signature = self.function(fn_root) orelse return true;
         const allocator = self.allocator;

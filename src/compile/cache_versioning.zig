@@ -44,11 +44,12 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 18 stores reproducible reports in
+/// reflected in layout fingerprints. Version 19 stores reproducible reports in
 /// the combined checking entry, Boxy callable capture graphs including
-/// descriptor scopes, and the item type naming an integer list worker of a
-/// stored function's recipe. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 18;
+/// descriptor scopes, the item type naming an integer list worker of a stored
+/// function's recipe, and a platform pairing's callable forwarding after
+/// binding its requirements. Platform-pairing entries share the envelope.
+const checked_envelope_version: u32 = 19;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
