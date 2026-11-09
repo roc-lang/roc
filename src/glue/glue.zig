@@ -51,7 +51,6 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 
 /// Backend used to execute the glue spec.
 pub const GlueOpt = enum {
@@ -455,6 +454,16 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
+    const exports = compile.static_data_exports.buildStaticDataForWidth(gpa, .{
+        .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    }, &lowered, script_target_usize, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.CompilationFailed,
+    };
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
@@ -547,7 +556,7 @@ fn buildGlueSpecPluginFileInner(
 }
 
 const glue_plugin_stamp_magic = [8]u8{ 'R', 'O', 'C', 'P', 'L', 'G', '1', 0 };
-const glue_plugin_abi_version: u32 = 1;
+const glue_plugin_abi_version: u32 = 2;
 
 const GluePluginKind = enum(u32) {
     glue = 1,
@@ -600,10 +609,6 @@ fn runGlueSpecPlugin(
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
-    const composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(gpa) else null;
-    defer if (composition) |owned| owned.destroy();
-    const composing = if (composition) |owned| owned.enter() else null;
-    defer if (composing) |entered| BoxyInProcessState.leave(entered);
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
@@ -672,6 +677,16 @@ fn buildGluePlugin(
     var bitcode = generate: {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
+        const static_procs = try compile.static_data_exports.collectReferencedProcs(gpa, lowered.frozen_static_data.?.exports);
+        defer gpa.free(static_procs);
+        codegen.static_data_procs = static_procs;
+        const static_helpers = try compile.static_data_exports.collectRequiredRcHelpers(gpa, lowered.frozen_static_data.?.exports);
+        defer gpa.free(static_helpers);
+        codegen.static_data_rc_helpers = static_helpers;
+        codegen.setStaticDataExports(lowered.frozen_static_data.?.exports) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CompilationFailed, error.UnsupportedLowLevel => return error.CompilationFailed,
+        };
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;

@@ -82,7 +82,7 @@ test "issue 11560: LSS lowers and runs the unannotated Try match with a payload 
 }
 
 // The payload-carrying `Try` form of the issue's unannotated match: Boxy must
-// map the worker's hidden descriptor parameters onto the direct call's
+// map the worker's hidden descriptors onto the direct call's
 // `Try(List(U64), U8)` representation, lower the app, and run it to the
 // correct result (`h(Ok([1, 2])) == [1, 2]`, so `main!` returns `Ok({})`).
 test "issue 11560: Boxy lowers and runs the unannotated Try match with a payload descriptor" {
@@ -124,7 +124,7 @@ test "issue 11560: LSS lowers and runs the unannotated Try match through a recor
 }
 
 // The callee's record field is an open tag row where the call's is `Try`;
-// Boxy aligns both its descriptor and dictionary parameters through `Try`.
+// Boxy aligns both its hidden descriptors and dictionaries through `Try`.
 test "issue 11560: Boxy lowers and runs the unannotated Try match through a record field" {
     try harness.runAppPathLoweredInspection(record_field_app_path, .{ .specialization_strategy = .boxy }, expectAppRunsSuccessfully);
 }

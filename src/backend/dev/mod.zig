@@ -58,6 +58,8 @@ pub const HostSplice = if (builtin.os.tag == .freestanding) void else @import("H
 pub const UnitPieces = @import("UnitPieces.zig");
 /// One unit's machine code laid out for a fast dev link.
 pub const UnitImage = @import("UnitImage.zig");
+/// The perf map of the functions the compiler places in its own process.
+pub const PerfMap = @import("PerfMap.zig");
 /// Loads a unit image into this process: every 64-bit x86 or ARM host the
 /// compiler runs on, whose own instruction set its native unit images hold.
 pub const UnitImageLoader = if (loader_host) @import("UnitImageLoader.zig") else void;

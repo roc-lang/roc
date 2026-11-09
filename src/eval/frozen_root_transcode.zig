@@ -8,13 +8,14 @@ const compilerInvariant = base.invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
+const names = @import("check").CanonicalNames;
 const static_data = @import("static_data");
 const frozen_graph = @import("frozen_graph.zig");
 const Allocator = std.mem.Allocator;
 const Program = lir.Program;
 const SymbolId = static_data.StaticDataSymbolId;
 
-const PlanView = struct { plan: Program.ConstPlanId, layout_idx: layout.Idx };
+const PlanView = struct { plan: Program.ConstPlanId, layout_idx: layout.Idx, storage: Program.CaptureSlotStorage = .value };
 
 /// Re-encode a frozen graph from explicit source and destination root plans.
 pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result, source_root: Program.ConstRootPlan, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: Program.ConstRootPlan, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
@@ -27,7 +28,7 @@ pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.R
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
     if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
-    return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx }, target_slot);
+    return transcodePlans(allocator, source_program, .{ .plan = source_slot.compile_time_root.?.role.value.plan, .layout_idx = source_slot.layout_idx, .storage = if (source_slot.representation_of) |view| view.storage else .value }, source_exports, source_symbol, target_program, .{ .plan = target.compile_time_root.?.role.value.plan, .layout_idx = target.layout_idx, .storage = if (target.representation_of) |view| view.storage else .value }, target_slot);
 }
 
 fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, source_root: PlanView, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_root: PlanView, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
@@ -36,7 +37,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
     var builder = Builder{ .graph = .{ .allocator = arena.allocator(), .output = allocator, .program = target_program, .slot = target_slot }, .source_program = source_program, .source_exports = source_exports };
     defer builder.graph.deinit();
     const symbol = try builder.graph.addNode(try Program.staticDataSymbolName(allocator, target_slot), builder.graph.size(target_root.layout_idx), builder.graph.alignment(target_root.layout_idx));
-    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
+    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, source_root.storage, target_root.storage);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
     return builder.graph.finish();
@@ -63,6 +64,30 @@ pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Res
 const Destination = frozen_graph.Destination;
 const Job = struct { source_plan: Program.ConstPlanId, source_layout: layout.Idx, plan: Program.ConstPlanId, layout_idx: layout.Idx, source: Destination, dest: Destination, source_storage: Program.CaptureSlotStorage, storage: Program.CaptureSlotStorage };
 const AllocationKey = struct { source: Destination, plan: ?Program.ConstPlanId, layout_idx: layout.Idx, count: usize, kind: enum { value, list, string, erased } };
+const TagPlanPair = struct { source: Program.ConstPlanId, target: Program.ConstPlanId };
+
+/// Join the producer plans' emitted labels in one temporary identity domain.
+/// `checked_name` is a separate identity and need not belong to either result's
+/// const-type name store. A target may omit source variants that never occur in
+/// the frozen value; absence is an invariant failure only if that tag is used.
+fn joinTagVariants(allocator: Allocator, source: []const Program.ConstTagVariant, target: []const Program.ConstTagVariant) Allocator.Error![]const ?u32 {
+    var joined_names = names.CanonicalNameStore.init(allocator);
+    defer joined_names.deinit();
+    var target_by_name = collections.DenseMap(names.TagLabelId, u32).init(allocator);
+    defer target_by_name.deinit();
+    for (target, 0..) |variant, index| {
+        const label = try joined_names.internTagLabel(variant.name);
+        const entry = try target_by_name.getOrPut(label);
+        if (entry.found_existing) invariant("target tag plan repeats an emitted label");
+        entry.value_ptr.* = @intCast(index);
+    }
+    const mapping = try allocator.alloc(?u32, source.len);
+    for (source, mapping) |variant, *slot| {
+        slot.* = if (joined_names.lookupTagLabel(variant.name)) |label| target_by_name.get(label) else null;
+    }
+    return mapping;
+}
+
 const Builder = struct {
     graph: frozen_graph.Graph(AllocationKey),
     source_program: *const Program.Result,
@@ -72,6 +97,20 @@ const Builder = struct {
     source_relocations: std.AutoHashMapUnmanaged(Destination, u32) = .empty,
     /// Source symbols whose relocations `source_relocations` already indexes.
     indexed_sources: collections.DenseMapUnmanaged(SymbolId, void) = .empty,
+    /// Arena-owned source-ordinal to target-ordinal mappings, built once per
+    /// plan pair. Repeated values use the producer mapping without name work.
+    tag_joins: std.AutoHashMapUnmanaged(TagPlanPair, []const ?u32) = .empty,
+
+    fn targetTag(self: *Builder, source_plan: Program.ConstPlanId, target_plan: Program.ConstPlanId, source_index: usize) Allocator.Error!u32 {
+        const pair = TagPlanPair{ .source = source_plan, .target = target_plan };
+        const mapping = self.tag_joins.get(pair) orelse blk: {
+            const joined = try joinTagVariants(self.graph.allocator, self.source_program.const_plans.items[@backingInt(source_plan)].tag_union, self.graph.program.const_plans.items[@backingInt(target_plan)].tag_union);
+            try self.tag_joins.put(self.graph.allocator, pair, joined);
+            break :blk joined;
+        };
+        return mapping[source_index] orelse invariant("target tag absent from plan");
+    }
+
     fn sourceWord(self: *const Builder) usize {
         return self.source_program.layouts.targetUsize().size();
     }
@@ -116,7 +155,7 @@ const Builder = struct {
         try self.jobs.append(self.graph.allocator, .{ .source_plan = sp, .source_layout = sl, .plan = tp, .layout_idx = tl, .source = src, .dest = dest, .source_storage = ss, .storage = ts });
     }
     fn boxed(self: *Builder, job: Job, sp: Program.ConstPlanId, sl: layout.Idx, tp: Program.ConstPlanId, tl: layout.Idx) Allocator.Error!void {
-        const src = try self.pointer(job.source);
+        const src = if (self.sourceSize(sl) == 0) job.source else try self.pointer(job.source);
         const allocation = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = 1, .kind = .value }, self.graph.size(tl), self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), null);
         try self.graph.relocate(job.dest, allocation.dest);
         if (allocation.fresh) try self.enqueue(sp, sl, tp, tl, src, allocation.dest, .value, .value);
@@ -143,6 +182,14 @@ const Builder = struct {
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         const source_plan = self.source_program.const_plans.items[@backingInt(job.source_plan)];
         const plan = self.graph.program.const_plans.items[@backingInt(job.plan)];
+        if (source_plan == .named) {
+            try self.enqueue(source_plan.named.backing, job.source_layout, job.plan, job.layout_idx, job.source, job.dest, job.source_storage, job.storage);
+            return;
+        }
+        if (plan == .named) {
+            try self.enqueue(job.source_plan, job.source_layout, plan.named.backing, job.layout_idx, job.source, job.dest, job.source_storage, job.storage);
+            return;
+        }
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         const source_boxed = job.source_storage == .recursive_box or (source_physical.tag == .box and recursionBoxSite(source_plan));
         const target_boxed = job.storage == .recursive_box or (physical.tag == .box and recursionBoxSite(plan));
@@ -160,10 +207,10 @@ const Builder = struct {
             },
             .str => try self.string(job),
             .list => |element| try self.list(job, source_plan.list, element),
-            .named => |named| try self.enqueue(source_plan.named.backing, job.source_layout, named.backing, job.layout_idx, job.source, job.dest, .value, .value),
+            .named => unreachable, // Explicit nominal wrappers were consumed above.
             .box => |element| switch (physical.tag) {
                 .box_of_zst => try self.graph.writeWord(job.dest, 0),
-                .box => try self.boxed(job, source_plan.box, source_physical.getIdx(), element, physical.getIdx()),
+                .box => try self.boxed(job, source_plan.box, if (source_physical.tag == .box_of_zst) .zst else source_physical.getIdx(), element, physical.getIdx()),
                 .erased_callable => try self.enqueue(source_plan.box, job.source_layout, element, job.layout_idx, job.source, job.dest, .value, .value),
                 .hole => invariant("a demand hole reached a frozen root"),
                 .scalar, .list, .list_of_zst, .struct_, .closure, .zst, .tag_union, .ptr, .dynamic => invariant("invalid box layout"),
@@ -175,16 +222,13 @@ const Builder = struct {
             },
             .tag_union => |variants| {
                 const disc = self.discriminant(job.source_layout, job.source);
-                const source_variant = for (source_plan.tag_union) |variant| {
-                    if (variant.discriminant == disc) break variant;
+                const source_index = for (source_plan.tag_union, 0..) |variant, index| {
+                    if (variant.discriminant == disc) break index;
                 } else invariant("source tag absent from plan");
-                for (variants) |variant| {
-                    if (variant.discriminant != disc) continue;
-                    self.writeDiscriminant(job.layout_idx, job.dest, disc);
-                    try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.graph.program, job.layout_idx, disc), job.source, job.dest, true);
-                    return;
-                }
-                invariant("target tag absent from plan");
+                const source_variant = source_plan.tag_union[source_index];
+                const variant = variants[try self.targetTag(job.source_plan, job.plan, source_index)];
+                self.writeDiscriminant(job.layout_idx, job.dest, variant.discriminant);
+                try self.children(source_variant.payloads, self.payload(self.source_program, job.source_layout, disc), variant.payloads, self.payload(self.graph.program, job.layout_idx, variant.discriminant), job.source, job.dest, true);
             },
             .fn_value => |set_id| {
                 const disc = self.discriminant(job.source_layout, job.source);
@@ -231,9 +275,12 @@ const Builder = struct {
         try self.graph.writeWord(job.dest.offsetBy(2 * self.graph.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.graph.program.layouts.getLayout(job.layout_idx);
         if (count == 0 or physical.tag == .list_of_zst) return;
-        const sl = self.source_program.layouts.getLayout(job.source_layout).getIdx();
+        const source_physical = self.source_program.layouts.getLayout(job.source_layout);
+        const sl: layout.Idx = if (source_physical.tag == .list_of_zst) .zst else source_physical.getIdx();
         const tl = physical.getIdx();
-        const src = try self.pointer(job.source);
+        // Zero-sized source elements have no allocation. Their destination
+        // may still need storage for a nominal's declared padding.
+        const src = if (self.sourceSize(sl) == 0) job.source else try self.pointer(job.source);
         const result = try self.graph.reserveAllocation(.{ .source = src, .plan = tp, .layout_idx = tl, .count = count, .kind = .list }, std.math.mul(usize, count, self.graph.size(tl)) catch return error.OutOfMemory, self.graph.alignment(tl), self.graph.program.layouts.layoutContainsRefcounted(self.graph.program.layouts.getLayout(tl)), count);
         try self.graph.relocate(job.dest, result.dest);
         if (result.fresh) for (0..count) |i| try self.enqueue(sp, sl, tp, tl, src.offsetBy(i * self.sourceSize(sl)), result.dest.offsetBy(i * self.graph.size(tl)), .value, .value);
@@ -356,6 +403,51 @@ fn testRootSymbol(exports: []const static_data.StaticDataExport) error{TestUnexp
 // These graph-only tests do not read request provenance or solved return types.
 fn testRoot(plan: Program.ConstPlanId, idx: layout.Idx) Program.ConstRootPlan {
     return .{ .root_order = 0, .owner = .first, .request = .{ .order = 0, .module_idx = 0, .kind = .compile_time_constant, .source = undefined, .checked_type = undefined, .abi = .compile_time, .exposure = .private }, .proc = undefined, .ret_layout = idx, .ret_type = undefined, .plan = plan };
+}
+
+test "frozen root transcode materializes padded zero-sized list and box payloads" {
+    const allocator = std.testing.allocator;
+    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
+        for ([_]bool{ false, true }) |as_list| {
+            var source = try Program.Result.init(allocator, base.target.TargetUsize.native);
+            defer source.deinit();
+            var target = try Program.Result.init(allocator, width);
+            defer target.deinit();
+            const element: Program.ConstPlanId = @fromBackingInt(0);
+            const container: Program.ConstPlanId = @fromBackingInt(1);
+            for ([_]*Program.Result{ &source, &target }) |program| {
+                try program.const_plans.append(allocator, .{ .record = &.{} });
+                try program.const_plans.append(allocator, if (as_list) .{ .list = element } else .{ .box = element });
+            }
+            // The record has no semantic fields, but its nominal destination
+            // reserves physical padding.
+            const padded = try target.layouts.putStructFields(&.{.{ .index = 0, .layout = .u64 }});
+            const source_layout = try source.layouts.insertLayout(if (as_list) layout.Layout.listOfZst() else layout.Layout.boxOfZst());
+            const target_layout = if (as_list) try target.layouts.insertList(padded) else try target.layouts.insertBox(padded);
+            var list_value = builtins.list.RocList{ .bytes = null, .length = 3, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(3) };
+            var box_value: usize = 0;
+            const native = try @import("native_root_export.zig").freezeRoot(
+                allocator,
+                &source,
+                try testSlot(&source, source_layout),
+                testRoot(container, source_layout),
+                .{ .ptr = if (as_list) @ptrCast(&list_value) else @ptrCast(&box_value) },
+                .{},
+            );
+            defer static_data.deinitStaticData(allocator, native);
+            try std.testing.expectEqual(@as(usize, 1), native.len);
+            try std.testing.expectEqual(@as(usize, 0), native[0].relocations.len);
+            const converted = try transcodeRoot(allocator, &source, testRoot(container, source_layout), native, try testRootSymbol(native), &target, testRoot(container, target_layout), try testSlot(&target, target_layout));
+            defer static_data.deinitStaticData(allocator, converted);
+            try std.testing.expectEqual(@as(usize, 2), converted.len);
+            try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
+            const pointer = converted[0].relocations[0];
+            const allocation = converted[@backingInt(pointer.target.data_symbol)];
+            const offset = allocation.symbol_offset + @as(usize, @intCast(pointer.addend));
+            const count: usize = if (as_list) 3 else 1;
+            for (allocation.bytes[offset..][0 .. count * 8]) |byte| try std.testing.expectEqual(@as(u8, 0), byte);
+        }
+    }
 }
 
 test "frozen root transcode preserves shared list strings across pointer widths" {
@@ -764,7 +856,7 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
     try std.testing.expectEqual(@as(u8, 0), converted[0].bytes[0]);
 }
 
-test "frozen root transcode re-points a boxed slot at its payload across pointer widths" {
+test "frozen root transcode re-points a boxed slot across pointer widths and independent tag orders" {
     // A constant folded into a recursive tag payload is frozen as a pointer
     // slot with the value in its own node. Transcoding has to follow the
     // relocation rather than read the slot's bytes as the union itself.
@@ -775,22 +867,36 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     defer target.deinit();
 
     const Plans = struct {
-        fn append(program: *Program.Result, gpa: Allocator) Allocator.Error!Program.ConstPlanId {
+        fn append(program: *Program.Result, gpa: Allocator, reversed: bool) Allocator.Error!Program.ConstPlanId {
             const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
             try program.const_plans.append(gpa, .str);
             const variants = try gpa.alloc(Program.ConstTagVariant, 2);
-            variants[0] = .{ .name = try gpa.dupe(u8, "Leaf"), .checked_name = undefined, .discriminant = 0, .payloads = try gpa.alloc(Program.ConstPlanId, 0) };
-            variants[1] = .{ .name = try gpa.dupe(u8, "Wrap"), .checked_name = undefined, .discriminant = 1, .payloads = try gpa.dupe(Program.ConstPlanId, &.{str_plan}) };
+            for (variants, 0..) |*variant, index| {
+                const wraps = index == @as(usize, if (reversed) 0 else 1);
+                const text = if (wraps) "Wrap" else "Leaf";
+                variant.* = .{
+                    .name = try gpa.dupe(u8, text),
+                    .checked_name = try program.const_type_names.internTagLabel(text),
+                    .discriminant = @intCast(index),
+                    .payloads = try gpa.dupe(Program.ConstPlanId, if (wraps) &.{str_plan} else &.{}),
+                };
+            }
             const tag_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
             try program.const_plans.append(gpa, .{ .tag_union = variants });
             return tag_plan;
         }
     };
-    const source_plan = try Plans.append(&source, allocator);
-    const target_plan = try Plans.append(&target, allocator);
+    const source_plan = try Plans.append(&source, allocator, false);
+    const target_plan = try Plans.append(&target, allocator, true);
+    const source_variants = source.const_plans.items[@backingInt(source_plan)].tag_union;
+    const target_variants = target.const_plans.items[@backingInt(target_plan)].tag_union;
+    // Equal raw ids in these independent pools name different tags. Matching
+    // checked_name numerically would select Leaf instead of the Wrap payload.
+    try std.testing.expectEqual(source_variants[1].checked_name, target_variants[1].checked_name);
+    try std.testing.expect(source_variants[1].checked_name != target_variants[0].checked_name);
 
     const source_tag = try source.layouts.putTagUnion(&.{ .zst, .str });
-    const target_tag = try target.layouts.putTagUnion(&.{ .zst, .str });
+    const target_tag = try target.layouts.putTagUnion(&.{ .str, .zst });
     const source_box = try source.layouts.insertBox(source_tag);
     const target_box = try target.layouts.insertBox(target_tag);
 
@@ -848,9 +954,32 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     const payload_export = converted[@backingInt(payload_pointer.target.data_symbol)];
     const payload_bytes = payload_export.bytes[@intCast(payload_pointer.addend)..];
     const target_data = target.layouts.getTagUnionData(target.layouts.getLayout(target_tag).getTagUnion().idx);
-    try std.testing.expectEqual(@as(u32, 1), target_data.readDiscriminant(payload_bytes.ptr, target.layouts.targetUsize()));
+    try std.testing.expectEqual(@as(u32, 0), target_data.readDiscriminant(payload_bytes.ptr, target.layouts.targetUsize()));
     const str_pointer = payload_export.relocations[0];
     try std.testing.expectEqualStrings(text, converted[@backingInt(str_pointer.target.data_symbol)].bytes[@intCast(str_pointer.addend)..]);
+}
+
+test "frozen root transcode tag identity join cleans up every allocation failure" {
+    // This join consumes only emitted labels and ordinals. Checked ids belong
+    // to other name domains; neither they nor payload/discriminant data is read.
+    const source = [_]Program.ConstTagVariant{
+        .{ .name = "Left", .checked_name = undefined, .discriminant = undefined },
+        .{ .name = "Right", .checked_name = undefined, .discriminant = undefined },
+        .{ .name = "Absent", .checked_name = undefined, .discriminant = undefined },
+    };
+    const target = [_]Program.ConstTagVariant{
+        .{ .name = "Right", .checked_name = undefined, .discriminant = undefined },
+        .{ .name = "Left", .checked_name = undefined, .discriminant = undefined },
+    };
+    const Attempt = struct {
+        fn run(allocator: Allocator, from: []const Program.ConstTagVariant, to: []const Program.ConstTagVariant) (Allocator.Error || error{TestExpectedEqual})!void {
+            const mapping = try joinTagVariants(allocator, from, to);
+            defer allocator.free(mapping);
+            try std.testing.expectEqualSlices(?u32, &.{ 1, 0, null }, mapping);
+        }
+    };
+    var no_resize = std.testing.FailingAllocator.init(std.testing.allocator, .{ .resize_fail_index = 0 });
+    try std.testing.checkAllAllocationFailures(no_resize.allocator(), Attempt.run, .{ source[0..], target[0..] });
 }
 
 fn boxedValueSlot(

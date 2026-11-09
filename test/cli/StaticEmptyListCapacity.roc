@@ -1,8 +1,6 @@
-# Each value below is a compile-time constant frozen into static data. An
-# empty list evaluated with spare capacity keeps it, so it restores as
-# `List.with_capacity(n)`; frozen into a record, it used to point at read-only
-# memory with capacity 0, and the first prepend crashed `roc test` on the dev
-# backend.
+# Completed constants live in immutable static data, including empty lists.
+# Mutating a copy must allocate normal writable storage and leave the
+# original constant unchanged.
 computed_empty = { first: "a", more: ["a"].drop_first(1) }
 
 reserved_empty = { first: "a", more: List.with_capacity(4) }

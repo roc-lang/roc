@@ -736,7 +736,6 @@ fn compileWithCodeGen(
                 .alignment = item.alignment,
                 .is_global = exported,
                 .is_exported = exported,
-                .is_mutable = datum.item.is_mutable,
                 .relocations = relocations,
             };
         }
@@ -1130,7 +1129,6 @@ fn appendStaticDataExports(
 /// Whether an export is stored as zero-fill: bytes that are all zero and stay
 /// zero after linking, which excludes anything a relocation writes into.
 pub fn isZeroFillExport(data_export: StaticDataExport) bool {
-    std.debug.assert(!data_export.is_mutable or (data_export.relocations.len == 0 and std.mem.allEqual(u8, data_export.bytes, 0)));
     if (data_export.bytes.len == 0 or data_export.relocations.len != 0) return false;
     return std.mem.allEqual(u8, data_export.bytes, 0);
 }
@@ -1549,7 +1547,6 @@ fn composeWithCodeGen(
                 .alignment = item.alignment,
                 .is_global = exported,
                 .is_exported = exported,
-                .is_mutable = datum.item.is_mutable,
                 .relocations = relocations,
             };
         }

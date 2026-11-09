@@ -541,7 +541,7 @@ pub const Ctx = struct {
         const start = try self.b.beginBackward();
         if (index >= named_field_base) {
             const name = self.state.named_fields.items[index - named_field_base];
-            try self.b.emitDyn(dest, .{ .field_addr_named = .{ .base = source, .desc = try self.b.descOf(record_ty), .name = try self.b.nameDesc(name) } });
+            try self.b.emitDyn(dest, .{ .field_addr = .{ .base = source, .desc = try self.b.descOf(record_ty), .field_index = try self.b.fieldIndex(record_ty, name) } });
         } else {
             try self.b.readFieldInto(dest, record_ty, source, index, ty);
         }
@@ -628,10 +628,10 @@ pub const Ctx = struct {
     }
 
     /// The fields of `source` a record pattern does not name, as the rest
-    /// record of type `ty` (`adapt` reads its fields by name).
+    /// record of type `ty` (`adapt` moves them by its plan).
     pub fn readRecordRest(self: Ctx, dest: LIR.LocalId, ty: types.TypeId, source: LIR.LocalId, source_ty: types.TypeId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
         const start = try self.b.beginBackward();
-        try self.b.emitDyn(dest, .{ .adapt = .{ .src = source, .from = try self.b.descOf(source_ty), .to = try self.b.descOf(ty) } });
+        try self.b.emitAdapt(dest, source, source_ty, ty);
         return try self.b.endBackward(start, next);
     }
 
@@ -650,8 +650,7 @@ pub const Ctx = struct {
         const desc = try self.b.descOf(union_ty);
         const actual = try self.b.closedLocal(.u32);
         try self.b.emitDyn(actual, .{ .tag_discriminant = .{ .base = source, .desc = desc } });
-        const expected = try self.b.closedLocal(.u32);
-        try self.b.emitDyn(expected, .{ .tag_discriminant_of = .{ .desc = desc, .name = try self.b.nameDesc(name) } });
+        const expected = try self.b.indexLocal(try self.b.tagIndex(union_ty, name));
         const matches = try self.b.closedLocal(.bool);
         try self.b.emitLowLevel(matches, .num_is_eq, &.{ actual, expected });
         try self.b.emitTerminal(try self.boolSwitchStmt(matches, on_match, on_miss));
