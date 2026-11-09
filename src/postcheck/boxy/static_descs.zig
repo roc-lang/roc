@@ -1312,8 +1312,17 @@ pub const StaticDescs = struct {
 
     /// The names block of descriptor `key`, reserved before the blocks of its
     /// components so a recursive type's block reaches itself; null for a
-    /// type with no label in its reach.
+    /// type with no label in its reach. Fill through a worklist so nesting
+    /// depth never becomes native call depth.
     fn namesBlock(self: *StaticDescs, key: Key) Allocator.Error!?ExportIndex {
+        var pending: std.ArrayList(Key) = .empty;
+        defer pending.deinit(self.allocator);
+        const root = try self.reserveNamesBlock(key, &pending);
+        while (pending.pop()) |next| try self.fillNamesBlock(next, &pending);
+        return root;
+    }
+
+    fn reserveNamesBlock(self: *StaticDescs, key: Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
         if (self.names_blocks.get(key)) |known| return known;
         if (!try self.reachesLabel(key)) {
             try self.names_blocks.put(self.allocator, key, null);
@@ -1323,13 +1332,20 @@ pub const StaticDescs = struct {
         self.extra_nodes += 1;
         const node = try self.addExport(try LirProgram.staticDataNodeSymbolName(self.allocator, 0, 16 + self.extra_nodes), names_layout.size, names_layout.alignment, null);
         try self.names_blocks.put(self.allocator, key, node);
+        try pending.append(self.allocator, key);
+        return node;
+    }
+
+    fn fillNamesBlock(self: *StaticDescs, key: Key, pending: *std.ArrayList(Key)) Allocator.Error!void {
+        const node = self.names_blocks.get(key).?.?;
+        const names_layout = desc_format.Names.layout(self.width);
         const shape = try self.shapeOf(key);
         defer shape.deinit(self.allocator);
         var pointers: std.ArrayList(Pointer) = .empty;
         defer pointers.deinit(self.allocator);
         switch (shape) {
             .leaf, .bool_ => types.invariant("a type without labels was given a names block"),
-            .list, .box, .recursive_box, .nominal => |child| if (try self.namesBlock(child)) |target| {
+            .list, .box, .recursive_box, .nominal => |child| if (try self.reserveNamesBlock(child, pending)) |target| {
                 try pointers.append(self.allocator, .{ .offset = names_layout.of(.child), .target = target });
             },
             .record, .tuple => |fields| {
@@ -1341,7 +1357,7 @@ pub const StaticDescs = struct {
                     label.* = field.name;
                     child.* = field.key;
                 }
-                if (try self.namesEntries(labels, keys)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
+                if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
             },
             .tag_union => |tag_union| {
                 const labels = try self.allocator.alloc(?NameId, tag_union.variants.len);
@@ -1352,16 +1368,15 @@ pub const StaticDescs = struct {
                     label.* = variant.name;
                     child.* = variant.payload;
                 }
-                if (try self.namesEntries(labels, keys)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
+                if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
             },
         }
         try self.setRelocations(node, pointers.items);
-        return node;
     }
 
     /// The `NamesEntry` array of a names block: each component's label and
     /// its type's names block.
-    fn namesEntries(self: *StaticDescs, labels: []const ?NameId, keys: []const Key) Allocator.Error!?ExportIndex {
+    fn namesEntries(self: *StaticDescs, labels: []const ?NameId, keys: []const Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
         if (labels.len == 0) return null;
         const entry_layout = desc_format.NamesEntry.layout(self.width);
         self.extra_nodes += 1;
@@ -1371,7 +1386,7 @@ pub const StaticDescs = struct {
         for (labels, keys, 0..) |label, key, index| {
             const base_offset = @as(u32, @intCast(index)) * entry_layout.size;
             if (label) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
-            if (try self.namesBlock(key)) |block| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.names), .target = block });
+            if (try self.reserveNamesBlock(key, pending)) |block| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.names), .target = block });
         }
         try self.setRelocations(entries, pointers.items);
         return entries;
@@ -2001,6 +2016,53 @@ fn scalarOf(primitive: types.Primitive) desc_format.Scalar {
         .i64x2 => .i64x2,
         .bool, .str => unreachable, // `fill` gives Bool and Str their own kinds
     };
+}
+
+test "deep names blocks fill every nested tag without native recursion" {
+    const allocator = std.testing.allocator;
+    for ([_]base.target.TargetUsize{ .u32, .u64 }) |width| {
+        var store = types.Store.init(allocator);
+        defer store.deinit();
+        var modules: types.Modules = .{ .allocator = allocator };
+        defer modules.deinit();
+        var result = try LirProgram.Result.init(allocator, width);
+        defer result.deinit();
+        var layouts: Layouts = .{
+            .allocator = allocator,
+            .store = &store,
+            .converter = .{ .store = &store, .modules = &modules },
+            .layouts = &result.layouts,
+        };
+        defer layouts.deinit();
+        var descs = StaticDescs.init(allocator, &store, &layouts, &result, width);
+        defer descs.deinit();
+        const name = try store.internName("Nested");
+        var ty = try store.primitive(.u8);
+        const depth = 4096;
+        for (0..depth) |_| ty = try store.intern(.{ .tag_union = .{ .tags = &.{.{ .name = name, .payloads = &.{ty} }}, .ext = null } });
+        const root = (try descs.namesBlock(.{ .ty = ty, .recursive_box = false })).?;
+        const export_count = descs.exports.items.len;
+        try std.testing.expectEqual(root, (try descs.namesBlock(.{ .ty = ty, .recursive_box = false })).?);
+        try std.testing.expectEqual(export_count, descs.exports.items.len);
+        var node: ?ExportIndex = root;
+        var count: usize = 0;
+        while (node) |current| {
+            const block = descs.exports.items[current];
+            try std.testing.expectEqual(@as(usize, 1), block.relocations.len);
+            try std.testing.expectEqual(desc_format.Names.layout(descs.width).of(.entries), block.relocations[0].offset);
+            const entries = descs.exports.items[@backingInt(block.relocations[0].target.data_symbol)];
+            try std.testing.expectEqual(@as(usize, desc_format.NamesEntry.layout(descs.width).size), entries.bytes.len);
+            node = null;
+            for (entries.relocations) |relocation| {
+                if (relocation.offset == desc_format.NamesEntry.layout(descs.width).of(.names)) {
+                    node = @backingInt(relocation.target.data_symbol);
+                }
+            }
+            count += 1;
+            try std.testing.expect(count <= depth);
+        }
+        try std.testing.expectEqual(@as(usize, depth), count);
+    }
 }
 
 test "static reference field trailers use target width and physical field order" {
