@@ -236,7 +236,9 @@ pub fn constTypeOf(program: *Program, ty: TypeId) Allocator.Error!const_store.Co
 }
 
 /// The declared order stored with a nominal of backing `backing_ty`: the
-/// record's slots in memory order, named fields by label.
+/// declaration's entries in declared order, named fields by label, as the
+/// checked declaration and the specialized lowering record it. The fields a
+/// row extension supplies have no entry.
 fn declaredOrderOf(program: *Program, backing_ty: TypeId) Allocator.Error!const_store.ConstRange {
     const store = &program.store;
     const const_types = &program.result.const_types;
@@ -245,15 +247,14 @@ fn declaredOrderOf(program: *Program, backing_ty: TypeId) Allocator.Error!const_
         .primitive, .empty_record, .tuple, .tag_union, .list, .box, .nominal, .function, .variable => return .{},
     };
     const declared = record.declared orelse return .{};
-    const fields = store.fieldSpan(record.fields);
     const padding = store.span(declared.padding);
-    const slots = store.declaredSlots(declared);
-    const out = try program.allocator.alloc(const_store.TypeDeclaredField, slots.len);
+    const entries = store.declaredEntries(declared);
+    const out = try program.allocator.alloc(const_store.TypeDeclaredField, entries.len);
     defer program.allocator.free(out);
-    for (slots, out) |slot, *entry| entry.* = if (slot < fields.len)
-        .{ .named = try program.result.const_type_names.internRecordFieldLabel(store.nameText(fields[slot].name)) }
-    else
-        .{ .padding = try constTypeOf(program, padding[slot - fields.len]) };
+    for (entries, out) |entry, *stored| stored.* = switch (entry) {
+        .named => |name| .{ .named = try program.result.const_type_names.internRecordFieldLabel(store.nameText(name)) },
+        .padding => |ordinal| .{ .padding = try constTypeOf(program, padding[ordinal]) },
+    };
     return try const_types.appendDeclaredFieldSpan(out);
 }
 

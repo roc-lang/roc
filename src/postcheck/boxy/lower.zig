@@ -1057,9 +1057,17 @@ pub const Program = struct {
                 if (record.declared) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
-                    const slots = store.declaredSlots(declared);
-                    hashWord(&hasher, @intCast(slots.len));
-                    for (slots) |slot| hashWord(&hasher, slot);
+                    // The entries identify the order; the slots derived
+                    // from them can coincide for different entries.
+                    const entries = store.declaredEntries(declared);
+                    hashWord(&hasher, @intCast(entries.len));
+                    for (entries) |entry| {
+                        hasher.update(&[_]u8{@backingInt(std.meta.activeTag(entry))});
+                        switch (entry) {
+                            .named => |name| hashLengthPrefixed(&hasher, store.nameText(name)),
+                            .padding => |ordinal| hashWord(&hasher, ordinal),
+                        }
+                    }
                 } else hasher.update(&[_]u8{0});
             },
             .tuple => |items| try self.hashTypes(&hasher, store.span(items)),
