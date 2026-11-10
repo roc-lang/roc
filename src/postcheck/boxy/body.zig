@@ -16,6 +16,8 @@
 
 const std = @import("std");
 const collections = @import("collections");
+const OptionalLocal = collections.OptionalId(LocalId);
+const OptionalType = collections.OptionalId(TypeId);
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
@@ -409,15 +411,15 @@ pub const Builder = struct {
     binders: collections.DenseMapUnmanaged(BinderId, LocalId) = .empty,
     /// The descriptor local of each scope variable, read from the worker's
     /// type table on first use (`inputLocal`).
-    var_descs: []?LocalId = &.{},
+    var_descs: []OptionalLocal = &.{},
     /// The dictionaries in scope (`Worker.scope_dictionary_indices` order),
     /// read from the type table on first use.
-    dict_locals: []?LocalId = &.{},
+    dict_locals: []OptionalLocal = &.{},
     /// The literal arguments in scope (`Worker.literal_scopes` order): an
     /// immortal callable per literal requirement producing the literal's converted
     /// value (design.md "Literal Arguments"), read from the type table on
     /// first use.
-    literal_locals: []?LocalId = &.{},
+    literal_locals: []OptionalLocal = &.{},
     /// The thunk composed for each `literal_argument` root this body reads.
     /// Set while `enterEdge` builds a frame's call instance, whose
     /// dictionaries the frame composes as it reads them, and whose
@@ -1471,12 +1473,12 @@ pub const Builder = struct {
         const input_count = self.program.inputCount(self.worker_id);
         const desc_count = self.program.descCount(self.worker_id);
         self.table_local = table;
-        self.var_descs = try arena.alloc(?LocalId, desc_count);
-        self.dict_locals = try arena.alloc(?LocalId, dict_count);
-        self.literal_locals = try arena.alloc(?LocalId, input_count - desc_count - dict_count);
-        @memset(self.var_descs, null);
-        @memset(self.dict_locals, null);
-        @memset(self.literal_locals, null);
+        self.var_descs = try arena.alloc(OptionalLocal, desc_count);
+        self.dict_locals = try arena.alloc(OptionalLocal, dict_count);
+        self.literal_locals = try arena.alloc(OptionalLocal, input_count - desc_count - dict_count);
+        @memset(self.var_descs, .none);
+        @memset(self.dict_locals, .none);
+        @memset(self.literal_locals, .none);
     }
 
     /// The needs list of this worker's tables, once its body is lowered.
@@ -1502,11 +1504,11 @@ pub const Builder = struct {
             &self.literal_locals[literal]
         else
             invariant("an input word names an input its worker does not take");
-        if (known.*) |local| return local;
+        if (known.get()) |local| return local;
         const table = self.table_local orelse invariant("a worker without a type table read an input");
         const local = try self.closedLocal(if (index < self.var_descs.len) .opaque_ptr else try self.erasedLayout());
         try self.emitEntry(.{ .dyn = .{ .target = local, .data = try self.store.addStmtRow(LIR.DynOp, .{ .table_entry = .{ .table = table, .index = index } }), .next = undefined } });
-        known.* = local;
+        known.* = .some(local);
         return local;
     }
 
@@ -4596,7 +4598,7 @@ pub const Builder = struct {
         // instantiation of it, or, the checker having fixed none, seals as a
         // variable no use relates.
         const subst = self.siteSubstitution(expr_id);
-        for (bound[0..scheme.scheme_vars.len], related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty orelse
+        for (bound[0..scheme.scheme_vars.len], related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
             if (index < subst.len and self.view.types().payload(subst[index]) != .err)
                 try self.convert(subst[index])
             else
@@ -4728,7 +4730,7 @@ pub const Builder = struct {
         // numeral only the body's methods fix, takes the type those methods
         // give it.
         for (related[0..outer_count], self.env.bound[0..outer_count]) |*slot, ty| {
-            if (slot.* == null) slot.* = ty;
+            if (slot.* == .none) slot.* = .some(ty);
         }
         try self.program.relateThroughRequirements(self.module, vars, scheme.params, related);
         scheme.per_call = false;
@@ -4743,7 +4745,7 @@ pub const Builder = struct {
         const own_types = try self.allocator.alloc(TypeId, scheme.scheme_vars.len);
         defer self.allocator.free(own_types);
         for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*own_ty, ty, variable, index| {
-            own_ty.* = ty orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
+            own_ty.* = ty.get() orelse if (index < subst.len and self.view.types().payload(subst[index]) != .err)
                 try self.convert(subst[index])
             else
                 try self.program.converter().sealedScheme(self.module, variable);
@@ -5085,7 +5087,7 @@ pub const Builder = struct {
         // checked instantiation of it, or, the checker having fixed none,
         // seals as a variable no use relates.
         const subst = self.siteSubstitution(call.func);
-        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty orelse
+        for (own_types, related[outer_count..], scheme.scheme_vars, 0..) |*slot, ty, variable, index| slot.* = ty.get() orelse
             if (index < subst.len and self.view.types().payload(subst[index]) != .err)
                 try self.convert(subst[index])
             else
@@ -5522,13 +5524,13 @@ pub const Builder = struct {
                     const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
                     defer self.allocator.free(from_edges);
                     for (related, from_edges) |*slot, determined| {
-                        if (slot.* == null) slot.* = determined;
+                        if (slot.* == .none) slot.* = determined;
                     }
                     try self.program.relateThroughRequirements(owner.module, scope_vars, params.items, related);
                 }
                 const bound = try self.allocator.alloc(TypeId, scope_vars.len);
                 defer self.allocator.free(bound);
-                for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty orelse try self.program.converter().sealedScheme(owner.module, variable);
+                for (related, bound, scope_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.program.converter().sealedScheme(owner.module, variable);
                 try self.program.resolveKindSlots(try self.program.schemeKinds(&.{generic_fn}, scope_vars.len), bound);
                 const concrete: types.Env = .{ .module = owner.module, .vars = scope_vars, .bound = bound };
                 const concrete_capture_types = try self.allocator.alloc(TypeId, captures.len);
@@ -5797,13 +5799,13 @@ pub const Builder = struct {
         }
         // Parents precede their children: bind each target's scheme from
         // its parameter's callable type at its parent's instantiation.
-        const callables = try self.allocator.alloc(?TypeId, parsed.items.len);
+        const callables = try self.allocator.alloc(OptionalType, parsed.items.len);
         defer self.allocator.free(callables);
-        const dispatchers = try self.allocator.alloc(?TypeId, parsed.items.len);
+        const dispatchers = try self.allocator.alloc(OptionalType, parsed.items.len);
         defer self.allocator.free(dispatchers);
         for (parsed.items, callables, dispatchers) |*entry, *callable, *dispatcher| {
-            callable.* = null;
-            dispatcher.* = null;
+            callable.* = .none;
+            dispatcher.* = .none;
             if (entry.contract) continue;
             const params, const env: types.Env = if (entry.parent) |p| blk: {
                 const parent = parsed.items[p];
@@ -5812,8 +5814,8 @@ pub const Builder = struct {
             } else .{ root_params, root_env };
             if (entry.position >= params.len) invariant("stored evidence has more entries than its owner has evidence parameters");
             const param = params[entry.position];
-            callable.* = try self.program.converter().convert(env.module, param.callable_ty, env);
-            dispatcher.* = try self.program.converter().convert(env.module, param.dispatcher_ty, env);
+            callable.* = .some(try self.program.converter().convert(env.module, param.callable_ty, env));
+            dispatcher.* = .some(try self.program.converter().convert(env.module, param.dispatcher_ty, env));
             switch (evidence.nodes[entry.node]) {
                 .target => |target_index| {
                     const stored = evidence.target(target_index).*;
@@ -5824,7 +5826,7 @@ pub const Builder = struct {
                     // A scheme variable only the target's own requirements
                     // mention is fixed by relating those requirements'
                     // methods (`Program.instantiateTarget`).
-                    entry.bound = try self.allocator.dupe(TypeId, (try self.program.instantiateTarget(target, formal, callable.*.?)).bound);
+                    entry.bound = try self.allocator.dupe(TypeId, (try self.program.instantiateTarget(target, formal, callable.get().?)).bound);
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
             }
@@ -5838,7 +5840,7 @@ pub const Builder = struct {
         while (index > 0) {
             index -= 1;
             const entry = parsed.items[index];
-            if (callables[index] == null) continue;
+            if (callables[index] == .none) continue;
             dicts[index] = switch (evidence.nodes[entry.node]) {
                 .target => blk: {
                     const target_worker = self.program.worker(entry.target.?).*;
@@ -5852,7 +5854,7 @@ pub const Builder = struct {
                     }
                     break :blk try self.composeDictionary(try self.program.methodEntryWorker(entry.target.?), hidden);
                 },
-                .structural => |structural_index| try self.storedStructuralDictionary(source, evidence.structural(structural_index).*, dispatchers[index].?, callables[index].?),
+                .structural => |structural_index| try self.storedStructuralDictionary(source, evidence.structural(structural_index).*, dispatchers[index].get().?, callables[index].get().?),
                 // Evidence no dictionary reads restores to none.
                 .from_callable, .from_scheme, .unreachable_value, .checked_error => null,
             };
@@ -6241,16 +6243,16 @@ pub const Builder = struct {
         const row_vars = try self.allocator.alloc(bool, target.scheme_vars.len);
         defer self.allocator.free(row_vars);
         @memset(row_vars, false);
-        const related: []?TypeId = if (call_fn) |actual| blk: {
+        const related: []lower.Related = if (call_fn) |actual| blk: {
             const formal = try self.program.store.intern(.{ .function = .{ .args = target.params, .ret = target.ret, .effectful = false } });
             break :blk try self.program.relateVariablesRows(self.allocator, &.{.{ formal, actual }}, target.scheme_vars.len, row_vars);
-        } else try self.allocator.alloc(?TypeId, 0);
+        } else try self.allocator.alloc(lower.Related, 0);
         defer self.allocator.free(related);
         // Without a recorded instantiation, a variable the function type
         // doesn't mention is one the target's own requirements fix.
         if (!recorded and related.len != 0) try self.program.relateThroughTargetRequirements(callee, related);
         for (bound, 0..) |*slot, index| {
-            const ty = if (index < related.len) related[index] else null;
+            const ty = if (index < related.len) related[index].get() else null;
             if (row_vars[index] and ty != null) {
                 slot.* = ty.?;
                 continue;
@@ -6498,11 +6500,11 @@ pub const Builder = struct {
         defer self.allocator.free(words);
         @memset(words, null);
         // The reserved recipe of each target a back edge returns to.
-        const heads = try self.allocator.alloc(?Tables.RecipeId, tree.len);
+        const heads = try self.allocator.alloc(collections.OptionalId(Tables.RecipeId), tree.len);
         defer self.allocator.free(heads);
         for (tree, heads) |node, *head| head.* = switch (node.kind) {
-            .target => |target| if (target.recursive) try self.recipes.reserve() else null,
-            .resolved, .back_edge => null,
+            .target => |target| if (target.recursive) .some(try self.recipes.reserve()) else .none,
+            .resolved, .back_edge => .none,
         };
         var index = tree.len;
         while (index > 0) {
@@ -6517,7 +6519,7 @@ pub const Builder = struct {
                     .derived => invariant("a derived codec or map dictionary is resolved from a type alone, but checking records each with its plan at the dispatch it serves"),
                     .target => invariant("a dictionary's target requirement is not a resolved node"),
                 },
-                .back_edge => |head| try self.adaptTargetDictionary(.{ .recipe = heads[head].? }, tree[head].kind.target, node.requirement.?.callable),
+                .back_edge => |head| try self.adaptTargetDictionary(.{ .recipe = heads[head].get().? }, tree[head].kind.target, node.requirement.?.callable),
                 .target => |target| blk: {
                     const worker = self.program.worker(target.target).*;
                     const bound = target.instance.bound;
@@ -6526,7 +6528,7 @@ pub const Builder = struct {
                     for (target.children, hidden[bound.len..][0..target.children.len]) |child, *dictionary| dictionary.* = words[child].?;
                     try self.derivedLiteralArgs(target.target, bound, hidden[bound.len + target.children.len ..]);
                     const entry = try self.program.methodEntryWorker(target.target);
-                    const dictionary: Word = if (heads[index]) |head| head: {
+                    const dictionary: Word = if (heads[index].get()) |head| head: {
                         try self.recipes.set(head, try self.dictionaryRecipe(entry, hidden));
                         break :head .{ .recipe = head };
                     } else try self.composeDictionary(entry, hidden);
@@ -6744,7 +6746,7 @@ pub const Builder = struct {
             slot.* = if (index < subst.len and self.view.types().payload(subst[index]) != .err)
                 try self.convert(subst[index])
             else
-                ty orelse try self.program.converter().sealedScheme(alias_step.module, variable);
+                ty.get() orelse try self.program.converter().sealedScheme(alias_step.module, variable);
         }
         return bound;
     }
@@ -7148,7 +7150,7 @@ pub const Builder = struct {
         const bound = try self.relateVariablesPartial(roots, count);
         defer self.allocator.free(bound);
         const result = try self.allocator.alloc(TypeId, count);
-        for (bound, result, 0..) |ty, *slot, index| slot.* = ty orelse {
+        for (bound, result, 0..) |ty, *slot, index| slot.* = ty.get() orelse {
             var formal_text: std.Io.Writer.Allocating = .init(self.allocator);
             defer formal_text.deinit();
             var actual_text: std.Io.Writer.Allocating = .init(self.allocator);
@@ -7166,7 +7168,7 @@ pub const Builder = struct {
 
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
-    pub fn relateVariablesPartial(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
+    pub fn relateVariablesPartial(self: *Builder, roots: []const [2]TypeId, count: usize) Allocator.Error![]lower.Related {
         return try self.program.relateVariablesPartial(self.allocator, roots, count);
     }
 
@@ -8316,9 +8318,9 @@ pub const Builder = struct {
         // Values arrive in source order; store them by checked field index. An
         // optional field's slot holds `#Present(value)`, or `#Missing` when
         // the literal omits it (design.md "Field Kinds").
-        const ordered = try self.allocator.alloc(?LocalId, fields.len);
+        const ordered = try self.allocator.alloc(OptionalLocal, fields.len);
         defer self.allocator.free(ordered);
-        @memset(ordered, null);
+        @memset(ordered, .none);
         const name_store = self.view.nameStore();
         for (record.fields, values) |field_id, value| {
             const field = self.bodies().recordField(field_id);
@@ -8326,7 +8328,7 @@ pub const Builder = struct {
             const position = for (fields, 0..) |candidate, index| {
                 if (candidate.name == name) break index;
             } else invariant("a record expression's field is absent from its type");
-            ordered[position] = switch (fields[position].kind) {
+            ordered[position] = .some(switch (fields[position].kind) {
                 .inline_slot => value,
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(fields[position].ty), try self.program.store.internName(@import("layouts.zig").present_label), &.{value}),
                 .variable_slot => blk: {
@@ -8335,7 +8337,7 @@ pub const Builder = struct {
                     try self.emitAdapt(slot_local, value, fields[position].ty, storage);
                     break :blk slot_local;
                 },
-            };
+            });
         }
         // Unset fields (`name: _`) are missing.
         for (record.unsets) |unset| {
@@ -8344,7 +8346,7 @@ pub const Builder = struct {
             for (fields, ordered) |field, *slot| {
                 if (field.name != name) continue;
                 if (field.kind != .presence_slot) invariant("an unset field is not optional");
-                slot.* = try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{});
+                slot.* = .some(try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}));
             }
         }
         // An update copies the fields it does not mention from its base.
@@ -8357,7 +8359,7 @@ pub const Builder = struct {
                 var updated: std.ArrayList(LocalId) = .empty;
                 defer updated.deinit(self.allocator);
                 for (fields, ordered) |field, value| {
-                    const local = value orelse continue;
+                    const local = value.get() orelse continue;
                     try names.append(self.allocator, field.name);
                     try updated.append(self.allocator, local);
                 }
@@ -8385,25 +8387,25 @@ pub const Builder = struct {
             const base_fields = try self.allocator.dupe(types.Field, self.program.store.fieldSpan(base_record.fields));
             defer self.allocator.free(base_fields);
             for (fields, ordered) |field, *slot| {
-                if (slot.* != null) continue;
+                if (slot.* != .none) continue;
                 const storage = try self.program.layouts.fieldStorage(field);
                 const base_index = for (base_fields, 0..) |candidate, index| {
                     if (candidate.name == field.name) break index;
                 } else null;
                 if (base_index) |index| {
-                    slot.* = try self.readField(base_ty, base_value, @intCast(index), storage);
+                    slot.* = .some(try self.readField(base_ty, base_value, @intCast(index), storage));
                 } else {
                     if (base_record.ext == null) invariant("a record update's field is absent from its base");
                     const local = try self.localOf(storage, .view);
                     try self.emitDyn(local, .{ .field_addr = .{ .base = base_value, .desc = try self.descOf(base_ty), .field_index = try self.fieldIndex(base_ty, field.name) } });
-                    slot.* = local;
+                    slot.* = .some(local);
                 }
             }
         }
         const slots = try self.allocator.alloc(LocalId, fields.len);
         defer self.allocator.free(slots);
         for (fields, ordered, slots) |field, value, *slot| {
-            slot.* = value orelse switch (field.kind) {
+            slot.* = value.get() orelse switch (field.kind) {
                 .presence_slot => try self.buildTag(try self.program.layouts.presenceSlot(field.ty), try self.program.store.internName(@import("layouts.zig").missing_label), &.{}),
                 .inline_slot => try self.defaultValue((try self.program.omittedDefault(.{ .module = self.module, .expr = expr_id, .name = field.name })) orelse
                     invariant("a record construction omits a field it has no default for")),

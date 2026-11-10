@@ -15,6 +15,8 @@ const LiteralDemand = @import("../literal_demand.zig");
 const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+/// An operand's checked expression, absent for an operand without one.
+const OptionalCheckedExpr = collections.OptionalId(CIR.Expr.Idx);
 /// A root's function type while it is resolved, zero when not yet lowered.
 const OptionalTypeId = collections.OptionalId(Type.TypeId);
 const specialize = @import("specialize.zig");
@@ -15128,7 +15130,8 @@ const Builder = struct {
         const fn_demand_shaped = try self.allocator.alloc(bool, if (any_demand_shaped) body_draft.fns.items.len else 0);
         errdefer self.allocator.free(fn_demand_shaped);
         @memset(fn_demand_shaped, false);
-        const def_ids = try self.allocator.alloc(?Ast.DefId, body_draft.defs.items.len);
+        // Every entry is written by the definition pass below before any read.
+        const def_ids = try self.allocator.alloc(collections.OptionalId(Ast.DefId), body_draft.defs.items.len);
         errdefer self.allocator.free(def_ids);
         const emit_fns = try self.allocator.alloc(bool, body_draft.fns.items.len);
         errdefer self.allocator.free(emit_fns);
@@ -15183,7 +15186,9 @@ const Builder = struct {
         }
         var prior_identities = std.AutoHashMap(specialize.SpecLookupAddress, u32).init(self.allocator);
         defer prior_identities.deinit();
-        const previous_same_identity = try self.allocator.alloc(?u32, body_draft.fns.items.len);
+        // Written for each function as it joins its identity's chain, before
+        // any later function walks the chain through it.
+        const previous_same_identity = try self.allocator.alloc(collections.OptionalId(DraftFnId), body_draft.fns.items.len);
         defer self.allocator.free(previous_same_identity);
 
         var next_fn: u32 = @intCast(self.program.fnCount());
@@ -15266,7 +15271,7 @@ const Builder = struct {
             if (identity) |wanted| {
                 const address = specialize.SpecLookupAddress.fromIdentity(wanted);
                 var candidate = if (allow_identity_merge) prior_identities.get(address) else null;
-                while (candidate) |prior| : (candidate = previous_same_identity[prior]) {
+                while (candidate) |prior| : (candidate = if (previous_same_identity[prior].get()) |previous| @backingInt(previous) else null) {
                     self.countBodyDiagnostic("draft_commit_lookup_steps");
                     if (identities[prior]) |existing| {
                         if (try self.draftSpecIdentityEql(existing, wanted)) {
@@ -15361,7 +15366,7 @@ const Builder = struct {
                     }
                     if (allow_identity_merge) {
                         const entry = try prior_identities.getOrPut(address);
-                        previous_same_identity[raw_index] = if (entry.found_existing) entry.value_ptr.* else null;
+                        previous_same_identity[raw_index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
                         entry.value_ptr.* = @intCast(raw_index);
                     }
                 }
@@ -15375,11 +15380,11 @@ const Builder = struct {
         var next_def: u32 = @intCast(self.program.defCount());
         for (body_draft.defs.items, body_draft.def_owners.items, 0..) |_, owner, raw_index| {
             if (!draftOwnerRetained(owner, emit_fns)) {
-                def_ids[raw_index] = null;
+                def_ids[raw_index] = .none;
                 emit_defs[raw_index] = false;
                 continue;
             }
-            def_ids[raw_index] = @fromBackingInt(@intCast(next_def));
+            def_ids[raw_index] = .some(@fromBackingInt(@intCast(next_def)));
             next_def += 1;
             emit_defs[raw_index] = true;
         }
@@ -21509,7 +21514,7 @@ const FinalIdOffsets = struct {
     /// specialization, so every call to it is demand-shaped. Empty when no
     /// draft function resolved to one.
     fn_demand_shaped: []const bool = &.{},
-    def_ids: []const ?Ast.DefId = &.{},
+    def_ids: []const collections.OptionalId(Ast.DefId) = &.{},
     /// Literal root definitions this draft converts at a type an earlier
     /// commit already owns a root for, mapped to that root's definition.
     shared_literal_root_defs: ?*const collections.DenseMap(DraftDefId, Ast.DefId) = null,
@@ -21572,7 +21577,7 @@ const FinalIdOffsets = struct {
 
     fn def(self: FinalIdOffsets, id: DraftDefId) Ast.DefId {
         if (self.shared_literal_root_defs) |shared| if (shared.get(id)) |root_def| return root_def;
-        if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)] orelse
+        if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)].get() orelse
             Common.invariant("draft definition required a local id after its function converged to an imported specialization");
         return @fromBackingInt(@intCast(self.def_start + @backingInt(id)));
     }
@@ -22166,7 +22171,7 @@ const InterfaceReplayEntry = struct {
     request: InterfaceConstraints.Identity,
     input_len: usize,
     /// The classes the request's parametric holes stood for.
-    hole_classes: []const ?NodeId,
+    hole_classes: []const solve.MaybeNodeId,
     /// This expansion's instantiated cell for each parametric hole slot.
     hole_cells: []const NodeId,
     roots: []const NodeId,
@@ -28302,12 +28307,12 @@ const BodyContext = struct {
         replay_state: *const InterfaceReplayState,
         entry: InterfaceReplayEntry,
         holes: []const NodeId,
-        hole_classes: []const ?NodeId,
+        hole_classes: []const solve.MaybeNodeId,
     ) bool {
         if (entry.hole_classes.len != hole_classes.len) return false;
         for (entry.hole_classes, entry.hole_cells, holes, hole_classes) |expanded_class, expanded_cell, hole, hole_class| {
-            const expanded = expanded_class orelse {
-                if (hole_class != null) return false;
+            const expanded = expanded_class.get() orelse {
+                if (hole_class != .none) return false;
                 continue;
             };
             var current = hole;
@@ -28327,7 +28332,7 @@ const BodyContext = struct {
         for (replay_state.stack.items) |index| {
             const unfinished = replay_state.entries.items[index];
             for (unfinished.hole_cells, unfinished.hole_classes) |cell, class| {
-                const stands_for = class orelse continue;
+                const stands_for = class.get() orelse continue;
                 if (self.graph.sameClass(node, cell)) return stands_for;
             }
         }
@@ -28440,9 +28445,9 @@ const BodyContext = struct {
         };
         const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
-        const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
+        const hole_classes = try input_arena.allocator().alloc(solve.MaybeNodeId, holes.nodes.len);
         const input = try InterfaceConstraints.captureRequestWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
-        for (hole_classes) |hole_class| if (hole_class != null) {
+        for (hole_classes) |hole_class| if (hole_class != .none) {
             self.builder.count("interface_parametric_requests");
             break;
         };
@@ -28524,7 +28529,7 @@ const BodyContext = struct {
             .evidence = stored_evidence,
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
             .input_len = shape.bytes.len,
-            .hole_classes = try self.graph.arena().dupe(?NodeId, hole_classes),
+            .hole_classes = try self.graph.arena().dupe(solve.MaybeNodeId, hole_classes),
             .hole_cells = hole_cells: {
                 const cells = try self.graph.arena().alloc(NodeId, holes.root_indices.len);
                 for (holes.root_indices, cells) |root_index, *cell| cell.* = roots[root_index];
@@ -28597,7 +28602,7 @@ const BodyContext = struct {
         parent: ?usize = null,
         restores_current: bool = false,
         replay_index: usize = undefined,
-        hole_classes: []const ?NodeId = &.{},
+        hole_classes: []const solve.MaybeNodeId = &.{},
         roots: []const NodeId = &.{},
 
         /// The child frame applying the callee's open relations, once.
@@ -28648,7 +28653,7 @@ const BodyContext = struct {
             const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
                 replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
             const parametric_request = for (hole_classes) |hole_class| {
-                if (hole_class != null) break true;
+                if (hole_class != .none) break true;
             } else false;
             var component_scratch = self.graph.acquireArena();
             defer self.graph.releaseArena(component_scratch);
@@ -28674,7 +28679,7 @@ const BodyContext = struct {
                     // settled types their holes stood for; only exact requests
                     // may reuse them.
                     const parametric = for (entry.hole_classes) |hole_class| {
-                        if (hole_class != null) break true;
+                        if (hole_class != .none) break true;
                     } else false;
                     if (parametric and !single_request_component) {
                         entry.status = .ready;
@@ -39523,7 +39528,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const ?CIR.Expr.Idx,
+        checked_args: []const OptionalCheckedExpr,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -39570,7 +39575,7 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
-                const advance_arg = checked_args[2] orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
+                const advance_arg = checked_args[2].get() orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
                 const advance_node = if (state_is_private)
                     try self.iterCustomAdvanceRequestNode(ExprSite.read(advance_arg), request_fn.args[0])
                 else
@@ -39731,7 +39736,7 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const ?CIR.Expr.Idx,
+        checked_args: []const OptionalCheckedExpr,
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
@@ -39743,7 +39748,7 @@ const BodyContext = struct {
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
         const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index] orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
+            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index].get() orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
         else
             null;
         return try self.graphFunctionNode(
@@ -55112,21 +55117,21 @@ const BodyContext = struct {
     fn checkedExprIteratorDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error![]?CIR.Expr.Idx {
-        const checked_args = try self.allocator.alloc(?CIR.Expr.Idx, operands.len);
+    ) Allocator.Error![]OptionalCheckedExpr {
+        const checked_args = try self.allocator.alloc(OptionalCheckedExpr, operands.len);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
-                .checked_expr => |expr| expr,
-                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => null,
+                .checked_expr => |expr| .some(expr),
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => .none,
             };
         }
         return checked_args;
     }
 
     /// `args` as the optional operands `generatedIteratorFunctionNode` takes.
-    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]?CIR.Expr.Idx {
-        const out = try self.allocator.alloc(?CIR.Expr.Idx, args.len);
-        for (args, out) |arg, *slot| slot.* = arg;
+    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]OptionalCheckedExpr {
+        const out = try self.allocator.alloc(OptionalCheckedExpr, args.len);
+        for (args, out) |arg, *slot| slot.* = .some(arg);
         return out;
     }
 

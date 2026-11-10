@@ -559,8 +559,11 @@ fn recordFieldType(types: *const Type.Store, record_ty: Type.TypeId, name: names
     };
 }
 
+/// Each function's body, by function index; absent for a function without one.
+pub const Bodies = collections.OptionalIndexColumn(Ast.ExprId).View;
+
 /// Analyze every function of `program` whose body `bodies` gives.
-pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast.ExprId) Allocator.Error!Analysis {
+pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: Bodies) Allocator.Error!Analysis {
     var analysis: Analysis = .{
         .arena = collections.SingleThreadArena.init(gpa),
         .program = program,
@@ -570,13 +573,13 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
     errdefer analysis.deinit();
     const arena = analysis.arena.allocator();
     analysis.paths = try PathTable.init(arena);
-    analysis.fns = try arena.alloc(FnSummary, bodies.len);
+    analysis.fns = try arena.alloc(FnSummary, bodies.len());
     for (analysis.fns, 0..) |*fn_summary, index| {
         const fn_ = program.getFnAt(index);
         fn_summary.* = .{
             .params = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.args).len),
             .captures = try arena.alloc(DemandSet, program.typedLocalSpan(fn_.captures).len),
-            .wrapper = bodies[index] != null and
+            .wrapper = bodies.get(index) != null and
                 try WrapperBody.wrapperBody(gpa, program, @fromBackingInt(@as(u32, @intCast(index)))) != null,
         };
         for (fn_summary.params) |*set| set.* = .{};
@@ -587,7 +590,7 @@ pub fn analyze(gpa: Allocator, program: *const Ast.Program, bodies: []const ?Ast
         .gpa = gpa,
         .analysis = &analysis,
         .scratch = collections.SingleThreadArena.init(gpa),
-        .callers = try gpa.alloc(std.ArrayList(Ast.FnId), bodies.len),
+        .callers = try gpa.alloc(std.ArrayList(Ast.FnId), bodies.len()),
         .marks = .{ .gpa = gpa },
     };
     for (builder.callers) |*list| list.* = .empty;
@@ -678,15 +681,15 @@ const Builder = struct {
     /// the worklist empties.
     fn fixpoint(
         self: *Builder,
-        bodies: []const ?Ast.ExprId,
+        bodies: Bodies,
         comptime visit: fn (*Builder, Ast.FnId, Ast.ExprId) Allocator.Error!bool,
     ) Allocator.Error!void {
-        const queued = try self.gpa.alloc(bool, bodies.len);
+        const queued = try self.gpa.alloc(bool, bodies.len());
         defer self.gpa.free(queued);
         @memset(queued, true);
         var pending: std.ArrayList(Ast.FnId) = .empty;
         defer pending.deinit(self.gpa);
-        var index = bodies.len;
+        var index = bodies.len();
         while (index > 0) {
             index -= 1;
             try pending.append(self.gpa, @fromBackingInt(@as(u32, @intCast(index))));
@@ -694,7 +697,7 @@ const Builder = struct {
         while (pending.pop()) |fn_id| {
             const raw = @backingInt(fn_id);
             queued[raw] = false;
-            const body = bodies[raw] orelse continue;
+            const body = bodies.get(raw) orelse continue;
             if (!try visit(self, fn_id, body)) continue;
             for (self.callers[raw].items) |caller| {
                 const caller_raw = @backingInt(caller);
@@ -787,9 +790,9 @@ const Builder = struct {
     /// value it builds itself, where the callee consumes that value. The
     /// clone of the body inlines such a call wherever the body is, so the
     /// body only stays smaller than a call while it stays one procedure.
-    fn dropSpecializingWrappers(self: *Builder, bodies: []const ?Ast.ExprId) Allocator.Error!void {
-        for (bodies, 0..) |maybe_body, index| {
-            const body = maybe_body orelse continue;
+    fn dropSpecializingWrappers(self: *Builder, bodies: Bodies) Allocator.Error!void {
+        for (0..bodies.len()) |index| {
+            const body = bodies.get(index) orelse continue;
             if (!self.analysis.fns[index].wrapper) continue;
             const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
             if (try self.bodySpecializesCall(fn_id, body)) self.analysis.fns[index].wrapper = false;

@@ -274,6 +274,7 @@ const RootOrdinalColumn = collections.OptionalIndexColumn(RootOrdinal);
 const ProgramPlanIndex = enum(u32) { _ };
 const ProgramPlanColumn = collections.OptionalIndexColumn(ProgramPlanIndex);
 const SlotSymbolColumn = collections.OptionalIndexColumn(static_data_exports.StaticDataSymbolId);
+const OptionalStaticData = collections.OptionalId(lir.LIR.StaticDataId);
 /// A position in a module's pending roots.
 const PendingPosition = enum(u32) { _ };
 const PendingPositionColumn = collections.OptionalIndexColumn(PendingPosition);
@@ -5428,18 +5429,18 @@ const InterpreterProgram = struct {
 /// Module and root ids are the existing lowering identities, including every
 /// representation of a checked root. No source identities are reconstructed.
 const PublicationSlots = struct {
-    checked_heads: []std.ArrayList(?lir.LIR.StaticDataId),
-    literal_heads: []?lir.LIR.StaticDataId,
+    checked_heads: []std.ArrayList(OptionalStaticData),
+    literal_heads: []OptionalStaticData,
     next: collections.OptionalIndexColumn(lir.LIR.StaticDataId),
 
     fn init(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!PublicationSlots {
-        const checked_heads = try allocator.alloc(std.ArrayList(?lir.LIR.StaticDataId), result.lowering_modules.items.len);
+        const checked_heads = try allocator.alloc(std.ArrayList(OptionalStaticData), result.lowering_modules.items.len);
         @memset(checked_heads, .empty);
         errdefer {
             for (checked_heads) |*heads| heads.deinit(allocator);
             allocator.free(checked_heads);
         }
-        var literal_heads = std.ArrayList(?lir.LIR.StaticDataId).empty;
+        var literal_heads = std.ArrayList(OptionalStaticData).empty;
         errdefer literal_heads.deinit(allocator);
         var next = try collections.OptionalIndexColumn(lir.LIR.StaticDataId).initFilled(allocator, result.static_data_values.items.len);
         errdefer next.deinit(allocator);
@@ -5450,7 +5451,7 @@ const PublicationSlots = struct {
             const head = switch (root.root) {
                 .literal => |id| blk: {
                     const raw = @backingInt(id);
-                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, null, raw + 1 - literal_heads.items.len);
+                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, .none, raw + 1 - literal_heads.items.len);
                     break :blk &literal_heads.items[raw];
                 },
                 .checked => |id| blk: {
@@ -5462,23 +5463,23 @@ const PublicationSlots = struct {
                     }
                     const heads = &checked_heads[@backingInt(last_owner)];
                     const raw = @backingInt(id);
-                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, null, raw + 1 - heads.items.len);
+                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, .none, raw + 1 - heads.items.len);
                     break :blk &heads.items[raw];
                 },
             };
-            if (head.*) |previous| next.set(index, previous);
-            head.* = @fromBackingInt(@intCast(index));
+            if (head.get()) |previous| next.set(index, previous);
+            head.* = .some(@fromBackingInt(@intCast(index)));
         }
         return .{ .checked_heads = checked_heads, .literal_heads = try literal_heads.toOwnedSlice(allocator), .next = next };
     }
 
     fn first(self: *const PublicationSlots, owner: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer) ?lir.LIR.StaticDataId {
         return switch (producer) {
-            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)] else null,
+            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)].get() else null,
             .checked => |id| blk: {
                 const heads = self.checked_heads[@backingInt(owner)].items;
                 const raw = @backingInt(id);
-                break :blk if (raw < heads.len) heads[raw] else null;
+                break :blk if (raw < heads.len) heads[raw].get() else null;
             },
         };
     }

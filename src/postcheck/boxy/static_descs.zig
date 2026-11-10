@@ -40,6 +40,13 @@ const WorkerId = lower.WorkerId;
 const StaticDataExport = LirProgram.StaticDataExport;
 const StaticDataRelocation = LirProgram.StaticDataRelocation;
 const ExportIndex = u32;
+/// An export position as a typed index, for compact optional columns.
+const ExportSlot = enum(u32) { _ };
+/// A destination variant's position in its union.
+const VariantPosition = enum(u32) { _ };
+const OptionalName = collections.OptionalId(NameId);
+const OptionalVariant = collections.OptionalId(VariantPosition);
+const OptionalExport = collections.OptionalId(ExportSlot);
 
 /// The static descriptors and dictionaries the program carries as static data.
 pub const StaticDescs = struct {
@@ -1354,23 +1361,23 @@ pub const StaticDescs = struct {
                 try pointers.append(self.allocator, .{ .offset = names_layout.of(.child), .target = target });
             },
             .record, .tuple => |fields| {
-                const labels = try self.allocator.alloc(?NameId, fields.len);
+                const labels = try self.allocator.alloc(OptionalName, fields.len);
                 defer self.allocator.free(labels);
                 const keys = try self.allocator.alloc(Key, fields.len);
                 defer self.allocator.free(keys);
                 for (fields, labels, keys) |field, *label, *child| {
-                    label.* = field.name;
+                    label.* = .of(field.name);
                     child.* = field.key;
                 }
                 if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
             },
             .tag_union => |tag_union| {
-                const labels = try self.allocator.alloc(?NameId, tag_union.variants.len);
+                const labels = try self.allocator.alloc(OptionalName, tag_union.variants.len);
                 defer self.allocator.free(labels);
                 const keys = try self.allocator.alloc(Key, tag_union.variants.len);
                 defer self.allocator.free(keys);
                 for (tag_union.variants, labels, keys) |variant, *label, *child| {
-                    label.* = variant.name;
+                    label.* = .some(variant.name);
                     child.* = variant.payload;
                 }
                 if (try self.namesEntries(labels, keys, pending)) |entries| try pointers.append(self.allocator, .{ .offset = names_layout.of(.entries), .target = entries });
@@ -1381,7 +1388,7 @@ pub const StaticDescs = struct {
 
     /// The `NamesEntry` array of a names block: each component's label and
     /// its type's names block.
-    fn namesEntries(self: *StaticDescs, labels: []const ?NameId, keys: []const Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
+    fn namesEntries(self: *StaticDescs, labels: []const OptionalName, keys: []const Key, pending: *std.ArrayList(Key)) Allocator.Error!?ExportIndex {
         if (labels.len == 0) return null;
         const entry_layout = desc_format.NamesEntry.layout(self.width);
         self.extra_nodes += 1;
@@ -1390,7 +1397,7 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         for (labels, keys, 0..) |label, key, index| {
             const base_offset = @as(u32, @intCast(index)) * entry_layout.size;
-            if (label) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
+            if (label.get()) |name| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.label), .target = (try self.reserveName(name)).node });
             if (try self.reserveNamesBlock(key, pending)) |block| try pointers.append(self.allocator, .{ .offset = base_offset + entry_layout.of(.names), .target = block });
         }
         try self.setRelocations(entries, pointers.items);
@@ -1805,20 +1812,21 @@ pub const StaticDescs = struct {
             const sources = from_shape.tag_union.variants;
             const node = try self.reservePlanNode(.retag, @intCast(sources.len), 0);
             try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
-            const targets = try self.allocator.alloc(?u32, sources.len);
+            const targets = try self.allocator.alloc(OptionalVariant, sources.len);
             defer self.allocator.free(targets);
-            for (sources, targets) |source, *target| target.* = @intFromBool(std.mem.eql(u8, self.store.nameText(source.name), "True"));
+            for (sources, targets) |source, *target| target.* = .some(@fromBackingInt(@intFromBool(std.mem.eql(u8, self.store.nameText(source.name), "True"))));
             try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, null));
             return node;
         }
         if (from_shape == .bool_ and to_shape == .tag_union) {
             const node = try self.reservePlanNode(.retag, 2, 0);
             try self.adapt_plans.put(self.allocator, .{ .from = from, .to = to }, node);
-            var targets: [2]?u32 = .{ null, null };
+            var targets: [2]OptionalVariant = .{ .none, .none };
             for (to_shape.tag_union.variants, 0..) |variant, index| {
                 const text = self.store.nameText(variant.name);
-                if (std.mem.eql(u8, text, "False")) targets[0] = @intCast(index);
-                if (std.mem.eql(u8, text, "True")) targets[1] = @intCast(index);
+                const position: VariantPosition = @fromBackingInt(@as(u32, @intCast(index)));
+                if (std.mem.eql(u8, text, "False")) targets[0] = .some(position);
+                if (std.mem.eql(u8, text, "True")) targets[1] = .some(position);
             }
             try self.finishPlanNode(node, from, to, null, try self.retagEntries(&targets, null));
             return node;
@@ -1875,18 +1883,21 @@ pub const StaticDescs = struct {
                 // The destination's variant is the source's by tag name; a
                 // label a joined row holds at several payload types names
                 // the variant whose payload describes the same values.
-                const targets = try self.allocator.alloc(?u32, sources.len);
+                const targets = try self.allocator.alloc(OptionalVariant, sources.len);
                 defer self.allocator.free(targets);
-                const payloads = try self.allocator.alloc(?ExportIndex, sources.len);
+                const payloads = try self.allocator.alloc(OptionalExport, sources.len);
                 defer self.allocator.free(payloads);
                 for (sources, targets, payloads) |source, *target, *payload| {
-                    target.* = null;
+                    target.* = .none;
                     for (to_union.variants, 0..) |candidate, index| {
                         if (candidate.name != source.name or candidate.payload_count != source.payload_count) continue;
-                        if (target.* != null) types.invariant("a re-tagged variant matches two destination variants");
-                        target.* = @intCast(index);
+                        if (target.* != .none) types.invariant("a re-tagged variant matches two destination variants");
+                        target.* = .some(@fromBackingInt(@as(u32, @intCast(index))));
                     }
-                    payload.* = if (target.*) |index| if (source.payload_count != 0) try self.planBetween(source.payload, to_union.variants[index].payload) else null else null;
+                    payload.* = if (target.get()) |position| if (source.payload_count != 0)
+                        .some(@fromBackingInt(try self.planBetween(source.payload, to_union.variants[@backingInt(position)].payload)))
+                    else
+                        .none else .none;
                 }
                 try self.finishPlanNode(node, from, to, null, try self.retagEntries(targets, payloads));
                 return node;
@@ -1942,7 +1953,7 @@ pub const StaticDescs = struct {
     /// The `AdaptVariant` entries of a re-tag plan: for each source
     /// variant, the destination's discriminant (null where the destination
     /// lacks the variant) and its payload's plan.
-    fn retagEntries(self: *StaticDescs, targets: []const ?u32, payloads: ?[]const ?ExportIndex) Allocator.Error!?ExportIndex {
+    fn retagEntries(self: *StaticDescs, targets: []const OptionalVariant, payloads: ?[]const OptionalExport) Allocator.Error!?ExportIndex {
         if (targets.len == 0) return null;
         const variant_layout = desc_format.AdaptVariant.layout(self.width);
         self.extra_nodes += 1;
@@ -1951,9 +1962,9 @@ pub const StaticDescs = struct {
         defer pointers.deinit(self.allocator);
         for (targets, 0..) |target, index| {
             const base_offset = @as(u32, @intCast(index)) * variant_layout.size;
-            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), target orelse desc_format.AdaptVariant.absent);
-            const payload = if (payloads) |plans| plans[index] else null;
-            if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = plan });
+            writeU32(@constCast(self.exports.items[entries].bytes), base_offset + variant_layout.of(.discriminant), if (target.get()) |position| @backingInt(position) else desc_format.AdaptVariant.absent);
+            const payload = if (payloads) |plans| plans[index].get() else null;
+            if (payload) |plan| try pointers.append(self.allocator, .{ .offset = base_offset + variant_layout.of(.plan), .target = @backingInt(plan) });
         }
         try self.setRelocations(entries, pointers.items);
         return entries;

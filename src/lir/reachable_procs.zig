@@ -17,9 +17,6 @@ const LirStore = core.LirStore;
 const GuardedList = collections.GuardedList;
 const BodyClone = @import("body_clone.zig");
 
-/// `Pass.old_stmt_to_new` entry of a statement no procedure reaches.
-const pruned_stmt: LIR.CFStmtId = @fromBackingInt(std.math.maxInt(u32));
-
 /// Remove proc specs unreachable from roots, closed static initializers, and
 /// explicit constant callable plans, then rewrite every retained proc reference
 /// to the compact id space.
@@ -74,8 +71,8 @@ const Pass = struct {
     reachable: []bool,
     old_to_new: collections.OptionalIndexColumn(LIR.LirProcSpecId),
     reachable_stmts: std.bit_set.DynamicBitSetUnmanaged,
-    /// The compact id of each reachable statement; `pruned_stmt` for the rest.
-    old_stmt_to_new: []LIR.CFStmtId,
+    /// The compact id of each reachable statement; absent for the rest.
+    old_stmt_to_new: collections.OptionalIndexColumn(LIR.CFStmtId),
     visited_stmts: std.bit_set.DynamicBitSetUnmanaged,
     visited_plans: []bool,
     reachable_static_data: []bool,
@@ -133,9 +130,8 @@ const Pass = struct {
         var reachable_stmts = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, stmt_count);
         errdefer reachable_stmts.deinit(allocator);
 
-        const old_stmt_to_new = try allocator.alloc(LIR.CFStmtId, stmt_count);
-        errdefer allocator.free(old_stmt_to_new);
-        @memset(old_stmt_to_new, pruned_stmt);
+        var old_stmt_to_new = try collections.OptionalIndexColumn(LIR.CFStmtId).initFilled(allocator, stmt_count);
+        errdefer old_stmt_to_new.deinit(allocator);
 
         const visited_plans = try allocator.alloc(bool, plan_count);
         errdefer allocator.free(visited_plans);
@@ -204,7 +200,7 @@ const Pass = struct {
         self.allocator.free(self.reachable_static_data);
         self.allocator.free(self.visited_plans);
         self.visited_stmts.deinit(self.allocator);
-        self.allocator.free(self.old_stmt_to_new);
+        self.old_stmt_to_new.deinit(self.allocator);
         self.reachable_stmts.deinit(self.allocator);
         self.old_to_new.deinit(self.allocator);
         self.allocator.free(self.reachable);
@@ -415,7 +411,7 @@ const Pass = struct {
         var next: u32 = 0;
         var reachable = self.reachable_stmts.iterator(.{});
         while (reachable.next()) |old_index| {
-            self.old_stmt_to_new[old_index] = @fromBackingInt(@intCast(next));
+            self.old_stmt_to_new.set(old_index, @fromBackingInt(next));
             next += 1;
         }
     }
@@ -847,10 +843,8 @@ const Pass = struct {
 
     fn remapStmt(self: *Pass, old: LIR.CFStmtId) LIR.CFStmtId {
         const index = @backingInt(old);
-        if (index >= self.old_stmt_to_new.len) reachableProcInvariant("stmt reference exceeds old cf_stmts len");
-        const new = self.old_stmt_to_new[index];
-        if (new == pruned_stmt) reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
-        return new;
+        if (index >= self.old_stmt_to_new.len()) reachableProcInvariant("stmt reference exceeds old cf_stmts len");
+        return self.old_stmt_to_new.get(index) orelse reachableProcInvariant("reachable stmt edge pointed at pruned stmt");
     }
 
     fn verifyProcRef(_: *Pass, proc: LIR.LirProcSpecId, proc_count: usize) void {

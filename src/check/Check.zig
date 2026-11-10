@@ -14023,7 +14023,7 @@ fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
     var found = false;
     var reachable_groups = std.ArrayList(u32).empty;
     defer reachable_groups.deinit(self.gpa);
-    var group_seen = std.DynamicBitSetUnmanaged{};
+    var group_seen = try collections.EpochSet(u32, .bitset, .internal).init(self.gpa, check_order.sccs.len);
     defer group_seen.deinit(self.gpa);
     var reachable_defs = std.ArrayList(CIR.Def.Idx).empty;
     defer reachable_defs.deinit(self.gpa);
@@ -14033,19 +14033,17 @@ fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
             if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(def_idx).expr))) break;
         } else continue;
 
-        try group_seen.resize(self.gpa, check_order.sccs.len, false);
-        group_seen.unsetAll();
+        group_seen.reset();
         reachable_groups.clearRetainingCapacity();
         reachable_defs.clearRetainingCapacity();
-        group_seen.set(group_index);
+        group_seen.insert(@intCast(group_index));
         try reachable_groups.append(self.gpa, @intCast(group_index));
         var next: usize = 0;
         while (next < reachable_groups.items.len) : (next += 1) {
             const reached = reachable_groups.items[next];
             try reachable_defs.appendSlice(self.gpa, check_order.sccs[reached].defs);
             for (check_order.dependenciesOf(reached)) |dependency| {
-                if (group_seen.isSet(dependency)) continue;
-                group_seen.set(dependency);
+                if (group_seen.testAndInsert(dependency)) continue;
                 try reachable_groups.append(self.gpa, dependency);
             }
         }
@@ -39188,12 +39186,12 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
 
     var evidence = DefaultWalkEvidence{
         .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(?u32, self.cir.record_omitted_defaults.items.items.len),
+        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items.items.len),
     };
     defer evidence.deinit(self.gpa);
     for (self.cir.record_omitted_defaults.items.items, 0..) |omitted, index| {
         const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
-        evidence.next_omitted_default[index] = if (entry.found_existing) entry.value_ptr.* else null;
+        evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
         entry.value_ptr.* = @intCast(index);
     }
 
@@ -39228,18 +39226,18 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     //    index and is never compared against local nodes here).
     // Records are linked from the last, so each node's chain runs in record order.
     const scheme_use_records = self.cir.scheme_uses.items.items;
-    evidence.next_node_scheme_use = try self.gpa.alloc(?u32, scheme_use_records.len);
+    evidence.next_node_scheme_use = try self.gpa.alloc(EvidenceLink, scheme_use_records.len);
     var record_cursor = scheme_use_records.len;
     while (record_cursor > 0) {
         record_cursor -= 1;
         const record = scheme_use_records[record_cursor];
         const record_index: u32 = @intCast(record_cursor);
-        evidence.next_node_scheme_use[record_index] = null;
+        evidence.next_node_scheme_use[record_index] = .none;
         const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
         switch (slot) {
             .value_use, .nested_function_use => {
                 const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
-                evidence.next_node_scheme_use[record_index] = if (entry.found_existing) entry.value_ptr.* else null;
+                evidence.next_node_scheme_use[record_index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
                 entry.value_ptr.* = record_index;
             },
             .dispatch_target => {
@@ -39267,14 +39265,14 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         }
     }
     const instantiations = self.dispatch_target_instantiations.items;
-    evidence.next_instantiation = try self.gpa.alloc(?u32, instantiations.len);
+    evidence.next_instantiation = try self.gpa.alloc(EvidenceLink, instantiations.len);
     var instantiation_cursor = instantiations.len;
     while (instantiation_cursor > 0) {
         instantiation_cursor -= 1;
         const index: u32 = @intCast(instantiation_cursor);
         const resolved = self.types.resolveVar(instantiations[instantiation_cursor].constraint_fn_var).var_;
         const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
-        evidence.next_instantiation[index] = if (entry.found_existing) entry.value_ptr.* else null;
+        evidence.next_instantiation[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
         entry.value_ptr.* = index;
     }
 
@@ -39567,19 +39565,28 @@ fn rejectDefaultParameterAliasing(
     try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
 }
 
+/// A record index in one of the checker's evidence tables.
+const EvidenceRecordIndex = enum(u32) { _ };
+/// The next record of a chain through one evidence table, absent at its end.
+const EvidenceLink = collections.OptionalId(EvidenceRecordIndex);
+
+fn linkedRecord(link: EvidenceLink) ?u32 {
+    return if (link.get()) |index| @backingInt(index) else null;
+}
+
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
 /// once, shared by every default's residue walk).
 const DefaultWalkEvidence = struct {
     /// Construction -> first recorded omission, with links into the CIR table.
     /// Built once so cycle walks consume exact omission evidence in O(fields).
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
-    next_omitted_default: []?u32,
+    next_omitted_default: []EvidenceLink,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> its first scheme-use record index
     /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
     /// links each record to the node's next one, in record order.
     node_to_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
-    next_node_scheme_use: []?u32 = &.{},
+    next_node_scheme_use: []EvidenceLink = &.{},
     /// Discharged constraint's raw fn var -> its `dispatch_target`
     /// scheme-use record index.
     dispatch_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
@@ -39587,7 +39594,7 @@ const DefaultWalkEvidence = struct {
     /// index; `next_instantiation` links each instantiation to the var's next
     /// one, in instantiation order.
     instantiations_by_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
-    next_instantiation: []?u32 = &.{},
+    next_instantiation: []EvidenceLink = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
         evidence.omitted_defaults_by_expr.deinit();
@@ -39707,7 +39714,7 @@ fn defaultMaterializationIsRecursive(
             if (seen_seed.found_existing) continue;
             var next_inst = evidence.instantiations_by_var.get(resolved_seed);
             while (next_inst) |inst_index| {
-                next_inst = evidence.next_instantiation[inst_index];
+                next_inst = linkedRecord(evidence.next_instantiation[inst_index]);
                 const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
                 if (seen_inst.found_existing) continue;
                 const instantiation = self.dispatch_target_instantiations.items[inst_index];
@@ -39855,7 +39862,7 @@ fn defaultMaterializationIsRecursive(
         // dispatch node carries the pristine scheme's var, never the copy.
         var next_record = evidence.node_to_scheme_uses.get(@backingInt(expr_idx));
         while (next_record) |record_index| {
-            next_record = evidence.next_node_scheme_use[record_index];
+            next_record = linkedRecord(evidence.next_node_scheme_use[record_index]);
             const record = self.cir.scheme_uses.items.items[record_index];
             const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
@@ -40185,7 +40192,7 @@ fn appendOmittedDefaultDependencies(
     var next = evidence.omitted_defaults_by_expr.get(record_expr);
     while (next) |index| {
         const omitted = self.cir.record_omitted_defaults.items.items[index];
-        next = evidence.next_omitted_default[index];
+        next = linkedRecord(evidence.next_omitted_default[index]);
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);

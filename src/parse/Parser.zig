@@ -14,6 +14,9 @@ const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
 const DeclIndex = @import("DeclIndex.zig");
+const collections = @import("collections");
+/// A scope's pending annotation, absent when none awaits its definition.
+const OptionalDecl = collections.OptionalId(DeclIndex.DeclIdx);
 const NumericLiteral = @import("NumericLiteral.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
@@ -30,7 +33,7 @@ pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: NodeStore,
 decl_index: DeclIndex,
-scope_pending_annos: std.ArrayList(?DeclIndex.DeclIdx),
+scope_pending_annos: std.ArrayList(OptionalDecl),
 type_path_stack: std.ArrayList(DeclIndex.TypePathIdx),
 type_path_stack_visible_start: usize,
 collect_type_dependencies: bool,
@@ -410,7 +413,7 @@ fn enterDeclScope(
     });
     if (kind == .associated) self.decl_index.setScopeOwnerTypePath(scope_idx, self.currentTypePath());
     while (self.scope_pending_annos.items.len <= @backingInt(scope_idx)) {
-        try self.scope_pending_annos.append(self.gpa, null);
+        try self.scope_pending_annos.append(self.gpa, .none);
     }
     return scope_idx;
 }
@@ -420,14 +423,14 @@ fn exitDeclScope(
     scope_idx: DeclIndex.ScopeIdx,
     region: AST.TokenizedRegion,
 ) std.mem.Allocator.Error!void {
-    self.scope_pending_annos.items[@backingInt(scope_idx)] = null;
+    self.scope_pending_annos.items[@backingInt(scope_idx)] = .none;
     try self.decl_index.exitScope(scope_idx, .{
         .start = region.start,
         .end = region.end,
     });
 }
 
-fn currentPendingAnno(self: *Parser) ?*?DeclIndex.DeclIdx {
+fn currentPendingAnno(self: *Parser) ?*OptionalDecl {
     const scope_idx = self.decl_index.currentScope() orelse return null;
     return &self.scope_pending_annos.items[@backingInt(scope_idx)];
 }
@@ -572,7 +575,7 @@ fn recordStatementDecl(
         .malformed,
         => null,
     } orelse {
-        if (self.currentPendingAnno()) |pending| pending.* = null;
+        if (self.currentPendingAnno()) |pending| pending.* = .none;
         return;
     };
 
@@ -590,13 +593,13 @@ fn recordStatementDecl(
         }
     }
     if (record.kind == .value_anno or record.kind == .var_anno) {
-        if (self.currentPendingAnno()) |pending| pending.* = decl_idx;
+        if (self.currentPendingAnno()) |pending| pending.* = .some(decl_idx);
         return;
     }
 
     if (record.kind == .value or record.kind == .var_decl) {
         if (self.currentPendingAnno()) |pending| {
-            if (pending.*) |anno_idx| {
+            if (pending.get()) |anno_idx| {
                 const anno = self.decl_index.decls.items[@backingInt(anno_idx)];
                 const kinds_match = (record.kind == .value and anno.kind == .value_anno) or
                     (record.kind == .var_decl and anno.kind == .var_anno);
@@ -604,12 +607,12 @@ fn recordStatementDecl(
                     self.decl_index.pairAnnotation(anno_idx, decl_idx);
                 }
             }
-            pending.* = null;
+            pending.* = .none;
         }
         return;
     }
 
-    if (self.currentPendingAnno()) |pending| pending.* = null;
+    if (self.currentPendingAnno()) |pending| pending.* = .none;
 }
 
 fn addStatement(self: *Parser, statement: AST.Statement) std.mem.Allocator.Error!AST.Statement.Idx {
@@ -672,13 +675,13 @@ fn recordValueDecl(
         try self.recordDestructuredValueNames(scope_idx, decl_idx, pattern_idx);
     }
     if (self.currentPendingAnno()) |pending| {
-        if (pending.*) |anno_idx| {
+        if (pending.get()) |anno_idx| {
             const anno = self.decl_index.decls.items[@backingInt(anno_idx)];
             if (anno.kind == .value_anno and self.tokenIdentsEqual(anno.name_tok, record.name_tok)) {
                 self.decl_index.pairAnnotation(anno_idx, decl_idx);
             }
         }
-        pending.* = null;
+        pending.* = .none;
     }
 }
 

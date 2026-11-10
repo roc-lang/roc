@@ -1602,22 +1602,21 @@ const CompileTimeRequestScheduler = struct {
             if (self.emitted[dependency]) continue;
             for (list.items) |dependent| try dependencies[dependent].append(self.allocator, @intCast(dependency));
         }
-        const reached = try self.allocator.alloc(bool, self.entries.len);
-        defer self.allocator.free(reached);
+        var reached = try collections.EpochSet(u32, .stamps, .internal).init(self.allocator, self.entries.len);
+        defer reached.deinit(self.allocator);
         var pending = std.ArrayList(u32).empty;
         defer pending.deinit(self.allocator);
         var best: ?usize = null;
         var best_count: usize = std.math.maxInt(usize);
         for (self.emitted, 0..) |emitted, start| {
             if (emitted) continue;
-            @memset(reached, false);
-            reached[start] = true;
+            reached.reset();
+            reached.insert(@intCast(start));
             var count: usize = 1;
             try pending.append(self.allocator, @intCast(start));
             while (pending.pop()) |request| {
                 for (dependencies[request].items) |dependency| {
-                    if (reached[dependency]) continue;
-                    reached[dependency] = true;
+                    if (reached.testAndInsert(dependency)) continue;
                     count += 1;
                     try pending.append(self.allocator, dependency);
                 }
@@ -13437,7 +13436,7 @@ const EvidencePass = struct {
     /// nodes. Every durable `EvidenceNodeId` is therefore an exact evidence
     /// identity, independent of which checker record requested it.
     evidence_node_buckets: std.AutoHashMap(u64, static_dispatch.EvidenceNodeId),
-    evidence_node_next: std.ArrayList(?static_dispatch.EvidenceNodeId),
+    evidence_node_next: std.ArrayList(collections.OptionalId(static_dispatch.EvidenceNodeId)),
     record_in_progress: collections.DenseMap(u32, void),
     /// Site-evidence dedupe (a checked expr can be reachable from two
     /// templates, e.g. a const body and its entry wrapper).
@@ -15830,12 +15829,12 @@ const EvidencePass = struct {
             if (try self.evidenceNodesEql(self.evidence_nodes.items[@backingInt(node_id)], candidate)) {
                 return node_id;
             }
-            existing = self.evidence_node_next.items[@backingInt(node_id)];
+            existing = self.evidence_node_next.items[@backingInt(node_id)].get();
         }
 
         const node_id: static_dispatch.EvidenceNodeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.evidence_nodes.items.len))));
         try self.evidence_nodes.append(self.allocator, candidate);
-        try self.evidence_node_next.append(self.allocator, self.evidence_node_buckets.get(hash));
+        try self.evidence_node_next.append(self.allocator, .of(self.evidence_node_buckets.get(hash)));
         try self.evidence_node_buckets.put(hash, node_id);
         return node_id;
     }
@@ -18239,7 +18238,7 @@ const NestedProcSiteBuilder = struct {
     /// in type-inventory unit tests, which select no procedures.
     resolved_value_refs: ?*const ResolvedValueRefTable = null,
     /// Per site, by site index: the site lexically enclosing it, if any.
-    site_parents: std.ArrayList(?u32) = .empty,
+    site_parents: std.ArrayList(collections.OptionalId(canonical.NestedProcSiteId)) = .empty,
     /// Per site, by site index: the scan that recorded it. One body can be
     /// scanned once per owner (a template and an entry wrapper reaching the
     /// same expression), and each scan records its own copy of every site.
@@ -18353,7 +18352,7 @@ const NestedProcSiteBuilder = struct {
             },
         };
 
-        try self.site_parents.append(self.allocator, self.innermostOpenSite());
+        try self.site_parents.append(self.allocator, .of(self.open_sites.getLastOrNull()));
         try self.site_scans.append(self.allocator, self.current_scan);
         try self.sites.append(self.allocator, .{
             .site = site,
@@ -18789,7 +18788,7 @@ const NestedProcSiteBuilder = struct {
         var current = self.binder_sites.get(.{ .scan = self.site_scans.items[site], .binder = binder }) orelse return false;
         while (current) |candidate| {
             if (candidate == site) return true;
-            current = self.site_parents.items[candidate];
+            current = if (self.site_parents.items[candidate].get()) |parent| @backingInt(parent) else null;
         }
         return false;
     }
@@ -18860,7 +18859,7 @@ const NestedProcSiteBuilder = struct {
                 }
             }
             for (self.site_parents.items, 0..) |maybe_parent, child| {
-                const parent = maybe_parent orelse continue;
+                const parent: u32 = @backingInt(maybe_parent.get() orelse continue);
                 var index: usize = 0;
                 while (index < needs[child].items.len) : (index += 1) {
                     const binder = needs[child].items[index];

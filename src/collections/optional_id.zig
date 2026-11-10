@@ -34,6 +34,11 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
             return @fromBackingInt(if (reserved_zero) raw else raw + 1);
         }
 
+        /// Wrap an optional ID: null is absence.
+        pub inline fn of(id: ?Id) Self {
+            return if (id) |present| some(present) else .none;
+        }
+
         /// Read the original ID, or null for absence.
         pub inline fn get(self: Self) ?Id {
             if (self == .none) return null;
@@ -60,4 +65,6 @@ test "optional IDs use one word and preserve both numbering policies" {
     try std.testing.expectEqual(last, Direct.some(last).get().?);
     try std.testing.expectEqual(@as(u32, 1), @backingInt(Biased.some(first)));
     try std.testing.expectEqual(@as(u32, 1), @backingInt(Direct.some(one)));
+    try std.testing.expect(Biased.of(null) == .none);
+    try std.testing.expectEqual(last, Biased.of(last).get().?);
 }

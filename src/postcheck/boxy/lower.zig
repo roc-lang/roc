@@ -495,11 +495,14 @@ pub fn listU8TemplateWorkerIdentity(link_name: [32]u8, template: checked_names.C
     return .{ .bytes = hasher.finalResult() };
 }
 
+/// A scheme variable's related type, absent when no relation fixed it.
+pub const Related = collections.OptionalId(TypeId);
+
 /// The kind variables of a scheme (design.md "Field Kinds"): the value type of
 /// each variable's field, null for a variable that is no kind, and the kind
 /// variables, each after those its value type mentions.
 pub const SchemeKinds = struct {
-    payloads: []const ?TypeId = &.{},
+    payloads: collections.OptionalIndexColumn(TypeId).View = .{},
     order: []const u32 = &.{},
 };
 
@@ -1591,25 +1594,25 @@ pub const Program = struct {
 
     /// The relation of `relateVariablesAll`, leaving variables the types do
     /// not relate null.
-    pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]?TypeId {
+    pub fn relateVariablesPartial(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize) Allocator.Error![]Related {
         return try self.relateVariablesRows(allocator, roots, count, null);
     }
 
     /// `relateVariablesPartial`, also marking in `row_vars` each variable
     /// related as an open tag row's remainder: the actual row's tags the open
     /// row does not name (design.md "Row Joins", `.boxy`).
-    pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]?TypeId {
+    pub fn relateVariablesRows(self: *Program, allocator: Allocator, roots: []const [2]TypeId, count: usize, row_vars: ?[]bool) Allocator.Error![]Related {
         const store = &self.store;
-        const bound = try allocator.alloc(?TypeId, count);
+        const bound = try allocator.alloc(Related, count);
         defer allocator.free(bound);
-        @memset(bound, null);
+        @memset(bound, .none);
         var pending: std.ArrayList([2]TypeId) = .empty;
         defer pending.deinit(allocator);
         try pending.appendSlice(allocator, roots);
         while (pending.pop()) |pair| {
             const formal = store.get(pair[0]);
             if (formal == .variable) {
-                bound[formal.variable] = pair[1];
+                bound[formal.variable] = .some(pair[1]);
                 continue;
             }
             const other = store.get(pair[1]);
@@ -1647,7 +1650,7 @@ pub const Program = struct {
                                 // A kind variable takes the field's storage
                                 // on the other side.
                                 if (field.kind == .variable_slot) {
-                                    bound[field.slot_variable] = try self.layouts.fieldStorage(candidate);
+                                    bound[field.slot_variable] = .some(try self.layouts.fieldStorage(candidate));
                                     if (row_vars) |marks| {
                                         if (field.slot_variable < marks.len) marks[field.slot_variable] = true;
                                     }
@@ -1696,7 +1699,7 @@ pub const Program = struct {
                 .primitive, .empty_record, .variable => {},
             }
         }
-        return try allocator.dupe(?TypeId, bound);
+        return try allocator.dupe(Related, bound);
     }
 
     /// The kind variables among `count` scheme variables that the types
@@ -1704,8 +1707,7 @@ pub const Program = struct {
     /// kind variable's scheme relates it to one field, so to one value type.
     pub fn schemeKinds(self: *Program, roots: []const TypeId, count: usize) Allocator.Error!SchemeKinds {
         const arena = self.arena.allocator();
-        const payloads = try arena.alloc(?TypeId, count);
-        @memset(payloads, null);
+        var payloads = try collections.OptionalIndexColumn(TypeId).initFilled(arena, count);
         var found: std.ArrayList(u32) = .empty;
         defer found.deinit(self.allocator);
         var pending: std.ArrayList(TypeId) = .empty;
@@ -1718,8 +1720,8 @@ pub const Program = struct {
             switch (self.store.get(ty)) {
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| {
-                        if (field.kind == .variable_slot and payloads[field.slot_variable] == null) {
-                            payloads[field.slot_variable] = field.ty;
+                        if (field.kind == .variable_slot and !payloads.isPresent(field.slot_variable)) {
+                            payloads.set(field.slot_variable, field.ty);
                             try found.append(self.allocator, field.slot_variable);
                         }
                         try pending.append(self.allocator, field.ty);
@@ -1752,7 +1754,7 @@ pub const Program = struct {
             const before = placed;
             for (found.items) |index| {
                 if (done[index]) continue;
-                const nested = try self.kindsMentioned(payloads[index].?, payloads.len);
+                const nested = try self.kindsMentioned(payloads.get(index).?, payloads.len());
                 defer self.allocator.free(nested);
                 const ready = for (nested) |other| {
                     if (!done[other]) break false;
@@ -1764,7 +1766,7 @@ pub const Program = struct {
             }
             if (placed == before) invariant("a field kind's value type mentions the kind itself, as no finite type does");
         }
-        return .{ .payloads = payloads, .order = order };
+        return .{ .payloads = payloads.view(), .order = order };
     }
 
     /// The kind variables `root` mentions.
@@ -1781,7 +1783,7 @@ pub const Program = struct {
     /// variable of the enclosing scope, stays.
     pub fn resolveKindSlots(self: *Program, kinds: SchemeKinds, bound: []TypeId) Allocator.Error!void {
         for (kinds.order) |index| {
-            const payload = kinds.payloads[index].?;
+            const payload = kinds.payloads.get(index).?;
             if (self.store.committedKindOf(bound[index])) |kind| {
                 const value = try self.substitute(self.allocator, payload, bound);
                 bound[index] = switch (kind) {
@@ -2324,14 +2326,14 @@ pub const Program = struct {
         defer self.allocator.free(related);
         try self.relateThroughTargetRequirements(target, related);
         const bound = try self.arena.allocator().alloc(TypeId, count);
-        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty orelse try self.converter().sealedScheme(target_worker.module, variable);
+        for (related, bound, target_worker.scheme_vars) |ty, *slot, variable| slot.* = ty.get() orelse try self.converter().sealedScheme(target_worker.module, variable);
         try self.resolveKindSlots(target_worker.kinds, bound);
         return try self.targetRequirements(target, bound);
     }
 
     /// Fill the scheme variables of `target` that `related` leaves unrelated
     /// from the requirements of its own evidence parameters.
-    pub fn relateThroughTargetRequirements(self: *Program, target: WorkerId, related: []?TypeId) Allocator.Error!void {
+    pub fn relateThroughTargetRequirements(self: *Program, target: WorkerId, related: []Related) Allocator.Error!void {
         const target_worker = self.worker(target).*;
         if (target_worker.dictionary_params.len == 0) return;
         const key = switch (target_worker.key) {
@@ -2352,7 +2354,7 @@ pub const Program = struct {
     /// method whose own type, related back to the requirement's callable,
     /// determines the variables that callable names, until no requirement
     /// determines more.
-    pub fn relateThroughRequirements(self: *Program, module_index: ModuleIndex, vars: []const checked.CheckedTypeId, params: []const static_dispatch.EvidenceParamRecord, related: []?TypeId) Allocator.Error!void {
+    pub fn relateThroughRequirements(self: *Program, module_index: ModuleIndex, vars: []const checked.CheckedTypeId, params: []const static_dispatch.EvidenceParamRecord, related: []Related) Allocator.Error!void {
         const count = vars.len;
         const partial = try self.allocator.alloc(TypeId, count);
         defer self.allocator.free(partial);
@@ -2363,7 +2365,7 @@ pub const Program = struct {
         var changed = true;
         while (changed) {
             changed = false;
-            for (related, partial, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
+            for (related, partial, 0..) |ty, *slot, index| slot.* = ty.get() orelse try self.store.variable(placeholder_base + @as(u32, @intCast(index)));
             const env: types.Env = .{ .module = module_index, .vars = vars, .bound = partial };
             for (params) |param| {
                 const dispatcher = try self.converter().convert(module_index, param.dispatcher_ty, env);
@@ -2382,15 +2384,15 @@ pub const Program = struct {
                 defer self.allocator.free(method_related);
                 const method_bound = try self.allocator.alloc(TypeId, method_related.len);
                 defer self.allocator.free(method_bound);
-                for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
+                for (method_related, method_bound, 0..) |ty, *slot, index| slot.* = ty.get() orelse try self.store.variable(placeholder_base + @as(u32, @intCast(count + index)));
                 const method_ty = try self.substitute(self.allocator, method_formal, method_bound);
                 const back = try self.relateVariablesPartial(self.allocator, &.{.{ try self.converter().convert(module_index, param.callable_ty, own_env), method_ty }}, count);
                 defer self.allocator.free(back);
                 for (related, back) |*slot, determined| {
-                    if (slot.* != null) continue;
-                    const ty = determined orelse continue;
+                    if (slot.* != .none) continue;
+                    const ty = determined.get() orelse continue;
                     if (try self.mentionsPlaceholder(ty)) continue;
-                    slot.* = ty;
+                    slot.* = .some(ty);
                     changed = true;
                 }
             }

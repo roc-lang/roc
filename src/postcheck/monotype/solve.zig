@@ -579,7 +579,7 @@ pub const InterfaceConstraints = struct {
         allocator: Allocator,
         roots: []const NodeId,
         holes: []const NodeId,
-        hole_classes: []?NodeId,
+        hole_classes: []MaybeNodeId,
     ) Allocator.Error!InterfaceConstraints {
         return try captureRoots(graph, allocator, roots, holes, hole_classes, .omit);
     }
@@ -592,11 +592,11 @@ pub const InterfaceConstraints = struct {
         allocator: Allocator,
         roots: []const NodeId,
         holes: []const NodeId,
-        hole_classes: []?NodeId,
+        hole_classes: []MaybeNodeId,
         finished_witnesses: FinishedWitnesses,
     ) Allocator.Error!InterfaceConstraints {
         std.debug.assert(holes.len == hole_classes.len);
-        @memset(hole_classes, null);
+        @memset(hole_classes, .none);
         const hole_roots = try allocator.alloc(NodeId, holes.len);
         for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
         // Every captured class asks whether it is a hole, so a request with
@@ -1272,7 +1272,7 @@ pub const InterfaceConstraints = struct {
         /// `holes` indexed by class when there are more than
         /// `hole_scan_limit` of them.
         hole_positions: ?*const collections.DenseMapUnmanaged(NodeId, u32) = null,
-        hole_classes: []?NodeId = &.{},
+        hole_classes: []MaybeNodeId = &.{},
         finished_witnesses: FinishedWitnesses,
 
         const hole_scan_limit = 16;
@@ -1389,7 +1389,7 @@ pub const InterfaceConstraints = struct {
             try self.nodes.append(self.graph.allocator, undefined);
             if (self.holeIndex(root)) |hole| {
                 if ((try self.graph.content(root)) != .unresolved and try self.holeIsRepresentationNeutral(raw)) {
-                    self.hole_classes[hole] = root;
+                    self.hole_classes[hole] = .of(root);
                     const open_index: u32 = @intCast(self.open_nodes.items.len);
                     self.nodes.items[@backingInt(id)] = .{ .open = open_index };
                     try self.open_nodes.append(self.graph.allocator, .{ .content = .{ .unresolved = InstVariable.interfaceParameter() } });
@@ -2525,7 +2525,7 @@ pub const InstGraph = struct {
     /// First imported witness in each representative's permanent-member list.
     /// Registration precedes all joins; unions preserve winner-before-loser
     /// order. Null is exact absence, independent of class history length.
-    class_finished_monos: std.ArrayList(?Type.TypeId),
+    class_finished_monos: std.ArrayList(collections.OptionalId(Type.TypeId)),
     /// Exact declaration-plus-current-argument-roots index for instantiated
     /// nominal backings. Keys point into the stable argument storage owned by
     /// `nominal_backing_instances`.
@@ -4058,7 +4058,7 @@ pub const InstGraph = struct {
         self.constructor_evidence_requests.appendAssumeCapacity(false);
         self.private_backing_roots.appendAssumeCapacity(false);
         self.representation_membership.appendAssumeCapacity(.{});
-        self.class_finished_monos.appendAssumeCapacity(null);
+        self.class_finished_monos.appendAssumeCapacity(.none);
         self.markPrivateBacking(node_content);
         if (node_content == .named and node_content.named.generated_iterator != null) self.generated_iterator_nodes += 1;
         self.countDiagnostic("nodes_created");
@@ -6860,7 +6860,7 @@ pub const InstGraph = struct {
         self.class_member_next.items[@backingInt(winner_tail)] = .of(loser_head);
         self.class_member_tail.items[@backingInt(winner)] = self.class_member_tail.items[@backingInt(loser)];
         const winner_finished = &self.class_finished_monos.items[@backingInt(winner)];
-        if (winner_finished.* == null) winner_finished.* = self.class_finished_monos.items[@backingInt(loser)];
+        if (winner_finished.* == .none) winner_finished.* = self.class_finished_monos.items[@backingInt(loser)];
         const winner_content = self.nodes.items[@backingInt(winner)];
         const loser_content = self.nodes.items[@backingInt(loser)];
         self.private_backing_roots.items[@backingInt(winner)] = self.private_backing_roots.items[@backingInt(winner)] or self.private_backing_roots.items[@backingInt(loser)];
@@ -8517,9 +8517,9 @@ pub const InstGraph = struct {
         std.debug.assert(self.nodes.items[index] != .redirect);
         std.debug.assert(self.class_member_head.items[index] == node);
         std.debug.assert(self.class_member_tail.items[index] == node);
-        std.debug.assert(self.class_finished_monos.items[index] == null);
+        std.debug.assert(self.class_finished_monos.items[index] == .none);
         try self.imported_monos.putNoClobber(node, ty);
-        self.class_finished_monos.items[index] = ty;
+        self.class_finished_monos.items[index] = .some(ty);
     }
 
     /// The caller has resolved the representative. No history traversal or
@@ -8527,7 +8527,7 @@ pub const InstGraph = struct {
     fn classFinishedMono(self: *InstGraph, root: NodeId) ?Type.TypeId {
         std.debug.assert(self.nodes.items[@backingInt(root)] != .redirect);
         self.countDiagnostic("finished_mono_witness_queries");
-        return self.class_finished_monos.items[@backingInt(root)];
+        return self.class_finished_monos.items[@backingInt(root)].get();
     }
 
     /// One component of an imported type. The backing of a nominal
@@ -14798,12 +14798,12 @@ test "interface constraints capture representation-neutral holes as variables" {
     const str_node = try graph.newNode(.{ .primitive = .str });
     const str_list = try graph.newNode(.{ .list = str_node });
 
-    var u8_classes: [1]?NodeId = undefined;
+    var u8_classes: [1]MaybeNodeId = undefined;
     const u8_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ u8_list, u8_node }, &.{u8_node}, &u8_classes);
-    var str_classes: [1]?NodeId = undefined;
+    var str_classes: [1]MaybeNodeId = undefined;
     const str_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ str_list, str_node }, &.{str_node}, &str_classes);
-    try std.testing.expect(u8_classes[0] != null);
-    try std.testing.expect(str_classes[0] != null);
+    try std.testing.expect(u8_classes[0] != .none);
+    try std.testing.expect(str_classes[0] != .none);
     // Requests that differ only in a hole's settled instantiation share one identity.
     try std.testing.expect(try (try u8_constraints.identity(graph)).eql(try str_constraints.identity(graph), &types, &name_store));
     const exact_u8 = try InterfaceConstraints.capture(graph, graph.arena(), &.{ u8_list, u8_node });
@@ -14819,9 +14819,9 @@ test "interface constraints capture representation-neutral holes as variables" {
     const private_node = try graph.newNode(.{ .primitive = .u8 });
     graph.private_backing_roots.items[@backingInt(private_node)] = true;
     const private_list = try graph.newNode(.{ .list = private_node });
-    var private_classes: [1]?NodeId = undefined;
+    var private_classes: [1]MaybeNodeId = undefined;
     const private_constraints = try InterfaceConstraints.captureRequestWithHoles(graph, graph.arena(), &.{ private_list, private_node }, &.{private_node}, &private_classes);
-    try std.testing.expect(private_classes[0] == null);
+    try std.testing.expect(private_classes[0] == .none);
     try std.testing.expect(!try (try private_constraints.identity(graph)).eql(try u8_constraints.identity(graph), &types, &name_store));
 }
 

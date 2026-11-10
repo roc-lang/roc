@@ -6402,7 +6402,7 @@ const Lowerer = struct {
         next: LIR.CFStmtId,
         /// The bindings the callee's arguments and captures shadowed, once
         /// installed.
-        saved: ?[]?LIR.LocalId = null,
+        saved: ?[]collections.OptionalId(LIR.LocalId) = null,
     };
 
     const CallableCallTask = struct {
@@ -8375,13 +8375,13 @@ const Lowerer = struct {
         const captures = self.captureSpan(spec.captures);
         if (task.capture_locals.len != captures.len) Common.invariant("inline call capture count differed from function captures");
 
-        const saved = try self.allocator.alloc(?LIR.LocalId, lifted_args.len + captures.len);
+        const saved = try self.allocator.alloc(collections.OptionalId(LIR.LocalId), lifted_args.len + captures.len);
         errdefer self.allocator.free(saved);
         for (0..lifted_args.len) |i| {
-            saved[i] = try self.shadowLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]);
+            saved[i] = .of(try self.shadowLocal(GuardedList.at(lifted_args, i).local, task.arg_locals[i]));
         }
         for (0..captures.len) |i| {
-            saved[lifted_args.len + i] = try self.shadowLocal(GuardedList.at(captures, i).local, task.capture_locals[i]);
+            saved[lifted_args.len + i] = .of(try self.shadowLocal(GuardedList.at(captures, i).local, task.capture_locals[i]));
         }
         task.saved = saved;
 
@@ -8404,12 +8404,12 @@ const Lowerer = struct {
         var i = captures.len;
         while (i > 0) {
             i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(captures, i).local, saved[lifted_args.len + i]);
+            self.restoreShadowedLocal(GuardedList.at(captures, i).local, saved[lifted_args.len + i].get());
         }
         i = lifted_args.len;
         while (i > 0) {
             i -= 1;
-            self.restoreShadowedLocal(GuardedList.at(lifted_args, i).local, saved[i]);
+            self.restoreShadowedLocal(GuardedList.at(lifted_args, i).local, saved[i].get());
         }
         self.allocator.free(saved);
         task.saved = null;

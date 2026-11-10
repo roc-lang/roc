@@ -2436,13 +2436,14 @@ const Gen = struct {
     ) Allocator.Error!void {
         const program_ = self.program();
         const err_ty = (try requireTry(program_, ret_ty)).err;
-        const optional = try self.b.allocator.alloc(?TypeId, fields.len);
+        // Whether each missing field parses as `Ok` of its `Try` type.
+        const optional = try self.b.allocator.alloc(bool, fields.len);
         defer self.b.allocator.free(optional);
         // A defaulted field never parsed takes its default (design.md
         // "Defaulted Fields").
         for (fields, slots, slot_types, names, optional) |field_info, slot, slot_ty, name_value, *missing_ok| {
-            missing_ok.* = if (field_info.kind == .inline_slot) try missingTryOk(program_, field_info.ty) else null;
-            if (field_info.kind == .presence_slot or missing_ok.* != null or field_info.default != null) continue;
+            missing_ok.* = field_info.kind == .inline_slot and try missingTryOk(program_, field_info.ty) != null;
+            if (field_info.kind == .presence_slot or missing_ok.* or field_info.default != null) continue;
             const present_hole = try self.branchTag(slot, slot_ty, layouts_mod.missing_label);
             const missing = try self.callFormat("missing_field", null, &.{ self.encoding, name_value });
             try self.failWith(missing.value, err_ty, on_err);
@@ -2466,7 +2467,7 @@ const Gen = struct {
                 value.* = merged.param;
                 continue;
             }
-            if (missing_ok == null) {
+            if (!missing_ok) {
                 value.* = (try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value;
                 continue;
             }

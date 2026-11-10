@@ -41,9 +41,12 @@ pub const InlineKind = enum(u8) {
     source_single_use,
 };
 
+/// Each lifted function's inline body, when it has one.
+const InlineBodies = collections.OptionalIndexColumn(Lifted.ExprId);
+
 /// Immutable inline eligibility table consumed by later lowering stages.
 pub const Plan = struct {
-    inline_bodies: []const ?Lifted.ExprId = &.{},
+    inline_bodies: InlineBodies.View = .{},
     kinds: []const InlineKind = &.{},
 
     pub fn kind(self: Plan, fn_id: Lifted.FnId) InlineKind {
@@ -68,34 +71,34 @@ pub const Plan = struct {
     }
 
     pub fn bodyForFn(self: Plan, fn_id: Lifted.FnId) ?Lifted.ExprId {
-        if (self.inline_bodies.len == 0) return null;
+        if (self.inline_bodies.len() == 0) return null;
 
         const index = @backingInt(fn_id);
-        if (index >= self.inline_bodies.len) {
+        if (index >= self.inline_bodies.len()) {
             Common.invariant("inline plan did not contain a lifted function");
         }
-        return self.inline_bodies[index];
+        return self.inline_bodies.get(index);
     }
 };
 
 /// Allocator-owned storage for a post-check inline plan.
 pub const OwnedPlan = struct {
     allocator: std.mem.Allocator,
-    inline_bodies: []?Lifted.ExprId,
+    inline_bodies: InlineBodies,
     kinds: []InlineKind,
 
     pub fn empty(allocator: std.mem.Allocator) OwnedPlan {
-        return .{ .allocator = allocator, .inline_bodies = &.{}, .kinds = &.{} };
+        return .{ .allocator = allocator, .inline_bodies = .{}, .kinds = &.{} };
     }
 
     pub fn deinit(self: *OwnedPlan) void {
-        if (self.inline_bodies.len != 0) self.allocator.free(self.inline_bodies);
+        self.inline_bodies.deinit(self.allocator);
         if (self.kinds.len != 0) self.allocator.free(self.kinds);
         self.* = empty(self.allocator);
     }
 
     pub fn view(self: *const OwnedPlan) Plan {
-        return .{ .inline_bodies = self.inline_bodies, .kinds = self.kinds };
+        return .{ .inline_bodies = self.inline_bodies.view(), .kinds = self.kinds };
     }
 };
 
@@ -176,17 +179,17 @@ const InlineAnalyzer = struct {
             try analyzer.resolveSingleUseMaterialization(fn_id, materialization_states);
         }
 
-        const inline_bodies = try allocator.alloc(?Lifted.ExprId, decisions.len);
-        errdefer allocator.free(inline_bodies);
+        var inline_bodies = try InlineBodies.initFilled(allocator, decisions.len);
+        errdefer inline_bodies.deinit(allocator);
         const kinds = try allocator.alloc(InlineKind, decisions.len);
         errdefer allocator.free(kinds);
-        for (decisions, inline_bodies, kinds) |decision, *body, *body_kind| {
-            body.* = switch (decision) {
-                .inline_body => |candidate| candidate.body,
+        for (decisions, kinds, 0..) |decision, *body_kind, index| {
+            switch (decision) {
+                .inline_body => |candidate| inline_bodies.set(index, candidate.body),
                 .unknown,
                 .never,
-                => null,
-            };
+                => {},
+            }
             body_kind.* = if (decision == .inline_body) decision.inline_body.kind else .none;
         }
 
