@@ -15018,8 +15018,8 @@ and Per-Module Output is the invariant that makes it possible:
   the digest of those records (`exportRecordsDigest`). An importer's key
   folds in the module's export digest, which combines that records digest
   with its imports' export digests (`Digests.recordExportsDigest`), so a
-  restored object's records are not hashed again. This is a semantic
-  interface digest, never a payload-integrity hash. The v2 export digest
+  restored object's records are not hashed again. This is an
+  interface meaning digest, never a payload-integrity hash. The v2 export digest
   composition changes hash bytes; object format 19 also incorporates stored
   field-default identities alongside integer worker bindings and invalidates
   the older entries. Its inputs remain the module's own export records and its imports,
@@ -15322,11 +15322,11 @@ all its records succeeds.
 
 A checked module's own body index (`body_analyses.ModuleIndex`: which nodes
 its bodies reach, the top-level unit owning each, and per-binding declaration
-facts) follows the same rule one level down. It is a pure function of the
+data) follows the same rule one level down. It is a pure function of the
 module's CIR and promoted local procedures, so it is built on first demand into
-a write-once slot of the module's `BodyAnalyses`, like every other body fact,
-and is never serialized. Publishing a freshly checked module demands it, since
-publication reads it; installing a cached checked entry does not. A consumer
+a write-once slot of the module's `BodyAnalyses`, like all other body data,
+and is never serialized. Building a freshly checked module's output demands it,
+since that output reads it; installing a cached checked entry does not. A consumer
 demands the index of every module whose bodies it reads before reading any:
 LSS lowering at its preparation (`CheckedModules.demandBodyIndexes`), literal
 demand, and platform pairing. Boxy registration and preparation demand none:
