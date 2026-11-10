@@ -5108,7 +5108,9 @@ requirement surface) it is every declaration in that module's type store,
 less the opaque ones, into which another module cannot lift, and the name of
 every optional or defaulted field of a record in that store: a field name
 written in one module reaches another only through the type stores it copies
-types from. From the module itself it is read from its syntax, since checking
+types from. Sealing a checked store lists those names
+(`Store.widening_names`), so a module reads each source's list rather than
+walking its records. From the module itself it is read from its syntax, since checking
 registers a declaration or an optional field only as it reaches it: every
 nominal declaration's backing, and every field name written as optional or
 defaulted in an annotation, accessed with `.?`, or unset. A backing written

@@ -154,23 +154,10 @@ pub const UseAbsorbers = struct {
             if (!include_opaque and decl.source.isOpaque()) continue;
             try self.addBacking(gpa, store, idents, decl.backing);
         }
-        const var_count: usize = @intCast(store.len());
-        for (0..var_count) |index| {
-            const var_: Var = @fromBackingInt(@intCast(index));
-            const resolved = store.resolveVar(var_);
-            if (resolved.var_ != var_) continue;
-            const record = switch (resolved.desc.content) {
-                .structure => |flat| switch (flat) {
-                    .record => |record| record,
-                    else => continue,
-                },
-                else => continue,
-            };
-            const fields = store.getRecordFieldsSlice(record.fields);
-            for (fields.items(.name), fields.items(.presence)) |name, presence| {
-                if (kindOf(store, presence) == .may_widen) try self.widening_fields.put(gpa, nameHash(idents.getText(name)), {});
-            }
-        }
+        // A checked module's store lists the name of every optional or
+        // defaulted field its records hold (`Store.widening_names`), filled
+        // when checking sealed it.
+        for (store.widening_names.items.items) |hash| try self.widening_fields.put(gpa, hash, {});
     }
 
     fn addBacking(self: *UseAbsorbers, gpa: Allocator, store: *const Store, idents: *const Ident.Store, backing: Var) Allocator.Error!void {
