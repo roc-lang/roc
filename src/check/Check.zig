@@ -9571,7 +9571,8 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     const SlotColumn = collections.ZeroSentinelIndexColumn(SlotId);
     const first_slot: usize = 1;
     if (decl_count == 0) return;
-    try slots.append(self.gpa, @fromBackingInt(0));
+    // Slot zero is the column's absence sentinel; every pass starts at first_slot.
+    try slots.append(self.gpa, undefined);
     var slot_by_decl = try SlotColumn.initFilled(self.gpa, decl_count);
     defer slot_by_decl.deinit(self.gpa);
 

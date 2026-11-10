@@ -199,6 +199,9 @@ const ProcArcDomain = struct {
         const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
         var value_use_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
         const value_use_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
+        // Resource bits are numbered in frame order once every resource is known.
+        var resource_frames = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, frame_len);
+        defer resource_frames.deinit(allocator);
 
         var mapped_len: usize = 0;
         errdefer for (frame_locals[0..mapped_len]) |local| {
@@ -231,13 +234,13 @@ const ProcArcDomain = struct {
             };
             for (resource_locals) |resource_local| {
                 const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
-                resource_bit_index.set(resource_frame_index, @fromBackingInt(0));
+                resource_frames.set(resource_frame_index);
             }
         }
 
         var resource_count: usize = 0;
-        for (0..frame_len) |frame_index| {
-            if (!resource_bit_index.isPresent(frame_index)) continue;
+        var resource_frame_iter = resource_frames.iterator(.{});
+        while (resource_frame_iter.next()) |frame_index| {
             resource_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(resource_count))));
             resource_locals_buffer[resource_count] = frame_locals[frame_index];
             resource_count += 1;

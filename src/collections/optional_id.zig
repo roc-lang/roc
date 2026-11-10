@@ -44,14 +44,14 @@ fn IndexValue(comptime Id: type, comptime reserved_zero: bool) type {
 }
 
 test "optional IDs use one word and preserve both numbering policies" {
-    const Id = enum(u32) { _ };
+    const Id = enum(u32) { zero = 0, _ };
     const Biased = OptionalId(Id);
     const Direct = ZeroSentinelId(Id);
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(Biased));
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(Direct));
     try std.testing.expect(Biased.none.get() == null);
     try std.testing.expect(Direct.none.get() == null);
-    const first: Id = @fromBackingInt(0);
+    const first: Id = .zero;
     const one: Id = @fromBackingInt(1);
     const last: Id = @fromBackingInt(std.math.maxInt(u32) - 1);
     try std.testing.expectEqual(first, Biased.some(first).get().?);

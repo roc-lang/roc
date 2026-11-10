@@ -401,9 +401,13 @@ test "a canonical id slot leaves the unencodable largest id unmemoized" {
 
 test "the zero word is an empty canonical id slot of four bytes" {
     try std.testing.expectEqual(@as(usize, 4), @sizeOf(CanonicalIdSlot));
-    var zeroed: [8]CanonicalIdSlot = undefined;
-    @memset(std.mem.sliceAsBytes(&zeroed), 0);
-    for (&zeroed) |*slot| try std.testing.expect(slot.get() == null);
+    // One column below the small-table threshold and one on fresh zero pages.
+    const page_backed_len = collections.zeroed_pages.small_table_bytes / @sizeOf(CanonicalIdSlot) + 1;
+    for ([_]usize{ 8, page_backed_len }) |len| {
+        var column = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(std.testing.allocator, len);
+        defer column.deinit(std.testing.allocator);
+        for (column.items) |*slot| try std.testing.expect(slot.get() == null);
+    }
 }
 
 /// Real solver-assigned representatives spanning full pages and a partial
