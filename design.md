@@ -19721,6 +19721,15 @@ successful pattern locals before lowering the branch statement span, so later
 stages consume this ordering directly; no source record-rest pattern survives
 Monotype lowering.
 
+An or-pattern's alternatives share one source body before specialization work
+can multiply it. Monotype gives a multi-alternative arm a typed body join;
+successful alternatives supply its canonical checked binders. Guards and
+pattern-derived preludes remain alternative-specific, preserving ordered guard
+failure and retry semantics. The shared body's runtime-demand exemption requires
+every incoming alternative to be impossible, not just one. Its interface carries
+the actual state/result and producer representation evidence, including capture
+identity; a source arm is not a new callable boundary.
+
 **The sharing invariant.** Monotype is a DAG: an expression id referenced from
 multiple positions is re-lowered at each reference, so downstream control
 sharing must go through typed lifted join points or LIR join points, never
@@ -23601,21 +23610,36 @@ once for the module. The same rule forbids reintroducing that search at the
 producer: a whole-module finalization pass whose only consumer is wasm local
 binding trades one redundant traversal for another.
 
+Pointer-local slots and the aggregate bytes they address have separate storage
+lifetimes. They share one procedure CFG and base lifetime solve; backing storage
+extends the solved ranges through admitted aliases before assigning byte slots.
+Every aggregate assignment has a planned destination, including a result local
+defined by several mutually exclusive calls. A closed value exposed through a
+dynamic view has dedicated backing storage, since its address escapes the
+static-local access inventory.
+
+Instruction-selection scratch does not survive its operation. It occupies a
+separate frame region whose extent is the maximum required by an operation, not
+the sum across emitted branches. Persistent slots and scratch are on opposite
+sides of the frame pointer; the prologue reserves both and every split fragment
+uses that same frame. Explicit address-producing allocations remain persistent.
+Assignment commits aggregate results before scratch is reused, so neither
+emission order nor a branch-local allocator reset determines value lifetime.
+
 ### Wasm Aggregate Aliases
 
 An aggregate local of the wasm backend holds the address of its bytes: a slot
-of the procedure's frame, or for a parameter the caller's storage, and
-either stays put for the rest of the procedure. An `assign_ref.local` of an
+of the procedure's frame, or for a parameter the caller's storage. An `assign_ref.local` of an
 aggregate therefore binds its target to the source's address rather than
-copying the bytes, exactly when `LocalWrites` proves the alias for the pair:
+copying the bytes when the shared stack planner proves the alias for the pair:
 the target has one definition, the source at most one, and neither is
 written in place (`set_local`, `init_uninitialized`, a join parameter, a
-string-match capture, a dynamic write); dynamic locals never alias. This is
-the rule the native dev backend's stack plan proves ("Dev Backend Register
-Lifetimes"), taken from the same shared definition walk, so a frame holds
-one copy of a record however many field reads name it. A `ref.local` the
-rule rejects copies, so a snapshot keeps the bytes it saw when its source is
-rewritten.
+string-match capture, a dynamic write), and the snapshot does not live across
+its owner's next definition around a back edge. Dynamic locals never alias by
+this rule. This is the native dev backend's proof ("Dev Backend Register
+Lifetimes"), with the same shared definition inventory and runtime CFG. The
+owner keeps its bytes through every alias read; a rejected alias copies, so
+storage reuse cannot change a snapshot when its source is rewritten.
 
 ## Wasm Body Generation
 
