@@ -375,6 +375,22 @@ not bear on the build/test decision. None moved instructions by more than
 commit-ahead, small-store thresholds of 64K and 1M entries, and a 25%
 reservation estimate. All four settings are unchanged.
 
+Storage work for one cold `roc check` of roc-pg, from the `-Ddev-diagnostics`
+ReleaseFast build of the current tree:
+
+| Counter | Value |
+| --- | ---: |
+| bytes_filled | 86,589,346 |
+| bytes_copied | 16,289,604 |
+| growth_allocations | 937 |
+| mappings / mapped_bytes | 25 / 9,908,224 |
+| reservations / reserved_bytes | 38 / 236,978,176 |
+| reservation_crossings / relocations | 30 / 6 |
+| pages_trimmed | 34,492 |
+| commit_calls / zero_resets | 0 / 0 |
+| epoch_resets / epoch_wraps | 16,977,168 / 0 |
+| scratch_bytes / scratch_resets | 11,568 / 33 |
+
 ## Lifecycle audit
 
 | Area | Decision and reason |
