@@ -703,6 +703,7 @@ pub fn compute(
     modules: Common.CheckedModules,
     declared: *const std.AutoHashMapUnmanaged(DeclaredRoot, void),
 ) Allocator.Error!LiteralDemand {
+    try modules.demandBodyIndexes();
     var demand = LiteralDemand{ .allocator = allocator };
     errdefer demand.deinit();
     var builder = Builder{ .allocator = allocator, .demand = &demand, .declared = declared };

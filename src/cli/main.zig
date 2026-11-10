@@ -6683,7 +6683,7 @@ const RunUnitTables = struct {
     fn init(ctx: *CliCtx) RunUnitTables {
         return .{
             .interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io),
-            .digests = .{ .gpa = ctx.gpa, .names = .{} },
+            .digests = .{ .gpa = ctx.gpa, .io = ctx.io.std_io, .names = .{} },
         };
     }
 
@@ -6831,6 +6831,7 @@ fn lowerRunUnits(
         defer ctx.gpa.free(records);
         try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
             .exports = records,
+            .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
             .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
             .host_boundary_digests = host_boundary_digests,
             // No link composes the root unit of a run image.
@@ -10353,6 +10354,23 @@ const BoxyReachTask = struct {
     }
 };
 
+/// Hash one module's own part of its digests (`Digests.ensurePrepared`)
+/// as a post-check task, on a lane that would otherwise idle while the
+/// units' import chains unwind, so a unit's own task finds it hashed.
+const BoxyDigestTask = struct {
+    digests: *compile.boxy_interface.Digests,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    failed: ?Allocator.Error = null,
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyDigestTask = @ptrCast(@alignCast(context));
+        self.digests.ensurePrepared(self.artifact) catch |err| {
+            self.failed = err;
+        };
+        return null;
+    }
+};
+
 /// What a test unit adds to its image (`compile.boxy_unit.Built`).
 const BoxyUnitTests = struct {
     expect_sites: []const compile.boxy_object_cache.ExpectSiteRecord,
@@ -10479,6 +10497,7 @@ fn buildBoxyLibraryObjects(
     // The units run on the executor's lanes, so each phase of this timing
     // sums the units' work rather than measuring elapsed time.
     var unit_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    const phase_started_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -10499,20 +10518,15 @@ fn buildBoxyLibraryObjects(
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
-            .names = &digests.names,
+            .digests = digests,
+            .build_env = build_env,
             .cache_manager = if (policy.no_cache) null else build_env.cache_manager,
             .timing = &unit_timing,
+            .executor = build_env.postCheckExecutor(),
+            .phase_started_ns = phase_started_ns,
             .want_pieces = !want_images,
         };
     }
-    // A unit's key reads what its imports' units recorded, so it is computed
-    // here, once they are done and before its own task can start.
-    const Prepare = struct {
-        fn run(unit_tasks: []BoxyUnitTask, unit_digests: *compile.boxy_interface.Digests, index: u32) Allocator.Error!void {
-            const task = &unit_tasks[index];
-            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.policy, task.target, &.{}, false);
-        }
-    };
 
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
@@ -10534,50 +10548,29 @@ fn buildBoxyLibraryObjects(
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
-    // An object compile-time evaluation built or restored under this
-    // build's key is linked as it is; its exports are in `interfaces`. A key
-    // reads what the unit's imports recorded, so this walks imports first,
-    // and a unit left to run holds back its importers.
+    // A unit runs once its imports' units are done: its task keys it from
+    // what they recorded, then restores or builds it. A unit left to run
+    // holds back its importers. Lanes no unit is ready for hash the
+    // waiting units' own parts of their digests meanwhile, so a unit whose
+    // turn comes keys itself from what is already hashed; the digest tasks
+    // take ids past the units'.
     var ready: std.ArrayList(u32) = .empty;
     defer ready.deinit(ctx.gpa);
-    var keyable: std.ArrayList(u32) = .empty;
-    defer keyable.deinit(ctx.gpa);
-    for (remaining, 0..) |count, index| if (count == 0) try keyable.append(ctx.gpa, @intCast(index));
-    while (keyable.pop()) |index| {
-        const task = &tasks[index];
-        try Prepare.run(tasks, digests, index);
-        const known = build_env.boxyObjectWithKey(task.artifact, task.key) orelse {
-            try ready.append(ctx.gpa, index);
-            continue;
-        };
-        // Compile-time evaluation never builds an instrumented test unit.
-        // Its ordinary objects can also serve expect-free test dependencies.
-        std.debug.assert(!task.policy.test_units);
-        try build_env.boxyAdoptExports(digests, task.artifact);
-        if (known.restored) restored += 1 else built += 1;
-        if (want_images) {
-            const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
-            images[index] = image.bytes;
-            if (policy.test_units) unit_tests[index] = .{
-                .expect_sites = &.{},
-                .test_roots = &.{},
-                .code_locations = image.code_locations,
-            };
-        } else {
-            objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
+    for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
+    const digest_tasks = try ctx.gpa.alloc(BoxyDigestTask, units.items.len);
+    defer ctx.gpa.free(digest_tasks);
+    for (digest_tasks, units.items) |*task, artifact| task.* = .{ .digests = digests, .artifact = artifact };
+    // The units the import chains reach last are hashed first: a unit with
+    // more imports waits longer for its turn.
+    const digest_order = try ctx.gpa.alloc(u32, units.items.len);
+    defer ctx.gpa.free(digest_order);
+    for (digest_order, 0..) |*slot, index| slot.* = @intCast(index);
+    std.mem.sort(u32, digest_order, remaining, struct {
+        fn moreImports(import_counts: []const u32, a: u32, b: u32) bool {
+            return import_counts[a] > import_counts[b] or (import_counts[a] == import_counts[b] and a < b);
         }
-        keys[index] = task.key.bytes;
-        for (known.hosted_symbols) |symbol| {
-            const owned = try ctx.arena.dupe(u8, symbol);
-            if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
-            try hosted_symbols.append(ctx.arena, owned);
-        }
-        done += 1;
-        for (dependents[index].items) |dependent| {
-            remaining[dependent] -= 1;
-            if (remaining[dependent] == 0) try keyable.append(ctx.gpa, dependent);
-        }
-    }
+    }.moreImports);
+    var next_digest: usize = 0;
     var first_error: ?CliMainError = null;
     var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
     defer if (executor_session) |*open| open.end();
@@ -10586,18 +10579,29 @@ fn buildBoxyLibraryObjects(
         if (executor_session) |*open| {
             while (ready.items.len != 0 and open.canSubmit() and first_error == null) {
                 const index = ready.pop().?;
-                try Prepare.run(tasks, digests, index);
+                tasks[index].trace("submitted");
                 try open.submit(.{ .id = index, .context = &tasks[index], .run = BoxyUnitTask.run });
             }
+            // Every lane but one, so a unit becoming ready finds a lane.
+            while (next_digest < digest_order.len and open.outstanding + 1 < open.executor.worker_count and first_error == null) : (next_digest += 1) {
+                const index = digest_order[next_digest];
+                try open.submit(.{ .id = tasks.len + index, .context = &digest_tasks[index], .run = BoxyDigestTask.run });
+            }
             if (open.outstanding != 0) {
-                completed = @intCast(open.receive().id);
+                const id = open.receive().id;
+                if (id >= tasks.len) {
+                    if (digest_tasks[id - tasks.len].failed) |err| {
+                        if (first_error == null) first_error = err;
+                    }
+                    continue;
+                }
+                completed = @intCast(id);
             } else if (first_error == null) {
                 base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
             } else break;
         } else {
             if (first_error != null) break;
             const index = ready.pop() orelse base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
-            try Prepare.run(tasks, digests, index);
             _ = BoxyUnitTask.run(&tasks[index], .{ .id = 0, .allocator = ctx.gpa, .scratch = ctx.gpa, .lane_state = undefined });
             completed = index;
         }
@@ -10610,10 +10614,38 @@ fn buildBoxyLibraryObjects(
                 if (first_error == null) first_error = err;
                 continue;
             },
+            // An object compile-time evaluation built or restored under
+            // this build's key is linked as it is; its exports are in
+            // `interfaces`.
+            .known => |known| {
+                if (first_error != null) continue;
+                // Compile-time evaluation never builds an instrumented test unit.
+                // Its ordinary objects can also serve expect-free test dependencies.
+                std.debug.assert(!task.policy.test_units);
+                try build_env.boxyAdoptExports(digests, task.artifact);
+                if (known.restored) restored += 1 else built += 1;
+                if (want_images) {
+                    const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
+                    images[index] = image.bytes;
+                    if (policy.test_units) unit_tests[index] = .{
+                        .expect_sites = &.{},
+                        .test_roots = &.{},
+                        .code_locations = image.code_locations,
+                    };
+                } else {
+                    objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
+                }
+                keys[index] = task.key.bytes;
+                for (known.hosted_symbols) |symbol| {
+                    const owned = try ctx.arena.dupe(u8, symbol);
+                    if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+                    try hosted_symbols.append(ctx.arena, owned);
+                }
+            },
             .done => |*result| {
                 if (first_error != null) continue;
                 if (result.restored) restored += 1 else built += 1;
-                try digests.recordExports(task.artifact, result.exports);
+                try digests.recordExportsDigest(task.artifact, result.exports_digest);
                 keys[index] = task.key.bytes;
                 for (result.hosted_symbols) |symbol| {
                     const owned = try ctx.arena.dupe(u8, symbol);
@@ -10639,13 +10671,17 @@ fn buildBoxyLibraryObjects(
                 }
                 result.deinitKeepingCode(ctx.gpa);
                 task.outcome = .pending;
-                for (dependents[index].items) |dependent| {
-                    remaining[dependent] -= 1;
-                    if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
-                }
             },
         }
+        for (dependents[index].items) |dependent| {
+            remaining[dependent] -= 1;
+            if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
+        }
     }
+    // Digest tasks still out hashed for units that are done.
+    if (executor_session) |*open| while (open.outstanding != 0) {
+        _ = open.receive();
+    };
     if (reach_session) |*open| _ = open.receive();
     if (first_error) |err| return err;
     const reach = switch (reach_task.outcome) {
@@ -10835,8 +10871,9 @@ fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact
 }
 
 /// One library module's unit, run as a post-check task: its object restored
-/// from the cache, or lowered, compiled, and filed there. The task owns no
-/// executor of its own; the parallelism is across units.
+/// from the cache, or lowered, compiled, and filed there. Units run in
+/// parallel across the lanes, and a unit's own per-procedure work fans out
+/// over them too (`executor`).
 const BoxyUnitTask = struct {
     gpa: Allocator,
     io: std.Io,
@@ -10846,32 +10883,77 @@ const BoxyUnitTask = struct {
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
-    names: *const postcheck.Boxy.Types.ModuleNames,
+    /// The link's digests, which the task keys its unit from: its own
+    /// part hashed on its lane, its imports' parts recorded by their units.
+    digests: *compile.boxy_interface.Digests,
+    build_env: *BuildEnv,
     cache_manager: ?*CacheManager,
     timing: *lir.CheckedPipeline.Timing,
+    /// The executor the unit's per-procedure work (the LIR passes, ARC and
+    /// native code generation) fans out over, in sessions of its own
+    /// nested in the one running the unit: a lone rebuilt unit then uses
+    /// every lane rather than the one its task holds.
+    executor: ?base.post_check_task_executor.Executor,
+    /// When the units' phase began, for the work trace.
+    phase_started_ns: i96,
+    /// The unit's key, computed by its task (`keyAndBuild`).
     key: compile.boxy_object_cache.Key = undefined,
     want_pieces: bool,
-    outcome: union(enum) { pending, failed: CliMainError, done: compile.boxy_unit.Built } = .pending,
+    outcome: Outcome = .pending,
+
+    const Outcome = union(enum) {
+        pending,
+        failed: CliMainError,
+        done: compile.boxy_unit.Built,
+        /// Compile-time evaluation built or restored the object under this
+        /// build's key.
+        known: BuildEnv.BoxyKnownObject,
+    };
 
     fn deinit(self: *BoxyUnitTask, gpa: Allocator) void {
         gpa.free(self.views);
         switch (self.outcome) {
-            .pending, .failed => {},
+            // A known object belongs to the compilation.
+            .pending, .failed, .known => {},
             .done => |result| result.deinit(gpa),
         }
     }
 
     fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
         const self: *BoxyUnitTask = @ptrCast(@alignCast(context));
-        self.outcome = if (self.build()) |result| .{ .done = result } else |err| .{ .failed = err };
+        self.outcome = self.keyAndBuild() catch |err| .{ .failed = err };
         return context;
+    }
+
+    /// Print `event` of this unit with the time since the phase began.
+    fn trace(self: *const BoxyUnitTask, comptime event: []const u8) void {
+        if (!dev_diagnostics.isSet(.trace_boxy_work)) return;
+        const now_ns = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        const elapsed_us: u64 = @intCast(@divTrunc(now_ns - self.phase_started_ns, std.time.ns_per_us));
+        std.debug.print("boxy-work: +{d}.{d:0>3} ms (clock {d} ns) " ++ event ++ " {s}\n", .{ elapsed_us / std.time.us_per_ms, elapsed_us % std.time.us_per_ms, now_ns, self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name) });
+    }
+
+    /// Key the unit from the digests, then take the object compile-time
+    /// evaluation left under that key, or restore or build it.
+    fn keyAndBuild(self: *BoxyUnitTask) CliMainError!Outcome {
+        try self.digests.ensurePrepared(self.artifact);
+        self.key = try boxyObjectKey(self.gpa, self.digests, self.artifact, self.platform, self.policy, self.target, &.{}, false);
+        self.trace("keyed");
+        if (self.build_env.boxyObjectWithKey(self.artifact, self.key)) |known| {
+            self.trace("known");
+            return .{ .known = known };
+        }
+        const result = try self.build();
+        if (result.restored) self.trace("restored") else self.trace("built");
+        return .{ .done = result };
     }
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
-        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names, .expect_sites = self.policy.test_units };
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units };
         config.target.timing = self.timing;
-        return try compile.boxy_unit.restoreOrBuild(.{
+        config.target.post_check_executor = self.executor;
+        const built = try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
             .artifact = self.artifact,
             .platform = self.platform,
@@ -10885,6 +10967,8 @@ const BoxyUnitTask = struct {
             .test_unit = self.policy.test_units,
             .wasm_stack_checks = self.policy.wasm_stack_checks,
         });
+        errdefer built.deinit(self.gpa);
+        return built;
     }
 };
 
@@ -11695,6 +11779,7 @@ fn buildWasmUnits(
     const app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports);
     try compile.boxy_unit.store(ctx.gpa, cache_manager, root_key, .{
         .exports = records,
+        .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
         .hosted_symbols = try compile.boxy_unit.hostedSymbols(ctx.arena, &lowered.lir_result.store),
         .app_export_symbols = app_export_symbols,
         .pieces = &.{},
@@ -12133,7 +12218,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
     // Filled once checking has published every module; the root unit reads
     // its names only when it lowers, after that.
-    var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .names = .{} };
+    var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .io = ctx.io.std_io, .names = .{} };
     defer boxy_digests.deinit();
     const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true, .names = &boxy_digests.names } else null;
     runtime_lowering.target.boxy_unit = boxy_root_unit;
@@ -12292,6 +12377,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
                 defer ctx.gpa.free(encoded);
                 try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, boxy_root_key.?, .{
                     .exports = records,
+                    .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                     .hosted_symbols = try hostedSymbolsFromLir(ctx.arena, &lowered.lir_result.store),
                     .link_root_symbols = try devObjectLinkRootSymbols(ctx.arena, static_data_exports),
                     .app_export_symbols = try sharedLibraryAppExports(ctx, entrypoints, static_data_exports),
@@ -12317,6 +12403,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
             defer ctx.gpa.free(encoded);
             try compile.boxy_unit.store(ctx.gpa, boxy_cache_manager, root_key, .{
                 .exports = records,
+                .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
                 .hosted_symbols = root_hosted_symbols,
                 .link_root_symbols = link_facts.link_root_symbols,
                 .app_export_symbols = link_facts.app_export_symbols,
@@ -15902,6 +15989,7 @@ fn unitTestRootImage(
     defer ctx.gpa.free(records);
     try compile.boxy_unit.store(ctx.gpa, cache_manager, key, .{
         .exports = records,
+        .exports_digest = try compile.boxy_object_cache.exportRecordsDigest(ctx.gpa, records),
         .hosted_symbols = hosted,
         // No link composes a test program's root unit.
         .pieces = &.{},
@@ -15926,7 +16014,7 @@ fn unitTestRootImage(
 /// report every planned module's outcomes as `runCompiledTestPlan` does.
 fn runUnitImageTestPlan(
     ctx: *CliCtx,
-    program: *const UnitImageTestProgram,
+    program: *UnitImageTestProgram,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
