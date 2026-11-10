@@ -2038,9 +2038,12 @@ const Formatter = struct {
     };
 
     fn ifCondition(fmt: *Formatter, condition: AST.Expr.Idx, then: AST.Expr.Idx) IfCondition {
-        if (fmt.ast.store.getExpr(condition) == .malformed) return .as_written;
+        const condition_expr = fmt.ast.store.getExpr(condition);
+        if (condition_expr == .malformed) return .as_written;
         if (fmt.ast.store.getExpr(then) != .block) {
-            return if (fmt.groupedInner(condition) == null) .parenthesized else .as_written;
+            // Tuples already delimit the condition, even when comments prevent
+            // removing their parentheses.
+            return if (condition_expr == .tuple) .as_written else .parenthesized;
         }
         var inner = fmt.groupedInner(condition) orelse return .as_written;
         while (fmt.groupedInner(inner)) |next| inner = next;
@@ -9861,6 +9864,48 @@ test "if condition is parenthesized unless the then branch is a block" {
             "commented = |n| if (\n\tn < 0 # why\n) {\n\t-n\n} else n\n",
         result,
     );
+}
+
+test "issue 12916: commented if conditions do not gain parentheses" {
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{
+            .input = "x = if (True # comment\n) True else False\n\nmain! = |_| Ok({})\n",
+            .expected = "x = if (\n\tTrue # comment\n) True else False\n\nmain! = |_| Ok({})\n",
+        },
+        .{
+            .input = "x = if (# before\nTrue) True else False\n",
+            .expected = "x = if ( # before\n\tTrue\n) True else False\n",
+        },
+        .{
+            .input = "x = if (True and # inside\nFalse) True else False\n",
+            .expected = "x = if (\n\tTrue and # inside\n\t\tFalse\n) True else False\n",
+        },
+        .{
+            .input = "x = if ((True # nested\n)) True else False\n",
+            .expected = "x = if (\n\t(\n\t\tTrue # nested\n\t)\n) True else False\n",
+        },
+        .{
+            .input = "main! = |_| if (True # comment\n) Ok({})\n",
+            .expected = "main! = |_| if (\n\tTrue # comment\n) Ok({})\n",
+        },
+        .{
+            .input = "x = if False True else if (True # comment\n) True else False\n",
+            .expected = "x = if (False) True else if (\n\tTrue # comment\n) True else False\n",
+        },
+        .{
+            .input = "x = if (True # comment\n) { value: 1 } else { value: 2 }\n",
+            .expected = "x = if (\n\tTrue # comment\n) { value: 1 } else { value: 2 }\n",
+        },
+        .{
+            .input = "x = if (True # comment\n) { True } else False\n",
+            .expected = "x = if (\n\tTrue # comment\n) {\n\tTrue\n} else False\n",
+        },
+    };
+    for (cases) |case| {
+        const result = try moduleFmtsStable(std.testing.allocator, case.input, false);
+        defer std.testing.allocator.free(result);
+        try std.testing.expectEqualStrings(case.expected, result);
+    }
 }
 
 test "else block aligns with if when only the else branch has braces" {
