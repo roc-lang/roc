@@ -5,8 +5,31 @@
 
 const TestCase = @import("parallel_runner.zig").TestCase;
 
+const boxed_sequence_source =
+    \\{
+    \\    text = Str.concat("abcdefghijklmnopqrstuvwxyz", "0123456789")
+    \\    original = Box.box(text.iter_utf8())
+    \\    nested = Box.box(original)
+    \\    repacked = Box.box(Box.unbox(original))
+    \\    first = List.from_iter(Box.unbox(repacked))
+    \\    second = List.from_iter(Box.unbox(Box.unbox(nested)))
+    \\    if first == second first.len() + second.len() else 0
+    \\}
+;
+
 /// Public value `tests`.
 pub const tests = [_]TestCase{
+    .{
+        .name = "issue 12887: boxed sequence records preserve shared captures (lss)",
+        .source = boxed_sequence_source,
+        .expected = .{ .inspect_str = "72" },
+    },
+    .{
+        .name = "issue 12887: boxed sequence records preserve shared captures (boxy)",
+        .source = boxed_sequence_source,
+        .expected = .{ .inspect_str = "72" },
+        .specialization_strategy = .boxy,
+    },
     .{
         .name = "value representation: loop swaps carried scalars",
         .source =

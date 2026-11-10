@@ -20,7 +20,7 @@ test "issue 11730: fixed decoder errors survive generalized helper layers" {
     for ([_][]const u8{ "decode", "fetch", "forward" }) |name| {
         const ty = try env.allocDefType(std.testing.allocator, name);
         defer std.testing.allocator.free(ty);
-        try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField(Str)") != null);
+        try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField") == null);
         try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
     }
     // A fixed local shape contributes its constraints once. Its helpers do not
@@ -46,7 +46,7 @@ test "issue 11730: forwarding depth does not multiply fixed codec derivations" {
     try forwarded.assertNoErrors();
     const ty = try forwarded.allocDefType(std.testing.allocator, "hop32");
     defer std.testing.allocator.free(ty);
-    try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField(Str)") != null);
+    try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
     try std.testing.expectEqual(0, forwarded.module_env.binding_scheme_codec_requirements.items.items.len);
     try std.testing.expectEqual(
         direct.module_env.generated_codec_derivations.items.items.len,
@@ -70,10 +70,10 @@ test "issue 11730: decoder errors survive an imported helper" {
     try env.assertNoErrors();
     const ty = try env.allocDefType(std.testing.allocator, "fetch");
     defer std.testing.allocator.free(ty);
-    try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField(Str)") != null);
+    try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
 }
 
-test "issue 11730: consuming helper cannot exclude a required parser error" {
+test "issue 11730: consuming helper exhaustively handles the format error" {
     var env = try TestEnv.init("Test", decoder ++
         \\
         \\consume : Str -> Str
@@ -83,16 +83,16 @@ test "issue 11730: consuming helper cannot exclude a required parser error" {
         \\}
     );
     defer env.deinit();
-    try env.assertOneTypeError("Non Exhaustive Match");
+    try env.assertNoErrors();
 }
 
-test "issue 11730: decoder annotation cannot exclude its required-field error" {
+test "issue 11730: decoder annotation needs only its format error" {
     var env = try TestEnv.init("Test",
         \\decode : Str -> Try(Str, [InvalidJson(Str)])
         \\
     ++ decoder);
     defer env.deinit();
-    try env.assertOneTypeError("Parser Error Row Missing Tag");
+    try env.assertNoErrors();
 }
 
 test "issue 11730: nested local record demands survive success projection" {
@@ -109,7 +109,7 @@ test "issue 11730: nested local record demands survive success projection" {
     try env.assertNoErrors();
     const ty = try env.allocDefType(std.testing.allocator, "fetch");
     defer std.testing.allocator.free(ty);
-    try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField(Str)") != null);
+    try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
     try std.testing.expectEqual(0, env.module_env.binding_scheme_codec_requirements.items.items.len);
 }
 
@@ -125,8 +125,8 @@ test "issue 11730: local decoder permits wider independent caller rows" {
     defer std.testing.allocator.free(first);
     const second = try env.allocDefType(std.testing.allocator, "second");
     defer std.testing.allocator.free(second);
-    try std.testing.expect(std.mem.find(u8, first, "MissingRequiredField(Str)") != null);
-    try std.testing.expect(std.mem.find(u8, second, "MissingRequiredField(Str)") != null);
+    try std.testing.expect(std.mem.find(u8, first, "InvalidJson(Str)") != null);
+    try std.testing.expect(std.mem.find(u8, second, "InvalidJson(Str)") != null);
     try std.testing.expect(std.mem.find(u8, first, "Second") == null);
     try std.testing.expect(std.mem.find(u8, second, "First") == null);
 }
@@ -153,7 +153,7 @@ test "issue 11730: generic decoder retains independent per-use codec requirement
     for ([_][]const u8{ "first", "second" }) |name| {
         const ty = try env.allocDefType(std.testing.allocator, name);
         defer std.testing.allocator.free(ty);
-        try std.testing.expect(std.mem.find(u8, ty, "MissingRequiredField(Str)") != null);
+        try std.testing.expect(std.mem.find(u8, ty, "InvalidJson(Str)") != null);
     }
 }
 

@@ -497,6 +497,8 @@ const Transform = struct {
             .capture = new_data.capture,
             .capture_layout = new_data.capture_layout,
             .on_drop = new_data.on_drop,
+            .on_copy = new_data.on_copy,
+            .frozen_capture_layout = new_data.frozen_capture_layout,
             .reuse = old_stmt.target,
         });
         self.store.getCFStmtPtr(new_stmt_id).* = .{ .assign_packed_erased_fn = .{

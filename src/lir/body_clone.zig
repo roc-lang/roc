@@ -1866,6 +1866,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .capture = try self.mapMaybeLocal(s.capture),
                             .capture_layout = s.capture_layout,
                             .on_drop = s.on_drop,
+                            .on_copy = s.on_copy,
+                            .frozen_capture_layout = s.frozen_capture_layout,
                             .reuse = try self.mapMaybeLocal(s.reuse),
                             .reuse_unique = s.reuse_unique,
                         }),

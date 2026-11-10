@@ -152,7 +152,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "k")))
-			(e-call (constraint-fn-var 284)
+			(e-call (constraint-fn-var 287)
 				(e-lookup-local
 					(p-assign (ident "k")))
 				(e-string
@@ -170,7 +170,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "x"))
 				(p-assign (ident "f")))
-			(e-call (constraint-fn-var 294)
+			(e-call (constraint-fn-var 297)
 				(e-lookup-local
 					(p-assign (ident "call_with")))
 				(e-closure
@@ -180,7 +180,7 @@ NO CHANGE
 					(e-lambda
 						(args
 							(p-underscore))
-						(e-call (constraint-fn-var 293)
+						(e-call (constraint-fn-var 296)
 							(e-lookup-local
 								(p-assign (ident "f")))
 							(e-lookup-local

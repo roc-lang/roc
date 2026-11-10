@@ -3,28 +3,28 @@ JsonStringEscapes :: [].{}
 # --- valid single-character escapes ---
 
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\\"b\"}")
 
 	result == Ok({ s: "a\"b" })
 }
 
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\\\b\"}")
 
 	result == Ok({ s: "a\\b" })
 }
 
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\/b\"}")
 
 	result == Ok({ s: "a/b" })
 }
 
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\b\\f\\n\\r\\tb\"}")
 
 	result == Ok({ s: "a\u(8)\u(C)\n\r\tb" })
@@ -33,7 +33,7 @@ expect {
 # --- unicode escapes ---
 
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"caf\\u00e9\"}")
 
 	result == Ok({ s: "café" })
@@ -41,7 +41,7 @@ expect {
 
 # uppercase hex digits are accepted
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"caf\\u00E9 \\u4E2D\"}")
 
 	result == Ok({ s: "café 中" })
@@ -49,7 +49,7 @@ expect {
 
 # a surrogate pair combines into one code point (U+1F600)
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"\\uD83D\\uDE00\"}")
 
 	result == Ok({ s: "😀" })
@@ -142,7 +142,7 @@ expect {
 
 # unknown escape character
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\xb\"}")
 
 	result == Err(InvalidJson("unknown escape character"))
@@ -159,7 +159,7 @@ expect {
 # a \u escape whose hex digits run past the closing quote: the scanner has no way
 # to know the string ended, so it reads the quote as a hex digit and rejects it
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\u12\"}")
 
 	result == Err(InvalidJson("invalid hex digit in \\uXXXX escape"))
@@ -167,7 +167,7 @@ expect {
 
 # non-hex digits in \u escape
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\uZZZZ\"}")
 
 	result == Err(InvalidJson("invalid hex digit in \\uXXXX escape"))
@@ -175,7 +175,7 @@ expect {
 
 # unpaired high surrogate
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\uD83Db\"}")
 
 	result == Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
@@ -183,7 +183,7 @@ expect {
 
 # unpaired low surrogate
 expect {
-	result : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ s : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"s\": \"a\\uDE00b\"}")
 
 	result == Err(InvalidJson("unpaired low surrogate escape"))
@@ -193,7 +193,7 @@ expect {
 
 # escaped object keys decode
 expect {
-	result : Try({ a_b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a_b : Str }, [InvalidJson(Str)])
 	result = Json.parse("{\"a\\u005fb\": \"ok\"}")
 
 	result == Ok({ a_b: "ok" })
@@ -201,7 +201,7 @@ expect {
 
 # escapes inside skipped unknown fields do not break known-field decoding
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"junk\": \"say \\\"hi\\\"\\n\", \"a\": 7}")
 
 	result == Ok({ a: 7 })
@@ -220,7 +220,7 @@ expect {
 expect {
 	original = { s: "quote \" backslash \\ newline \n tab \t" }
 
-	round_tripped : Try({ s : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	round_tripped : Try({ s : Str }, [InvalidJson(Str)])
 	round_tripped = match Json.to_str_try(original) {
 		Ok(encoded) => Json.parse(encoded)
 		Err(_) => Err(Json.invalid_json({}))
@@ -267,7 +267,7 @@ expect {
 			subtitle : Try(Str, [Missing]),
 			url : Str,
 		},
-		[InvalidJson(Str), MissingRequiredField(Str)],
+		[InvalidJson(Str)],
 	)
 	result = Json.parse("{\"body\": \"First line.\\nSecond line with \\\"emphasis\\\".\", \"author\": {\"name\": \"Ren\\u00e9e\", \"bio\": \"calls herself \\\"Ren\\\"\", \"avatar\": \"https:\\/\\/cdn.example.com\\/r.png\"}, \"url\": \"https:\\/\\/example.com\\/articles\\/1\", \"reactions\": [{\"emoji\": \"\\ud83d\\udc4d\", \"count\": 3}]}")
 
@@ -342,7 +342,7 @@ expect {
 
 # invalid escape inside a nested skipped subtree is still rejected
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":{\"deep\":[\"ok\",\"bad\\qx\"]},\"a\":7}")
 
 	result == Err(InvalidJson("unknown escape character"))
@@ -354,7 +354,7 @@ expect {
 	suffix = Str.to_utf8("cd\",\"a\":7}")
 	document = Str.from_utf8(List.concat(prefix, List.concat([1], suffix)))
 
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = match document {
 		Ok(value) => Json.parse(value)
 		Err(_) => Err(Json.invalid_json({}))
@@ -365,7 +365,7 @@ expect {
 
 # unterminated skipped string
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"a\":7,\"skip\":\"abc")
 
 	result == Err(InvalidJson("unterminated string"))
@@ -373,7 +373,7 @@ expect {
 
 # skipped string ending in a lone backslash at end of input
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"a\":7,\"skip\":\"abc\\")
 
 	result == Err(InvalidJson("truncated escape"))
@@ -381,35 +381,35 @@ expect {
 
 # invalid escapes rejected in skipped positions, mirroring the value cases
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":\"a\\xb\",\"a\":7}")
 
 	result == Err(InvalidJson("unknown escape character"))
 }
 
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":\"a\\u12z\",\"a\":7}")
 
 	result == Err(InvalidJson("invalid hex digit in \\uXXXX escape"))
 }
 
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":\"a\\uZZZZ\",\"a\":7}")
 
 	result == Err(InvalidJson("invalid hex digit in \\uXXXX escape"))
 }
 
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":\"a\\uD83Db\",\"a\":7}")
 
 	result == Err(InvalidJson("high surrogate escape not followed by a low surrogate escape"))
 }
 
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":\"a\\uDE00b\",\"a\":7}")
 
 	result == Err(InvalidJson("unpaired low surrogate escape"))
@@ -417,7 +417,7 @@ expect {
 
 # escaped key on a skipped nested object (the skip_json_object key site)
 expect {
-	result : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ a : U64 }, [InvalidJson(Str)])
 	result = Json.parse("{\"skip\":{\"k\\\"ey\":\"v\"},\"a\":7}")
 
 	result == Ok({ a: 7 })

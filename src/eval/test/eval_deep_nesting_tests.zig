@@ -78,6 +78,9 @@ fn methodChainArgs(i: usize) struct { usize, usize, usize, usize, usize, usize }
 /// validates the derived parser of the record inside it.
 const codec_chain_prelude =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    parse_u64 : Format, State -> Try({ value : U64, rest : State }, [FormatError])
     \\    parse_u64 = |_, state|
     \\        match state {
@@ -115,8 +118,8 @@ const codec_chain_prelude =
     \\State := [Present(U64), Done]
     \\
     \\Wrap(a) := [Wrap(a)].{
-    \\    parser_for : Format -> (State -> Try({ value : Wrap(a), rest : State }, [FormatError, ..errs]))
-    \\        where [a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs]))]
+    \\    parser_for : Format -> (State -> Try({ value : Wrap(a), rest : State }, [FormatError]))
+    \\        where [a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError]))]
     \\    parser_for = |format| |state| {
     \\        Inner : a
     \\        parse_inner = Inner.parser_for(format)
@@ -125,9 +128,9 @@ const codec_chain_prelude =
     \\    }
     \\}
     \\
-    \\parse : State -> Try(a, [FormatError, ..errs])
+    \\parse : State -> Try(a, [FormatError])
     \\    where [
-    \\        a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+    \\        a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
     \\    ]
     \\parse = |input| {
     \\    Shape : a
@@ -140,7 +143,7 @@ const codec_chain_prelude =
 
 fn codecChain(comptime n: usize) []const u8 {
     return codec_chain_prelude ++
-        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError, MissingRequiredField(Str)])\n" ++
+        "probe : State -> Try(" ++ repeat("Wrap({ x : ", n) ++ "U64" ++ repeat(" })", n) ++ ", [FormatError])\n" ++
         "probe = |input| parse(input)\n\n" ++
         "main = match probe(State.Done) {\n    Ok(_) => \"ok\"\n    Err(_) => \"err\"\n}\n";
 }

@@ -1086,7 +1086,7 @@ const EmissionOwner = struct {
         var binding_override_changed = true;
         while (binding_override_changed) {
             binding_override_changed = false;
-            for (domain.frame_locals) |local| {
+            for (domain.resource_locals) |local| {
                 if (owned_binding_override.contains(local)) continue;
                 const root = dismantles.ownedOnlyBindingRoot(local) orelse continue;
                 if (owned_binding_override.contains(root)) {
@@ -2318,6 +2318,8 @@ const Inserter = struct {
                             .capture = assign.capture,
                             .capture_layout = assign.capture_layout,
                             .on_drop = assign.on_drop,
+                            .on_copy = assign.on_copy,
+                            .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
                         }),
@@ -4389,7 +4391,10 @@ const Inserter = struct {
     /// id on purpose: rebinding a name kills only that name's own binding,
     /// never the unit of a value the name merely borrowed (audited for
     /// issue 9703's keying class—see the layer comment above).
-    fn takeRebindTarget(_: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+    /// Bindings include scalar results and descriptor words; only a binding
+    /// with refcounted content can have a previous ownership unit.
+    fn takeRebindTarget(self: *const Inserter, owned: *OwnedSet, target: LIR.LocalId) ResourceError!bool {
+        if (!self.localContainsRefcounted(target)) return false;
         if (!owned.contains(target)) return false;
         try owned.unset(target);
         return true;
@@ -18239,7 +18244,7 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         const scalar = try d.f.local(.u64);
         const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
             .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
-            .slots = try d.f.store.addU32Span(&.{ 0, 0, 0, 1, 2 }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 0, 1, 2, 3 }),
             .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
         });
         d.f.store.getLocalPtr(param).product = product;

@@ -219,6 +219,7 @@ const LayoutStore = layout.Store;
 /// The host's diagnostic runtime symbols, each called as `(bytes, len)`.
 const RuntimeDiagnostic = enum { dbg, expect_failed, crashed };
 const wasm_erased_callable_on_drop_offset: u32 = 4;
+const wasm_erased_callable_capture_offset = builtins.erased_callable.captureOffset(4);
 
 const Self = @This();
 
@@ -2105,6 +2106,8 @@ pub fn generateModule(
     if (proc_specs.len > 0) {
         self.compileAllProcSpecs(proc_specs) catch return error.OutOfMemory;
     }
+    // Frozen callables can name a drop helper that no procedure body calls.
+    try self.compileStaticDataRcHelpers(self.static_data_rc_helpers);
 
     const root_proc = self.store.getProcSpec(root_proc_id);
     if (!root_proc.args.isEmpty()) {
@@ -3011,7 +3014,7 @@ fn emitErasedCallableOnDrop(
     try self.emitBrIf(0);
 
     try self.emitLocalGet(payload_ptr_local);
-    try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
+    try self.emitI32Const(@intCast(wasm_erased_callable_capture_offset));
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitNullPtr();
     try self.emitLocalGet(on_drop_local);
@@ -7151,7 +7154,7 @@ fn emitProcSpecBody(
     };
 
     if (proc.uses_pending_cell and self.pending_cell == null) {
-        const cell_offset = try self.allocStackMemory(builtins.native_callable.pending_words * 4, 4);
+        const cell_offset = try self.allocStackMemory(builtins.native_callable.pendingByteSize(wasm_word_size), builtins.native_callable.pendingAlignment(wasm_word_size));
         const own_cell = self.storage.allocPersistentLocal(.i32) catch return error.OutOfMemory;
         try self.emitFpOffset(cell_offset);
         try self.emitLocalSet(own_cell);
@@ -8234,6 +8237,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 .target_layout = self.procLocalLayoutIdx(assign_stmt.target),
                 .capture_layout = assign.capture_layout,
                 .on_drop = assign.on_drop,
+                .on_copy = assign.on_copy,
                 .reuse = assign.reuse,
                 .reuse_unique = assign.reuse_unique,
             });
@@ -9756,6 +9760,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
             // No hot-reload header or drop on wasm.
             try self.emitI32Const(0);
             try self.emitI32Const(0);
+            try self.emitI32Const(0);
             try self.emitBoxyRuntimeCall(if (c.reuse != null) .closure_reuse else .closure);
             try self.bindReturnedScalar(dst, .i32);
         },
@@ -9794,7 +9799,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
                 try self.emitTargetAddress(t);
                 if (c.args) |args| try self.emitBytesAddress(args) else try self.emitI32Const(0);
                 try self.emitLocalGet(payload);
-                try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
+                try self.emitI32Const(@intCast(wasm_erased_callable_capture_offset));
                 try self.emitOps(.{Op.i32_add});
                 // An owned call transfers the closure allocation as the
                 // callee's reuse input.
@@ -9810,6 +9815,7 @@ fn generateDyn(self: *Self, target_or_null: ?ProcLocalId, op: LIR.DynOp) Allocat
 /// operation.
 fn boxyListOp(op: base.LowLevel) ?BoxyListOp {
     return switch (op) {
+        .boxed_sequence_pack, .boxed_sequence_unpack => null,
         .list_capacity => .capacity,
         .list_slack_unique => .slack_unique,
         .list_owned_unique => .owned_unique,
@@ -9865,6 +9871,7 @@ fn generateDynElemLowLevel(self: *Self, assign: anytype) Allocator.Error!void {
     const extra = self.store.stmtRowOrDefault(assign.extra);
 
     switch (assign.op) {
+        .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
         .list_prefetch => {
             if (self.localDyn(dst) == null) {
                 try self.emitZeroValue(try self.procLocalValType(dst));
@@ -10085,7 +10092,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 
     const capture_ptr = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
     try self.emitLocalGet(payload_ptr);
-    try self.emitI32Const(@intCast(builtins.erased_callable.capture_offset));
+    try self.emitI32Const(@intCast(wasm_erased_callable_capture_offset));
     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
     try self.emitLocalSet(capture_ptr);
 
@@ -10313,16 +10320,23 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
     try self.emitOptionalFunctionTableIndexConst(on_drop_table_idx);
     try self.emitStoreOpSized(.i32, 4, wasm_erased_callable_on_drop_offset);
 
+    try self.emitLocalGet(payload_ptr);
+    try self.emitOptionalFunctionTableIndexConst(try self.erasedCallableOnDropTableIndex(c.on_copy));
+    try self.emitStoreOpSized(.i32, 4, 8);
+    try self.emitLocalGet(payload_ptr);
+    try self.emitI32Const(@intCast(capture_size));
+    try self.emitStoreOpSized(.i32, 4, 12);
+
     if (c.capture) |capture| {
         const capture_layout = c.capture_layout orelse unreachable; // capture and capture_layout are present together (asserted at function entry)
         if (capture_size > 0) {
             const capture_value = try self.emitProcLocalToNewLocal(capture, try self.procLocalValType(capture));
 
             if (try self.isCompositeLayout(capture_layout)) {
-                try self.emitMemCopy(payload_ptr, @intCast(builtins.erased_callable.capture_offset), capture_value, @intCast(capture_size));
+                try self.emitMemCopy(payload_ptr, @intCast(wasm_erased_callable_capture_offset), capture_value, @intCast(capture_size));
             } else {
                 try self.emitLocalGet(capture_value);
-                try self.emitStoreToMemSized(payload_ptr, @intCast(builtins.erased_callable.capture_offset), try self.resolveValType(capture_layout), @intCast(capture_size));
+                try self.emitStoreToMemSized(payload_ptr, @intCast(wasm_erased_callable_capture_offset), try self.resolveValType(capture_layout), @intCast(capture_size));
             }
         }
     }
@@ -10331,7 +10345,7 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 }
 
 fn emitFreshErasedCallablePayload(self: *Self, payload_ptr: u32, capture_size: u32) Allocator.Error!void {
-    const payload_size = builtins.erased_callable.payloadSize(capture_size);
+    const payload_size = builtins.erased_callable.payloadSizeFor(4, capture_size);
     try self.emitHeapAllocWithRefcountConst(
         @intCast(payload_size),
         builtins.erased_callable.payload_alignment,
@@ -11208,6 +11222,22 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
     const args = self.store.getLocalSpan(ll.args);
 
     switch (ll.op) {
+        .boxed_sequence_pack => {
+            const record = GuardedList.at(args, 0);
+            try self.emitBytesAddress(record);
+            try self.emitI32Const(@intCast(try self.layoutStorageByteSize(self.procLocalLayoutIdx(record))));
+            try self.emitProcLocal(GuardedList.at(args, 1));
+            try self.emitBuiltinCall(.boxed_sequence_pack);
+        },
+        .boxed_sequence_unpack => {
+            const size = try self.layoutStorageByteSize(ll.ret_layout);
+            const slot = try self.allocStackMemory(size, 8);
+            try self.emitFpOffset(slot);
+            try self.emitProcLocal(GuardedList.at(args, 0));
+            try self.emitI32Const(@intCast(size));
+            try self.emitBuiltinCall(.boxed_sequence_unpack);
+            try self.emitFpOffset(slot);
+        },
         .num_from_le_bytes_unchecked => try self.emitNumFromLeBytes(ll, args),
         .simd_load_16_unchecked => return self.emitSimdLowLevel(.simd_load_16_unchecked, ll, args),
         .simd_store_16_unchecked => return self.emitSimdLowLevel(.simd_store_16_unchecked, ll, args),
