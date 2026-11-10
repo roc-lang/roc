@@ -57,7 +57,7 @@ const Rank = @import("types.zig").Rank;
 const DescStoreIdx = @import("store.zig").DescStoreIdx;
 const RecordField = @import("types.zig").RecordField;
 const types = @import("types.zig");
-const TagUnionAbsorbers = @import("tag_absorbers.zig").TagUnionAbsorbers;
+const UseAbsorbers = @import("use_absorbers.zig").UseAbsorbers;
 
 /// The descriptor a rank frame settles once its children have reported.
 const RankFill = struct {
@@ -158,13 +158,13 @@ pub const Generalizer = struct {
     rank_frames: std.ArrayList(RankFrame),
     /// Settled child ranks, consumed by the frame that requested them.
     pending_ranks: std.ArrayList(Rank),
-    /// The declarations the module being checked can lift a tag union into,
+    /// What the module being checked can change anonymous structure into,
     /// or null when every liftable class is copied per use.
-    tag_absorbers: ?TagAbsorberQuery = null,
+    use_absorbers: ?UseAbsorberQuery = null,
 
-    /// What `Generalizer.tag_absorbers` reads a tag union's names through.
-    pub const TagAbsorberQuery = struct {
-        absorbers: *TagUnionAbsorbers,
+    /// What `Generalizer.use_absorbers` reads structure's names through.
+    pub const UseAbsorberQuery = struct {
+        absorbers: *UseAbsorbers,
         idents: *const base.Ident.Store,
     };
 
@@ -185,7 +185,7 @@ pub const Generalizer = struct {
 
     /// Whether a class this pass leaves ungeneralized is per-use structure.
     fn copiedPerUse(self: *Self, desc: types.Descriptor) std.mem.Allocator.Error!bool {
-        const query = self.tag_absorbers orelse return desc.liftsIntoNominal();
+        const query = self.use_absorbers orelse return desc.liftsIntoNominal();
         return query.absorbers.copiedPerUse(self.gpa, self.store, query.idents, desc);
     }
 
