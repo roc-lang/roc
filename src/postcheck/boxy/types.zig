@@ -191,6 +191,8 @@ pub const Modules = struct {
     allocator: Allocator,
     views: std.ArrayList(ModuleView) = .empty,
     by_key: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
+    /// Declaring modules by stable content identity, independent of local name stores.
+    by_identity: std.AutoHashMapUnmanaged([32]u8, ModuleIndex) = .empty,
     /// The names of a module unit's link. A whole program links nothing, and
     /// names each module by its content identity.
     link_names: ?*const ModuleNames = null,
@@ -198,6 +200,7 @@ pub const Modules = struct {
     pub fn deinit(self: *Modules) void {
         self.views.deinit(self.allocator);
         self.by_key.deinit(self.allocator);
+        self.by_identity.deinit(self.allocator);
     }
 
     /// Add a module unless one with the same key is present.
@@ -208,11 +211,22 @@ pub const Modules = struct {
         entry.value_ptr.* = index;
         const link_name = if (self.link_names) |link_names| link_names.of(view) else view.module_identity.stable_hash;
         try self.views.append(self.allocator, .{ .index = index, .key = view.key.digest(), .view = view, .link_name = link_name });
+        try self.by_identity.put(self.allocator, view.module_identity.stable_hash, index);
         return index;
     }
 
     pub fn get(self: *const Modules, index: ModuleIndex) *const ModuleView {
         return &self.views.items[@backingInt(index)];
+    }
+
+    /// Rebase a checked default from its name store into this program's modules.
+    pub fn fieldDefault(self: *const Modules, module: ModuleIndex, default: checked.CheckedFieldDefault) FieldDefault {
+        const origin = default.origin() orelse invariant("a field default has no declaring module");
+        const identity = self.get(module).nameStore().moduleIdentityBytes(origin).*;
+        return .{
+            .module = self.by_identity.get(identity) orelse invariant("a field default's declaring module is not in this lowering"),
+            .expr_node = default.expr_node,
+        };
     }
 
     /// The name module `index`'s workers and nominal types are digested
@@ -301,8 +315,9 @@ pub const FieldKind = enum(u8) {
     variable_slot,
 };
 
-/// A field of a record type, by the record's type and the field's name.
-pub const FieldDefaultKey = struct { record: TypeId, name: NameId };
+/// A `??` default's immutable identity, rebased into this program's modules.
+/// Defaults affect codec semantics, not the field's inline representation.
+pub const FieldDefault = struct { module: ModuleIndex, expr_node: u32 };
 
 /// One field of a record type: its name, type, and storage kind.
 pub const Field = struct {
@@ -311,6 +326,7 @@ pub const Field = struct {
     kind: FieldKind,
     /// The scheme variable of a `variable_slot` field.
     slot_variable: u32 = 0,
+    default: ?FieldDefault = null,
 };
 
 /// One tag of a tag union type: its name and payload types.
@@ -455,9 +471,6 @@ pub const Store = struct {
     closed_memo: std.AutoHashMapUnmanaged(ClosedKey, TypeId) = .empty,
     /// The backing of each instantiated nominal node.
     backing_memo: collections.DenseMapUnmanaged(TypeId, TypeId) = .empty,
-    /// The `??` default identity of each defaulted field of a record type
-    /// conversion produced (design.md "Defaulted Fields").
-    field_defaults: std.AutoHashMapUnmanaged(FieldDefaultKey, checked.CheckedFieldDefault) = .empty,
     /// `Converter.representationClosed` of each type asked about.
     representation_closed: collections.DenseMapUnmanaged(TypeId, bool) = .empty,
     /// `Converter.erasedResultSlots` of each type asked about.
@@ -531,7 +544,6 @@ pub const Store = struct {
         self.backing_memo.deinit(self.allocator);
         self.representation_closed.deinit(self.allocator);
         self.erased_slots.deinit(self.allocator);
-        self.field_defaults.deinit(self.allocator);
         self.decl_by_key.deinit(self.allocator);
         self.decl_keys_indexed.deinit(self.allocator);
         self.decl_by_source.deinit(self.allocator);
@@ -747,6 +759,11 @@ pub const Store = struct {
                     try self.keyType(field.ty);
                     try self.scratch_key.append(self.allocator, @backingInt(field.kind));
                     try self.keyU32(field.slot_variable);
+                    try self.scratch_key.append(self.allocator, @intFromBool(field.default != null));
+                    if (field.default) |default| {
+                        try self.keyU32(@backingInt(default.module));
+                        try self.keyU32(default.expr_node);
+                    }
                     closed = closed and self.isClosed(field.ty) and field.kind != .variable_slot;
                 }
                 try self.keyU32(if (record.ext) |ext| @backingInt(ext) else std.math.maxInt(u32));
@@ -1240,8 +1257,6 @@ pub const Converter = struct {
             .record => |record| {
                 var fields: std.ArrayList(Field) = .empty;
                 defer fields.deinit(allocator);
-                var defaults: std.ArrayList(struct { name: NameId, default: checked.CheckedFieldDefault }) = .empty;
-                defer defaults.deinit(allocator);
                 var child_index: usize = 0;
                 var current_fields = record.fields;
                 var current = record.ext;
@@ -1250,7 +1265,6 @@ pub const Converter = struct {
                         const field = current_fields.get(field_index);
                         const field_name = try self.store.internName(name_store.recordFieldLabelText(field.name));
                         try fields.append(allocator, self.convertedField(module, field_name, children[child_index], field.kind, env));
-                        if (field.kind.tag == .defaulted) try defaults.append(allocator, .{ .name = field_name, .default = field.kind.default });
                         child_index += 1;
                     }
                     current_fields = .empty;
@@ -1284,9 +1298,7 @@ pub const Converter = struct {
                         return s.nameLessThan(a.name, b.name);
                     }
                 }.lessThan);
-                const record_ty = try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
-                for (defaults.items) |entry| try self.store.field_defaults.put(allocator, .{ .record = record_ty, .name = entry.name }, entry.default);
-                return record_ty;
+                return try self.store.intern(.{ .record = .{ .fields = fields.items, .ext = ext } });
             },
             .tag_union => |tag_union| {
                 var tags: std.ArrayList(TagInput) = .empty;
@@ -1380,7 +1392,13 @@ pub const Converter = struct {
                         // union.
                         .fields => return try self.store.intern(.{ .list = try self.fieldHandle() }),
                         .field => return try self.fieldHandle(),
-                        .parse_tag_union_spec => return try self.store.intern(.{ .function = .{ .args = &.{}, .ret = children[0], .effectful = false } }),
+                        .parse_tag_union_spec => {
+                            if (children.len != 4) invariant("a tag-union spec must carry shape, encoding, state, and error");
+                            // The spec uses the erased-callable representation.
+                            // Preserve its whole semantic contract here; codec
+                            // lowering supplies the options-record call signature.
+                            return try self.store.intern(.{ .function = .{ .args = children[1..], .ret = children[0], .effectful = false } });
+                        },
                         .bool_tag_union, .try_nominal, .dict, .set, .iterator, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => {},
                     },
                     .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => {},
@@ -1421,7 +1439,8 @@ pub const Converter = struct {
     /// `required`, as it does for every other strategy.
     fn convertedField(self: Converter, module: ModuleIndex, name: NameId, ty: TypeId, kind: checked.CheckedFieldKind, env: Env) Field {
         return switch (kind.tag) {
-            .required, .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot },
+            .required => .{ .name = name, .ty = ty, .kind = .inline_slot },
+            .defaulted => .{ .name = name, .ty = ty, .kind = .inline_slot, .default = self.modules.fieldDefault(module, kind.default) },
             .optional => .{ .name = name, .ty = ty, .kind = .presence_slot },
             .undetermined => {
                 if (!self.seal_undetermined_kinds) {
@@ -1709,16 +1728,11 @@ pub const Converter = struct {
             },
             .padding => |ordinal| @intCast(fields.len + ordinal),
         };
-        const backing_ty = try self.store.intern(.{ .record = .{
+        return try self.store.intern(.{ .record = .{
             .fields = fields,
             .ext = ext,
             .declared = .{ .padding = padding, .slots = slots },
         } });
-        for (fields) |field| {
-            const default = self.store.field_defaults.get(.{ .record = row, .name = field.name }) orelse continue;
-            try self.store.field_defaults.put(allocator, .{ .record = backing_ty, .name = field.name }, default);
-        }
-        return backing_ty;
     }
 };
 
@@ -1735,6 +1749,47 @@ test "interning shares structurally equal nodes" {
     const v = try store.variable(0);
     const list_v = try store.intern(.{ .list = v });
     try std.testing.expect(!store.isClosed(list_v));
+}
+
+test "record interning preserves immutable field default identities" {
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    var modules: Modules = .{ .allocator = std.testing.allocator };
+    defer modules.deinit();
+    var view: checked.ImportedModuleView = undefined;
+    view.key = .{ .bytes = @splat(1) };
+    view.module_identity.stable_hash = view.key.bytes;
+    const first_module = try modules.add(view);
+    view.key.bytes = @splat(2);
+    view.module_identity.stable_hash = view.key.bytes;
+    const second_module = try modules.add(view);
+    const count = try store.internName("count");
+    const u8_ty = try store.primitive(.u8);
+    var fields = [_]Field{.{ .name = count, .ty = u8_ty, .kind = .inline_slot }};
+    const required = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    const first_default: FieldDefault = .{ .module = first_module, .expr_node = 10 };
+    fields[0].default = first_default;
+    const first = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    try std.testing.expectEqual(first, try store.intern(.{ .record = .{ .fields = &fields, .ext = null } }));
+    fields[0].default.?.expr_node = 20;
+    const other_expr = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    fields[0].default = .{ .module = second_module, .expr_node = 10 };
+    const other_module = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
+    try std.testing.expect(required != first);
+    try std.testing.expect(first != other_expr);
+    try std.testing.expect(first != other_module);
+    try std.testing.expect(other_expr != other_module);
+    try std.testing.expectEqual(@as(?FieldDefault, null), store.fieldSpan(store.get(required).record.fields)[0].default);
+    try std.testing.expectEqual(first_default, store.fieldSpan(store.get(first).record.fields)[0].default.?);
+    fields[0].default = null;
+    try std.testing.expectEqual(required, try store.intern(.{ .record = .{ .fields = &fields, .ext = null } }));
+    fields[0].default = first_default;
+    const padded = try store.intern(.{ .record = .{
+        .fields = &fields,
+        .ext = null,
+        .declared = .{ .padding = &.{u8_ty}, .slots = &.{ 0, 1 } },
+    } });
+    try std.testing.expectEqual(first, try store.recordRow(padded));
 }
 
 test "a padded backing is a type of its own, whose unnamed fields count toward it" {

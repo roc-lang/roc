@@ -21,21 +21,21 @@ Twenty := { count : U8 ?? 20 }.{
 # An absent `?:` field parses to the missing state: `.?` reads it as
 # Err(MissingField), so the `??` default fires.
 expect {
-	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok({ name: "a" })
 }
 
 # A present `?:` field parses at its payload type into the present state.
 expect {
-	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\",\"count\":7}")
 	result == Ok({ name: "a", count: 7 })
 }
 
 # The parsed present slot reads back through `.?`.
 expect {
-	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ name : Str, count ?: U8 }, [InvalidJson(Str)])
 	result = Json.parse("{\"count\":7,\"name\":\"a\"}")
 	count = match result {
 		Ok(rec) => rec.?count ?? 99
@@ -63,7 +63,7 @@ expect {
 # Round trip: encode of a parsed value reproduces the original text, and
 # the optional field survives nesting.
 expect {
-	parsed : Try({ inner : { flag ?: U8 }, name : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	parsed : Try({ inner : { flag ?: U8 }, name : Str }, [InvalidJson(Str)])
 	parsed = Json.parse("{\"inner\":{},\"name\":\"n\"}")
 	match parsed {
 		Ok(rec) => Json.to_str(rec) == "{\"inner\":{},\"name\":\"n\"}"
@@ -74,7 +74,7 @@ expect {
 # An absent `??` key materializes the archived default—the same
 # construction-site omission semantics `{}` literals get.
 expect {
-	result : Try(Counted, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Counted, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok(Counted.{ name: "a" })
 }
@@ -82,7 +82,7 @@ expect {
 # A present `??` key parses at the field's inline type and wins over the
 # default.
 expect {
-	result : Try(Counted, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Counted, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\",\"count\":7}")
 	result == Ok(Counted.{ name: "a", count: 7 })
 }
@@ -95,8 +95,8 @@ expect {
 	result == Err(Json.invalid_json({}))
 }
 
-# A record whose fields can all self-fill parses with a closed error row:
-# no MissingRequiredField is demanded.
+# A record whose fields can all self-fill succeeds on absent fields:
+# no missing-field error is produced.
 expect {
 	result : Try(SelfFill, [InvalidJson(Str)])
 	result = Json.parse("{}")
@@ -111,10 +111,9 @@ expect {
 	Json.to_str(value) == "{\"count\":10,\"name\":\"a\"}"
 }
 
-# An all-self-filling record INSIDE A TAG-UNION PAYLOAD parses with a
-# closed error row: the lowering mirrors of the checker's self-fill
-# analysis must not demand MissingRequiredField (or route the payload to
-# the invalid-value arm) when every payload field self-fills.
+# An all-self-filling record INSIDE A TAG-UNION PAYLOAD also succeeds:
+# the lowering mirrors of the checker's self-fill analysis must not report
+# a missing-field error or route the payload to the invalid-value arm.
 expect {
 	result : Try([Wrap(SelfFill), Nothing], [InvalidJson(Str)])
 	result = Json.parse("{\"Wrap\":{}}")
@@ -130,12 +129,12 @@ expect {
 
 # A required row with the same SHAPE as a `??` row above is a DIFFERENT
 # monotype (`Type.FieldDefault` rides on the row): the required twin's
-# parser must still error MissingRequiredField, never fill the other
+# parser must still report the missing field, never fill the other
 # row's default.
 expect {
-	result : Try({ count : U8 }, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try({ count : U8 }, [InvalidJson(Str)])
 	result = Json.parse("{}")
-	result == Err(MissingRequiredField("count"))
+	result == Err(InvalidJson("Missing field: count"))
 }
 
 # Same shape, different default: distinct monotypes, and each derived
@@ -158,7 +157,7 @@ computed_base : U8
 computed_base = 10
 
 expect {
-	result : Try(Computed, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Computed, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok(Computed.{ name: "a", count: 13 })
 }
@@ -172,14 +171,14 @@ triple_plus_one : U8 -> U8
 triple_plus_one = |n| n * 3 + 1
 
 expect {
-	result : Try(Called, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Called, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok(Called.{ name: "a", count: 13 })
 }
 
 # A present key still wins over a non-literal default.
 expect {
-	result : Try(Called, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(Called, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\",\"count\":7}")
 	result == Ok(Called.{ name: "a", count: 7 })
 }
@@ -195,7 +194,7 @@ UntypedCalled := { name : Str, count : U8 ?? untyped_triple(4) }.{
 untyped_triple = |n| n * 3 + 1
 
 expect {
-	result : Try(UntypedCalled, [InvalidJson(Str), MissingRequiredField(Str)])
+	result : Try(UntypedCalled, [InvalidJson(Str)])
 	result = Json.parse("{\"name\":\"a\"}")
 	result == Ok(UntypedCalled.{ name: "a", count: 13 })
 }

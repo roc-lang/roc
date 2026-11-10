@@ -138,7 +138,7 @@ For example, this parses a JSON configuration file at compile time:
 ```roc
 import "config.json" as config_text : Str
 
-config : Try({ port : U16, host : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+config : Try({ port : U16, host : Str }, [InvalidJson(Str)])
 config = Json.parse(config_text)
 ```
 

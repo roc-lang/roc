@@ -1,9 +1,6 @@
 main! : List(Str) => Try({}, [Exit(I8)])
 main! = |_| {
-	match read_and_handle_message({}) {
-		Ok({}) => Ok({}),
-		Err(_) => Err(Exit(1))
-	}
+	read_and_handle_message({}).map_err(|_| Exit(1))
 }
 
 Message : [
@@ -11,13 +8,13 @@ Message : [
 	PING,
 ]
 
-decode_message : {} -> Try(Message, Encoding.Json.ParseErr)
+decode_message : {} -> Try(Message, [InvalidJson(Str)])
 decode_message = |_| {
 	s = Json.parse("")?
 	Ok(INFO(s))
 }
 
-read_and_handle_message : {} -> Try({}, [StdoutErr(Str), InvalidJson(Str), MissingRequiredField(Str)])
+read_and_handle_message : {} -> Try({}, [StdoutErr(Str), InvalidJson(Str)])
 read_and_handle_message = |_| {
 	message = decode_message({})?
 	match message {

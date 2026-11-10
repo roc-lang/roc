@@ -1,6 +1,6 @@
 JsonTagUnionProtocol :: [].{}
 
-Parsed(a) : Try(a, [InvalidJson(Str), MissingRequiredField(Str)])
+Parsed(a) : Try(a, [InvalidJson(Str)])
 
 ## One tag union covers every payload arity, so these tests share a single
 ## derived parser instead of deriving one shape apiece.

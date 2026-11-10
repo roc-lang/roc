@@ -56,13 +56,13 @@ EndOfFile,
 		(e-num (value "42")))
 	(s-let
 		(p-assign (ident "y"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 236)
+		(e-dispatch-call (method "plus") (constraint-fn-var 239)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "x"))))
 			(args
 				(e-num (value "1")))))
-	(e-dispatch-call (method "times") (constraint-fn-var 245)
+	(e-dispatch-call (method "times") (constraint-fn-var 248)
 		(receiver
 			(e-lookup-local
 				(p-assign (ident "y"))))

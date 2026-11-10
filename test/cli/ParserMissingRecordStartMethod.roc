@@ -1,11 +1,14 @@
 ParserMissingRecordStartMethod :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
 	parse_str : Format, State -> Try({ value : Str, rest : State }, [FormatError])
-	parse_str = |_| Err(FormatError)
+	parse_str = |_, _| Err(FormatError)
 
 	parse_record_field : Format,
 	Encoding.FieldName.FieldNames(_shape),
@@ -30,9 +33,9 @@ Format := [Default].{
 
 State := [Present(Str)]
 
-parse : Str -> Try(a, [FormatError, ..errs])
+parse : Str -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -41,5 +44,5 @@ parse = |input| {
 	Ok(parsed.value)
 }
 
-main : Try({ foo : Str }, [FormatError, MissingRequiredField(Str)])
+main : Try({ foo : Str }, [FormatError])
 main = parse("foo: bar")

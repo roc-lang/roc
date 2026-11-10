@@ -66,7 +66,7 @@ expect Json.to_str({ hidden: Hidden.(Secret.("hunter2")) }) == "{\"hidden\":\"**
 
 account_round_trips : Str -> Bool
 account_round_trips = |json| {
-	parsed : Try({ account : Account }, [InvalidJson(Str), MissingRequiredField(Str)])
+	parsed : Try({ account : Account }, [InvalidJson(Str)])
 	parsed = Json.parse(json)
 
 	match parsed {
@@ -79,7 +79,7 @@ expect account_round_trips("{\"account\":\"ada\"}")
 
 label_uses_inner_parser : Str -> Bool
 label_uses_inner_parser = |json| {
-	parsed : Try({ label : Label }, [InvalidJson(Str), MissingRequiredField(Str)])
+	parsed : Try({ label : Label }, [InvalidJson(Str)])
 	parsed = Json.parse(json)
 
 	match parsed {

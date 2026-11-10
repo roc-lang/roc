@@ -7,6 +7,7 @@ F := [F].{
 	parse_record_field = |_, _, _| crash ""
 	parse_record_after_field = |_, _| crash ""
 	parse_str = |_, _| crash ""
+	missing_field = |_, _| crash ""
 	rename_field = |_, name| name
 	parse_tag_union = |_, _, _| crash ""
 }

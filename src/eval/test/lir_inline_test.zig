@@ -426,7 +426,7 @@ fn structuralJsonSource(
     try source.appendSlice(allocator, "}\n\n");
     switch (operation) {
         .parse => try source.appendSlice(allocator,
-            \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+            \\main : Str -> Try(Shape, [InvalidJson(Str)])
             \\main = |json| Json.parse(json)
             \\
         ),
@@ -465,7 +465,7 @@ fn nestedOptionalStructuralJsonParserSource(
         \\
         \\Shape : { outer : Try({ mid : Try({ inner : Try(Fields, [Missing]) }, [Missing]) }, [Missing]) }
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
         \\
     );
@@ -574,7 +574,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     for (0..parse_sites) |site| {
         const parse_fn = try std.fmt.allocPrint(
             allocator,
-            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
+            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
             .{ site, site },
         );
         defer allocator.free(parse_fn);
@@ -2122,12 +2122,13 @@ test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
 test "issue 11910 boxy JSON record parser lowers each field's value parser once" {
     // The `Field`, `TryField`, and `TryFieldCaseless` events all select a
     // field and then parse its value; each field's value parser is one join
-    // they jump to. A field therefore adds two calls: the parser's
-    // constructor renaming its name, and the one call parsing its value.
+    // they jump to. A field adds three calls: construction-time renaming,
+    // the one value parser, and the format's missing_field on the cold
+    // absent-field path. No event duplicates the value parser.
     const allocator = std.testing.allocator;
     const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
     const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
-    try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
+    try std.testing.expectEqual(@as(usize, 3 * 4), eight - four);
 }
 
 test "issue 11910 boxy JSON parses of one shape share its generated parser" {
@@ -2154,7 +2155,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
         \\    f1 : Str,
         \\}
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
     ,
         &.{},
@@ -2199,18 +2200,18 @@ test "issue 10979 shared JSON record continuations preserve field semantics" {
         \\
         \\main : Bool
         \\main = {
-        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate : Try(Shape, [InvalidJson(Str)])
         \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
-        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing : Try(Shape, [InvalidJson(Str)])
         \\    missing = Json.parse("{ \"f0\": \"only\" }")
-        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid : Try(Shape, [InvalidJson(Str)])
         \\    invalid = Json.parse("{ \"f0\": \"started\", ")
         \\    duplicate_ok = match duplicate {
         \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
         \\        Err(_) => False
         \\    }
         \\    missing_ok = match missing {
-        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        Err(InvalidJson(message)) => message == "Missing field: f1"
         \\        _ => False
         \\    }
         \\    invalid_ok = match invalid {
@@ -2294,9 +2295,9 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         \\
         \\    ok_encoded = Json.to_str(ok_original)
         \\    missing_encoded = Json.to_str(missing_original)
-        \\    ok_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    ok_parsed : Try(Shape, [InvalidJson(Str)])
         \\    ok_parsed = Json.parse(ok_encoded)
-        \\    missing_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing_parsed : Try(Shape, [InvalidJson(Str)])
         \\    missing_parsed = Json.parse(missing_encoded)
         \\
         \\    ok_round_trips =
@@ -9937,7 +9938,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\    lhs = { speed: Speed.Mph($sum), label: "total" }
         \\    rhs = { speed: Speed.Mph(6), label: "total" }
         \\    other = { speed: Speed.Mph(7), label: "total" }
-        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str)])
         \\    parsed = Json.parse("{ \"names\": [\"a\", \"b\"] }")
         \\    parsed_count = match parsed {
         \\        Ok(rec) => rec.names.len()
@@ -13373,6 +13374,9 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
 /// to emit.
 const stored_parser_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13413,51 +13417,28 @@ const stored_parser_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
-    // This body's generation sits behind the graph freeze, in Phase B. No
-    // snapshot anywhere carries lowered output, so these are the numbers that
-    // stand in for "the sealed body is the body the eager restore used to
-    // emit". Measured on the compiler that still restored eagerly:
-    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
-    // and re-measured after the 2026-09-15 rebase onto upstream's codec
-    // contract machinery, which the eager restore no longer exists to be
-    // compared against, so the reference is this compiler itself:
-    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
-    // and again once a missing required field always constructs
-    // `MissingRequiredField` directly, with no remaining-state binding for an
-    // `invalid_value` call:
-    //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
-    // and once a value whose closed or annotation-bounded row flows into an
-    // annotated result relates through a row coercion (design.md "Row
-    // Subsumption"), which lowers as a `row_widen` expression per such flow,
-    // except for a direct call, which is requested at the coercion's row and
-    // produces it with no `row_widen` (design.md "Closed Result Rows At
-    // Template Boundaries"). Every count is exact, including expressions and
-    // locals. The reserve-
-    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
-    // eager restore already performed (it too filled a reservation with a
-    // lowered expression), so deferring orphans no expression the eager path
-    // kept and the predicted delta is zero. A window here would hide exactly
-    // the drift this gate exists to catch. Specialization misses may only
-    // fall: the eager restore keyed the callee spec as an open request, and
-    // Phase-B emission removes that cause.
+    // The format-owned missing_field callback contributes one method body;
+    // equal format errors propagate without generated row-injection branches.
+    // Exact counts pin the complete sealed body, including its reservations,
+    // so later changes cannot silently drop or duplicate generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 550), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 120), stats.locals);
-    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 493), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 110), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -13469,6 +13450,9 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
 /// the case the two-phase restore exists for.
 const stored_parser_optional_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13509,13 +13493,13 @@ const stored_parser_optional_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str, bar ?: Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
@@ -13572,25 +13556,16 @@ const stored_encoder_optional_gate_source =
 ;
 
 test "stored parser restore lowers a shape with an optional field" {
-    // Not an equivalence gate: this program panicked before W2b
-    // ("resolved Monotype view requested for an unresolved instantiation
-    // node"), so there is no pre-W2b number to compare against. These are
-    // W2b's own, measured 2026-09-15, and they exist so a later change that
-    // silently drops or duplicates part of the generated optional-field
-    // parser is caught. That it lowers at all is the primary assertion.
-    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
-    // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
-    // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138), and again once a value
-    // whose annotation-bounded row flows into an annotated result lowers as a
-    // `row_widen` expression (exprs 727 -> 730).
+    // Optional fields add presence handling but no second missing_field
+    // specialization. This shares the required-record gate's method counts
+    // while pinning the optional field's complete generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 680), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 138), stats.locals);
-    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 623), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 128), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 

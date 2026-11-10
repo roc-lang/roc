@@ -1,6 +1,9 @@
 ParserTopLevelStoredParserConstructor :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -41,16 +44,16 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-make_parser : () -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs]))
+make_parser : () -> (State -> Try({ value : a, rest : State }, [FormatError]))
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 make_parser = || {
 	Shape : a
 	Shape.parser_for(Format.Default)
 }
 
-parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
 parse_stored = make_parser()
 
 expect {
