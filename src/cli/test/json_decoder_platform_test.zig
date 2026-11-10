@@ -536,8 +536,9 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
     switch (result.term) {
         .exited => |code| {
             if (code != 0) {
-                std.debug.print("json parser exited with code {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+                std.debug.print("json parser exited with code {}\nINPUT:\n{s}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                     code,
+                    input,
                     result.stdout,
                     result.stderr,
                 });
@@ -545,8 +546,9 @@ fn runJsonDecoderAndCheckOutput(allocator: std.mem.Allocator, exe_path: []const 
             }
         },
         .signal, .stopped, .unknown => {
-            std.debug.print("json parser terminated unexpectedly: {}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
+            std.debug.print("json parser terminated unexpectedly: {}\nINPUT:\n{s}\nSTDOUT:\n{s}\nSTDERR:\n{s}\n", .{
                 result.term,
+                input,
                 result.stdout,
                 result.stderr,
             });

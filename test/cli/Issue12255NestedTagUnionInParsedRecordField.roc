@@ -5,6 +5,9 @@ Issue12255NestedTagUnionInParsedRecordField :: [].{}
 ## payload, where the inner union's payload needs a format call of its own,
 ## check and parse like any other field.
 Counted := [Default].{
+	missing_field : Counted, Str -> [Bad]
+	missing_field = |_, _| Bad
+
 	rename_field : Counted, Str -> Str
 	rename_field = |_, name| name
 
@@ -49,7 +52,7 @@ Counted := [Default].{
 		Ok(parts.rest)
 	}
 
-	parse_tag_union : Counted, Encoding.ParseTagUnionSpec(a), State -> Try({ value : a, rest : State }, [Bad])
+	parse_tag_union : Counted, Encoding.ParseTagUnionSpec(a, Counted, State, [Bad]), State -> Try({ value : a, rest : State }, [Bad])
 	parse_tag_union = |encoding, spec, state| {
 		parts = take_token(state)?
 
@@ -103,9 +106,9 @@ take_count = |state, marker| {
 	}
 }
 
-parse : Str -> Try(a, [Bad, ..errs])
+parse : Str -> Try(a, [Bad])
 	where [
-		a.parser_for : Counted -> (State -> Try({ value : a, rest : State }, [Bad, ..errs])),
+		a.parser_for : Counted -> (State -> Try({ value : a, rest : State }, [Bad])),
 	]
 parse = |raw| {
 	Shape : a
@@ -116,7 +119,7 @@ parse = |raw| {
 
 Wire : { steps : [Outer([Inner(List(Str))])] }
 
-parse_wire : Str -> Try(Wire, [Bad, MissingRequiredField(Str)])
+parse_wire : Str -> Try(Wire, [Bad])
 parse_wire = |text| {
 	wire : Wire
 	wire = parse(text)?
@@ -127,7 +130,7 @@ expect parse_wire("R 1 steps Outer Inner L 2 a b") == Ok({ steps: Outer(Inner(["
 
 RecordPayloadWire : { steps : [Outer([Inner({ a : Str })])] }
 
-parse_record_payload_wire : Str -> Try(RecordPayloadWire, [Bad, MissingRequiredField(Str)])
+parse_record_payload_wire : Str -> Try(RecordPayloadWire, [Bad])
 parse_record_payload_wire = |text| {
 	wire : RecordPayloadWire
 	wire = parse(text)?
@@ -138,7 +141,7 @@ expect parse_record_payload_wire("R 1 steps Outer Inner R 1 a x") == Ok({ steps:
 
 TryWire : { steps : Try([Inner(List(Str))], [Missing]) }
 
-parse_try_wire : Str -> Try(TryWire, [Bad, MissingRequiredField(Str)])
+parse_try_wire : Str -> Try(TryWire, [Bad])
 parse_try_wire = |text| {
 	wire : TryWire
 	wire = parse(text)?
