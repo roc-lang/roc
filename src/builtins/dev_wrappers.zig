@@ -1464,6 +1464,16 @@ pub fn roc_builtins_erased_callable_free(payload_ptr: ?[*]u8) callconv(.c) void 
     erased_callable.free(payload_ptr, roc_ops);
 }
 
+/// Consume an erased step into one opaque iterator/stream allocation.
+pub fn roc_builtins_boxed_sequence_pack(record: [*]const u8, record_size: usize, step_offset: usize) callconv(.c) [*]u8 {
+    return @import("boxed_sequence.zig").pack(record, record_size, step_offset, in_process_host.ops());
+}
+
+/// Read the private record view of an opaque iterator/stream allocation.
+pub fn roc_builtins_boxed_sequence_unpack(out: [*]u8, step: [*]u8, record_size: usize) callconv(.c) void {
+    @import("boxed_sequence.zig").unpack(out, step, record_size);
+}
+
 /// Enter the loaded dev-shim code image that contains the generated callsite.
 pub fn roc_builtins_hot_reload_enter() callconv(.c) ?*anyopaque {
     if (comptime @hasDecl(@import("root"), "roc_hot_reload_enter")) {
@@ -1505,6 +1515,17 @@ pub fn roc_builtins_hot_reload_erased_callable_drop(capture_ptr: ?[*]u8, _: *Roc
         root.roc_hot_reload_release_retained(header.code_ref);
     } else {
         roc_builtins_hot_reload_leave(header.code_ref);
+    }
+}
+
+/// Retain the state and code image of an independently copied shim capture.
+pub fn roc_builtins_hot_reload_erased_callable_copy(capture_ptr: ?[*]u8, amount: isize) callconv(.c) void {
+    const header = erased_callable.hotReloadCaptureHeader(capture_ptr) orelse return;
+    if (header.original_on_copy) |retain| {
+        retain(erased_callable.hotReloadAdjustedCapturePtr(capture_ptr), amount);
+    }
+    if (comptime @hasDecl(@import("root"), "roc_hot_reload_retain_existing")) {
+        for (0..@intCast(amount)) |_| @import("root").roc_hot_reload_retain_existing(header.code_ref);
     }
 }
 

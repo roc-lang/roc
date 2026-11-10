@@ -1,4 +1,4 @@
-Session(a) :: [Reload(a -> Str)].{
+Session(a) :: [Reload(Box((a -> Str)))].{
 	reload : (a -> Str) -> Session(a)
-	reload = |render| Reload(render)
+	reload = |render| Reload(Box.box(render))
 }

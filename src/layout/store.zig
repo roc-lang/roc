@@ -777,6 +777,26 @@ pub const Store = struct {
         return self.internStructShape(metrics, fields);
     }
 
+    /// Describe a capture's owned fields after a non-owning runtime prefix.
+    /// Static callable callbacks must skip the same prefix as their entrypoint.
+    pub fn putPrefixedCaptureLayout(self: *Self, capture: Idx, prefix_size: u32) std.mem.Allocator.Error!Idx {
+        if (prefix_size == 0) return capture;
+        var fields = std.ArrayList(StructField).empty;
+        defer fields.deinit(self.allocator);
+        var remaining = prefix_size;
+        while (remaining != 0) {
+            const width: u32 = if (remaining >= 16) 16 else 1;
+            try fields.append(self.allocator, .{
+                .index = @intCast(fields.items.len),
+                .layout = if (width == 16) .u128 else .u8,
+                .is_padding = true,
+            });
+            remaining -= width;
+        }
+        try fields.append(self.allocator, .{ .index = @intCast(fields.items.len), .layout = capture });
+        return self.putNominalStructFields(fields.items);
+    }
+
     /// Insert a tuple layout from concrete element layouts. The shared layout
     /// commit sorts by descending sort key, then original tuple index.
     pub fn putTuple(self: *Self, element_layouts: []const Layout) std.mem.Allocator.Error!Idx {

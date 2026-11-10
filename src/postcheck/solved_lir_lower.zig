@@ -178,6 +178,8 @@ pub const Options = struct {
     site_code_keys: bool = false,
     /// Explicit dev ownership policy, independent of cache availability.
     owned_proc_signatures: bool = false,
+    /// Non-owning runtime bytes before the entrypoint's typed capture.
+    erased_capture_prefix: u32 = 0,
     inline_plan: SolvedInline.Plan = .{},
     /// Reuse checking workers for prepared procedure-body lowering.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
@@ -865,6 +867,7 @@ const Lowerer = struct {
     host_boundary_digests: bool,
     site_code_keys: bool,
     owned_proc_signatures: bool,
+    erased_capture_prefix: u32,
     /// This consumer's explicit share of the producer's roots and requests.
     root_manifest: ?RootManifest,
     /// Drain positions, kept across calls so a second drain resumes.
@@ -895,6 +898,8 @@ const Lowerer = struct {
     layout_requests: std.ArrayList(LayoutRequest),
     runtime_schema_requests: std.ArrayList(RuntimeSchemaRequest),
     type_layouts: collections.DenseMap(Type.TypeId, layout.Idx),
+    /// Frozen capture views are committed before workers borrow the layout store.
+    frozen_capture_layouts: collections.DenseMap(layout.Idx, layout.Idx),
     /// Recursive-graph digest the layout commit settled for each type whose
     /// node was local to its graph. A layout graph reuses a cached child only
     /// through this digest, so the child stays visible to recursion analysis.
@@ -1252,6 +1257,7 @@ const Lowerer = struct {
             .host_boundary_digests = options.host_boundary_digests,
             .site_code_keys = options.site_code_keys,
             .owned_proc_signatures = options.owned_proc_signatures,
+            .erased_capture_prefix = options.erased_capture_prefix,
             .root_manifest = options.root_manifest,
             .fn_queue_index = 0,
             .initializer_queue_index = 0,
@@ -1273,6 +1279,7 @@ const Lowerer = struct {
             .layout_requests = .empty,
             .runtime_schema_requests = .empty,
             .type_layouts = collections.DenseMap(Type.TypeId, layout.Idx).init(allocator),
+            .frozen_capture_layouts = collections.DenseMap(layout.Idx, layout.Idx).init(allocator),
             .type_layout_digests = collections.DenseMap(Type.TypeId, layout.GraphDigest).init(allocator),
             .named_layout_index = std.HashMap(NamedLayoutBucket, std.ArrayList(Type.TypeId), NamedLayoutBucketContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .representation_shapes = collections.DenseMap(Type.TypeId, RepresentationShape).init(allocator),
@@ -1426,6 +1433,7 @@ const Lowerer = struct {
         self.representation_shapes.deinit();
         self.expr_context_tys.deinit();
         self.type_layouts.deinit();
+        self.frozen_capture_layouts.deinit();
         self.type_layout_digests.deinit();
         self.runtime_schema_requests.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
@@ -2369,7 +2377,10 @@ const Lowerer = struct {
                         const args = l.types.span(entry.args);
                         for (0..args.len) |index| try self.add(.{ .ty = GuardedList.at(args, index) });
                         try self.add(.{ .ty = entry.ret });
-                        if (entry.spec.capture_ty) |ty| try self.add(.{ .ty = ty });
+                        if (entry.spec.capture_ty) |ty| {
+                            try self.add(.{ .ty = ty });
+                            if (entry.spec.abi == .erased) _ = try l.frozenCaptureLayout(try l.layoutOfType(ty));
+                        }
                         if (entry.capture_arg_ty) |ty| try self.add(.{ .ty = ty });
                         switch (entry.spec.return_reuse) {
                             .none => {},
@@ -5075,7 +5086,13 @@ const Lowerer = struct {
             .zst => .zst,
             .hole => Common.invariant("a demand hole reached a constant plan"),
             .list => |elem| if (input) |elem_plan| .{ .list = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
-            .box => |elem| if (input) |elem_plan| .{ .box = elem_plan.get(.plan) } else return .{ .call = .{ .plan = .{ .ty = elem } } },
+            .box => |elem| if (input) |elem_plan| blk: {
+                if (self.sequenceType(elem)) |sequence| break :blk .{ .boxed_sequence = .{
+                    .payload = elem_plan.get(.plan),
+                    .view_layout = try self.layoutOfType(self.runtimeBackingType(sequence)),
+                } };
+                break :blk .{ .box = elem_plan.get(.plan) };
+            } else return .{ .call = .{ .plan = .{ .ty = elem } } },
             .tuple, .record => blk: {
                 if (input) |component| {
                     task.plans[task.index] = component.get(.plan);
@@ -5448,7 +5465,7 @@ const Lowerer = struct {
             const entry_proc = if (held) try self.markReachableFn(member.target) else try self.procPlaceholder(member.target);
             const capture_layout = if (member.capture_ty) |capture_ty| try self.layoutOfType(capture_ty) else .zst;
             task.entries[task.index] = .{
-                .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .on_drop = self.erasedCallableOnDrop(try self.frozenCaptureLayout(capture_layout)),
                 .entry = entry_proc,
                 .capture_layout = capture_layout,
                 .template = template,
@@ -8039,6 +8056,8 @@ const Lowerer = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = self.erasedCallableOnDrop(capture_layout),
+                .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
+                .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
                 .reuse = reuse,
             }),
             .next = next,
@@ -8666,7 +8685,14 @@ const Lowerer = struct {
         if (op == .box_box or op == .box_unbox) {
             if (args.len != 1) Common.invariant("Box low-level operation reached LIR lowering with the wrong arity");
             const arg = GuardedList.at(args, 0);
-            const source = try self.addTemp(try self.lowerExprTy(arg));
+            const source_ty = try self.lowerExprTy(arg);
+            const source = try self.addTemp(source_ty);
+            const source_content = self.types.get(self.unaliasedType(source_ty));
+            const sequence_ty = if (op == .box_box) source_ty else source_content.box;
+            if (self.sequenceType(sequence_ty)) |sequence| {
+                const assign = try self.assignBoxedSequence(where, target, source, sequence, op == .box_box, next);
+                return .{ .tail = exprTask(where, source, arg, source_ty, assign) };
+            }
             const source_layout = self.result.store.getLocal(source).layout_idx;
             const saved_return_target = self.current_return_target;
             if (saved_return_target == target and op == .box_box) {
@@ -10029,6 +10055,19 @@ const Lowerer = struct {
             .none
         else
             .{ .rc_helper = helper_key };
+    }
+
+    fn frozenCaptureLayout(self: *Lowerer, capture_layout: ?layout.Idx) Allocator.Error!?layout.Idx {
+        const original = switch (self.erasedCallableOnDrop(capture_layout)) {
+            .none => return null,
+            .rc_helper => |helper| helper.layout_idx,
+        };
+        if (self.erased_capture_prefix == 0) return original;
+        if (self.frozen_capture_layouts.get(original)) |frozen| return frozen;
+        if (self.worker_callback) self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared frozen capture layout");
+        const frozen = try self.result.layouts.putPrefixedCaptureLayout(original, self.erased_capture_prefix);
+        try self.frozen_capture_layouts.put(original, frozen);
+        return frozen;
     }
 
     fn sameErasedCaptureShapeForCurrentProc(self: *Lowerer, new_layout: ?layout.Idx) Common.LowerError!bool {
@@ -12615,6 +12654,65 @@ const Lowerer = struct {
         return (try self.runBoundary(where, .{ .box = .{ .target = target, .source = source, .source_layout = source_layout, .next = next } })).?;
     }
 
+    fn unaliasedType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
+        var current = ty;
+        for (0..self.types.typeCount()) |_| {
+            const content = self.types.get(current);
+            if (content != .named or content.named.kind != .alias) return current;
+            current = (content.named.backing orelse Common.invariant("a transparent alias has no backing")).ty;
+        }
+        Common.invariant("a transparent alias chain is cyclic");
+    }
+
+    fn sequenceType(self: *Lowerer, ty: Type.TypeId) ?Type.TypeId {
+        const current = self.unaliasedType(ty);
+        const content = self.types.get(current);
+        if (content != .named) return null;
+        const owner = content.named.builtin_owner orelse return null;
+        return if (owner == .iter or owner == .stream) current else null;
+    }
+
+    fn assignBoxedSequence(self: *Lowerer, where: LowerSite, target: LIR.LocalId, source: LIR.LocalId, sequence: Type.TypeId, packing: bool, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
+        // These are the compiler-owned builtin sequence fields, not a search
+        // for a user type whose structure happens to resemble an iterator.
+        const fields = self.recordFields(sequence);
+        if (fields.len != 2) Common.invariant("a builtin sequence has two fields");
+        var length_index: ?u32 = null;
+        var step_index: ?u32 = null;
+        for (0..fields.len) |index| {
+            const field = GuardedList.at(fields, index);
+            const name = self.solved.lifted.names.recordFieldLabelText(field.name);
+            if (std.mem.eql(u8, name, "len_if_known")) length_index = @intCast(index);
+            if (std.mem.eql(u8, name, "step") or std.mem.eql(u8, name, "step!")) step_index = @intCast(index);
+        }
+        const li = length_index orelse Common.invariant("a builtin sequence has a length hint");
+        const si = step_index orelse Common.invariant("a builtin sequence has a step");
+        if (li != 0 or si != 1) Common.invariant("builtin sequence fields must retain their logical field order");
+        const backing_ty = self.runtimeBackingType(sequence);
+        const backing = try self.addTemp(backing_ty);
+        const backing_layout = self.result.store.getLocal(backing).layout_idx;
+        if (packing) {
+            const info = self.result.layouts.getLayout(backing_layout).getStruct();
+            const step_offset = self.result.layouts.getStructFieldOffsetByOriginalIndex(info.idx, si);
+            const offset = try self.addLocalForLayout(.u32);
+            const pack = try self.result.store.addCFStmt(.{ .assign_low_level = .{
+                .target = target,
+                .op = .boxed_sequence_pack,
+                .rc_effect = try self.result.store.addRcEffect(LIR.LowLevel.boxed_sequence_pack.rcEffect()),
+                .args = try self.result.store.addLocalSpan(&.{ backing, offset }),
+                .next = next,
+            } }, where.source());
+            const set_offset = try self.result.store.addCFStmt(.{ .assign_literal = .{
+                .target = offset,
+                .value = .{ .i64_literal = .{ .value = step_offset, .layout_idx = .u32 } },
+                .next = pack,
+            } }, where.source());
+            return self.assignNominalBoundary(where, backing, source, self.result.store.getLocal(source).layout_idx, set_offset);
+        }
+        const wrap = try self.assignNominalBoundary(where, target, backing, backing_layout, next);
+        return self.assignUnaryLowLevel(where, backing, .boxed_sequence_unpack, source, wrap);
+    }
+
     fn assignRefRead(self: *Lowerer, where: LowerSite, target: LIR.LocalId, storage_layout: layout.Idx, op: LIR.RefOp, next: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
         return (try self.runBoundary(where, .{ .ref_read = .{ .target = target, .storage_layout = storage_layout, .op = op, .next = next } })).?;
     }
@@ -13500,6 +13598,8 @@ const Lowerer = struct {
                         .capture = capture,
                         .capture_layout = capture_layout,
                         .on_drop = self.erasedCallableOnDrop(capture_layout),
+                        .on_copy = self.erasedCallableOnDrop(capture_layout).copyCallback(),
+                        .frozen_capture_layout = try self.frozenCaptureLayout(capture_layout),
                         .reuse = try self.erasedCallableReuseForPack(target, capture_layout),
                     }),
                     .next = next,
@@ -13998,6 +14098,7 @@ const Lowerer = struct {
             if (content != .named) return false;
             const backing = content.named.backing orelse return false;
             if (content.named.kind == .@"opaque" and
+                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
                 backing.authority != .generated_private and
                 self.solved.types.rootContent(backing.ty) == .record and
                 try self.solvedTypeContainsCallable(backing.ty))
@@ -14029,6 +14130,7 @@ const Lowerer = struct {
             if (content != .named) return false;
             const backing = content.named.backing orelse return false;
             if (content.named.kind == .@"opaque" and
+                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
                 backing.authority != .generated_private and
                 self.types.get(backing.ty) == .record and
                 try self.typeContainsCallable(backing.ty))
@@ -14751,6 +14853,7 @@ const Lowerer = struct {
             switch (lowerer.types.get(ty)) {
                 .named => |named| if (named.backing) |backing| {
                     if (named.kind == .@"opaque" and
+                        named.builtin_owner != .iter and named.builtin_owner != .stream and
                         // Generated-private backing is the checked producer's
                         // explicit runtime representation, not source opacity.
                         backing.authority != .generated_private and
@@ -14901,7 +15004,7 @@ const Lowerer = struct {
                 },
                 .list => |elem| return .{ .child = elem },
                 .box => |elem| {
-                    if (!try self.isErasedCallableValueType(elem)) return .{ .child = elem };
+                    if (self.lowerer.sequenceType(elem) == null and !try self.isErasedCallableValueType(elem)) return .{ .child = elem };
                     self.graph.setNode(node, .erased_callable);
                     return .{ .done = .{ .input = layout.localGraphInput(node) } };
                 },

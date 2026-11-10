@@ -210,7 +210,7 @@ const CheckTypeCheckerPatternsStep = struct {
         .{ .file = "inspected.zig", .start = 223, .end = 229 },
         // object_image.zig binds a loaded object's `roc_desc_*` references to the
         // Boxy runtime's entry points, which are matched by symbol name.
-        .{ .file = "object_image.zig", .start = 33, .end = 38 },
+        .{ .file = "object_image.zig", .start = 34, .end = 39 },
         // inspected.zig trims the trailing newline off a rendered report. This is
         // presentation text on its way out, not a type-checker comparison.
         .{ .file = "inspected.zig", .start = 2474, .end = 2474 },

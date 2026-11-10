@@ -1719,7 +1719,7 @@ pub fn decode(b: *body.Builder, recipe: []const u8) Allocator.Error!Decoded {
                     override.* = .{ .nominal = original.nominal, .methods = undefined };
                     for (original.methods, &override.methods) |method, *out| out.* = if (method) |ref| words[ref] else null;
                 }
-                break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped } };
+                break :blk .{ .desc = .{ .ty = desc.ty, .scoped = scoped, .substitute_inputs = false } };
             },
             .callable => |callable| .{ .callable = .{ .entry = try callable.worker.resolve(b.program), .captures = try captureOperands(arena, words, callable.captures) } },
             .table => |table| .{ .table = .{ .worker = try table.worker.resolve(b.program), .inputs = try captureOperands(arena, words, table.inputs) } },
@@ -2010,6 +2010,7 @@ pub fn encodeNeeds(allocator: Allocator, program: *Program, needs: Tables.Needs)
             .input => |index| try encoder.word(index),
             .desc => |desc| {
                 try encoder.typeOf(desc.ty);
+                try encoder.bytes.append(allocator, @intFromBool(desc.substitute_inputs));
                 try encoder.word(@intCast(desc.scoped.len));
                 for (desc.scoped) |override| {
                     try encoder.typeOf(override.nominal);
@@ -2101,12 +2102,13 @@ pub fn decodeNeeds(program: *Program, bytes: []const u8) Allocator.Error!Tables.
             .input => .{ .input = decoder.word() },
             .desc => blk: {
                 const ty = decoder.typeOf();
+                const substitute_inputs = decoder.byte() != 0;
                 const scoped = try arena.alloc(Tables.ScopedOverride, decoder.word());
                 for (scoped) |*override| {
                     override.* = .{ .nominal = decoder.typeOf(), .methods = undefined };
                     for (&override.methods) |*method| method.* = if (decoder.byte() != 0) try decodeOperand(&decoder) else null;
                 }
-                break :blk .{ .desc = .{ .ty = ty, .scoped = scoped } };
+                break :blk .{ .desc = .{ .ty = ty, .scoped = scoped, .substitute_inputs = substitute_inputs } };
             },
             .args_desc => blk: {
                 const leading = decoder.word();
