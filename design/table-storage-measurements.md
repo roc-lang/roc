@@ -401,12 +401,17 @@ includes the optional-index sweep recorded under "Lifecycle audit". Host
 policy as above: transparent huge pages `madvise`, defrag `madvise`,
 overcommit 0, no address-space limit.
 
-Corpora, each compiling with zero errors on both binaries: roc-pdf at its
-upstream head, and a copy of roc-pg whose `RowFormat` was adapted to the
-format-owned parser error rule (operations return `RowFormat.Err`, and the
-format has a `missing_field` method). The roc-pg `examples/small` build is
-not used: its platform package reports type errors. The build rows are
-roc-pdf's `examples/business-report`.
+Every measured and profiled invocation exits 0 on both binaries; the runner
+stops at the first nonzero exit. A compile with warnings exits 2, so each
+corpus compiles with zero errors and zero warnings. The corpora are roc-pdf
+at its upstream head and a copy of roc-pg with three changes: `RowFormat`
+follows the format-owned parser error rule (operations return
+`RowFormat.Err`, and the format has a `missing_field` method); unreachable
+trailing expressions, redundant `return`s and the variables they leave unused
+are removed; and the md5 dependency is a local copy whose `Hasher` type is
+named `Md5Hasher`, because `Hasher` shadows a builtin type. The roc-pg
+`examples/small` build is not used: its platform package reports type
+errors. The build rows are roc-pdf's `examples/business-report`.
 
 Each row is one cold run, the median of three warm runs, and the median of
 three post-edit runs. A post-edit run starts from the warm cache after a new
@@ -416,42 +421,54 @@ instructions, measured tree against baseline:
 
 | Workload | Cold | Warm | Post-edit |
 | --- | ---: | ---: | ---: |
-| roc-pg test, specialized | -5.00% | -10.37% | -3.82% |
-| roc-pg test, Boxy | -2.50% | -8.80% | -1.10% |
+| roc-pg test, specialized | -4.61% | -12.36% | -3.94% |
+| roc-pg test, Boxy | -2.03% | -12.61% | -1.21% |
 | roc-pdf build, specialized | -6.43% | -7.15% | -6.80% |
 | roc-pdf build, Boxy | -2.73% | -7.12% | -3.41% |
 | roc-pdf test, specialized | -4.75% | -13.25% | -3.93% |
 | roc-pdf test, Boxy | -0.40% | -13.32% | -0.08% |
-| roc-pg check (diagnostic) | -4.72% | -5.02% | -3.88% |
+| roc-pg check (diagnostic) | -4.62% | -5.26% | -4.03% |
 | roc-pdf check (diagnostic) | -6.87% | -7.69% | -7.19% |
 
 The three post-edit runs of a row differ from each other by under 1% on the
-baseline and under 1.7% on the measured tree. Peak RSS is 0.9% to 8.4% lower
-in every row. Minor faults are lower in every row except cold roc-pg check
-(+3.0%); the Boxy rows drop 15% to 25% post-edit and the warm test rows 37% to
-40%. Warm test and warm Boxy build rows are runs of 0.07 to 0.33 CPU seconds.
+baseline and under 1.7% on the measured tree. Peak RSS is 0.6% to 8.4% lower
+in every row. Minor faults are lower in every row except the cold and
+post-edit specialized roc-pg test (+0.9%, +0.4%); the Boxy rows drop 15% to
+25% post-edit and the warm test rows 37% to 40%. Warm test and warm Boxy build rows are runs of 0.07 to 0.33 CPU seconds.
 
 Attribution from `perf record` with LBR call graphs on the cold specialized
 test runs, share of cycles:
 
 | Symbol | roc-pg base | roc-pg measured | roc-pdf base | roc-pdf measured |
 | --- | ---: | ---: | ---: | ---: |
-| `memcpy` | 7.44% | 4.59% | 4.79% | 2.99% |
-| `memset` | 0.49% | 0.56% | 0.33% | 0.36% |
-| kernel page zeroing (`kernel_init_pages`) | 1.95% | 2.15% | 0.69% | 0.75% |
-| page fault entry | 0.40% | 0.43% | 0.30% | 0.30% |
-| all kernel | 7.79% | 8.29% | 4.94% | 5.19% |
+| `memcpy` | 7.32% | 4.89% | 4.79% | 2.99% |
+| `memset` | 0.47% | 0.58% | 0.33% | 0.36% |
+| kernel page zeroing (`kernel_init_pages`) | 1.93% | 1.89% | 0.69% | 0.75% |
+| page fault entry | 0.39% | 0.34% | 0.30% | 0.30% |
+| all kernel | 8.17% | 8.54% | 4.94% | 5.19% |
 
 Fill time and fault time were under 3% of the baseline together and did not
 move. The gain is copy time. By immediate caller, the `memcpy` samples that
 disappear are in Monotype lowering's `scopedNode`, `probeInstNode` and
-`runInst` and in `CheckedTypeStoreView.canonicalId` (2.6% of roc-pg cycles on
+`runInst` and in `CheckedTypeStoreView.canonicalId` (2.5% of roc-pg cycles on
 the baseline, 0.2% on the measured tree; 1.3% to 0.1% on roc-pdf). Those
 functions call the checked type store view's key and canonical-id methods,
 which take the view by pointer on this branch and took it by value, copying
 the view on every call, on the baseline. No other caller's `memcpy` share
-moves by more than 0.06%, so growth copies in the converted tables are not a
+moves by more than 0.1%, so growth copies in the converted tables are not a
 measurable part of either profile.
+
+The `memcpy` that remains on the measured tree has no caller above 0.6% of
+roc-pg cycles. The largest are byte appends of digests and names
+(`IdentityWriter.raw` 0.56%, Monotype `computeDigest` and its collect sink
+0.67%, `recursive_digest` 0.25%, `Type.Store.addFields` 0.20%); none is a
+by-value copy of a view or store.
+
+The same profile shows one cost outside the storage tables: the worklist
+`append` called from `InstGraph.unifyConcrete` is 2.1% of roc-pg cycles on
+both trees, and 69% of its samples are on the instruction after an
+eight-byte load of a `NodePair` whose two four-byte ids the caller has just
+stored.
 
 Storage work for cold roc-pg runs of the measured tree, from the
 `-Ddev-diagnostics` ReleaseFast build:
