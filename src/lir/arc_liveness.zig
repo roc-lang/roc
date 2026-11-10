@@ -243,7 +243,7 @@ pub fn equationRow(
 
 /// Whether `node` is the header of its innermost loop.
 fn isHeader(forest: *const LoopForest, node: u32) bool {
-    const loop = forest.innermost[node];
+    const loop = forest.innermostOf(node);
     return loop != LoopForest.none and forest.loops[loop].header == node;
 }
 
@@ -286,7 +286,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     for (0..node_count) |target_index| {
         const target: u32 = @intCast(target_index);
         for (graph.predecessorsOf(target)) |predecessor| {
-            var loop = forest.innermost[target];
+            var loop = forest.innermostOf(target);
             while (loop != no_loop and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
                 if (forest.loops[loop].header != target) {
                     try found_entries.append(scratch, .{ .loop = loop, .predecessor = predecessor, .target = target });
@@ -313,13 +313,13 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
     const written = try scratch.alloc(Row, loop_count);
     for (written) |*bits| bits.* = Row.initEmpty(graph.bit_len);
     for (0..node_count) |node_index| {
-        const loop = forest.innermost[node_index];
+        const loop = forest.innermostOf(node_index);
         if (loop == no_loop) continue;
         for (graph.defsOf(node_index)) |bit| try written[loop].set(scratch, bit);
         for (graph.successorsOf(node_index), graph.succ_starts[node_index]..) |successor, edge| {
             const kills = graph.killsOf(edge);
             if (kills.len == 0) continue;
-            const target_loop = forest.innermost[successor];
+            const target_loop = forest.innermostOf(successor);
             if (target_loop == no_loop) continue;
             var common = loop;
             while (common != no_loop and !forest.contains(common, target_loop)) common = forest.loops[common].parent;
@@ -365,7 +365,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
 
         fn reach(search: *@This(), node: u32) Allocator.Error!void {
             if (search.component_of_[node] != search.component) return;
-            const innermost = search.forest_.innermost[node];
+            const innermost = search.forest_.innermostOf(node);
             if (innermost != LoopForest.none and search.transparent(innermost)) {
                 const loop = search.forest_.outermostWhile(innermost, search, transparent);
                 if (search.loop_seen.testAndInsert(loop)) return;
@@ -405,7 +405,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         component_cursor -= 1;
         const members = components.membersOf(component_cursor);
         const first = members[0];
-        if (members.len == 1 and forest.innermost[first] == no_loop) {
+        if (members.len == 1 and forest.innermostOf(first) == no_loop) {
             // One exact equation step from the solved successors' rows.
             rows[first] = try equationRow(graph, first, allocator, @as([]const Row, rows), rowAt);
             continue;
@@ -467,7 +467,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
 
         // Rows: the bits whole loops carry, shared down the component's loop
         // tree, plus the bits exposed at the node itself.
-        var top = forest.innermost[first];
+        var top = forest.innermostOf(first);
         while (forest.loops[top].parent != no_loop) top = forest.loops[top].parent;
         for (forest.preorder[forest.loops[top].enter .. forest.loops[top].exit + 1]) |loop| {
             const parent = forest.loops[loop].parent;
@@ -494,7 +494,7 @@ pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const G
         ready.clearRetainingCapacity();
         for (members) |member| {
             if (isHeader(&forest, member)) {
-                var row = carried[forest.innermost[member]];
+                var row = carried[forest.innermostOf(member)];
                 const bits = search.node_bits.group(member);
                 var cursor = bits.len;
                 while (cursor > 0) {

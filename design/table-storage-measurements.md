@@ -36,7 +36,104 @@ numbers medians of nine. Cache files are disposable; raw counters, commands,
 binary hashes, diagnostics and host settings remain in the checkout's ignored
 `.tmp/storage-measure` directory.
 
-### Quiet-machine three-way comparison
+### Build/test performance decision scope
+
+Richard clarified that only `roc build` and `roc test` performance determines
+this choice. The check-only measurements below remain historical diagnostic
+evidence, not a basis for selecting storage backing.
+
+Cold and warm correctness preflights passed for all three saved variants on:
+
+- randomized-spa WASM `build --opt=dev`, with specialization enabled and disabled;
+- roc-pg `examples/small/main.roc` native `build --opt=dev --specialize=no`;
+- roc-pg `test --opt=dev --specialize=no package/main.roc`: all 383 tests passed;
+- the isolated roc-pdf compatibility fixture's `test --opt=dev package/main.roc`,
+  with specialization enabled and disabled: all 605 tests passed, including
+  its local Unicode dependency.
+
+Build artifacts were byte-identical across variants and cold/warm preflights.
+Exit 2 in roc-pg and roc-pdf denotes warnings, not failed tests or builds.
+The native roc-pg workload uses `--replace-dep` with an isolated copy of its
+basic-cli platform: interpolation annotations consume `Iter(Str)`, and the
+unknown stream length is `Err(Unknown)`, matching this compiler's APIs.
+The original platform package and application repositories are unchanged.
+Every variant receives the identical compatibility fixture.
+
+Excluded from this bounded comparison, not treated as successful workloads:
+specialized roc-pg build/full test exceeded the 600-second preflight limit;
+randomized-spa test reported 108 failed assertions in both strategies.
+The unadapted native roc-pg platform had five type errors.
+
+The build/test runner uses all six variant orders, cold plus three warm runs,
+and the same affinity and memory cap across variants. It records `duration_time`
+in nanoseconds from perf alongside task-clock, instructions, faults and peak
+RSS, preserves raw output, and checks diagnostic equivalence, build artifact
+hashes, and unchanged workload input hashes. A fresh explicit quiet/ready
+confirmation is required before this separate measurement window.
+
+#### Build/test results, 2026-11-09
+
+After Richard confirmed the machine was quiet, all 432 invocations completed.
+The other thread remained paused until the window was explicitly released.
+Each variant/workload/strategy cell has six cold samples and eighteen warm
+samples, arranged in six balanced experimental rounds. Warm repeats within
+one round are not independent rounds. Cold means a fresh compiler cache,
+not a flushed OS page cache.
+
+Median elapsed seconds from perf's `duration_time`:
+
+| Workload | Baseline cold / warm | Recycling cold / warm | Non-recycling cold / warm |
+| --- | ---: | ---: | ---: |
+| SPA WASM build, specialized | 3.2465 / 1.8091 | 3.2284 / 1.8010 | 3.2515 / 1.8099 |
+| SPA WASM build, Boxy | 2.2390 / 0.07379 | 2.2296 / 0.07217 | 2.2321 / 0.07153 |
+| roc-pg native build, Boxy | 2.5638 / 0.09044 | 2.5477 / 0.08874 | 2.5491 / 0.08766 |
+| roc-pg test, Boxy | 2.7921 / 0.04860 | 2.7867 / 0.04630 | 2.7983 / 0.04624 |
+| roc-pdf test, specialized | 10.6404 / 0.11867 | 10.6443 / 0.11761 | 10.6683 / 0.11755 |
+| roc-pdf test, Boxy | 4.6022 / 0.11946 | 4.6127 / 0.11890 | 4.6041 / 0.11775 |
+
+Changes in median wall time relative to baseline; negative means faster:
+
+| Workload | Recycling cold / warm | Non-recycling cold / warm |
+| --- | ---: | ---: |
+| SPA WASM build, specialized | -0.56% / -0.45% | +0.16% / +0.05% |
+| SPA WASM build, Boxy | -0.42% / -2.20% | -0.31% / -3.06% |
+| roc-pg native build, Boxy | -0.63% / -1.88% | -0.57% / -3.07% |
+| roc-pg test, Boxy | -0.19% / -4.72% | +0.22% / -4.84% |
+| roc-pdf test, specialized | +0.04% / -0.89% | +0.26% / -0.95% |
+| roc-pdf test, Boxy | +0.23% / -0.47% | +0.04% / -1.43% |
+
+Peak RSS medians in MiB:
+
+| Workload | Baseline cold / warm | Recycling cold / warm | Non-recycling cold / warm |
+| --- | ---: | ---: | ---: |
+| SPA WASM build, specialized | 1143.32 / 945.59 | 1162.88 / 953.12 | 1169.92 / 959.31 |
+| SPA WASM build, Boxy | 644.43 / 269.52 | 659.16 / 283.82 | 662.87 / 284.33 |
+| roc-pg native build, Boxy | 814.89 / 380.07 | 832.43 / 393.55 | 832.04 / 394.84 |
+| roc-pg test, Boxy | 808.61 / 248.96 | 825.71 / 260.60 | 834.88 / 261.65 |
+| roc-pdf test, specialized | 3101.74 / 472.65 | 3117.42 / 484.70 | 3143.81 / 485.83 |
+| roc-pdf test, Boxy | 976.34 / 472.11 | 988.89 / 484.47 | 986.66 / 485.49 |
+
+Cold wall-time changes are below 0.7% with overlapping ranges: no clear cold
+winner. The strongest positive signal is warm Boxy builds/tests. Both compact
+variants improved warm SPA Boxy build in every matched round; recycling
+improved warm roc-pg build in every round, and both improved warm roc-pg test
+in five of six rounds. These short warm invocations save roughly 1–3 ms.
+The small differences between recycling and non-recycling do not establish
+a universal backing-policy winner.
+
+The RSS increases are about 0.5–5.5%, or 8–42 MiB, not an independent rejection
+criterion. Both compact variants remain candidates on this build/test evidence.
+No check timing contributes to this conclusion.
+
+All expected exits and diagnostic comparisons passed. All 216 generated
+artifact hashes matched within each build workload/strategy across variants
+and cache states, and workload input hashes were unchanged. Raw outputs,
+all counters, ranges, and matched-round comparisons are retained in the
+attached worktree at `.tmp/storage-build-test/results-20261109-115800`.
+This is the completed cold/warm matrix described above, not evidence for
+the excluded specialized roc-pg cases or post-edit performance.
+
+### Historical check-only comparison
 
 The compact-index sweep's noisy-host roc-pg runs were roughly
 instruction-neutral with about 1.5% higher median peak RSS. This is provisional
@@ -247,6 +344,37 @@ tails, **not live virtual usage or RSS**. There is no comparable instrumented
 old-container baseline, so these totals alone cannot prove each migration's
 kill criterion. Commit-ahead remains disabled; its tuning experiment is open.
 
+## Optional-index, epoch, and write-first conversions, 2026-11-09
+
+ReleaseFast, pinned to the performance cores, 180 invocations on a quiet
+machine. The baseline is the tree before the conversions. Corpora: roc-pg,
+roc-pdf at its upstream head (which checks without errors), and a generated
+1,500-function module that checks without errors. Compiler caches were on
+disk. Cold means a fresh compiler cache.
+
+Current tree against baseline, change in instructions (one cold run, median
+of three warm runs):
+
+| Workload | Cold | Warm |
+| --- | ---: | ---: |
+| roc-pg test, specialized | +0.18% | -4.66% |
+| roc-pg test, Boxy | +0.01% | -2.16% |
+| roc-pg build of `examples/small`, Boxy | +0.09% | -1.13% |
+| roc-pdf test, specialized | +0.13% | -4.09% |
+| roc-pdf test, Boxy | -0.03% | -4.48% |
+| roc-pg check, specialized | -0.28% | +0.03% |
+| roc-pdf check, specialized | +0.49% | +0.81% |
+
+Cold build and test are unchanged within noise. The warm build and test rows
+are runs of 0.06 to 0.2 seconds. Peak RSS is between 7.4% lower and 1.7% higher.
+
+Four tuning variants were compared against the current tree on `roc check`
+only, three alternating cold pairs per corpus, so they are diagnostic and do
+not bear on the build/test decision. None moved instructions by more than
+0.5% in either direction: the slot kind packed into the slot word, Linux
+commit-ahead, small-store thresholds of 64K and 1M entries, and a 25%
+reservation estimate. All four settings are unchanged.
+
 ## Lifecycle audit
 
 | Area | Decision and reason |
@@ -276,12 +404,9 @@ declarations. It rejects fills through those owners and optional allocations
 for named index types with an existing compact column in that file. It does
 not perform cross-file Zig type inference or prove lifetimes.
 
-Still open: eligible optional-index tables in checked-artifact construction,
-Monotype lowering, solved lowering, compile-time finalization and remaining
-LIR passes; repeated solver/SCC scratch; remaining scatter suffix conversions;
-reservation sizing/commit-ahead tuning; per-site performance attribution;
-the complete cold/warm/post-edit check/build/test corpus matrix. These are not
-silently relabeled as measured keeps.
+Still open: remaining scatter suffix conversions; per-site performance
+attribution; post-edit rows of the corpus matrix. These are not silently
+relabeled as measured keeps.
 
 roc-pdf's Unicode iterator compatibility fix was validated in an isolated
 copy, not persisted to its repository. Observatory's saved baseline has 77

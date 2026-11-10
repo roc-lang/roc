@@ -1346,12 +1346,13 @@ const OutcomeSeenState = struct {
 /// whether the statement was already entered with exactly this state.
 fn enterOutcomeWalk(
     allocator: Allocator,
-    heads: []u32,
+    heads: *collections.EpochColumn(u32, u32, .internal),
     states: *std.ArrayList(OutcomeSeenState),
     index: u32,
     walk: OutcomeWalkState,
 ) Allocator.Error!bool {
-    var cursor = heads[index];
+    const head = heads.get(index) orelse no_local;
+    var cursor = head;
     while (cursor != no_local) {
         const state = states.items[cursor];
         if (state.present == walk.present and state.discriminant == walk.discriminant) return true;
@@ -1359,8 +1360,8 @@ fn enterOutcomeWalk(
     }
     const position = std.math.cast(u32, states.items.len) orelse return error.OutOfMemory;
     if (position == no_local) return error.OutOfMemory;
-    try states.append(allocator, .{ .present = walk.present, .discriminant = walk.discriminant, .next = heads[index] });
-    heads[index] = position;
+    try states.append(allocator, .{ .present = walk.present, .discriminant = walk.discriminant, .next = head });
+    heads.set(index, position);
     return false;
 }
 
@@ -1569,7 +1570,7 @@ fn computeOutcomeRestitution(
     defer stack.deinit(allocator);
     // The walk states each statement was entered with, chained from that
     // statement's position in the procedure inventory.
-    var seen_heads = std.ArrayList(u32).empty;
+    var seen_heads: collections.EpochColumn(u32, u32, .internal) = .{};
     defer seen_heads.deinit(allocator);
     var seen_states = std.ArrayList(OutcomeSeenState).empty;
     defer seen_states.deinit(allocator);
@@ -1621,7 +1622,7 @@ fn computeOutcomeRestitution(
         try mask_buffer.resize(allocator, proc_stmts.len);
         try bit_discriminant_buffer.resize(allocator, proc_stmts.len);
         try bit_present_buffer.resize(allocator, proc_stmts.len);
-        try seen_heads.resize(allocator, proc_stmts.len);
+        try seen_heads.ensureLen(allocator, proc_stmts.len);
         const escape_discriminants = discriminant_buffer.items;
         const escape_masks = mask_buffer.items;
         const bit_escape_discriminants = bit_discriminant_buffer.items;
@@ -1652,7 +1653,7 @@ fn computeOutcomeRestitution(
             if (@import("builtin").mode == .debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
             bit_accum.clearRetainingCapacity();
             stack.clearRetainingCapacity();
-            @memset(seen_heads.items, no_local);
+            seen_heads.reset();
             seen_states.clearRetainingCapacity();
             try stack.append(allocator, .{
                 .stmt = @backingInt(body),
@@ -1662,7 +1663,7 @@ fn computeOutcomeRestitution(
             while (stack.pop()) |walk| {
                 const walk_index = statement_indices.get(@fromBackingInt(walk.stmt)) orelse
                     solveInvariant("ARC outcome walk left its lifted procedure inventory");
-                if (try enterOutcomeWalk(allocator, seen_heads.items, &seen_states, walk_index, walk)) continue;
+                if (try enterOutcomeWalk(allocator, &seen_heads, &seen_states, walk_index, walk)) continue;
                 if (@import("builtin").mode == .debug) outcome_solver_iterations += 1;
                 const current: LIR.CFStmtId = @fromBackingInt(@intCast(walk.stmt));
                 const stmt = store.getCFStmtImmediate(current);
@@ -4441,8 +4442,13 @@ fn settleUniqueOrigins(
     }
 }
 
+/// A local's position in its procedure's dense domain.
+const DenseLocalId = enum(u32) { _ };
+/// Dense-domain position of each store local, for one procedure's locals.
+pub const DenseLocalColumn = collections.OptionalIndexColumn(DenseLocalId);
+
 const ProcUniquenessDomain = struct {
-    local_to_dense: []const u32,
+    local_to_dense: DenseLocalColumn.View,
     count: usize,
     locals: ?[]const u32 = null,
     procs: ?[]const u32 = null,
@@ -4451,12 +4457,10 @@ const ProcUniquenessDomain = struct {
 
     fn indexOf(self: ProcUniquenessDomain, local: LIR.LocalId) ?u32 {
         const raw = @backingInt(local);
-        if (raw >= self.local_to_dense.len) return null;
-        const dense = self.local_to_dense[raw];
-        if (dense != no_local) if (self.owners) |owners| {
-            std.debug.assert(owners[raw] == self.component);
-        };
-        return if (dense == no_local) null else dense;
+        if (raw >= self.local_to_dense.len()) return null;
+        const dense = self.local_to_dense.get(raw) orelse return null;
+        if (self.owners) |owners| std.debug.assert(owners[raw] == self.component);
+        return @backingInt(dense);
     }
 };
 
@@ -4472,7 +4476,7 @@ pub fn computeProcUniqueness(
     sigs: arc_sig.SigTable,
     proc: LIR.LirProcSpecId,
     stmts: []const LIR.CFStmtId,
-    local_to_dense: []const u32,
+    local_to_dense: DenseLocalColumn.View,
     /// The local each dense index names, in dense order.
     dense_locals: []const LIR.LocalId,
     layouts: *const layout_mod.Store,
@@ -4566,7 +4570,7 @@ const UniquenessStructure = struct {
     stmt_owner: []u32,
     proc_component: []u32,
     components: []UniquenessComponent,
-    local_to_dense: []u32,
+    local_to_dense: DenseLocalColumn.View,
     stmt_to_dense: []u32,
     topology: UseOrder.Topology,
 
@@ -4600,7 +4604,7 @@ const UniquenessStructure = struct {
             .stmt_owner = &.{},
             .proc_component = &.{},
             .components = &.{},
-            .local_to_dense = &.{},
+            .local_to_dense = .{},
             .stmt_to_dense = &.{},
             .topology = undefined,
         };
@@ -4743,12 +4747,11 @@ const UniquenessStructure = struct {
             component_procs[proc_counts[component]] = @intCast(index);
             proc_counts[component] += 1;
         }
-        const local_to_dense = try arena.alloc(u32, store.localCount());
-        @memset(local_to_dense, no_local);
+        var local_to_dense = try DenseLocalColumn.initFilled(arena, store.localCount());
         for (local_owner, 0..) |owner, raw| {
             if (owner == no_local) continue;
             const position = local_counts[owner];
-            local_to_dense[raw] = position - local_first[owner];
+            local_to_dense.set(raw, @fromBackingInt(position - local_first[owner]));
             component_locals[position] = @intCast(raw);
             local_counts[owner] += 1;
         }
@@ -4773,7 +4776,7 @@ const UniquenessStructure = struct {
         self.stmt_owner = stmt_owner;
         self.proc_component = proc_component;
         self.components = components;
-        self.local_to_dense = local_to_dense;
+        self.local_to_dense = local_to_dense.view();
         self.stmt_to_dense = stmt_to_dense;
         self.topology = topology;
         return self;
@@ -6243,8 +6246,8 @@ fn computeUniquenessDetailed(allocator: Allocator, store: *const LirStore, rc_lo
         if (domain.locals) |locals| {
             @memcpy(index_to_local, locals);
         } else {
-            for (domain.local_to_dense, 0..) |dense, raw| {
-                if (dense != no_local) index_to_local[dense] = @intCast(raw);
+            for (0..domain.local_to_dense.len()) |raw| {
+                if (domain.local_to_dense.get(raw)) |dense| index_to_local[@backingInt(dense)] = @intCast(raw);
             }
         }
     } else {
@@ -6631,7 +6634,7 @@ test "ordered-use inventory transfer cleans up on allocation failure" {
 }
 
 fn expectEmptyUseOrderScratch(scratch: *const UseOrder.Scratch) error{TestExpectedEqual}!void {
-    for (scratch.jump_join) |join| try std.testing.expectEqual(no_local, join);
+    for (0..scratch.jump_join.len()) |index| try std.testing.expectEqual(false, scratch.jump_join.isPresent(index));
     for (scratch.mark_gen) |mark| try std.testing.expectEqual(@as(u32, 0), mark);
     for ([_]*const UseOrder.RowIndex{ &scratch.reads_index, &scratch.defs_index, &scratch.preds_index }) |index| {
         for (index.len) |len| try std.testing.expectEqual(@as(u32, 0), len);

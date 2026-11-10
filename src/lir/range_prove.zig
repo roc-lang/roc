@@ -3227,9 +3227,8 @@ const Pass = struct {
         preds: std.ArrayList(u32) = .empty,
         jumps_to: collections.DenseMap(JoinPointId, std.ArrayList(u32)),
         join_order: collections.DenseMap(JoinPointId, JoinOrder),
-        /// `mark[i] == generation` when node `i` is on the current loop's cycle.
-        mark: std.ArrayList(u32) = .empty,
-        generation: u32 = 0,
+        /// The nodes on the current loop's cycle.
+        mark: collections.EpochSet(u32, .stamps, .internal) = .{},
         pending: std.ArrayList(u32) = .empty,
         cycle: std.ArrayList(u32) = .empty,
 
@@ -3255,7 +3254,6 @@ const Pass = struct {
             var jumps = self.jumps_to.iterator();
             while (jumps.next()) |entry| entry.value_ptr.clearRetainingCapacity();
             self.join_order.clearRetainingCapacity();
-            self.mark.clearRetainingCapacity();
             self.pending.clearRetainingCapacity();
             self.cycle.clearRetainingCapacity();
         }
@@ -3267,7 +3265,6 @@ const Pass = struct {
             while (jumps.next()) |entry| entry.value_ptr.deinit(allocator);
             self.jumps_to.clearRetainingCapacity();
             self.clear();
-            self.generation = 0;
         }
 
         fn deinit(self: *LoopScan, allocator: Allocator) void {
@@ -3374,8 +3371,7 @@ const Pass = struct {
             fill[edge.to] += 1;
         }
         scan.pending.clearRetainingCapacity();
-        try scan.mark.resize(gpa, count);
-        @memset(scan.mark.items, 0);
+        try scan.mark.ensureLen(gpa, count);
 
         // Number the join-nesting tree in depth-first order: a join's body
         // encloses exactly the joins numbered within its interval.
@@ -3436,8 +3432,7 @@ const Pass = struct {
     /// when it is reachable from the body.
     fn scanLoopAssigned(self: *Pass, join_id: JoinPointId, body: CFStmtId) ResourceError!void {
         const scan = &self.loop_scan;
-        scan.generation += 1;
-        const generation = scan.generation;
+        scan.mark.reset();
         scan.pending.clearRetainingCapacity();
         scan.cycle.clearRetainingCapacity();
         const header = self.join_stmts.get(join_id);
@@ -3446,8 +3441,7 @@ const Pass = struct {
             for (jumps.items) |jump| {
                 const owner = self.enclosing_join.get(scan.stmts.items[jump]) orelse continue;
                 if (owner != join_id and !scan.encloses(join_id, owner)) continue;
-                if (scan.mark.items[jump] == generation) continue;
-                scan.mark.items[jump] = generation;
+                if (scan.mark.testAndInsert(jump)) continue;
                 try scan.pending.append(self.allocator, jump);
             }
         }
@@ -3455,9 +3449,9 @@ const Pass = struct {
             try scan.cycle.append(self.allocator, current);
             if (body_node != null and current == body_node.?) continue;
             for (scan.preds.items[scan.pred_start.items[current]..scan.pred_start.items[current + 1]]) |pred| {
-                if (scan.mark.items[pred] == generation) continue;
+                if (scan.mark.contains(pred)) continue;
                 if (header != null and scan.stmts.items[pred] == header.?) continue;
-                scan.mark.items[pred] = generation;
+                scan.mark.insert(pred);
                 try scan.pending.append(self.allocator, pred);
             }
         }

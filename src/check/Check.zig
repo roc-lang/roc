@@ -9391,25 +9391,24 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     const decl_count = self.type_decl_statements.items.len;
     if (decl_count == 0) return;
 
-    var dependent_counts = try self.gpa.alloc(usize, decl_count);
-    defer self.gpa.free(dependent_counts);
+    const scratch = self.table_scratch.allocator();
+    defer self.table_scratch.reset();
+
+    const dependent_counts = try scratch.alloc(u32, decl_count);
     @memset(dependent_counts, 0);
 
     for (self.type_decl_dependencies.items) |edge| {
         dependent_counts[edge.dependency] += 1;
     }
 
-    var dependent_offsets = try self.gpa.alloc(usize, decl_count + 1);
-    defer self.gpa.free(dependent_offsets);
+    const dependent_offsets = try scratch.alloc(usize, decl_count + 1);
     dependent_offsets[0] = 0;
     for (dependent_counts, 0..) |count, dense_idx| {
         dependent_offsets[dense_idx + 1] = dependent_offsets[dense_idx] + count;
     }
 
-    var fill_offsets = try self.gpa.dupe(usize, dependent_offsets[0..decl_count]);
-    defer self.gpa.free(fill_offsets);
-    const dependents = try self.gpa.alloc(u32, self.type_decl_dependencies.items.len);
-    defer self.gpa.free(dependents);
+    const fill_offsets = try scratch.dupe(usize, dependent_offsets[0..decl_count]);
+    const dependents = try scratch.alloc(u32, self.type_decl_dependencies.items.len);
 
     for (self.type_decl_dependencies.items) |edge| {
         const offset = fill_offsets[edge.dependency];
@@ -9421,12 +9420,10 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     defer worklist.deinit(self.gpa);
     try worklist.ensureTotalCapacity(self.gpa, decl_count);
 
-    const propagated = try self.gpa.alloc(bool, decl_count);
-    defer self.gpa.free(propagated);
+    const propagated = try scratch.alloc(bool, decl_count);
     @memset(propagated, false);
 
-    const poisoned = try self.gpa.alloc(bool, decl_count);
-    defer self.gpa.free(poisoned);
+    const poisoned = try scratch.alloc(bool, decl_count);
     @memset(poisoned, false);
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
@@ -9963,8 +9960,11 @@ fn stronglyConnectedComponents(
     adjacency: []const std.ArrayListUnmanaged(u32),
     component_of: []u32,
 ) std.mem.Allocator.Error!void {
+    // A caller may hold its own tables in the arena, so release only this
+    // pass's.
     const scratch = self.table_scratch.allocator();
-    defer self.table_scratch.reset();
+    const position = self.table_scratch.mark();
+    defer self.table_scratch.resetTo(position);
     const node_count = adjacency.len;
     const unvisited = std.math.maxInt(u32);
     const index_of = try scratch.alloc(u32, node_count);
@@ -45631,13 +45631,15 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
     try scratch.out_start.appendNTimes(self.gpa, 0, node_count + 1);
     for (scratch.edge_nodes.items) |node| scratch.out_start.items[node + 1] += 1;
     for (1..scratch.out_start.items.len) |i| scratch.out_start.items[i] += scratch.out_start.items[i - 1];
-    try scratch.out_edges.appendNTimes(self.gpa, 0, scratch.edges.items.len);
     {
+        var out_edges = try collections.WriteFirstSlice(u32).wrap(self.gpa, try scratch.out_edges.addManyAsSlice(self.gpa, scratch.edges.items.len));
+        errdefer out_edges.release(self.gpa);
         try scratch.index.appendSlice(self.gpa, scratch.out_start.items[0..node_count]);
         for (scratch.edge_nodes.items, 0..) |node, owned_idx| {
-            scratch.out_edges.items[scratch.index.items[node]] = @intCast(owned_idx);
+            out_edges.set(scratch.index.items[node], @intCast(owned_idx));
             scratch.index.items[node] += 1;
         }
+        _ = out_edges.finish(self.gpa);
         scratch.index.clearRetainingCapacity();
     }
 
@@ -45675,9 +45677,11 @@ fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
     const scratch = &self.try_row_fixpoint_scratch;
     const unvisited = std.math.maxInt(u32);
     try scratch.index.appendNTimes(self.gpa, unvisited, node_count);
-    try scratch.lowlink.appendNTimes(self.gpa, 0, node_count);
+    // Every node is a root or reached from one, and is written on its visit
+    // and at its component's completion, before either column is read.
+    _ = try scratch.lowlink.addManyAsSlice(self.gpa, node_count);
     try scratch.on_stack.appendNTimes(self.gpa, false, node_count);
-    try scratch.component.appendNTimes(self.gpa, 0, node_count);
+    _ = try scratch.component.addManyAsSlice(self.gpa, node_count);
     try scratch.order_start.append(self.gpa, 0);
     var next_index: u32 = 0;
     for (0..node_count) |root_usize| {

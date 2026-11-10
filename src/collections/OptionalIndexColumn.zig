@@ -96,6 +96,14 @@ fn IndexColumn(comptime Idx: type, comptime reserved_zero: bool) type {
             return .{ .words = self.words };
         }
 
+        /// The raw index at entry `i`, or `maxInt(u32)` when it is absent. Every
+        /// absent entry stores zero and every biased entry stores `n + 1`, so
+        /// this is a wrapping decrement.
+        pub inline fn rawOrMaxInt(self: *const Self, i: usize) u32 {
+            comptime std.debug.assert(!reserved_zero);
+            return self.words[i] -% 1;
+        }
+
         /// Whether entry `i` holds an index.
         pub inline fn isPresent(self: *const Self, i: usize) bool {
             return self.words[i] != 0;
@@ -143,6 +151,16 @@ test "the first and the largest real index round-trip" {
     try testing.expectEqual(@as(?TestIdx, .first), column.get(0));
     try testing.expect(!column.isPresent(1));
     try testing.expectEqual(@as(?TestIdx, @fromBackingInt(std.math.maxInt(u32) - 1)), column.get(2));
+}
+
+test "an absent entry reads as the largest raw value" {
+    var column = try OptionalIndexColumn(TestIdx).initFilled(testing.allocator, 2);
+    defer column.deinit(testing.allocator);
+    try testing.expectEqual(std.math.maxInt(u32), column.rawOrMaxInt(0));
+    column.set(1, @fromBackingInt(std.math.maxInt(u32) - 1));
+    try testing.expectEqual(std.math.maxInt(u32) - 1, column.rawOrMaxInt(1));
+    column.set(0, .first);
+    try testing.expectEqual(@as(u32, 0), column.rawOrMaxInt(0));
 }
 
 test "a cleared entry is absent" {
