@@ -380,7 +380,7 @@ test "procedure rewrite ownership includes statements reached through shared met
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{value}),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .u64,
         }, .none);
         context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc };
@@ -415,7 +415,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .identity = LIR.ProcIdentity.forTest(@intCast(index)),
             .args = try store.addLocalSpan(&.{low}),
             .frame_locals = try store.addLocalSpan(&.{ low, high }),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .u64,
         }, .none);
     }
@@ -478,7 +478,7 @@ test "issue 11325 lane registration and counting allocation failures release sto
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{local}),
         .frame_locals = try store.addLocalSpan(&.{local}),
-        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture),
+        .body = .some(try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture)),
         .ret_layout = .u64,
     }, .none);
     try testing.checkAllAllocationFailures(testing.allocator, testLaneCountingAllocation, .{ &store, &layouts, proc });

@@ -2052,7 +2052,7 @@ pub const Interpreter = struct {
             );
         }
 
-        if (proc_spec.hosted) |hosted| {
+        if (proc_spec.hosted.get()) |hosted| {
             const param_layouts = try self.localLayouts(self.store.getLocalSpan(proc_spec.args));
             if (args.len != param_layouts.len) {
                 return self.invariantFailedError(
@@ -2104,7 +2104,7 @@ pub const Interpreter = struct {
                 for (arg_layouts, 0..) |arg_layout, i| {
                     debugPrint("{d}:{d} ", .{ i, @backingInt(arg_layout) });
                 }
-                debugPrint(" abi={s} hosted={}\n", .{ @tagName(proc_spec.abi), proc_spec.hosted != null });
+                debugPrint(" abi={s} hosted={}\n", .{ @tagName(proc_spec.abi), proc_spec.hosted.get() != null });
                 self.debugDumpProc(proc_id);
             }
             return self.invariantFailedError(
@@ -2359,7 +2359,7 @@ pub const Interpreter = struct {
     }
 
     fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
-        return proc_spec.body orelse self.invariantFailed(
+        return proc_spec.body.get() orelse self.invariantFailed(
             "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
             .{@backingInt(proc_id)},
         );
@@ -8766,7 +8766,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
         .args = LIR.LocalSpan.empty(),
-        .body = f32_body,
+        .body = .some(f32_body),
         .ret_layout = .f32,
         .frame_locals = try store.addLocalSpan(&.{f32_local}),
     }, .none);
@@ -8782,7 +8782,7 @@ test "interpreter float NaN mode preserves runtime payloads and normalizes compi
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = f64_body,
+        .body = .some(f64_body),
         .ret_layout = .f64,
         .frame_locals = try store.addLocalSpan(&.{f64_local}),
     }, .none);
@@ -8827,7 +8827,7 @@ test "interpreter evaluates explicit static data by compact id" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = .u64,
         .frame_locals = frame_locals,
     }, .none);
@@ -8871,7 +8871,7 @@ test "interpreter turns a compiler host allocation failure into a Roc crash" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = list_layout,
         .frame_locals = try store.addLocalSpan(&.{ capacity, list }),
     }, .none);

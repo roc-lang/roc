@@ -1927,9 +1927,13 @@ pub const GeneratedCodecCall = struct {
     method_role: u32,
     dispatcher_ty: CheckedTypeId,
     callable_ty: CheckedTypeId,
-    subject_ty: ?CheckedTypeId = null,
+    subject_ty: collections.OptionalId(CheckedTypeId) = .none,
     resolution: GeneratedCodecCallResolution = .pending,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(GeneratedCodecCall) == 28);
+}
 
 /// Exact checked contract for one compiler-generated codec instantiation.
 pub const GeneratedCodecDerivation = struct {
@@ -2503,7 +2507,7 @@ pub const StaticDispatchPlanTable = struct {
                     .method_role = method_role.?,
                     .dispatcher_ty = dispatcher_ty,
                     .callable_ty = callable_ty,
-                    .subject_ty = subject_ty,
+                    .subject_ty = .of(subject_ty),
                 });
             }
             try generated_codec_derivations.append(allocator, .{

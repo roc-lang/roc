@@ -87,7 +87,7 @@ pub fn collectReferencedProcs(
 
     for (exports) |data_export| {
         for (data_export.relocations) |relocation| {
-            const proc = relocation.procedure orelse continue;
+            const proc = relocation.procedure.get() orelse continue;
             const gop = try seen.getOrPut(@backingInt(proc));
             if (gop.found_existing) continue;
             try result.append(allocator, proc);
@@ -393,7 +393,7 @@ const StaticInitializerMachine = struct {
                 _ = pending.pop();
                 continue;
             }
-            const initializer = definition.initializer orelse
+            const initializer = definition.initializer.get() orelse
                 staticDataInvariant("static value has neither frozen data nor an initializer");
             if (try self.unevaluatedStaticRead(initializer)) |dependency| {
                 if (self.static_active[@backingInt(dependency)]) staticDataInvariant("static initializer data dependency graph contained a cycle");
@@ -420,7 +420,7 @@ const StaticInitializerMachine = struct {
             self.static_roots[raw] = root;
             return root;
         }
-        if (value.callable) |procedure| {
+        if (value.callable.get()) |procedure| {
             const allocation = try self.erasedCallableAllocation(value.layout_idx, procedure, 0);
             const root = try self.pointerValue(value.layout_idx, allocation.id, 0);
             self.static_roots[raw] = root;
@@ -441,7 +441,7 @@ const StaticInitializerMachine = struct {
     /// The first static value an initializer reads whose own initializer has
     /// not run yet.
     fn unevaluatedStaticRead(self: *StaticInitializerMachine, proc_id: lir.LIR.LirProcSpecId) MaterializationError!?lir.LIR.StaticDataId {
-        var current = self.store().getProcSpecImmediate(proc_id).body orelse staticDataInvariant("static initializer procedure had no body");
+        var current = self.store().getProcSpecImmediate(proc_id).body.get() orelse staticDataInvariant("static initializer procedure had no body");
         while (true) {
             current = switch (self.store().getCFStmt(current)) {
                 .assign_literal => |assign| blk: {
@@ -884,7 +884,7 @@ const StaticInitializerMachine = struct {
             if (relocation.offset < start or relocation.offset >= end) continue;
             const target: SymbolicRelocation.Target = switch (relocation.target) {
                 .data_symbol => |id| .{ .frozen_symbol = id },
-                .named => if (relocation.procedure) |proc|
+                .named => if (relocation.procedure.get()) |proc|
                     .{ .procedure = proc }
                 else if (relocation.rc_helper) |helper|
                     .{ .rc_helper = helper }
@@ -896,7 +896,7 @@ const StaticInitializerMachine = struct {
                 .target = target,
                 .addend = relocation.addend,
                 .kind = relocation.kind,
-                .callable_capture_offset = relocation.callable_capture_offset,
+                .callable_capture_offset = relocation.callable_capture_offset.get(),
             });
         }
         return value;
@@ -911,8 +911,8 @@ const StaticInitializerMachine = struct {
             staticDataInvariant("static materializer was asked to execute a runtime procedure");
         }
         if (!proc.args.isEmpty()) staticDataInvariant("static initializer procedure had runtime arguments");
-        if (proc.hosted != null) staticDataInvariant("static initializer procedure was hosted");
-        const body = proc.body orelse staticDataInvariant("static initializer procedure had no body");
+        if (proc.hosted.get() != null) staticDataInvariant("static initializer procedure was hosted");
+        const body = proc.body.get() orelse staticDataInvariant("static initializer procedure had no body");
         const frame = try self.pushFrame();
         defer self.popFrame();
         const locals = frame.slots;
@@ -2025,7 +2025,7 @@ const StaticDataBuilder = struct {
 
     fn buildRequestedExports(self: *StaticDataBuilder) MaterializationError!void {
         for (self.lowered.lir_result.requested_layouts.items, 0..) |request, index| {
-            const initializer = request.initializer orelse continue;
+            const initializer = request.initializer.get() orelse continue;
             if (request.const_locator == null) continue;
 
             self.beginOwner(requestedOwner(self.lowered, index));
@@ -2058,7 +2058,7 @@ const StaticDataBuilder = struct {
             self.beginOwner(self.providedOwner(provided_index));
 
             const request = self.requestedLayout(data.const_ref);
-            const initializer = request.initializer orelse
+            const initializer = request.initializer.get() orelse
                 staticDataInvariant("provided static data export had no closed LIR initializer");
             const entrypoint_name = self.root.module.canonical_names.externalSymbolNameText(data.ffi_symbol);
             const symbol_name = try self.allocator.dupe(u8, entrypoint_name);
@@ -2138,7 +2138,7 @@ const StaticDataBuilder = struct {
     fn requestedLayout(self: *StaticDataBuilder, const_locator: CheckedModule.ConstLocator) lir.Program.RequestedLayout {
         for (self.lowered.lir_result.requested_layouts.items) |request| {
             const request_locator = request.const_locator orelse continue;
-            if (std.meta.eql(request_locator, const_locator) and request.initializer != null) return request;
+            if (std.meta.eql(request_locator, const_locator) and request.initializer != .none) return request;
         }
         staticDataInvariant("provided data export had no initialized LIR layout request");
     }
@@ -2239,7 +2239,7 @@ const StaticDataBuilder = struct {
                     .target = .{ .data_symbol = symbol },
                     .addend = source.addend,
                     .kind = source.kind,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                 };
                 return null;
             },
@@ -2255,7 +2255,7 @@ const StaticDataBuilder = struct {
                     .target = .{ .data_symbol = target.symbol },
                     .addend = target.addend + source.addend,
                     .kind = source.kind,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                 };
                 return reserved;
             },
@@ -2269,8 +2269,8 @@ const StaticDataBuilder = struct {
                     .target_symbol_name = name,
                     .addend = source.addend,
                     .kind = .function_pointer,
-                    .callable_capture_offset = source.callable_capture_offset,
-                    .procedure = proc_id,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
+                    .procedure = .some(proc_id),
                     .owns_target_symbol_name = cached_name == null,
                 };
                 return null;
@@ -2285,7 +2285,7 @@ const StaticDataBuilder = struct {
                     .target_symbol_name = name,
                     .addend = source.addend,
                     .kind = .function_pointer,
-                    .callable_capture_offset = source.callable_capture_offset,
+                    .callable_capture_offset = .of(source.callable_capture_offset),
                     .rc_helper = helper,
                     .owns_target_symbol_name = cached_name == null,
                 };
@@ -2438,7 +2438,7 @@ fn addCompletedValueForTest(program: *lir.Program.Result, layout_idx: layout.Idx
     errdefer allocator.free(owned);
     const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{
-        .initializer = null,
+        .initializer = .none,
         .layout_idx = layout_idx,
         .parts = .{ .kind = kind, .children = owned },
     });
@@ -2469,7 +2469,7 @@ test "completed value parts encode shared nested lists and callables at both tar
             .args = .empty(),
             .frame_locals = try program.store.addLocalSpan(&.{local_id}),
             .join_points = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .zst,
             .abi = .roc,
         }, .none);

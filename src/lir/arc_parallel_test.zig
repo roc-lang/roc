@@ -31,7 +31,7 @@ const Fixture = struct {
                 .name = self.store.freshSyntheticSymbol(),
                 .args = frame,
                 .frame_locals = frame,
-                .body = body,
+                .body = .some(body),
                 .ret_layout = .i64,
             }, .none);
         }
@@ -201,7 +201,7 @@ test "ARC executor reverse completions match inline RC bodies and identities acr
     try testing.expectEqual(@as(u64, 2), inline_metrics.waves);
     for (0..direct.store.procSpecCount()) |index| {
         const spec = direct.store.getProcSpec(@fromBackingInt(@intCast(index)));
-        const body = direct.store.getCFStmt(spec.body.?);
+        const body = direct.store.getCFStmt(spec.body.get().?);
         try testing.expect(body == .decref);
         try testing.expectEqual(core.LirStore.GuardedList.at(direct.store.getLocalSpan(spec.args), 1), body.decref.value);
         try testing.expect(direct.store.getCFStmtImmediate(body.decref.next).* == .ret);
@@ -386,7 +386,7 @@ const UniquenessFixture = struct {
                 .name = s.freshSyntheticSymbol(),
                 .args = if (index == 4) .empty() else try s.addLocalSpan(&.{param}),
                 .frame_locals = try s.addLocalSpan(if (param == result) &.{param} else &.{ param, result }),
-                .body = body,
+                .body = .some(body),
                 .ret_layout = list,
             }, .none);
         }
@@ -395,7 +395,7 @@ const UniquenessFixture = struct {
             var spec = shared;
             spec.identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount()));
             spec.name = s.freshSyntheticSymbol();
-            if (index == 1) spec.body = try s.addCFStmt(s.getCFStmt(shared.body.?), .test_fixture);
+            if (index == 1) spec.body = .some(try s.addCFStmt(s.getCFStmt(shared.body.get().?), .test_fixture));
             _ = try s.addProcSpec(spec, .none);
         }
         const independent = try s.addLocal(.{ .layout_idx = list });
@@ -404,7 +404,7 @@ const UniquenessFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{independent}),
             .frame_locals = try s.addLocalSpan(&.{independent}),
-            .body = try s.addCFStmt(.{ .ret = .{ .value = independent } }, .test_fixture),
+            .body = .some(try s.addCFStmt(.{ .ret = .{ .value = independent } }, .test_fixture)),
             .ret_layout = list,
         }, .none);
         return .{ .fixture = f };
@@ -586,7 +586,7 @@ const OutcomeFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{ param, choose }),
             .frame_locals = try s.addLocalSpan(&.{ param, choose, changed, result }),
-            .body = callee_body,
+            .body = .some(callee_body),
             .ret_layout = result_layout,
         }, .none);
         const item = try s.addLocal(.{ .layout_idx = .str });
@@ -637,7 +637,7 @@ const OutcomeFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{caller_choose}),
             .frame_locals = try s.addLocalSpan(&.{ item, input, caller_choose, call_result, discriminant, answer }),
-            .body = caller_body,
+            .body = .some(caller_body),
             .ret_layout = .u64,
         }, .none);
         return .{ .fixture = f, .input = input };
@@ -664,7 +664,7 @@ const OutcomeFixture = struct {
         const s = &self.fixture.store;
         try testing.expectEqual(@as(usize, 3), s.procSpecCount());
         for ([_]u32{ 0, 2 }) |proc| {
-            var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(proc))).body.?;
+            var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(proc))).body.get().?;
             while (true) {
                 const stmt = s.getCFStmt(cursor);
                 if (stmt == .assign_low_level) {
@@ -677,7 +677,7 @@ const OutcomeFixture = struct {
                 } else cursor = try linearNext(stmt);
             }
         }
-        var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(1))).body.?;
+        var cursor = s.getProcSpecImmediate(@fromBackingInt(@intCast(1))).body.get().?;
         while (true) {
             const stmt = s.getCFStmt(cursor);
             if (stmt == .incref) try testing.expect(stmt.incref.value != self.input);
@@ -751,7 +751,7 @@ const DismantleRangeFixture = struct {
             .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
             .name = s.freshSyntheticSymbol(),
             .args = .empty(),
-            .body = null,
+            .body = .none,
             .ret_layout = .i64,
         }, .none);
         var body = try s.addCFStmt(.{ .ret = .{ .value = counter } }, .test_fixture);
@@ -775,7 +775,7 @@ const DismantleRangeFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = .empty(),
             .frame_locals = try s.addLocalSpan(&.{counter}),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .i64,
         }, .none);
         try self.addPairProc(pair_layout, 1);
@@ -788,7 +788,7 @@ const DismantleRangeFixture = struct {
             .identity = core.LIR.ProcIdentity.forTest(@intCast(s.procSpecCount())),
             .name = s.freshSyntheticSymbol(),
             .args = .empty(),
-            .body = null,
+            .body = .none,
             .ret_layout = .i64,
         }, .none);
         const cond = try s.addLocal(.{ .layout_idx = .i64 });
@@ -854,7 +854,7 @@ const DismantleRangeFixture = struct {
             .name = s.freshSyntheticSymbol(),
             .args = try s.addLocalSpan(&.{cond}),
             .frame_locals = try s.addLocalSpan(&.{ cond, first, second, pair, first_read, second_read, first_sink, second_sink, result }),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .i64,
         }, .none);
         self.takes[slot] = .{ first_branch, second_branch };

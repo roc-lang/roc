@@ -1220,9 +1220,9 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
     if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
-    for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
+    for (result.static_data_values.items) |*value| value.first_comptime_guard = .none;
     for (lowered.frozen_static_data.?.exports) |item| {
-        if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
+        if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = .none;
     }
     for (result.static_data_values.items) |*value| value.compile_time_root = null;
 }
@@ -1235,10 +1235,10 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
 fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     const result = &lowered.lir_result;
     result.comptime_value_guards.clearRetainingCapacity();
-    for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
+    for (result.static_data_values.items) |*value| value.first_comptime_guard = .none;
     if (lowered.frozen_static_data) |*frozen| {
         for (frozen.exports) |item| {
-            if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
+            if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = .none;
         }
         for (result.static_data_values.items) |*value| value.compile_time_root = null;
         try ReachableProcs.runWithFrozen(result, frozen);
@@ -1616,7 +1616,7 @@ pub const PreparedSolved = struct {
         for (roots[0..root_count], producers[0..root_count]) |root, *producer| producer.* = .{
             .fn_id = root.fn_id,
             .module = lowering_modules[@backingInt(root.owner)],
-            .root = .{ .checked = root.request.compile_time_root orelse checkedPipelineInvariant("compile-time root reached producer ordering without its checked root identity") },
+            .root = .{ .checked = root.request.compile_time_root.get() orelse checkedPipelineInvariant("compile-time root reached producer ordering without its checked root identity") },
         };
         for (literal_roots, producers[root_count..], 0..) |root, *producer, index| producer.* = .{
             .fn_id = root.fn_id,
@@ -1900,7 +1900,7 @@ fn finishLoweredOutput(
         @memset(seen, false);
         for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
-            const proc = relocation.procedure orelse continue;
+            const proc = relocation.procedure.get() orelse continue;
             try entered_from_outside.append(allocator, proc);
             if (seen[@backingInt(proc)]) continue;
             seen[@backingInt(proc)] = true;
@@ -2296,7 +2296,7 @@ test "runtime extraction consumes producer root positions and preserves their or
             .name = lowered.lir_result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(1),
             .args = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .zst,
         }, .none);
         try lowered.lir_result.root_procs.append(allocator, proc);
@@ -2333,7 +2333,7 @@ test "adopting completed compile-time values drops their initializers and identi
             .name = lowered.lir_result.store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(index + 1)),
             .args = .empty(),
-            .body = ret,
+            .body = .some(ret),
             .ret_layout = .zst,
         }, .none);
     }
@@ -2348,7 +2348,7 @@ test "adopting completed compile-time values drops their initializers and identi
     });
     const completed_slot: LIR.StaticDataId = @fromBackingInt(@intCast(lowered.lir_result.static_data_values.items.len));
     try lowered.lir_result.static_data_values.append(allocator, .{
-        .initializer = procs[1],
+        .initializer = .some(procs[1]),
         .layout_idx = .zst,
         .compile_time_root = .{
             .module = .{ .bytes = @splat(0) },
@@ -2370,7 +2370,7 @@ test "adopting completed compile-time values drops their initializers and identi
     try completeComptimeValueSlots(&lowered);
 
     const slot = lowered.lir_result.static_data_values.items[0];
-    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);
+    try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer.get());
     try std.testing.expect(slot.compile_time_root == null);
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.store.procSpecCount());
     try std.testing.expectEqual(@as(usize, 1), lowered.lir_result.root_procs.items.len);
@@ -2412,12 +2412,12 @@ const ProcCensus = if (!base.dev_diagnostics.available) struct {
         const program = programs.fetchAdd(1, .monotonic);
         var with_body: usize = 0;
         for (0..store.procSpecCount()) |index| {
-            if (store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body != null) with_body += 1;
+            if (store.getProcSpecImmediate(@fromBackingInt(@intCast(index))).body != .none) with_body += 1;
         }
         std.debug.print("proc-census: program {d} ({s}): {d} procedures, {d} roots\n", .{ program, @tagName(strategy), with_body, result.root_procs.items.len });
         for (0..store.procSpecCount()) |index| {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
-            if (store.getProcSpecImmediate(proc_id).body == null) continue;
+            if (store.getProcSpecImmediate(proc_id).body == .none) continue;
             std.debug.print("proc-census:   {d} {s}\n", .{ program, store.procDebugName(proc_id) orelse "?" });
         }
     }
@@ -2868,7 +2868,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const spec = store.getProcSpecImmediate(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
-            if (spec.body == null) {
+            if (spec.body == .none) {
                 std.debug.print("CENSUS_PROC\t{d}\t{s}\t0\t0\t{s}\n", .{ index, name, if (spec.is_static_initializer) "nobody-init" else "nobody" });
                 continue;
             }

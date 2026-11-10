@@ -923,7 +923,7 @@ const Solver = struct {
         }};
         const callable = try self.program.types.add(.{ .lambda_set = try self.program.types.addMembers(&members) });
 
-        if (fn_.signature) |signature| {
+        if (fn_.signature.get()) |signature| {
             const fn_ty = try self.monoLeaf(signature);
             const content = try self.resolvedContent(fn_ty);
             if (std.meta.activeTag(content) != .func) Common.invariant("producer-authored lifted function signature was not a function");

@@ -6498,8 +6498,8 @@ const TailDriver = struct {
 const tail_area_args_offset: u32 = 16;
 
 fn isTailGroupMember(proc: LirProcSpec) bool {
-    return proc.tail_group != .none and proc.abi == .roc and proc.hosted == null and
-        proc.body != null and !proc.is_static_initializer;
+    return proc.tail_group != .none and proc.abi == .roc and proc.hosted.get() == null and
+        proc.body != .none and !proc.is_static_initializer;
 }
 
 fn tailDriverFor(self: *const Self, proc: LirProcSpec) Allocator.Error!?*const TailDriver {
@@ -6888,7 +6888,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     self.local_slots.clearRetainingCapacity();
     self.slot_bindings.clearRetainingCapacity();
     defer self.local_slots.clearRetainingCapacity();
-    if (proc.body) |body| {
+    if (proc.body.get()) |body| {
         try self.local_writes.collect(self.store, body);
         try self.planProcLocals(proc.frame_locals, body);
     }
@@ -7080,8 +7080,8 @@ fn emitProcSpecBody(
     // every function of a split procedure's family shares.
     if (self.split_mode) try self.spillProcStateToFrame(scope);
 
-    if (proc.hosted) |hosted| {
-        if (builtin.mode == .debug and proc.body != null) {
+    if (proc.hosted.get()) |hosted| {
+        if (builtin.mode == .debug and proc.body != .none) {
             base.invariant(
                 "WASM/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                 .{proc.name.raw()},
@@ -7185,7 +7185,7 @@ fn spillProcStateToFrame(self: *Self, scope: Storage.Scope) Allocator.Error!void
 }
 
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
-    return proc.body orelse wasmInvariantFmt(
+    return proc.body.get() orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
         .{ @backingInt(proc_id), proc.name.raw() },
     );
@@ -7379,7 +7379,7 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
         };
     }
     for (proc_specs) |spec| {
-        const hosted = spec.hosted orelse continue;
+        const hosted = spec.hosted.get() orelse continue;
         if (self.hosted_symbol_targets.contains(hosted.dispatch_index)) continue;
 
         const symbol_text = self.store.getString(hosted.symbol);
@@ -9238,7 +9238,7 @@ fn callIsDynamic(self: *const Self, proc_id: LIR.LirProcSpecId, target: ProcLoca
 /// callee leaves pending are run into the target's storage as `drive` says.
 fn generateDynCall(self: *Self, proc_id: LIR.LirProcSpecId, args: ProcLocalSpan, target: ProcLocalId, drive: LIR.PendingDrive) Allocator.Error!void {
     const callee = self.store.getProcSpec(proc_id);
-    if (callee.hosted != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+    if (callee.hosted.get() != null) wasmInvariantFmt("WASM/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
     const arg_refs = self.store.getLocalSpan(args);
     const param_refs = self.store.getLocalSpan(callee.args);
     if (arg_refs.len != param_refs.len) wasmInvariantFmt(
@@ -18176,7 +18176,7 @@ test "wasm backend fuses overflow predicate with matching wrapping result" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = lhs_literal,
+        .body = .some(lhs_literal),
         .ret_layout = .u64,
     }, .none);
 
@@ -18317,7 +18317,7 @@ test "wasm bodies that share lazily created entities commit in spec order at eve
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i + 1)),
             .args = try store.addLocalSpan(&.{arg}),
-            .body = release,
+            .body = .some(release),
             .ret_layout = .str,
         }, .none);
     }
@@ -18359,7 +18359,7 @@ test "U128 to I64 try conversion bounds the low word by I64's highest value" {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
-        .body = convert,
+        .body = .some(convert),
         .ret_layout = try_layout,
     }, .none);
 
@@ -18586,7 +18586,7 @@ fn timeProcCompileNs(allocator: Allocator, proc_count: usize) Allocator.Error!u6
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = lhs_literal,
+            .body = .some(lhs_literal),
             .ret_layout = .u64,
         }, .none);
     }
@@ -18651,7 +18651,7 @@ fn procCompileBindingRowsVisited(allocator: Allocator, proc_count: usize) Alloca
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = lhs_literal,
+            .body = .some(lhs_literal),
             .ret_layout = .u64,
         }, .none);
     }
@@ -18870,7 +18870,7 @@ fn compileJoinFixture(allocator: Allocator, shape: JoinFixtureShape) ScanError!B
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
-        .body = proc_body,
+        .body = .some(proc_body),
         .ret_layout = .u64,
     }, .none);
 
@@ -18920,7 +18920,7 @@ test "procedure parameters keep their ABI local indices when the body reads them
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ first, second }),
-        .body = ret,
+        .body = .some(ret),
         .ret_layout = .u64,
     }, .none);
 
@@ -18963,7 +18963,7 @@ test "sibling procedures that share LocalIds emit identical independent bodies" 
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .args = LIR.LocalSpan.empty(),
-            .body = assign,
+            .body = .some(assign),
             .ret_layout = .u64,
         }, .none);
     }
@@ -19009,7 +19009,7 @@ fn frameInventoryDeclaredLocals(allocator: Allocator, obsolete_locals: usize) Sc
         .identity = LIR.ProcIdentity.forTest(1),
         .args = LIR.LocalSpan.empty(),
         .frame_locals = try store.addLocalSpan(inventory.items),
-        .body = assign,
+        .body = .some(assign),
         .ret_layout = .u64,
     }, .none);
 
@@ -19346,7 +19346,7 @@ fn addSplitFixtureProc(store: *LirStore) Allocator.Error!void {
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = init_acc,
+        .body = .some(init_acc),
         .ret_layout = .u64,
     }, .none);
 }
@@ -19591,7 +19591,7 @@ fn addRecordAliasChainProc(store: *LirStore, layouts: *layout.Store, alias_count
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = build,
+        .body = .some(build),
         .ret_layout = .u64,
     }, .none);
 }
@@ -19657,7 +19657,7 @@ test "a ref.local of a record that is written again is a copy of the bytes it sa
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{ a, b }),
-        .body = build_first,
+        .body = .some(build_first),
         .ret_layout = .u64,
     }, .none);
     var codegen = Self.init(allocator, &store, &layouts, .default);
@@ -19696,7 +19696,7 @@ fn runI128Narrow(allocator: Allocator, op: LIR.LowLevel, source_layout: layout.I
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
         .args = try store.addLocalSpan(&.{source}),
-        .body = convert,
+        .body = .some(convert),
         .ret_layout = try_layout,
     }, .none);
     var codegen = Self.init(allocator, &store, &layouts, .default);

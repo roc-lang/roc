@@ -1361,7 +1361,7 @@ fn collectAssignCallProcs(
     proc_id: LIR.LirProcSpecId,
 ) TestError![]LIR.LirProcSpecId {
     const proc = lowered.lir_result.store.getProcSpec(proc_id);
-    const body = proc.body orelse return allocator.alloc(LIR.LirProcSpecId, 0);
+    const body = proc.body.get() orelse return allocator.alloc(LIR.LirProcSpecId, 0);
 
     var calls = std.ArrayList(LIR.LirProcSpecId).empty;
     errdefer calls.deinit(allocator);
@@ -5178,7 +5178,7 @@ fn collectLirResultProcShape(
         .arg_count = result.store.getLocalSpan(proc.args).len,
     };
 
-    const body = proc.body orelse return shape;
+    const body = proc.body.get() orelse return shape;
 
     var work = std.ArrayList(LIR.CFStmtId).empty;
     defer work.deinit(allocator);
@@ -5364,7 +5364,7 @@ fn perElementProcSummary(
     while (reachable.pop()) |proc_id| {
         const proc_entry = try reachable_visited.getOrPut(proc_id);
         if (proc_entry.found_existing) continue;
-        const proc_body = store.getProcSpecImmediate(proc_id).body orelse continue;
+        const proc_body = store.getProcSpecImmediate(proc_id).body.get() orelse continue;
 
         const calls = try collectAssignCallProcs(allocator, lowered, proc_id);
         defer allocator.free(calls);
@@ -5534,7 +5534,7 @@ fn perElementConstructionSummary(
     lowered: *lir.CheckedPipeline.LoweredProgram,
 ) TestError!PerElementConstructionSummary {
     const store = &lowered.lir_result.store;
-    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body.get() orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
 
     var bodies = std.ArrayList(LIR.CFStmtId).empty;
@@ -5563,7 +5563,7 @@ fn perElementConstructionSummary(
             if (stmt == .assign_call) {
                 const entry = try visited_procs.getOrPut(stmt.assign_call.proc);
                 if (!entry.found_existing) {
-                    const proc_body = store.getProcSpecImmediate(stmt.assign_call.proc).body orelse continue;
+                    const proc_body = store.getProcSpecImmediate(stmt.assign_call.proc).body.get() orelse continue;
                     try bodies.append(allocator, proc_body);
                 }
             }
@@ -5575,7 +5575,7 @@ fn perElementConstructionSummary(
 fn loopCarriedWrapperCount(lowered: *lir.CheckedPipeline.LoweredProgram) TestError!usize {
     const store = &lowered.lir_result.store;
     const layouts = &lowered.lir_result.layouts;
-    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body orelse return error.MissingRootProcedure;
+    const root_body = store.getProcSpecImmediate(try rootProc(lowered)).body.get() orelse return error.MissingRootProcedure;
     const loop = try findSingleLoopJoin(store, root_body);
     const params = store.getLocalSpan(loop.params);
     var count: usize = 0;
@@ -5641,7 +5641,7 @@ test "ARC keeps a loop-invariant record field out of the loop body keep" {
         defer lowered.deinit(allocator);
 
         const store = &lowered.lowered.lir_result.store;
-        const root_body = store.getProcSpecImmediate(try rootProc(&lowered.lowered)).body orelse return error.MissingRootProcedure;
+        const root_body = store.getProcSpecImmediate(try rootProc(&lowered.lowered)).body.get() orelse return error.MissingRootProcedure;
         var walk = try lir.BodyClone.ReachableStmts.init(store, root_body);
         defer walk.deinit();
 
@@ -9320,7 +9320,7 @@ test "spec constr keeps a same-binder scalar distinct from a substituted aggrega
 
     try mono.defs.append(allocator, .{
         .symbol = @fromBackingInt(@intCast(10)),
-        .fn_id = worker_fn_id,
+        .fn_id = .some(worker_fn_id),
         .args = try mono.addTypedLocalSpan(&.{.{ .local = pair_local, .ty = pair_ty }}),
         .body = .{ .roc = worker_body },
         .ret = pair_ty,
@@ -9666,7 +9666,7 @@ test "dispatch evidence boundary validator rejects malformed specialization inte
     templates.templates.items[raw_template].specialization_interface_relations = saved_template_span;
 
     const saved_parent = templates.dispatch_scopes[0].parent;
-    templates.dispatch_scopes[0].parent = @fromBackingInt(@intCast(templates.dispatch_scopes.len));
+    templates.dispatch_scopes[0].parent = .some(@fromBackingInt(@intCast(templates.dispatch_scopes.len)));
     failure = (try artifact.validateDispatchEvidence()) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqual(check.CheckedArtifact.DispatchEvidenceFailure.Kind.specialization_scope_parent_invalid, failure.kind);
     templates.dispatch_scopes[0].parent = saved_parent;
@@ -11101,7 +11101,7 @@ fn recordFieldReadCounts(
 ) TestError!struct { before_first_call: usize, total: usize } {
     const store = &lowered.lir_result.store;
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return .{ .before_first_call = 0, .total = 0 };
+    const body = proc.body.get() orelse return .{ .before_first_call = 0, .total = 0 };
 
     var aliases = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer aliases.deinit();
@@ -11222,7 +11222,7 @@ fn fieldReadRetainCount(
 ) TestError!usize {
     const store = &lowered.lir_result.store;
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return 0;
+    const body = proc.body.get() orelse return 0;
 
     var read_targets = collections.DenseMap(LIR.LocalId, void).init(allocator);
     defer read_targets.deinit();
@@ -11333,7 +11333,7 @@ test "field takes drop the field-read retains of dying local records" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11372,7 +11372,7 @@ test "field takes cross a fall-through branch diamond" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11407,7 +11407,7 @@ test "field takes split across the arms of a branch" {
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
         if (GuardedList.borrowLen(args) != 0) continue;
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         root_retained = (root_retained orelse 0) + retained;
     }
@@ -11440,7 +11440,7 @@ fn mainFieldReadTakes(allocator: Allocator, lowered: *const lir.CheckedPipeline.
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         found_main = true;
         const stmts = try procStmts(allocator, store, proc_id);
         defer allocator.free(stmts);
@@ -11470,7 +11470,7 @@ fn mainFieldReadRetainCount(allocator: Allocator, lowered: *const lir.CheckedPip
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         found_main = true;
         retained += try fieldReadRetainCount(allocator, lowered, proc_id);
     }
@@ -11659,7 +11659,7 @@ test "field takes dismantle a Try whose caller match tag reachability folded" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         const retained = try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
         main_retained = (main_retained orelse 0) + retained;
     }
@@ -11715,7 +11715,7 @@ test "a field take assigned into a join result cell keeps a loop list unique" {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "main")) continue;
-        if (store.getProcSpecImmediate(proc_id).body == null) continue;
+        if (store.getProcSpecImmediate(proc_id).body == .none) continue;
         const sets = listSetCounts(store, proc_id);
         var total = main_sets orelse ListSetCounts{};
         total.checked += sets.checked;
@@ -11816,7 +11816,7 @@ test "issue 12420 a string match in a loop keeps dying call arguments on the own
             if (visited_entry.found_existing) continue;
 
             if (store.procDebugName(proc_id)) |name| {
-                if (std.mem.eql(u8, name, "add") and store.getProcSpecImmediate(proc_id).body != null) {
+                if (std.mem.eql(u8, name, "add") and store.getProcSpecImmediate(proc_id).body != .none) {
                     add_count += 1;
                     add_retained += try fieldReadRetainCount(allocator, &lowered.lowered, proc_id);
                 }
@@ -11999,7 +11999,7 @@ test "owned variants take a helper parameter's fields at the call" {
     for (0..store.procSpecCount()) |index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
-        if (proc.body == null) continue;
+        if (proc.body == .none) continue;
         const sets = listSetCounts(store, proc_id);
         if (sets.checked + sets.check_free == 0) continue;
         const retained = try fieldReadRetainCount(allocator, &optimized.lowered, proc_id);
@@ -12037,7 +12037,7 @@ const ListSetCounts = struct {
 fn listSetCounts(store: *const lir.LirStore, proc_id: LIR.LirProcSpecId) ListSetCounts {
     var counts: ListSetCounts = .{};
     const proc = store.getProcSpec(proc_id);
-    const body = proc.body orelse return counts;
+    const body = proc.body.get() orelse return counts;
     var cursor_stack: [256]LIR.CFStmtId = undefined;
     var top: usize = 0;
     cursor_stack[top] = body;
@@ -13954,7 +13954,7 @@ fn procStmts(
     defer work.deinit(allocator);
     var seen = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
     defer seen.deinit();
-    try work.append(allocator, store.getProcSpecImmediate(proc).body orelse return error.MissingProcSpec);
+    try work.append(allocator, store.getProcSpecImmediate(proc).body.get() orelse return error.MissingProcSpec);
     while (work.pop()) |stmt_id| {
         if ((try seen.getOrPut(stmt_id)).found_existing) continue;
         try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
@@ -13987,7 +13987,7 @@ test "provenance: TRMC statements state their kind at the site they rewrite" {
     defer allocator.free(stmts);
 
     // The loop join TRMC wraps around the body sits at the procedure body.
-    const entry = store.getProcSpecImmediate(repeat).body.?;
+    const entry = store.getProcSpecImmediate(repeat).body.get().?;
     try std.testing.expect(store.getCFStmtImmediate(entry).* == .join);
     try std.testing.expect(store.stmtOriginKind(entry) == .trmc);
     try std.testing.expectEqual(@as(u32, 5), store.stmtLoc(entry).line);

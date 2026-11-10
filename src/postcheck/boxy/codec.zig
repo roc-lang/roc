@@ -381,7 +381,7 @@ fn collectCalls(program: *Program, family_index: u32) Allocator.Error!void {
         const derivation = table.generated_codec_derivations[@backingInt(id)];
         for (derivation.callsSlice(table)) |call| {
             const method = try methodName(program, names.methodNameText(call.method));
-            const subject: ?TypeId = if (call.subject_ty) |subject_ty|
+            const subject: ?TypeId = if (call.subject_ty.get()) |subject_ty|
                 try subjectKey(program, method, try convertIn(program, env, subject_ty))
             else
                 null;
@@ -837,7 +837,7 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
         .recorded => |recorded| return .{
             .module = b.program.moduleByKey(.{ .bytes = recorded.view.bytes }).index,
             .callable_ty = recorded.callable_ty,
-            .id = recorded.generated_codec_derivation,
+            .id = recorded.generated_codec_derivation.get(),
         },
         .codec => |codec| codec,
     };
@@ -887,7 +887,7 @@ pub fn restoreRuntime(b: *Builder, source: lower.ConstSource, fn_id: check.Const
     const derivation_module, const derivation = if (plan.generated_codec_derivation.get()) |id| .{ owner_view.index, id } else switch (plan.resolution) {
         .evidence_dependent => |dependent| blk: {
             var frame_index = stored.evidence_frame_head orelse invariant("a stored generated codec runtime has no evidence");
-            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent orelse
+            for (0..dependent.index.depth) |_| frame_index = stored.evidence_frames[frame_index].parent.get() orelse
                 invariant("a stored generated codec runtime's evidence has fewer frames than its dispatch names");
             const frame = stored.evidence_frames[frame_index];
             if (dependent.index.index >= frame.roots_len) invariant("a stored generated codec runtime's evidence frame lacks its dispatch's parameter");

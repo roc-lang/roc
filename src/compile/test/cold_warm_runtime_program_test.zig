@@ -115,7 +115,7 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
         try out.writer.writeByte('\n');
     }
     for (result.static_data_values.items, 0..) |value, index| {
-        try out.writer.print("static s{d} layout={d} initializer={?d}\n", .{ index, @backingInt(value.layout_idx), if (value.initializer) |proc| @backingInt(proc) else null });
+        try out.writer.print("static s{d} layout={d} initializer={?d}\n", .{ index, @backingInt(value.layout_idx), if (value.initializer.get()) |proc| @backingInt(proc) else null });
     }
     if (runtime.frozen_static_data) |frozen| for (frozen.exports) |item| {
         try out.writer.print("frozen {s} {x}\n", .{ item.symbol_name, item.bytes });
@@ -147,10 +147,10 @@ fn buildWithCacheAtTarget(gpa: std.mem.Allocator, cache_dir: []const u8, app_pat
     for (result.static_data_values.items) |value| {
         if (value.parts) |parts| {
             if (parts.kind == .callable) facts.static_callables += 1;
-            if (value.initializer != null) facts.invalid_static_parts += 1;
+            if (value.initializer != .none) facts.invalid_static_parts += 1;
             for (parts.children) |child| {
                 const index = @backingInt(child);
-                if (index >= result.static_data_values.items.len or result.static_data_values.items[index].initializer != null) facts.invalid_static_parts += 1;
+                if (index >= result.static_data_values.items.len or result.static_data_values.items[index].initializer != .none) facts.invalid_static_parts += 1;
             }
         }
     }

@@ -114,7 +114,7 @@ pub const Fn = struct {
     /// Exact producer-authored Monotype signature graph. This is present only
     /// while the lifted function still has that signature; transformations
     /// that synthesize a different ABI clear it explicitly.
-    signature: ?Type.TypeId = null,
+    signature: collections.OptionalId(Type.TypeId) = .none,
     /// The iterator-fusion pass normalized this function from explicit
     /// checker-stamped iterator producers. Later structural LIR passes consume
     /// this provenance directly instead of rediscovering iterator intent from
@@ -136,6 +136,10 @@ pub const Fn = struct {
     /// What the body contains, for SpecConstr phase admission.
     shapes: FnShapes = .{},
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Fn) == 572);
+}
 
 /// What a lifted function body contains, recorded by whoever emitted its
 /// expressions: the lifter as it rewrites each expression of a body, and the

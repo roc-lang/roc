@@ -41,7 +41,7 @@ fn inspect(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLi
         defer work.deinit(std.testing.allocator);
         var visited = collections.DenseMap(lir.LIR.CFStmtId, void).init(std.testing.allocator);
         defer visited.deinit();
-        try work.append(std.testing.allocator, proc.body.?);
+        try work.append(std.testing.allocator, proc.body.get().?);
         var in_result: usize = 0;
         var in_frame: usize = 0;
         while (work.pop()) |id| {

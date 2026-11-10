@@ -507,9 +507,13 @@ pub const ComptimeSite = struct {
     /// the module of whichever compile-time root happens to execute it.
     owner: LoweringModuleId,
     region: base.Region,
-    checked_site: ?CheckedExhaustivenessSiteId = null,
+    checked_site: collections.OptionalId(CheckedExhaustivenessSiteId) = .none,
     proc: LirProcSpecId,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ComptimeSite) == 24);
+}
 
 /// Identifier of a join point targeted by `jump`.
 pub const JoinPointId = enum(u32) {
@@ -877,6 +881,9 @@ pub const RefOp = packed struct(u128) {
 
 /// Platform-hosted proc metadata used for external proc ABIs.
 pub const HostedProc = hosted.Proc;
+
+/// An optional `HostedProc` at its own size.
+pub const OptionalHostedProc = collections.OptionalStruct(HostedProc, "dispatch_index");
 
 /// One explicit switch branch keyed by an integer branch value.
 pub const CFSwitchBranch = struct {
@@ -1856,7 +1863,7 @@ pub const LirProcSpec = struct {
     /// Passes adding fresh locals must preserve this ordering.
     frame_locals: LocalSpan = LocalSpan.empty(),
     join_points: JoinPointSpan = JoinPointSpan.empty(),
-    body: ?CFStmtId = null,
+    body: collections.OptionalId(CFStmtId) = .none,
     ret_layout: layout.Idx,
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: collections.OptionalId(LocalId) = .none,
@@ -1873,7 +1880,7 @@ pub const LirProcSpec = struct {
     /// and emit only ordinary procedures.
     is_static_initializer: bool = false,
     /// Hosted call ABI metadata, when this proc is provided by the platform.
-    hosted: ?HostedProc = null,
+    hosted: OptionalHostedProc = .none,
     /// The procedure is supplied by another emission unit. Its `rc_*` fields
     /// carry the ownership facts declared by that unit.
     external: bool = false,
@@ -1949,7 +1956,7 @@ pub const LirProcSpec = struct {
     rc_ret_conditions: U32Span = U32Span.empty(),
 
     comptime {
-        std.debug.assert(@sizeOf(LirProcSpec) == 224);
+        std.debug.assert(@sizeOf(LirProcSpec) == 216);
     }
 
     /// The body ARC analyzes and places reference counts in. A static
@@ -1957,7 +1964,7 @@ pub const LirProcSpec = struct {
     /// materializer evaluates and no backend emits, so nothing calls it and a
     /// reference count in it would never run: ARC sees it as having none.
     pub fn arcBody(self: *const LirProcSpec) ?CFStmtId {
-        return if (self.is_static_initializer) null else self.body;
+        return if (self.is_static_initializer) null else self.body.get();
     }
 
     /// Whether direct calls pass this procedure the cell it leaves a pending

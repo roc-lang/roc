@@ -62,8 +62,8 @@ pub fn Schema(comptime Image: type) type {
                         .named => missing,
                         .data_symbol => |id| @backingInt(id),
                     },
-                    .capture_offset = reloc.callable_capture_offset orelse missing,
-                    .procedure = if (reloc.procedure) |id| @backingInt(id) else missing,
+                    .capture_offset = reloc.callable_capture_offset.get() orelse missing,
+                    .procedure = if (reloc.procedure.get()) |id| @backingInt(id) else missing,
                     .rc_layout = if (reloc.rc_helper) |helper| @intCast(@backingInt(helper.layout_idx)) else missing,
                     .rc_op = if (reloc.rc_helper) |helper| @backingInt(helper.op) else missing,
                     .function_pointer = @intFromBool(reloc.kind == .function_pointer),
@@ -126,8 +126,8 @@ pub fn Schema(comptime Image: type) type {
                         .target_symbol_name = try Image.sliceFromRef(u8, base, size, reloc.name),
                         .target = if (reloc.data_symbol == missing) .named else .{ .data_symbol = @fromBackingInt(@intCast(reloc.data_symbol)) },
                         .kind = if (reloc.function_pointer != 0) .function_pointer else .address,
-                        .callable_capture_offset = if (reloc.capture_offset == missing) null else reloc.capture_offset,
-                        .procedure = if (reloc.procedure == missing) null else @fromBackingInt(@intCast(reloc.procedure)),
+                        .callable_capture_offset = if (reloc.capture_offset == missing) .none else .some(reloc.capture_offset),
+                        .procedure = if (reloc.procedure == missing) .none else .some(@fromBackingInt(@intCast(reloc.procedure))),
                         .rc_helper = if (reloc.rc_layout == missing) null else .{ .op = rc_op, .layout_idx = @fromBackingInt(@intCast(reloc.rc_layout)) },
                     };
                 }

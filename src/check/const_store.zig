@@ -385,9 +385,13 @@ pub const RecordedStructuralEdge = struct {
     dispatcher_ty: checked_ids.CheckedTypeId,
     callable_key: names.CanonicalTypeKey,
     callable_ty: checked_ids.CheckedTypeId,
-    generated_codec_derivation: ?static_dispatch.GeneratedCodecDerivationId,
+    generated_codec_derivation: collections.OptionalId(static_dispatch.GeneratedCodecDerivationId),
     generated_codec_content: ?static_dispatch.GeneratedCodecContentDigest,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RecordedStructuralEdge) == 144);
+}
 
 /// A codec edge named by its contract's identity across checked modules and
 /// the checked keys of its dispatcher and callable types.
@@ -543,18 +547,22 @@ pub const ConstFnEvidenceScope = union(enum(u8)) {
 /// flat evidence vector; parent indexes address its `evidence_frames` slice.
 pub const ConstFnEvidenceFrame = struct {
     scope_id: ConstFnEvidenceScope,
-    parent: ?u32,
+    parent: collections.OptionalU32,
     roots_start: u32,
     roots_len: u32,
 
     pub fn init(scope_id: ConstFnEvidenceScope, parent: ?u32, roots_start: u32, roots_len: u32) ConstFnEvidenceFrame {
-        return .{ .scope_id = scope_id, .parent = parent, .roots_start = roots_start, .roots_len = roots_len };
+        return .{ .scope_id = scope_id, .parent = .of(parent), .roots_start = roots_start, .roots_len = roots_len };
     }
 
     pub fn scope(self: ConstFnEvidenceFrame) ConstFnEvidenceScope {
         return self.scope_id;
     }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ConstFnEvidenceFrame) == 20);
+}
 
 /// Function value stored by compile-time evaluation.
 pub const ConstFn = struct {
@@ -707,14 +715,18 @@ const StoredFn = struct {
     fn_def: FnDef,
     source_fn_ty: checked_ids.CheckedTypeId,
     source_fn_key: names.TypeDigest,
-    owner_fn_ty: ?ConstTypeId = null,
+    owner_fn_ty: collections.OptionalId(ConstTypeId) = .none,
     captures: ConstRange = .{},
     evidence: ConstRange = .{},
     evidence_targets: ConstRange = .{},
     evidence_structurals: ConstRange = .{},
     evidence_frames: ConstRange = .{},
-    evidence_frame_head: ?u32 = null,
+    evidence_frame_head: collections.OptionalU32 = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(StoredFn) == 232);
+}
 
 /// A type node as `ConstTypeStore` keeps it: `ConstType` with its two large
 /// payloads, `named` and `erased`, held out of line by index, so a node takes
@@ -1324,13 +1336,13 @@ pub const ConstStore = struct {
             .fn_def = fn_value.fn_def,
             .source_fn_ty = fn_value.source_fn_ty,
             .source_fn_key = fn_value.source_fn_key,
-            .owner_fn_ty = fn_value.owner_fn_ty,
+            .owner_fn_ty = .of(fn_value.owner_fn_ty),
             .captures = captures_range,
             .evidence = evidence_range,
             .evidence_targets = evidence_targets,
             .evidence_structurals = evidence_structurals,
             .evidence_frames = evidence_frames,
-            .evidence_frame_head = fn_value.evidence_frame_head,
+            .evidence_frame_head = .of(fn_value.evidence_frame_head),
         });
         return id;
     }
@@ -1364,13 +1376,14 @@ pub const ConstStore = struct {
         var cursor: usize = 0;
         for (fn_value.evidence_frames, 0..) |frame, index| {
             if (index == 0 or index == head + 1) {
-                if (frame.scope() != .root or frame.parent != null) return false;
+                if (frame.scope() != .root or frame.parent != .none) return false;
             } else {
                 switch (frame.scope()) {
                     .root => return false,
                     .generalized => {},
                 }
-                if (frame.parent == null or frame.parent.? != index - 1) return false;
+                const parent = frame.parent.get() orelse return false;
+                if (parent != index - 1) return false;
             }
             if (frame.roots_start != cursor) return false;
             cursor = try evidenceVectorEnd(allocator, fn_value.evidence, cursor, frame.roots_len) orelse return false;
@@ -1546,7 +1559,7 @@ pub const ConstStore = struct {
             .fn_def = stored.fn_def,
             .source_fn_ty = stored.source_fn_ty,
             .source_fn_key = stored.source_fn_key,
-            .owner_fn_ty = stored.owner_fn_ty,
+            .owner_fn_ty = stored.owner_fn_ty.get(),
             .captures = self.capture_pool.items[stored.captures.start .. stored.captures.start + stored.captures.len],
             .evidence = .{
                 .nodes = self.evidence_pool.items[stored.evidence.start .. stored.evidence.start + stored.evidence.len],
@@ -1554,7 +1567,7 @@ pub const ConstStore = struct {
                 .structurals = self.evidence_structural_pool.items[stored.evidence_structurals.start .. stored.evidence_structurals.start + stored.evidence_structurals.len],
             },
             .evidence_frames = self.evidence_frame_pool.items[stored.evidence_frames.start .. stored.evidence_frames.start + stored.evidence_frames.len],
-            .evidence_frame_head = stored.evidence_frame_head,
+            .evidence_frame_head = stored.evidence_frame_head.get(),
         };
     }
 
@@ -2134,7 +2147,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_head));
 
     var corrupt_parent_frames = evidence_frames;
-    corrupt_parent_frames[1].parent = 1;
+    corrupt_parent_frames[1].parent = .some(1);
     var corrupt_parent = loaded_fn;
     corrupt_parent.evidence_frames = &corrupt_parent_frames;
     try std.testing.expect(!try ConstStore.evidenceFramesValid(std.testing.allocator, corrupt_parent));

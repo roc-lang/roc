@@ -250,7 +250,7 @@ pub const StaticDataImage = struct {
 
 fn exportHoldsCallable(static_export: *const StaticDataExport) bool {
     for (static_export.relocations) |relocation| {
-        if (relocation.kind == .function_pointer and relocation.callable_capture_offset != null) return true;
+        if (relocation.kind == .function_pointer and relocation.callable_capture_offset != .none) return true;
     }
     return false;
 }
@@ -304,8 +304,8 @@ test "static data image resolves function relocations explicitly" {
         .offset = 0,
         .target_symbol_name = "roc__p1",
         .kind = .function_pointer,
-        .callable_capture_offset = 16,
-        .procedure = @fromBackingInt(@intCast(1)),
+        .callable_capture_offset = .some(16),
+        .procedure = .some(@fromBackingInt(@intCast(1))),
     }};
     const exports = [_]StaticDataExport{.{
         .symbol_name = "callable",
@@ -319,8 +319,8 @@ test "static data image resolves function relocations explicitly" {
     const Resolver = struct {
         fn resolve(_: ?*anyopaque, relocation: StaticDataRelocation) ?usize {
             if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__p1")) return null;
-            if (relocation.callable_capture_offset != 16) return null;
-            if (@backingInt(relocation.procedure orelse return null) != 1) return null;
+            if (relocation.callable_capture_offset.get() != 16) return null;
+            if (@backingInt(relocation.procedure.get() orelse return null) != 1) return null;
             return 0x1234;
         }
     };

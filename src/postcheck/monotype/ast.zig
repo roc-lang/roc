@@ -312,11 +312,14 @@ pub const CodecContractIdentity = struct {
     shape_ty: Type.TypeId,
 };
 
+/// An optional `CodecContractIdentity` at its own size.
+pub const OptionalCodecContractIdentity = collections.OptionalStruct(CodecContractIdentity, "constructor_ty");
+
 /// Function template plus source and monomorphic type identities.
 pub const FnTemplate = struct {
     /// Identity in the common frozen Monotype owner, stamped by lifting.
     /// Consumer-specific symbols and layout specializations never replace it.
-    frozen_fn: ?FnId = null,
+    frozen_fn: collections.OptionalId(FnId) = .none,
     /// Exact callable worker specialization key, emitted by SpecConstr:
     /// SHA-256 template, callable-ABI, and capture-ABI digests in that order.
     frozen_worker: ?[96]u8 = null,
@@ -328,7 +331,7 @@ pub const FnTemplate = struct {
     /// it was lowered in, which names the variables a stored value of it keeps
     /// no other record of. Not part of the function's identity: a body that
     /// depended on one would have a different request or evidence.
-    owner_fn_ty: ?Type.TypeId = null,
+    owner_fn_ty: collections.OptionalId(Type.TypeId) = .none,
     evidence_digest: EvidenceDigest = .{},
     /// `specIdentityKey` of the specialization this template was reserved
     /// for, computed before the body exists. Null for functions that are not template
@@ -376,8 +379,12 @@ pub const FnTemplate = struct {
     /// created, retained for compile-time function values.
     const_evidence: ConstEvidenceSpans = .{},
     const_evidence_frames: Span(check.ConstStore.ConstFnEvidenceFrame) = Span(check.ConstStore.ConstFnEvidenceFrame).empty(),
-    const_evidence_frame_head: ?u32 = null,
+    const_evidence_frame_head: collections.OptionalU32 = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(FnTemplate) == 464);
+}
 
 /// Monotype function-specialization metadata.
 pub const SignatureRelation = enum(u8) {
@@ -750,7 +757,7 @@ fn writeFnEvidence(
             .root => {},
             .generalized => |scope| writeU32(hasher, scope),
         }
-        writeOptionalU32(hasher, frame.parent);
+        writeOptionalU32(hasher, frame.parent.get());
         writeU32(hasher, frame.roots_start);
         writeU32(hasher, frame.roots_len);
     }
@@ -1417,8 +1424,12 @@ pub const ComptimeSite = struct {
     /// the procedure the site ends up in.
     owner: Common.LoweringModuleId,
     region: base.Region,
-    checked_site: ?checked.CheckedExhaustivenessSiteId = null,
+    checked_site: collections.OptionalId(checked.CheckedExhaustivenessSiteId) = .none,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(ComptimeSite) == 20);
+}
 
 /// Typed Monotype expression.
 pub const Expr = struct {
@@ -1737,7 +1748,7 @@ pub const Stmt = union(enum(u8)) {
 pub const Def = struct {
     symbol: Common.Symbol,
     fn_def: ?FnTemplate = null,
-    fn_id: ?FnId = null,
+    fn_id: collections.OptionalId(FnId) = .none,
     /// Content identity of a definition that has no function template: a
     /// static-data request thunk or a procedure-binding root, identified by
     /// the checked request that produced it. Null when `fn_def` is present.
@@ -1746,6 +1757,10 @@ pub const Def = struct {
     body: FnBody,
     ret: Type.TypeId,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(Def) == 532);
+}
 
 /// Body availability for a top-level or generated Monotype definition.
 pub const FnBody = union(enum(u8)) {
@@ -1845,9 +1860,13 @@ pub const LiteralRoot = struct {
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
     ty: Type.TypeId,
-    def: ?DefId = null,
+    def: collections.OptionalId(DefId) = .none,
     const_locator: ?checked.ConstLocator = null,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(LayoutRequest) == 68);
+}
 
 /// Runtime schema requested for a named runtime value shape.
 pub const RuntimeSchemaRequest = struct {
@@ -2020,7 +2039,7 @@ pub const ProgramView = struct {
 
     pub fn verifyCallTargets(self: ProgramView) ?CallTargetVerifyError {
         for (self.defs) |def| {
-            if (def.fn_id) |fn_id| {
+            if (def.fn_id.get()) |fn_id| {
                 if (self.verifyFnDefinition(fn_id, def.args)) |err| return err;
             }
         }
@@ -2563,7 +2582,7 @@ pub const ProgramBuilder = struct {
             .kind = kind,
             .owner = owner,
             .region = region,
-            .checked_site = checked_site,
+            .checked_site = .of(checked_site),
         });
         return id;
     }
@@ -3064,7 +3083,7 @@ test "monotype call target verifier checks local slots" {
         const fn_id = try program.addFn(testFnSource(fn_ty));
         try program.defs.append(std.testing.allocator, .{
             .symbol = undefined, // symbol is not inspected by the call-target verifier
-            .fn_id = fn_id,
+            .fn_id = .some(fn_id),
             .args = Span(TypedLocal).empty(),
             .body = .hosted,
             .ret = unit_ty,
@@ -3332,7 +3351,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
             .dispatcher_ty = replay_types[0],
             .callable_key = try types.view().rootKey(replay_types[1]),
             .callable_ty = replay_types[1],
-            .generated_codec_derivation = derivation_ids[0],
+            .generated_codec_derivation = .some(derivation_ids[0]),
             .generated_codec_content = .{ .bytes = @as([32]u8, @splat(4)) },
         } },
     }};
@@ -3341,7 +3360,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const right: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &right_structurals };
     right_structurals[0].checked.?.recorded.dispatcher_ty = replay_types[2];
     right_structurals[0].checked.?.recorded.callable_ty = replay_types[3];
-    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[1];
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = .some(derivation_ids[1]);
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0));
     // Equal contracts recorded by different modules are one identity.
@@ -3355,7 +3374,7 @@ test "codec function evidence identity excludes per-use replay addresses" {
     const stored: check.ConstStore.ConstFnEvidenceVector = .{ .nodes = &nodes, .structurals = &stored_structurals };
     try std.testing.expect(fnEvidenceEql(left, &frames, 0, stored, &frames, 0));
     try std.testing.expectEqual(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(stored, &frames, 0));
-    right_structurals[0].checked.?.recorded.generated_codec_derivation = derivation_ids[2];
+    right_structurals[0].checked.?.recorded.generated_codec_derivation = .some(derivation_ids[2]);
     right_structurals[0].checked.?.recorded.generated_codec_content = .{ .bytes = @as([32]u8, @splat(6)) };
     try std.testing.expect(!fnEvidenceEql(left, &frames, 0, right, &frames, 0));
     try std.testing.expect(!std.meta.eql(fnEvidenceDigest(left, &frames, 0), fnEvidenceDigest(right, &frames, 0)));

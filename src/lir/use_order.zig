@@ -1103,7 +1103,7 @@ test "use order compact procedure domain matches dense queries and excludes unre
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11661),
         .args = try store.addLocalSpan(&.{input}),
-        .body = alias,
+        .body = .some(alias),
         .ret_layout = .u64,
     }, .none);
     var compact = try UseOrder.initFromStore(allocator, &store, proc);
@@ -1208,7 +1208,7 @@ test "use order block queries agree with a statement-level search on random bodi
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(11698),
             .args = try store.addLocalSpan(gen.locals[0..1]),
-            .body = body,
+            .body = .some(body),
             .ret_layout = .u64,
         }, .none);
         var order = try UseOrder.initFromStore(allocator, &store, proc);

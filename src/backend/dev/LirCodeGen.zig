@@ -14017,7 +14017,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 );
             }
 
-            if (proc_spec.hosted) |hosted| {
+            if (proc_spec.hosted.get()) |hosted| {
                 return try self.generateCAbiCall(.{ .hosted = hosted }, arg_locs, arg_layouts, call.ret_layout);
             }
             if (proc_spec.linked) {
@@ -14048,7 +14048,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateDynCall(self: *Self, proc_id: lir.LIR.LirProcSpecId, args: LocalSpan, target_local: LocalId, drive: lir.LIR.PendingDrive) Allocator.Error!void {
             try self.spillAllVectorLocals();
             const callee = self.store.getProcSpec(proc_id);
-            if (callee.hosted != null) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
+            if (callee.hosted.get() != null) base.invariant("LIR/codegen invariant violated: a call with dynamic operands targets a C-ABI procedure", .{});
             const arg_refs = self.store.getLocalSpan(args);
             const param_refs = self.store.getLocalSpan(callee.args);
             if (arg_refs.len != param_refs.len) base.invariant(
@@ -14150,7 +14150,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const param_refs = self.store.getLocalSpan(proc_spec.args);
             if (proc_spec.linked) base.invariant("LIR/codegen invariant violated: a frame-replacing call targets a procedure another object defines", .{});
             if (param_refs.len != arg_refs.len or
-                proc_spec.hosted != null or
+                proc_spec.hosted.get() != null or
                 proc_spec.abi != .roc or
                 proc_spec.ret_layout != call.ret_layout or
                 self.early_return_ret_layout != call.ret_layout)
@@ -19074,7 +19074,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             if (proc.uses_pending_cell and !proc.takesPendingCell()) try self.emitOwnPendingCell(invocation_slot);
 
-            if (proc.hosted) |hosted| {
+            if (proc.hosted.get()) |hosted| {
                 try self.generateCAbiProcWrapper(.{ .hosted = hosted }, proc);
             } else {
                 const body = requireProcBody(proc_id, proc);
@@ -19299,7 +19299,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
-            return proc.body orelse base.invariant(
+            return proc.body.get() orelse base.invariant(
                 "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
                 .{ @backingInt(proc_id), proc.name.raw() },
             );
@@ -19310,7 +19310,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             callee: CAbiCallee,
             proc: LirProcSpec,
         ) Allocator.Error!void {
-            if (builtin.mode == .debug and proc.body != null) {
+            if (builtin.mode == .debug and proc.body != .none) {
                 base.invariant(
                     "Dev/codegen invariant violated: C-ABI proc {d} unexpectedly carried a statement body",
                     .{proc.name.raw()},
@@ -23896,7 +23896,7 @@ fn addNoArgProc(store: *LirStore, body: CFStmtId, ret_layout: layout.Idx) Alloca
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = LocalSpan.empty(),
-        .body = body,
+        .body = .some(body),
         .ret_layout = ret_layout,
     }, .none);
 }
@@ -23906,7 +23906,7 @@ fn addProc(store: *LirStore, args: []const LocalId, body: CFStmtId, ret_layout: 
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
         .args = try store.addLocalSpan(args),
-        .body = body,
+        .body = .some(body),
         .ret_layout = ret_layout,
     }, .none);
 }
@@ -25974,7 +25974,7 @@ fn addHostedCallRoot(
         .identity = lir.LIR.ProcIdentity.forTest(4),
         .args = try store.addLocalSpan(params),
         .ret_layout = .i64,
-        .hosted = .{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 },
+        .hosted = .some(.{ .symbol = try store.insertString(symbol_name), .dispatch_index = 0 }),
     }, .none);
 
     const args = try allocator.alloc(LocalId, arg_layouts.len);
@@ -26072,7 +26072,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
     const local = try store.addLocal(.{ .layout_idx = .str });
     const end = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{ .target = local, .value = .{ .str_literal = .{ .backing = literal, .offset = 0, .len = @intCast(store.getString(literal).len) } }, .next = end } }, .test_fixture);
-    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = body, .ret_layout = .str }, .none);
+    _ = try store.addProcSpec(.{ .name = store.freshSyntheticSymbol(), .identity = lir.LIR.ProcIdentity.forTest(11), .args = .empty(), .body = .some(body), .ret_layout = .str }, .none);
     var test_state = try TestLayoutState.init(allocator);
     defer test_state.deinit();
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux }) |target| {
@@ -26143,7 +26143,7 @@ test "independent fragment emits only requested procedure with unresolved self a
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(81),
             .args = .empty(),
-            .body = call,
+            .body = .some(call),
             .ret_layout = .i64,
         }, .none);
         var cg = try LirCodeGen(target).init(allocator, &store, &layouts.layout_store, .{}, .default);
@@ -26216,7 +26216,7 @@ test "independent fragment symbolic calls resolve after all procedures are place
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(99),
             .args = .empty(),
-            .body = call,
+            .body = .some(call),
             .ret_layout = .i64,
         }, .none);
         var image = try CG.init(allocator, &store, &layouts.layout_store, .{}, .default);

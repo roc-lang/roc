@@ -615,7 +615,7 @@ pub const StaticDescs = struct {
     fn addSlot(self: *StaticDescs) Allocator.Error!LIR.StaticDataId {
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = .opaque_ptr,
         });
         return id;
@@ -951,8 +951,8 @@ pub const StaticDescs = struct {
             .target_symbol_name = try self.result.store.getProcSpec(proc).identity.symbolName(self.allocator),
             .owns_target_symbol_name = true,
             .kind = .function_pointer,
-            .procedure = proc,
-            .callable_capture_offset = capture_offset,
+            .procedure = .some(proc),
+            .callable_capture_offset = .some(capture_offset),
         };
         var next: usize = 1;
         for (words, 0..) |word, position| {

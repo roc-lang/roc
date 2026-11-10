@@ -39,8 +39,8 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
             std.hash.autoHash(&hash, std.meta.activeTag(call.resolution));
             hash.update(&(try types.rootKey(call.dispatcher_ty)).bytes);
             hash.update(&(try types.rootKey(call.callable_ty)).bytes);
-            std.hash.autoHash(&hash, call.subject_ty != null);
-            if (call.subject_ty) |subject| hash.update(&(try types.rootKey(subject)).bytes);
+            std.hash.autoHash(&hash, call.subject_ty != .none);
+            if (call.subject_ty.get()) |subject| hash.update(&(try types.rootKey(subject)).bytes);
         }
         const key = hash.final();
         var candidate = buckets.get(key);
@@ -309,7 +309,7 @@ const ContentDigester = struct {
             self.writeU32(call.method_role);
             try self.writeType(call.dispatcher_ty);
             try self.writeType(call.callable_ty);
-            try self.writeOptionalType(call.subject_ty);
+            try self.writeOptionalType(call.subject_ty.get());
             self.writeU8(@backingInt(std.meta.activeTag(call.resolution)));
             switch (call.resolution) {
                 .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
@@ -492,7 +492,7 @@ pub fn callsEquivalent(
     if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
     try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
     try comparer.typesPair(left.callable_ty, right.callable_ty);
-    if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
+    if (!try comparer.optionalTypes(left.subject_ty.get(), right.subject_ty.get())) return false;
     switch (left.resolution) {
         .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before calls are compared
         .checked_error => {},
@@ -619,7 +619,7 @@ const Comparer = struct {
                         if (ac.method != bc.method or ac.method_role != bc.method_role or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
                         try self.typesPair(ac.dispatcher_ty, bc.dispatcher_ty);
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
-                        if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
+                        if (!try self.optionalTypes(ac.subject_ty.get(), bc.subject_ty.get())) return false;
                         switch (ac.resolution) {
                             .pending => unreachable, // EvidencePass.linkGeneratedCodecCalls resolves every call before codec identities are computed
                             .checked_error => {},

@@ -211,7 +211,7 @@ pub fn forEachCheckedSourceTypeRoot(
     // name the exact scheme without relying on an unrelated definition
     // having the same canonical key.
     for (inputs.selected_hoisted_roots) |selected| {
-        try visitor.visitScheme(if (selected.pattern) |pattern|
+        try visitor.visitScheme(if (selected.pattern.get()) |pattern|
             ModuleEnv.varFrom(pattern)
         else
             module.exprType(selected.expr));
@@ -1083,7 +1083,7 @@ pub const RootRequest = struct {
     /// previously evaluated root from its platform.
     evaluation_complete: bool = false,
     /// Full same-module evaluation order, including withheld roots.
-    evaluation_order: ?u32 = null,
+    evaluation_order: collections.OptionalU32 = .none,
     module_idx: u32,
     kind: RootRequestKind,
     source: RootSource,
@@ -1092,7 +1092,7 @@ pub const RootRequest = struct {
     /// Exact checked root selected for this request. Compile-time roots can
     /// share a source expression, so source and broad request kind are not an
     /// identity.
-    compile_time_root: ?ComptimeRootId = null,
+    compile_time_root: OptionalId(ComptimeRootId) = .none,
     checked_type: CheckedTypeId,
     abi: RootAbi,
     exposure: RootExposure,
@@ -1101,6 +1101,10 @@ pub const RootRequest = struct {
     procedure_use: ?ProcedureUseTemplate = null,
     root_evidence: ?CheckedEvidenceSpan = null,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(RootRequest) == 248);
+}
 
 /// Public `RootRequestTable` declaration.
 pub const RootRequestTable = struct {
@@ -1238,7 +1242,7 @@ pub const RootRequestTable = struct {
             // A direct app entry invokes the checked platform instance. A
             // compile-time wrapper constructs the value instead; it retains
             // its own callable type and construction evidence.
-            if (request.compile_time_root == null) for (platform_solutions, platform_root_evidence) |solution, evidence| {
+            if (request.compile_time_root == .none) for (platform_solutions, platform_root_evidence) |solution, evidence| {
                 if (!solution.is_function or solution.outcome != .success) continue;
                 const matches = switch (request.source) {
                     .def => |def| def == solution.def,
@@ -1296,7 +1300,7 @@ pub const RootRequestTable = struct {
         for (full_schedule) |request| {
             all_requests[request.order].requires_pairing = request.requires_pairing;
             if (request.abi != .compile_time) continue;
-            all_requests[request.order].evaluation_order = evaluation_order;
+            all_requests[request.order].evaluation_order = .some(evaluation_order);
             evaluation_order += 1;
             if (!request.requires_pairing) try active_schedule.append(allocator, all_requests[request.order]);
         }
@@ -1774,7 +1778,7 @@ const CompileTimeRequestScheduler = struct {
                     try self.addRootDependency(template.root);
                     // A call of an exact procedure alias is a call of the
                     // procedure its lookup forwards to.
-                    const lookup = template.forwarded_lookup orelse return null;
+                    const lookup = template.forwarded_lookup.get() orelse return null;
                     const ref_id = self.resolved_value_refs.lookupIdByExpr(lookup) orelse
                         checkedArtifactInvariant("an exact procedure alias's forwarded lookup had no resolved value reference", .{});
                     const ref = self.resolved_value_refs.records[@backingInt(ref_id)].ref;
@@ -1952,7 +1956,7 @@ fn compileTimeRootIdForRequest(
     compile_time_roots: *const CompileTimeRootTable,
     request: RootRequest,
 ) ComptimeRootId {
-    const root_id = request.compile_time_root orelse {
+    const root_id = request.compile_time_root.get() orelse {
         checkedArtifactInvariant("compile-time request had no exact compile-time root identity", .{});
     };
     const raw = @backingInt(root_id);
@@ -2164,7 +2168,7 @@ fn compileTimeRootHasRootRequest(
 ) bool {
     for (requests) |request| {
         if (request.abi != .compile_time) continue;
-        if (request.compile_time_root == root.id) return true;
+        if (request.compile_time_root.get() == root.id) return true;
     }
     return false;
 }
@@ -2466,7 +2470,7 @@ fn aliasRootWrapperTemplate(
     return switch (top_level_procedure_bindings.get(binding_ref).body) {
         .callable_eval_template => |template_id| blk: {
             const template = callable_eval_templates.templates.items[@backingInt(template_id)];
-            if (template.forwarded_lookup == null) break :blk null;
+            if (template.forwarded_lookup == .none) break :blk null;
             break :blk templateForEntryWrapperRoot(entry_wrappers, template.root);
         },
         .direct_template, .checked_error => null,
@@ -2575,7 +2579,7 @@ fn appendRoot(
         .kind = request.kind,
         .source = request.source,
         .provided_export = if (request.provided_export) |id| .some(id) else .none,
-        .compile_time_root = request.compile_time_root,
+        .compile_time_root = .of(request.compile_time_root),
         .checked_type = request.checked_type,
         .abi = request.abi,
         .exposure = request.exposure,
@@ -2729,6 +2733,10 @@ pub const CheckedTypeScheme = struct {
     }
 };
 
+/// An optional `types.NumeralInfo` at its own size. A digit count below
+/// `maxInt(u32)` is the key, since a literal's source text bounds it.
+pub const OptionalNumeralInfo = collections.OptionalStruct(types.NumeralInfo, "scale");
+
 /// Public `CheckedStaticDispatchConstraint` declaration.
 pub const CheckedStaticDispatchConstraint = struct {
     fn_name: canonical.MethodNameId,
@@ -2736,16 +2744,20 @@ pub const CheckedStaticDispatchConstraint = struct {
     origin: types.StaticDispatchConstraint.Origin,
     /// A numeric literal conversion's facts; present exactly when `origin` is
     /// the `numeral` literal kind.
-    numeral: ?types.NumeralInfo = null,
+    numeral: OptionalNumeralInfo = .none,
 
     pub fn binopNegated(self: @This()) bool {
         return self.origin.binopNegated();
     }
 
     pub fn numeralInfo(self: @This()) ?types.NumeralInfo {
-        return self.numeral;
+        return self.numeral.get();
     }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(CheckedStaticDispatchConstraint) == 48);
+}
 
 /// The defaulting oracle (src/types/literal_defaulting.zig), re-exported for
 /// consumers reached through the checked artifact (monotype solving/lowering).
@@ -3528,11 +3540,15 @@ pub const StoredAlias = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleIdentityId,
     owner_module: ModuleId,
-    source_decl: ?u32 = null,
+    source_decl: collections.OptionalU32 = .none,
     builtin_origin: bool = false,
     backing: CheckedTypeId,
     args: CheckedTypeRange = .{},
 };
+
+comptime {
+    std.debug.assert(@sizeOf(StoredAlias) == 60);
+}
 
 /// POD form of `CheckedNominalType`: `args` and `padding_field_types` are ranges
 /// into `type_id_pool`; `declared_fields` is a range into `declared_field_pool`.
@@ -10977,7 +10993,7 @@ fn procedureUseCanBeCalledDirectly(
         .callable_eval_template => |template| (if (body.view) |view|
             view.callable_eval_templates.templates[@backingInt(template)]
         else
-            local_callable_eval_templates.get(template)).forwarded_lookup != null,
+            local_callable_eval_templates.get(template)).forwarded_lookup != .none,
     };
 }
 
@@ -11403,8 +11419,12 @@ pub const CallableEvalTemplate = struct {
     /// an exact procedure alias (`f = g`). A call through the alias is a
     /// direct call that forwards to that lookup inside the alias's own
     /// evidence scope, its entry wrapper; no compile-time evaluator runs.
-    forwarded_lookup: ?CIR.Expr.Idx = null,
+    forwarded_lookup: OptionalId(CIR.Expr.Idx) = .none,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CallableEvalTemplate) == 28);
+}
 
 /// Public `CallableEvalTemplateTableView` declaration.
 pub const CallableEvalTemplateTableView = struct {
@@ -11456,7 +11476,7 @@ pub const CallableEvalTemplateTable = struct {
     fn forwardingRoots(self: *const CallableEvalTemplateTable, allocator: Allocator, root_count: usize) Allocator.Error!std.DynamicBitSetUnmanaged {
         var roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, root_count);
         for (self.templates.items) |template| {
-            if (template.forwarded_lookup != null) roots.set(@backingInt(template.root));
+            if (template.forwarded_lookup != .none) roots.set(@backingInt(template.root));
         }
         return roots;
     }
@@ -11480,12 +11500,12 @@ fn publishCallableEvalForwarding(
     available_modules: []const ImportedModuleView,
     relation_modules: []const ImportedModuleView,
 ) void {
-    for (templates.templates.items) |*template| template.forwarded_lookup = null;
+    for (templates.templates.items) |*template| template.forwarded_lookup = .none;
     var changed = true;
     while (changed) {
         changed = false;
         for (templates.templates.items) |*template| {
-            if (template.forwarded_lookup != null) continue;
+            if (template.forwarded_lookup != .none) continue;
             const root = roots.root(template.root);
             if (!compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) continue;
             const ref_id = resolved_value_refs.lookupIdByExpr(root.rootExpr()) orelse
@@ -11500,7 +11520,7 @@ fn publishCallableEvalForwarding(
                 available_modules,
                 relation_modules,
             )) continue;
-            template.forwarded_lookup = root.expr;
+            template.forwarded_lookup = .of(root.expr.get());
             changed = true;
         }
     }
@@ -11550,12 +11570,12 @@ const SelectedHoistedCallableTable = struct {
                 .def, .expr, .statement, .required_binding, .literal => continue,
             }
 
-            const source_pattern = root.source_pattern orelse
+            const source_pattern = root.source_pattern.get() orelse
                 checkedArtifactInvariant("selected callable root had no source pattern", .{});
             if (!sourceTypeIsFunction(module, ModuleEnv.varFrom(source_pattern))) {
                 checkedArtifactInvariant("selected callable root source pattern was not function-typed", .{});
             }
-            const checked_pattern = root.pattern orelse
+            const checked_pattern = root.pattern.get() orelse
                 checkedArtifactInvariant("selected callable root had no checked pattern", .{});
             const source_scheme = checked_type_publication.schemeForSourceVar(module, ModuleEnv.varFrom(source_pattern));
             const callable_template = try callable_eval_templates.append(
@@ -12810,8 +12830,8 @@ fn isLocalProcExpr(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) bool {
 /// scope's canonical evidence params at depth 0, walking outward to the
 /// template's own params.
 pub const DispatchRefScope = struct {
-    /// Enclosing generalized-local scope, or `null` for the template itself.
-    parent: ?DispatchScopeId,
+    /// Enclosing generalized-local scope, or `.none` for the template itself.
+    parent: collections.OptionalId(DispatchScopeId),
     /// The local function's scheme root var (its decl pattern var).
     scheme_var: Var,
     /// Published checked root of `scheme_var`; specialization evidence paths
@@ -12827,6 +12847,10 @@ pub const DispatchRefScope = struct {
     /// The scope scheme's literal requirements, as a template's.
     literal_requirements: artifact_serialize.Span = .{},
 };
+
+comptime {
+    std.debug.assert(@sizeOf(DispatchRefScope) == 40);
+}
 
 /// Stable identity of a generalized-local dispatch scope within a checked
 /// module artifact.
@@ -13959,7 +13983,7 @@ const EvidencePass = struct {
     /// hoisted root's source pattern or the constant's definition. Expression
     /// roots, expect bodies and platform-required bindings have no scheme.
     fn rootSchemeVar(root: CompileTimeRoot) ?Var {
-        if (root.source_pattern) |source_pattern| return ModuleEnv.varFrom(source_pattern);
+        if (root.source_pattern.get()) |source_pattern| return ModuleEnv.varFrom(source_pattern);
         return switch (root.source) {
             .def => |def_idx| ModuleEnv.varFrom(def_idx),
             .expr, .statement, .required_binding, .hoisted, .literal => null,
@@ -14140,7 +14164,7 @@ const EvidencePass = struct {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                break :blk root.kind == .callable_binding and root.source_pattern == null;
+                break :blk root.kind == .callable_binding and root.source_pattern == .none;
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => false,
         };
@@ -14197,7 +14221,7 @@ const EvidencePass = struct {
         return switch (template.body) {
             .entry_wrapper => |wrapper_id| blk: {
                 const root = self.compile_time_roots.root(self.entry_wrappers.get(wrapper_id).root);
-                if (root.source_pattern) |pattern| break :blk ModuleEnv.varFrom(pattern);
+                if (root.source_pattern.get()) |pattern| break :blk ModuleEnv.varFrom(pattern);
                 break :blk if (root.kind == .callable_binding) rootSchemeVar(root) else null;
             },
             .checked_body, .intrinsic_wrapper, .unimplemented => null,
@@ -14523,7 +14547,7 @@ const EvidencePass = struct {
                     },
                 }
 
-                if (call.subject_ty == null and call.method_role != 0) {
+                if (call.subject_ty == .none and call.method_role != 0) {
                     checkedArtifactInvariant(
                         "checked generated codec shape-independent call had a nonzero method role",
                         .{},
@@ -14534,14 +14558,14 @@ const EvidencePass = struct {
                     if (previous.method != call.method) continue;
                     if (call.method_role > 0 and previous.method_role == call.method_role - 1) has_previous_role = true;
                     if (previous.method_role != call.method_role) continue;
-                    if ((previous.subject_ty == null) != (call.subject_ty == null)) {
+                    if ((previous.subject_ty == .none) != (call.subject_ty == .none)) {
                         checkedArtifactInvariant(
                             "checked generated codec method role mixed subject-bearing and shape-independent calls",
                             .{},
                         );
                     }
-                    if (call.subject_ty) |subject_ty| {
-                        if (!try type_view.rootAliasTransparentEql(&scratch, previous.subject_ty.?, subject_ty)) {
+                    if (call.subject_ty.get()) |subject_ty| {
+                        if (!try type_view.rootAliasTransparentEql(&scratch, previous.subject_ty.get().?, subject_ty)) {
                             checkedArtifactInvariant(
                                 "checked generated codec method role named different subject types",
                                 .{},
@@ -14643,7 +14667,7 @@ const EvidencePass = struct {
             const scope = self.template_iterator_refs.scopes[@backingInt(id)];
             const schema = try self.schemeSchema(scope.scheme_var);
             try self.chain_scratch.append(self.allocator, .{ .params = schema.params, .by_dispatcher = schema.by_dispatcher });
-            current = scope.parent;
+            current = scope.parent.get();
         }
         try self.chain_scratch.append(self.allocator, template_level);
         return self.chain_scratch.items;
@@ -16570,7 +16594,7 @@ const EvidencePass = struct {
             checkedArtifactInvariant("nested procedure construction scope belonged to a different checked expression", .{});
         }
 
-        const parent_scope: DispatchScope = if (scope.parent) |parent|
+        const parent_scope: DispatchScope = if (scope.parent.get()) |parent|
             .{ .generalized = parent }
         else
             .root;
@@ -17074,7 +17098,7 @@ const CheckedTemplateRefCollector = struct {
             const scope_entry = try self.scope_by_checked_expr.getOrPut(expr_id);
             const scope_id = if (scope_entry.found_existing) blk: {
                 const existing = self.scopes.items[@backingInt(scope_entry.value_ptr.*)];
-                if (existing.parent != parent or existing.scheme_var != scheme_var or existing.scheme_root != scheme_root) {
+                if (existing.parent.get() != parent or existing.scheme_var != scheme_var or existing.scheme_root != scheme_root) {
                     checkedArtifactInvariant("generalized local dispatch scope has inconsistent checked ownership", .{});
                 }
                 break :blk scope_entry.value_ptr.*;
@@ -17082,7 +17106,7 @@ const CheckedTemplateRefCollector = struct {
                 const id: DispatchScopeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.scopes.items.len))));
                 scope_entry.value_ptr.* = id;
                 try self.scopes.append(self.allocator, .{
-                    .parent = parent,
+                    .parent = .of(parent),
                     .scheme_var = scheme_var,
                     .scheme_root = scheme_root,
                     .checked_expr = expr_id,
@@ -18306,7 +18330,7 @@ fn nestedProcLexicalScope(
     if (raw_scope >= scopes.len or scopes[raw_scope].checked_expr != expr) {
         checkedArtifactInvariant("nested procedure lexical scope map disagreed with the checked scope table", .{});
     }
-    const expected_parent: DispatchScope = if (scopes[raw_scope].parent) |parent|
+    const expected_parent: DispatchScope = if (scopes[raw_scope].parent.get()) |parent|
         .{ .generalized = parent }
     else
         .root;
@@ -20345,7 +20369,7 @@ const EnclosingDispatchIdentity = struct {
                 }
                 const scope = self.scopes[raw_scope];
                 if (try self.index.schemeQuantifies(scope.scheme_root, origin)) return true;
-                current = scope.parent;
+                current = scope.parent.get();
             }
         }
         return false;
@@ -20920,7 +20944,7 @@ fn literalRequirementTypeIsBound(
             for (templates.scheme_vars_pool[dispatch_scope.scheme_vars.start..][0..dispatch_scope.scheme_vars.len]) |bound| {
                 if (store.identityOrigin(bound) == origin) continue :variables;
             }
-            current = if (dispatch_scope.parent) |parent| @backingInt(parent) else null;
+            current = if (dispatch_scope.parent.get()) |parent| @backingInt(parent) else null;
         }
         if (key.template) |template_index| {
             const template = templates.templates.items[template_index];
@@ -20997,7 +21021,7 @@ fn publishLiteralArgumentRoots(
             var current: ?DispatchScopeId = site.scope;
             while (current) |id| {
                 scope_owners.set(@backingInt(id), @fromBackingInt(@as(u32, @intCast(template_index))));
-                current = scopes[@backingInt(id)].parent;
+                current = scopes[@backingInt(id)].parent.get();
             }
         }
     }
@@ -21263,7 +21287,7 @@ fn publishLiteralArgumentRoots(
                                     .callable_eval_template => |template_id| {
                                         const view = if (local_owner) null else self.import_views.viewForKey(owner_key);
                                         const eval_templates: CallableEvalTemplateTableView = if (view) |v| v.callable_eval_templates else self.callable_eval_templates.view();
-                                        if (eval_templates.templates[@backingInt(template_id)].forwarded_lookup == null) return try self.takeComposed(&owned, actuals);
+                                        if (eval_templates.templates[@backingInt(template_id)].forwarded_lookup == .none) return try self.takeComposed(&owned, actuals);
                                         step = try self.callableEvalAliasStep(view, eval_templates.templates[@backingInt(template_id)].pattern);
                                     },
                                     .direct_template, .checked_error => return try self.takeComposed(&owned, actuals),
@@ -21276,7 +21300,7 @@ fn publishLiteralArgumentRoots(
                                 switch (binding.body) {
                                     .callable_eval_template => |template_id| {
                                         const template = view.callable_eval_templates.templates[@backingInt(template_id)];
-                                        if (template.forwarded_lookup == null) return try self.takeComposed(&owned, actuals);
+                                        if (template.forwarded_lookup == .none) return try self.takeComposed(&owned, actuals);
                                         step = try self.callableEvalAliasStep(view, template.pattern);
                                     },
                                     .direct_template, .checked_error => return try self.takeComposed(&owned, actuals),
@@ -21314,7 +21338,7 @@ fn publishLiteralArgumentRoots(
             const wrapper_template = procedure_templates.get(wrapper.template.template);
             return .{
                 .module = alias_view,
-                .lookup = template.forwarded_lookup orelse checkedArtifactInvariant("a method's alias binding is not an exact procedure alias", .{}),
+                .lookup = template.forwarded_lookup.get() orelse checkedArtifactInvariant("a method's alias binding is not an exact procedure alias", .{}),
                 .vars = procedure_templates.scheme_vars_pool[wrapper_template.scheme_vars.start .. wrapper_template.scheme_vars.start + wrapper_template.scheme_vars.len],
             };
         }
@@ -21392,7 +21416,7 @@ fn publishLiteralArgumentRoots(
                 .callable_eval_template => |template_id| blk: {
                     const eval_templates: CallableEvalTemplateTableView = if (alias_view) |view| view.callable_eval_templates else self.callable_eval_templates.view();
                     const template = eval_templates.templates[@backingInt(template_id)];
-                    if (template.forwarded_lookup == null) break :blk null;
+                    if (template.forwarded_lookup == .none) break :blk null;
                     const wrapper_table: *const EntryWrapperTable = if (alias_view) |view| view.entry_wrappers else self.entry_wrappers;
                     const wrapper = wrapper_table.lookupByRoot(template.root) orelse
                         checkedArtifactInvariant("a callable-eval template's root has no entry wrapper", .{});
@@ -21486,7 +21510,7 @@ fn publishLiteralArgumentRoots(
         if (!sealed) continue;
         const site_span = template_iterator_refs.scope_site_spans[template_index];
         for (template_iterator_refs.scope_sites[site_span.start..][0..site_span.len]) |site| {
-            const parent = scopes[@backingInt(site.scope)].parent;
+            const parent = scopes[@backingInt(site.scope)].parent.get();
             try collector.scopeSite(site, .{ .template = t, .scope = if (parent) |p| @backingInt(p) else null });
         }
     }
@@ -21505,7 +21529,7 @@ fn publishLiteralArgumentRoots(
         }
         const sites = template_iterator_refs.default_scope_sites;
         for (template_iterator_refs.scope_sites[sites.start..][0..sites.len]) |site| {
-            const parent = scopes[@backingInt(site.scope)].parent;
+            const parent = scopes[@backingInt(site.scope)].parent.get();
             try collector.scopeSite(site, if (parent) |p| .{ .template = null, .scope = @backingInt(p) } else null);
         }
     }
@@ -23122,15 +23146,15 @@ pub fn pairCheckedPlatform(
         // Once a required procedure is bound, an exact callable alias uses the
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
-        if (request.requires_pairing and request.compile_time_root != null and
-            forwarding_roots.isSet(@backingInt(request.compile_time_root.?))) continue;
+        if (request.requires_pairing and request.compile_time_root != .none and
+            forwarding_roots.isSet(@backingInt(request.compile_time_root.get().?))) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
         request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) blk: {
-            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            const root = result.compile_time_roots.root(request.compile_time_root.get().?);
             break :blk !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
         } else false;
         request.requires_pairing = false;
@@ -23153,7 +23177,7 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order == null) continue;
+        if (request.evaluation_order == .none) continue;
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
@@ -23161,7 +23185,7 @@ pub fn pairCheckedPlatform(
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {
-            return a.evaluation_order.? < b.evaluation_order.?;
+            return a.evaluation_order.get().? < b.evaluation_order.get().?;
         }
     }.lessThan);
     result.root_requests.compile_time_requests = try schedule.toOwnedSlice(session);
@@ -24162,17 +24186,17 @@ pub const CompileTimeRoot = struct {
     module_idx: u32,
     kind: CompileTimeRootKind,
     source: RootSource,
-    source_pattern: ?CIR.Pattern.Idx = null,
+    source_pattern: OptionalId(CIR.Pattern.Idx) = .none,
     /// A selected hoisted root's body. A pattern body is a construct
     /// lowering builds from this description: a crash for a rejected
     /// destructure binder, or a match of the base expression against the
     /// pattern that yields the bound value or unit.
     hoisted_body: ?hoist_roots.Body = null,
-    pattern: ?CIR.Pattern.Idx,
+    pattern: OptionalId(CIR.Pattern.Idx),
     /// The root's expression: the evaluated expression or a hoisted pattern
     /// root's selected expression. A literal conversion root has none: it
     /// converts the literal its `source` names (`literalNode`).
-    expr: ?CIR.Expr.Idx,
+    expr: OptionalId(CIR.Expr.Idx),
     checked_type: CheckedTypeId,
     request_eligibility: CompileTimeRootRequestEligibility,
     payload: CompileTimeRootPayload,
@@ -24251,7 +24275,7 @@ pub const CompileTimeRoot = struct {
     /// The expression a root other than a literal conversion root evaluates
     /// or selects.
     pub fn rootExpr(self: CompileTimeRoot) CIR.Expr.Idx {
-        return self.expr orelse checkedArtifactInvariant("a literal conversion root was read as an expression root", .{});
+        return self.expr.get() orelse checkedArtifactInvariant("a literal conversion root was read as an expression root", .{});
     }
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
@@ -24262,6 +24286,10 @@ pub const CompileTimeRoot = struct {
         };
     }
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(CompileTimeRoot) == 148);
+}
 
 /// One literal's conversion root (`CompileTimeRootTable.literal_conversions`).
 pub const LiteralConversionRoot = extern struct {
@@ -24400,7 +24428,7 @@ pub const CompileTimeRootTable = struct {
         }
 
         for (selected_hoisted_roots, 0..) |selected, selected_index| {
-            const source_ty = if (selected.pattern) |pattern|
+            const source_ty = if (selected.pattern.get()) |pattern|
                 ModuleEnv.varFrom(pattern)
             else
                 module.exprType(selected.expr);
@@ -24425,7 +24453,7 @@ pub const CompileTimeRootTable = struct {
                     .index = @intCast(selected_index),
                     .expr = selected.expr,
                 } },
-                .source_pattern = selected.pattern,
+                .source_pattern = selected.pattern.get(),
                 .hoisted_body = hoisted_body,
                 .pattern = checked_root.pattern,
                 .expr = checked_root.expr,
@@ -24474,14 +24502,14 @@ pub const CompileTimeRootTable = struct {
     pub fn lookupIdByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) ?ComptimeRootId {
         for (self.roots) |entry| {
             if (entry.kind == .hoisted_validation) continue;
-            if (entry.pattern != null and entry.pattern.? == pattern) return entry.id;
+            if (entry.pattern != .none and entry.pattern.get().? == pattern) return entry.id;
         }
         return null;
     }
 
     pub fn validationResolvedByPattern(self: *const CompileTimeRootTable, pattern: CIR.Pattern.Idx) bool {
         for (self.roots) |entry| {
-            if (entry.kind != .hoisted_validation or entry.pattern != pattern) continue;
+            if (entry.kind != .hoisted_validation or entry.pattern.get() != pattern) continue;
             const body = entry.hoisted_body orelse checkedArtifactInvariant("hoisted validation root had no selected body", .{});
             if (body != .pattern_validation) checkedArtifactInvariant("hoisted validation root had a non-validation body", .{});
             if (!body.pattern_validation.erase_runtime) return false;
@@ -24585,10 +24613,10 @@ pub const CompileTimeRootTable = struct {
             .module_idx = entry.module_idx,
             .kind = entry.kind,
             .source = entry.source,
-            .source_pattern = entry.source_pattern,
+            .source_pattern = .of(entry.source_pattern),
             .hoisted_body = entry.hoisted_body,
-            .pattern = entry.pattern,
-            .expr = entry.expr,
+            .pattern = .of(entry.pattern),
+            .expr = .of(entry.expr),
             .checked_type = entry.checked_type,
             .request_eligibility = entry.request_eligibility,
             .payload = entry.payload,
@@ -26568,7 +26596,7 @@ fn publishCheckedExhaustivenessSites(
         };
         const requires_pairing = if (replacing_root) |root| blk: {
             for (root_requests.requests) |request| {
-                if (request.compile_time_root == root.id) break :blk request.requires_pairing;
+                if (request.compile_time_root.get() == root.id) break :blk request.requires_pairing;
             }
             break :blk false;
         } else if (owner_template) |template| blk: {
@@ -26890,11 +26918,11 @@ fn selectedHoistedRootBody(
     return switch (selected.body) {
         .expr => .{
             .expr = reachedRootExpr(module_index, selected.expr),
-            .pattern = if (selected.pattern) |pattern| reachedRootPattern(module_index, pattern) else null,
-            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, if (selected.pattern) |pattern| ModuleEnv.varFrom(pattern) else module.exprType(selected.expr)),
+            .pattern = if (selected.pattern.get()) |pattern| reachedRootPattern(module_index, pattern) else null,
+            .checked_type = try checkedTypeIdForVar(allocator, module, checked_types, if (selected.pattern.get()) |pattern| ModuleEnv.varFrom(pattern) else module.exprType(selected.expr)),
         },
         .pattern_error => blk: {
-            const pattern = selected.pattern orelse
+            const pattern = selected.pattern.get() orelse
                 checkedArtifactInvariant("pattern-error hoisted root has no binding pattern", .{});
             break :blk .{
                 .expr = selected.expr,
@@ -27168,11 +27196,15 @@ pub const HoistedConstEntry = struct {
     module_idx: u32,
     root: ComptimeRootId,
     expr: CIR.Expr.Idx,
-    pattern: ?CIR.Pattern.Idx,
+    pattern: OptionalId(CIR.Pattern.Idx),
     checked_type: CheckedTypeId,
     source_scheme: CheckedTypeSchemeId,
     const_ref: ConstRef,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(HoistedConstEntry) == 80);
+}
 
 const HoistedConstByExprEntry = struct {
     expr: CIR.Expr.Idx,
@@ -27248,7 +27280,7 @@ pub const HoistedConstTable = struct {
                 .literal,
                 => checkedArtifactInvariant("hoisted constant root had non-expression source", .{}),
             };
-            const source_var = if (root.source_pattern) |pattern|
+            const source_var = if (root.source_pattern.get()) |pattern|
                 ModuleEnv.varFrom(pattern)
             else
                 ModuleEnv.varFrom(source_expr);
@@ -27270,7 +27302,7 @@ pub const HoistedConstTable = struct {
                 .module_idx = module.moduleIndex(),
                 .root = root.id,
                 .expr = root.rootExpr(),
-                .pattern = root.pattern,
+                .pattern = .of(root.pattern.get()),
                 .checked_type = root.checked_type,
                 .source_scheme = source_scheme,
                 .const_ref = const_ref,
@@ -27281,7 +27313,7 @@ pub const HoistedConstTable = struct {
                 .expr = evaluated,
                 .entry = id,
             });
-            if (root.pattern) |pattern| {
+            if (root.pattern.get()) |pattern| {
                 try by_pattern.append(allocator, .{
                     .pattern = pattern,
                     .entry = id,
@@ -28855,13 +28887,17 @@ fn dependencyViewByKey(
 
 /// Public `ExportedProcedureTemplate` declaration.
 pub const ExportedProcedureTemplate = struct {
-    export_name: ?canonical.ExportNameId,
+    export_name: OptionalId(canonical.ExportNameId),
     def: CIR.Def.Idx,
     source_scheme: CheckedTypeSchemeId,
     template: canonical.ProcedureTemplateRef,
     template_data: CheckedProcedureTemplate,
     template_closure: StoredImportedTemplateClosure = .{},
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(ExportedProcedureTemplate) == 296);
+}
 
 /// Read-only view of a closure-bearing export table: its rows plus the pool
 /// their stored closures index into.
@@ -28945,7 +28981,7 @@ pub const ExportedProcedureTemplateTable = struct {
             );
 
             try templates.append(allocator, .{
-                .export_name = export_name,
+                .export_name = .of(export_name),
                 .def = def_idx,
                 .source_scheme = source_scheme,
                 .template = template,
@@ -30493,7 +30529,7 @@ pub const CheckedModuleArtifact = struct {
     /// "Stored Function Values").
     pub fn hasUnevaluatedRequests(self: *const CheckedModuleArtifact, strategy: base.SpecializationStrategy) bool {
         for (self.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
+            const root = request.compile_time_root.get() orelse continue;
             if (self.compile_time_roots.root(root).needsEvaluation(strategy)) return true;
         }
         return false;
@@ -30992,7 +31028,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@backingInt(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
             std.debug.assert(compileTimeRootHasConstBody(root.kind));
-            std.debug.assert(root.expr == body.body_expr);
+            std.debug.assert(root.expr.get() == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@backingInt(body.body_expr) < self.moduleEnvConst().store.nodes.len());
             std.debug.assert(self.typesView().containsId(body.checked_type));
@@ -31029,10 +31065,10 @@ pub const CheckedModuleArtifact = struct {
         for (self.compile_time_roots.roots, 0..) |root, i| {
             std.debug.assert(@backingInt(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
-            if (root.expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
+            if (root.expr.get()) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert((root.expr == null) == (root.literalNode() != null));
-            if (root.pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
+            std.debug.assert((root.expr == .none) == (root.literalNode() != null));
+            if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             switch (root.kind) {
                 .constant, .hoisted_constant, .hoisted_validation, .callable_binding, .numeral_conversion, .quote_conversion, .repl_expr, .literal_argument => switch (root.payload) {
                     .pending => {},
@@ -31451,7 +31487,7 @@ pub const CheckedModuleArtifact = struct {
                         return .{ .kind = .generated_codec_call_type_out_of_bounds, .index = @intCast(i), .method = call.method };
                     }
                 }
-                if (call.subject_ty) |subject_ty| {
+                if (call.subject_ty.get()) |subject_ty| {
                     if (!self.typesView().containsId(subject_ty)) {
                         return .{ .kind = .generated_codec_call_type_out_of_bounds, .index = @intCast(i), .method = call.method };
                     }
@@ -31702,7 +31738,7 @@ pub const CheckedModuleArtifact = struct {
             }
         }
         for (templates.dispatch_scopes, 0..) |scope, i| {
-            if (scope.parent) |parent| {
+            if (scope.parent.get()) |parent| {
                 if (@backingInt(parent) >= i) {
                     return .{ .kind = .specialization_scope_parent_invalid, .index = @intCast(i) };
                 }
@@ -32068,10 +32104,10 @@ pub const CheckedModuleArtifact = struct {
         for (self.compile_time_roots.roots, 0..) |root, i| {
             std.debug.assert(@backingInt(root.id) == i);
             std.debug.assert(root.module_idx == self.module_identity.module_idx);
-            if (root.expr) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
+            if (root.expr.get()) |expr| std.debug.assert(@backingInt(expr) < self.moduleEnvConst().store.nodes.len());
             if (root.literalNode()) |literal| std.debug.assert(literal.node() < self.moduleEnvConst().store.nodes.len());
-            std.debug.assert((root.expr == null) == (root.literalNode() != null));
-            if (root.pattern) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
+            std.debug.assert((root.expr == .none) == (root.literalNode() != null));
+            if (root.pattern.get()) |pattern| std.debug.assert(@backingInt(pattern) < self.moduleEnvConst().store.nodes.len());
             if (root.kind == .expect) {
                 switch (root.payload) {
                     .expect => {},
@@ -32149,7 +32185,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@backingInt(body.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(body.root);
             std.debug.assert(compileTimeRootHasConstBody(root.kind));
-            std.debug.assert(root.expr == body.body_expr);
+            std.debug.assert(root.expr.get() == body.body_expr);
             std.debug.assert(root.checked_type == body.checked_type);
             std.debug.assert(@backingInt(body.body_expr) < self.moduleEnvConst().store.nodes.len());
             std.debug.assert(self.typesView().containsId(body.checked_type));
@@ -32392,7 +32428,7 @@ pub const CheckedModuleArtifact = struct {
             std.debug.assert(@backingInt(template.root) < self.compile_time_roots.roots.len);
             const root = self.compile_time_roots.root(template.root);
             std.debug.assert(root.kind == .callable_binding);
-            std.debug.assert(root.pattern != null and root.pattern.? == template.pattern);
+            std.debug.assert(root.pattern.get() == template.pattern);
             std.debug.assert(self.typesView().containsId(template.checked_fn_root));
             _ = self.checked_types.scheme(template.source_scheme);
         }
@@ -34079,7 +34115,7 @@ const MethodBindingTargets = struct {
                         imported.callable_eval_templates.templates[@backingInt(template_id)]
                     else
                         self.callable_eval_templates.get(template_id);
-                    expr = template.forwarded_lookup orelse return .{ .target = .{
+                    expr = template.forwarded_lookup.get() orelse return .{ .target = .{
                         .kind = .{ .callable_binding = .{
                             .module = if (body.view) |imported| imported.key.digest() else self.artifact_key.digest(),
                             .template = template_id,
@@ -34112,7 +34148,7 @@ const MethodBindingTargets = struct {
             .checked_error => return .rejected,
         };
         const template = self.callable_eval_templates.get(template_id);
-        if (template.forwarded_lookup != null) checkedArtifactInvariant("a forwarding procedure alias reached computed-callable resolution", .{});
+        if (template.forwarded_lookup != .none) checkedArtifactInvariant("a forwarding procedure alias reached computed-callable resolution", .{});
         return .{ .target = .{
             .kind = .{ .callable_binding = .{ .module = self.artifact_key.digest(), .template = template_id } },
             .callable = .{ .template_root = template.checked_fn_root },
@@ -35184,7 +35220,7 @@ test "local procedure uses carry exact producer-recorded dispatch scope ownershi
     };
     var refs = ResolvedValueRefTable{ .records = &records };
     const scopes = [_]DispatchRefScope{.{
-        .parent = null,
+        .parent = .none,
         .scheme_var = @fromBackingInt(@intCast(50)),
         .scheme_root = @fromBackingInt(@intCast(60)),
         .checked_expr = @fromBackingInt(@intCast(30)),
@@ -35208,13 +35244,13 @@ test "nested procedure sites inherit exact producer-recorded lexical scopes" {
     const allocator = std.testing.allocator;
     const scopes = [_]DispatchRefScope{
         .{
-            .parent = null,
+            .parent = .none,
             .scheme_var = @fromBackingInt(@intCast(50)),
             .scheme_root = @fromBackingInt(@intCast(60)),
             .checked_expr = @fromBackingInt(@intCast(30)),
         },
         .{
-            .parent = testIndexId(DispatchScopeId, 0),
+            .parent = .some(testIndexId(DispatchScopeId, 0)),
             .scheme_var = @fromBackingInt(@intCast(51)),
             .scheme_root = @fromBackingInt(@intCast(61)),
             .checked_expr = @fromBackingInt(@intCast(31)),
@@ -36625,8 +36661,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x7A, 0xF9, 0x1C, 0x61, 0x4D, 0x59, 0x6D, 0x74, 0x01, 0x8D, 0x07, 0xE9, 0x05, 0x17, 0x7E, 0xEC,
-        0x04, 0xDC, 0xEE, 0xCE, 0x65, 0xB1, 0xAA, 0xF2, 0x7C, 0xFF, 0x30, 0xE5, 0xC3, 0x4B, 0x4F, 0x1E,
+        0x86, 0xE0, 0x76, 0x1B, 0x54, 0x71, 0x41, 0x46, 0x07, 0xB5, 0xBB, 0x1A, 0xAD, 0x48, 0xFA, 0x18,
+        0x0B, 0x9B, 0xB7, 0x8C, 0x85, 0x51, 0xD8, 0xF4, 0xFD, 0xC1, 0xEF, 0x8E, 0xD3, 0x13, 0xC9, 0x0D,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37125,13 +37161,13 @@ test "direct dispatch classification treats only a body-local defaultable row ta
 
     const scopes = [_]DispatchRefScope{
         .{
-            .parent = null,
+            .parent = .none,
             .scheme_var = testIndexId(Var, 0),
             .scheme_root = quantifying_root,
             .checked_expr = testIndexId(CIR.Expr.Idx, 0),
         },
         .{
-            .parent = testIndexId(DispatchScopeId, 0),
+            .parent = .some(testIndexId(DispatchScopeId, 0)),
             .scheme_var = testIndexId(Var, 1),
             .scheme_root = local_callable,
             .checked_expr = testIndexId(CIR.Expr.Idx, 1),

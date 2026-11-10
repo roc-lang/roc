@@ -265,9 +265,13 @@ pub const MergeId = u32;
 /// What a join's parameters are: an optional value, then the binders of its
 /// merge.
 pub const JoinInfo = struct {
-    value: ?LocalId,
-    merge: ?MergeId,
+    value: collections.OptionalId(LocalId),
+    merge: collections.OptionalU32,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(JoinInfo) == 8);
+}
 
 /// A loop being lowered: its exit join, and whether anything leaves through
 /// it (a failed condition, or a break).
@@ -1099,8 +1103,8 @@ pub const Builder = struct {
         if (value) |local| try params.append(self.allocator, local);
         if (merge) |m| try params.appendSlice(self.allocator, self.merges.items[m].params);
         const index = @backingInt(id);
-        while (self.join_infos.items.len <= index) try self.join_infos.append(self.allocator, .{ .value = null, .merge = null });
-        self.join_infos.items[index] = .{ .value = value, .merge = merge };
+        while (self.join_infos.items.len <= index) try self.join_infos.append(self.allocator, .{ .value = .none, .merge = .none });
+        self.join_infos.items[index] = .{ .value = .of(value), .merge = .of(merge) };
         return try self.declareJoin(id, params.items);
     }
 
@@ -1133,12 +1137,12 @@ pub const Builder = struct {
     /// parameter, and its merge's binders' current values to theirs.
     pub fn emitJump(self: *Builder, id: LIR.JoinPointId, value: ?LocalId) Allocator.Error!void {
         const index = @backingInt(id);
-        const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = null, .merge = null };
-        if (info.value) |param| {
+        const info: JoinInfo = if (index < self.join_infos.items.len) self.join_infos.items[index] else .{ .value = .none, .merge = .none };
+        if (info.value.get()) |param| {
             const source = value orelse invariant("a jump to a value join carried no value");
             try self.emitLinear(.{ .set_local = .{ .target = param, .value = source, .mode = .initialize_join_param, .next = undefined } });
         }
-        if (info.merge) |merge| {
+        if (info.merge.get()) |merge| {
             const m = self.merges.items[merge];
             // The parameters take their values at once: a value that is one
             // of the parameters (a loop's carried value moving to another
@@ -1698,7 +1702,7 @@ pub const Builder = struct {
                                 const proc = self.store.getProcSpecPtr(worker.proc);
                                 proc.args = try self.store.addLocalSpan(params);
                                 proc.ret_layout = ret_layout;
-                                proc.hosted = .{ .symbol = try self.store.insertString(hosted.symbol), .dispatch_index = dispatch_index };
+                                proc.hosted = .some(.{ .symbol = try self.store.insertString(hosted.symbol), .dispatch_index = dispatch_index });
                                 return;
                             }
                             try self.callGenericExtern(hosted.symbol, dispatch_index, params, worker.params, worker.ret);
@@ -1733,9 +1737,9 @@ pub const Builder = struct {
                 self.own_root = wrapper.root;
                 self.comptime_root_body = root.kind != .literal_argument and root.literalConversionKind() == null;
                 try self.tasks.append(self.allocator, .ret);
-                const forwards = root.kind == .callable_binding and if (root.pattern) |pattern| blk: {
+                const forwards = root.kind == .callable_binding and if (root.pattern.get()) |pattern| blk: {
                     const id = self.program.callable_eval_by_pattern.get(.{ .module = self.module, .pattern = pattern }) orelse break :blk false;
-                    break :blk self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != null;
+                    break :blk self.view.view.callable_eval_templates.templates[@backingInt(id)].forwarded_lookup != .none;
                 } else false;
                 // A construction whose type needs its use context has no
                 // scheduled evaluator result. Its checked wrapper remains a
@@ -1807,7 +1811,7 @@ pub const Builder = struct {
             .emission_unit = .isolated,
             .args = try self.store.addLocalSpan(extern_params),
             .ret_layout = ret_abi,
-            .hosted = .{ .symbol = try self.store.insertString(symbol), .dispatch_index = dispatch_index },
+            .hosted = .some(.{ .symbol = try self.store.insertString(symbol), .dispatch_index = dispatch_index }),
         }, base.SourceLoc.none);
         const result = try self.closedLocal(ret_abi);
         try self.emitLinear(.{ .assign_call = .{ .target = result, .proc = extern_proc, .args = try self.store.addLocalSpan(extern_args), .next = undefined } });
@@ -1967,7 +1971,7 @@ pub const Builder = struct {
         proc.dyn_result = .of(self.result_local);
         proc.frame_locals = try self.store.addLocalSpan(self.frame_locals.items);
         proc.join_points = try self.store.addJoinPointSpan(self.join_points.items);
-        proc.body = proc_body;
+        proc.body = .some(proc_body);
         proc.shapes = self.store.shapes;
         self.store.shapes = .{};
         if (has_dynamic_frame) self.tail_calls.self_calls = .replace_frame;
@@ -2530,7 +2534,7 @@ pub const Builder = struct {
         else if (request.procedure_binding) |binding| switch (self.view.view.top_level_procedure_bindings.bindings.items[@backingInt(binding)].body) {
             .direct_template => |direct| .{ .worker = try self.program.templateRefWorker(Program.directTemplate(direct.template)) },
             // An exact procedure alias calls what it names.
-            .callable_eval_template => |template| if (self.view.view.callable_eval_templates.templates[@backingInt(template)].forwarded_lookup != null)
+            .callable_eval_template => |template| if (self.view.view.callable_eval_templates.templates[@backingInt(template)].forwarded_lookup != .none)
                 .{ .alias = try self.aliasCallee(self.module, template) }
             else
                 .{ .callable_eval = .{ .module = self.module, .template = template } },
@@ -3310,7 +3314,7 @@ pub const Builder = struct {
         if (root.boxy_value) |stored| return .{ .stored = stored };
         if (root.payloadFor(.boxy) == .pending and self.view.view.const_templates.get(entry.const_ref).state == .stored_const) return .{ .pending = entry.root };
         if (root.payloadFor(.boxy) == .runtime) return null;
-        if (entry.pattern != null and root.guarded) return null;
+        if (entry.pattern != .none and root.guarded) return null;
         return switch (self.view.view.const_templates.get(entry.const_ref).state) {
             .stored_const => |stored| .{ .stored = stored },
             // A value this compile-time program evaluates is read from its
@@ -5943,7 +5947,7 @@ pub const Builder = struct {
                     };
                     if (owner.dictionary_params.len != 0) {
                         var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
-                        while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
+                        while (stored.evidence_frames[frame_index].parent.get()) |parent| frame_index = parent;
                         try self.recordedDerivedCallables(source, stored, frame_index, self.templateEvidenceParams(owner_worker), owner.module, generic, &recorded);
                     }
                     const from_edges = try self.relateVariablesPartial(recorded.items, scope_vars.len);
@@ -6111,7 +6115,7 @@ pub const Builder = struct {
         if (dicts.len == 0) return dicts;
         // The procedure's evidence is the outermost frame's roots.
         var frame_index = stored.evidence_frame_head orelse invariant("a stored function value with dictionaries has no evidence");
-        while (stored.evidence_frames[frame_index].parent) |parent| frame_index = parent;
+        while (stored.evidence_frames[frame_index].parent.get()) |parent| frame_index = parent;
         const frame = stored.evidence_frames[frame_index];
         if (frame.scope() != .root) invariant("a stored function value's outermost evidence frame is not its procedure's");
         const owner_record = self.program.worker(owner).*;
@@ -6361,7 +6365,7 @@ pub const Builder = struct {
         const plan = try @import("const_schema.zig").constPlanOf(self.program, ty);
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
         try self.program.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = value_layout,
             .stored = .{ .module = self.program.module(source.module).key, .node = node, .plan = plan },
         });
@@ -6379,7 +6383,7 @@ pub const Builder = struct {
         for (values, children) |value, *child| child.* = try self.constantSlot(value);
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.program.result.static_data_values.items.len));
         try self.program.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = value_layout,
             .parts = .{ .kind = kind, .children = children },
         });
@@ -6440,7 +6444,7 @@ pub const Builder = struct {
             .callable_eval_template => |template_id| {
                 const owner = self.program.module(resolved.module);
                 const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
-                if (template.forwarded_lookup == null) return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
+                if (template.forwarded_lookup == .none) return .{ .callable_eval = .{ .module = resolved.module, .template = template_id } };
                 return .{ .alias = try self.aliasCallee(resolved.module, template_id) };
             },
         }
@@ -6466,7 +6470,7 @@ pub const Builder = struct {
     fn forwardedBinding(self: *Builder, module: types.ModuleIndex, template_id: checked.CallableEvalTemplateId) @FieldType(checked.ProcedureUseTemplate, "binding") {
         const owner = self.program.module(module);
         const template = owner.view.callable_eval_templates.templates[@backingInt(template_id)];
-        const forwarded = template.forwarded_lookup orelse invariant("a callable-eval template that is no alias forwards nothing");
+        const forwarded = template.forwarded_lookup.get() orelse invariant("a callable-eval template that is no alias forwards nothing");
         const ref_id = owner.view.resolved_value_refs.lookupIdByExpr(forwarded) orelse
             invariant("a procedure alias's lookup has no resolved reference");
         var ref = owner.view.resolved_value_refs.records[@backingInt(ref_id)].ref;
@@ -7377,7 +7381,7 @@ pub const Builder = struct {
                     switch (resolved.body) {
                         .callable_eval_template => |template_id| {
                             const template = self.program.module(resolved.module).view.callable_eval_templates.templates[@backingInt(template_id)];
-                            if (template.forwarded_lookup != null) break :blk self.callableEvalAliasStep(resolved.module, template_id);
+                            if (template.forwarded_lookup != .none) break :blk self.callableEvalAliasStep(resolved.module, template_id);
                             invariant("an alias chain reaches a computed callable, which a forwarding alias never does");
                         },
                         .direct_template => {},
@@ -7477,7 +7481,7 @@ pub const Builder = struct {
         const wrapper_template = templates.templates.items[@backingInt(wrapper.template)];
         return .{
             .module = module_index,
-            .lookup = template.forwarded_lookup orelse invariant("a method's alias binding is not an exact procedure alias"),
+            .lookup = template.forwarded_lookup.get() orelse invariant("a method's alias binding is not an exact procedure alias"),
             .vars = lower.poolSlice(checked.CheckedTypeId, templates.scheme_vars_pool, wrapper_template.scheme_vars),
             .params = lower.poolSlice(static_dispatch.EvidenceParamRecord, templates.evidence_params_pool, wrapper_template.evidence_params),
             .literal_requirements = templates.templateLiteralRequirements(&wrapper_template),

@@ -653,7 +653,7 @@ test "Boxy selection retains imported representation readiness and shares cyclic
     try std.testing.expectEqual(@as(usize, 3), consumer.root_requests.compile_time_requests.len);
     var roots: [3]Root = undefined;
     for (&roots, consumer.root_requests.compile_time_requests) |*root, request| {
-        root.* = .{ .module = 0, .root = request.compile_time_root.?, .request = request };
+        root.* = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
     }
     var graph = try buildForBoxySelection(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = views[1..] }, &roots);
     defer graph.deinit(allocator);
@@ -731,7 +731,7 @@ test "CTFE root classification resolves nominal backings throughout the checked 
         const request = consumer.root_requests.compile_time_requests[0];
         // A nominal can be supplied by the ownership anchor, a platform
         // relation, or an ordinary import. None needs a pending CTFE root.
-        const root: Root = .{ .module = 0, .root = request.compile_time_root.?, .request = request };
+        const root: Root = .{ .module = 0, .root = request.compile_time_root.get().?, .request = request };
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(holder), .imports = &.{checked.importedView(consumer)} }, root));
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringViewWithRelations(consumer, &.{checked.importedView(holder)}) }, root));
         try std.testing.expectEqual(case.holds_function, try rootHoldsFunction(allocator, &.{consumer}, .{ .root = checked.loweringView(consumer), .imports = &.{checked.importedView(holder)} }, root));
@@ -751,7 +751,7 @@ fn expectSharedDependencies(source: []const u8, imports: []const @import("inspec
     defer roots.deinit(allocator);
     for (modules.items, 0..) |module, index| {
         for (module.root_requests.compile_time_requests) |request| {
-            try roots.append(allocator, .{ .module = @intCast(index), .root = request.compile_time_root.?, .request = request });
+            try roots.append(allocator, .{ .module = @intCast(index), .root = request.compile_time_root.get().?, .request = request });
         }
     }
     try std.testing.expect(roots.items.len >= 3);

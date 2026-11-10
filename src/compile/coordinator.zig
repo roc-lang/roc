@@ -3711,7 +3711,7 @@ pub const Coordinator = struct {
                 // A different strategy can still need its function form.
                 if (artifact.hasUnboundPlatformRequirements()) {
                     for (artifact.root_requests.compile_time_requests) |request| {
-                        const root = artifact.compile_time_roots.root(request.compile_time_root.?);
+                        const root = artifact.compile_time_roots.root(request.compile_time_root.get().?);
                         if (root.needsEvaluation(self.specialization_strategy) and root.boxy_value == null and
                             (root.payload == .pending or root.payload == .unevaluated))
                         {
@@ -3940,7 +3940,7 @@ pub const Coordinator = struct {
     fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact, strategy: base.SpecializationStrategy) usize {
         var count: usize = 0;
         for (artifact.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
+            const root = request.compile_time_root.get() orelse continue;
             if (artifact.compile_time_roots.root(root).needsEvaluation(strategy)) count += 1;
         }
         return count;
@@ -4122,7 +4122,7 @@ pub const Coordinator = struct {
     /// specialization strategy, so a later compilation can reopen it.
     fn hasUnevaluatedRequestsUnderAnyStrategy(artifact: *const CheckedArtifact.CheckedModuleArtifact) bool {
         for (artifact.root_requests.compile_time_requests) |request| {
-            const root = request.compile_time_root orelse continue;
+            const root = request.compile_time_root.get() orelse continue;
             const payload = artifact.compile_time_roots.root(root).payload;
             if (payload == .unevaluated or payload == .pending) return true;
         }
@@ -8367,7 +8367,7 @@ fn compileAppRootIdentityExpecting(
     }
     var forwarded_callable_count: usize = 0;
     for (root.callable_eval_templates.templates.items) |template| {
-        if (template.forwarded_lookup != null) forwarded_callable_count += 1;
+        if (template.forwarded_lookup != .none) forwarded_callable_count += 1;
     }
     return .{
         .compile_time_request_count = root.root_requests.compile_time_requests.len,
@@ -9981,9 +9981,9 @@ fn hashPatternExtractionRegionsForView(
         };
         count.* += 1;
 
-        if (root.source_pattern == null) return error.PatternExtractionMissingSourcePattern;
-        if (root.source_pattern.? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
-        const root_pattern = root.pattern orelse return error.PatternExtractionMissingCheckedPattern;
+        if (root.source_pattern == .none) return error.PatternExtractionMissingSourcePattern;
+        if (root.source_pattern.get().? != extraction.result_pattern) return error.PatternExtractionSourcePatternMismatch;
+        const root_pattern = root.pattern.get() orelse return error.PatternExtractionMissingCheckedPattern;
         if (root_pattern != extraction.result_pattern) return error.PatternExtractionRootPatternMismatch;
         if (root.rootExpr() != extraction.base_expr) return error.PatternExtractionRootExprWasNotBaseExpr;
         if (root.evaluatedExpr() != null) return error.PatternExtractionRootEvaluatedItsExpr;
@@ -12917,7 +12917,7 @@ test "shared CTFE and runtime requests specialize once per evaluation across wor
             defer visited.deinit();
             for (0..store.procSpecCount()) |proc_index| {
                 const proc = store.getProcSpec(@fromBackingInt(@intCast(proc_index)));
-                if (proc.body) |body| try work.append(allocator, body);
+                if (proc.body.get()) |body| try work.append(allocator, body);
             }
             while (work.pop()) |stmt_id| {
                 if ((try visited.getOrPut(stmt_id)).found_existing) continue;

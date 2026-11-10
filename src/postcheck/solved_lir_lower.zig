@@ -365,12 +365,16 @@ const FnSpec = struct {
     solved_fn_ty: SolvedType.TypeVarId,
     abi: CaptureAbi,
     captures: CaptureSpanId,
-    capture_ty: ?Type.TypeId,
+    capture_ty: collections.OptionalId(Type.TypeId),
     /// Optional erased-callable destination threaded through an internal
     /// finite proc. The payload records the capture type already resident in
     /// that destination; `null` means an enabled destination with no captures.
     return_reuse: ErasedReturnReuse,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(FnSpec) == 40);
+}
 
 const FnSpecContext = struct {
     pub fn hash(_: FnSpecContext, spec: FnSpec) u64 {
@@ -381,7 +385,7 @@ const FnSpecContext = struct {
         std.hash.autoHash(&hasher, spec.captures.source);
         std.hash.autoHash(&hasher, spec.captures.start);
         std.hash.autoHash(&hasher, spec.captures.len);
-        if (spec.capture_ty) |capture_ty| {
+        if (spec.capture_ty.get()) |capture_ty| {
             std.hash.autoHash(&hasher, @backingInt(capture_ty));
         } else {
             std.hash.autoHash(&hasher, @as(u32, std.math.maxInt(u32)));
@@ -427,7 +431,7 @@ const FnEntry = struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(FnEntry) == 556);
+    std.debug.assert(@sizeOf(FnEntry) == 540);
 }
 
 const LoweredFnBody = struct {
@@ -502,9 +506,13 @@ const LiteralRootEntry = struct {
 const LayoutRequest = struct {
     checked_type: check.CheckedModule.CheckedTypeId,
     ty: Type.TypeId,
-    initializer: ?Type.FnId,
+    initializer: collections.OptionalId(Type.FnId),
     const_locator: ?check.CheckedModule.ConstLocator,
 };
+
+comptime {
+    if (@sizeOf(usize) == 8) std.debug.assert(@sizeOf(LayoutRequest) == 68);
+}
 
 const StaticInitializerRequest = struct {
     static_data: Common.StaticDataId,
@@ -1642,7 +1650,7 @@ const Lowerer = struct {
             try self.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
-                .initializer = if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null,
+                .initializer = .of(if (request.fn_id) |fn_id| try self.ensureOwnFnSpec(fn_id, .finite) else null),
                 .const_locator = request.const_locator,
             });
         }
@@ -2258,7 +2266,7 @@ const Lowerer = struct {
                 .return_reuse = switch (entry.spec.abi) {
                     .finite => entry.spec.return_reuse,
                     .erased => if (try lowerer.erasedResultDemand(entry.ret) == .single_slot)
-                        .{ .erased_callable = entry.spec.capture_ty }
+                        .{ .erased_callable = entry.spec.capture_ty.get() }
                     else
                         .none,
                 },
@@ -2339,7 +2347,7 @@ const Lowerer = struct {
                         const args = l.types.span(entry.args);
                         for (0..args.len) |index| try self.add(.{ .ty = GuardedList.at(args, index) });
                         try self.add(.{ .ty = entry.ret });
-                        if (entry.spec.capture_ty) |ty| {
+                        if (entry.spec.capture_ty.get()) |ty| {
                             try self.add(.{ .ty = ty });
                             if (entry.spec.abi == .erased) _ = try l.frozenCaptureLayout(try l.layoutOfType(ty));
                         }
@@ -2519,7 +2527,7 @@ const Lowerer = struct {
         fn prepareCall(self: *WorkerPreparation, target: Type.FnId, is_cold: bool, kind: PreparedCallKind) Common.LowerError!void {
             try self.add(.{ .proc = target });
             const spec = self.lowerer.fn_specs.items[@backingInt(target)];
-            const captures_allowed = kind == .direct or spec.capture_ty == null;
+            const captures_allowed = kind == .direct or spec.capture_ty == .none;
             if (spec.abi == .finite and captures_allowed and !is_cold and !spec.return_reuse.enabled()) {
                 if (try self.lowerer.inlineBodyForKnownCall(target, null)) |body| try self.add(.{ .expr = body });
             }
@@ -2674,8 +2682,8 @@ const Lowerer = struct {
             self.erased_owner_states.appendAssumeCapacity(.pending);
         }
         const proc = self.result.store.getProcSpecPtr(shard.proc);
-        proc.body = appended.root orelse
-            Common.invariant("Solved-LIR committed a Roc procedure without a body");
+        proc.body = .some(appended.root orelse
+            Common.invariant("Solved-LIR committed a Roc procedure without a body"));
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
         proc.shapes = shard.shapes;
@@ -2739,7 +2747,7 @@ const Lowerer = struct {
         try self.resolveErasedCallOwnerUses(erased_owner_use_start);
         const frame_locals = try self.writeFrameLocals(&proc_locals);
         const proc = self.result.store.getProcSpecPtr(initializer.proc);
-        proc.body = body;
+        proc.body = .some(body);
         proc.shapes = proc.shapes.merged(self.result.store.shapes);
         proc.frame_locals = frame_locals;
         proc.stack_probe = self.stackProbeForProc(proc.args, proc.frame_locals, proc.ret_layout);
@@ -2801,10 +2809,10 @@ const Lowerer = struct {
         switch (spec.abi) {
             .finite => {
                 const expected_args = lifted_args.len +
-                    @as(usize, @intFromBool(spec.capture_ty != null)) +
+                    @as(usize, @intFromBool(spec.capture_ty != .none)) +
                     @as(usize, @intFromBool(spec.return_reuse.enabled()));
                 if (proc_args.len != expected_args) Common.invariant("finite proc placeholder had wrong internal arity");
-                if (spec.capture_ty) |capture_ty| {
+                if (spec.capture_ty.get()) |capture_ty| {
                     try self.bindCaptureRecord(spec.captures, capture_ty, .{ .record = GuardedList.at(proc_args, lifted_args.len) });
                 }
             },
@@ -2838,7 +2846,7 @@ const Lowerer = struct {
                     else
                         null,
                     .finite => if (spec.return_reuse.enabled())
-                        GuardedList.at(proc_args, lifted_args.len + @as(usize, @intFromBool(spec.capture_ty != null)))
+                        GuardedList.at(proc_args, lifted_args.len + @as(usize, @intFromBool(spec.capture_ty != .none)))
                     else
                         null,
                 };
@@ -2853,7 +2861,7 @@ const Lowerer = struct {
                 try self.noteLocalSpan(self.result.store.getProcSpecImmediate(proc_id).args);
 
                 var capture_snapshot: ?LIR.LocalId = null;
-                if (spec.capture_ty) |capture_ty| switch (spec.abi) {
+                if (spec.capture_ty.get()) |capture_ty| switch (spec.abi) {
                     .finite => {},
                     .erased => {
                         const capture_ptr = GuardedList.at(proc_args, lifted_args.len);
@@ -2896,7 +2904,7 @@ const Lowerer = struct {
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
-                    proc_ptr.body = body;
+                    proc_ptr.body = .some(body);
                     proc_ptr.frame_locals = frame_locals;
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = .of(lowered_body.?.tail_calls);
@@ -2905,7 +2913,7 @@ const Lowerer = struct {
             },
             .hosted => {
                 const proc = self.result.store.getProcSpec(proc_id);
-                if (proc.hosted == null and !proc.external) {
+                if (proc.hosted.get() == null and !proc.external) {
                     Common.invariant("hosted function reached direct LIR without hosted metadata");
                 }
             },
@@ -3079,11 +3087,11 @@ const Lowerer = struct {
                 .some(try self.erasedCallArgsPlan(arg_locals[0..lifted_args.len]))
             else
                 .none,
-            .body = null,
+            .body = .none,
             .ret_layout = ret_layout,
             .erased_capture_arg = if (spec.abi == .erased) .some(arg_locals[lifted_args.len]) else .none,
             .abi = if (spec.abi == .erased) .erased_callable else .roc,
-            .hosted = try self.hostedProcForSource(source_fn.source),
+            .hosted = .of(try self.hostedProcForSource(source_fn.source)),
             .code_key = code_key,
             .stack_probe = self.stackProbeForProc(args_span, LIR.LocalSpan.empty(), ret_layout),
         }, proc_loc);
@@ -3853,7 +3861,7 @@ const Lowerer = struct {
             else => {
                 const ret_ty = input.?.ty;
                 const capture_arg_ty = switch (task.spec.abi) {
-                    .finite => task.spec.capture_ty,
+                    .finite => task.spec.capture_ty.get(),
                     .erased => try self.erasedCapturePtrType(),
                 };
                 const source_fn = self.solved.lifted.getFn(task.source);
@@ -3876,7 +3884,7 @@ const Lowerer = struct {
                 .solved_fn_ty = root_fn_ty,
                 .abi = task.abi,
                 .captures = task.captures,
-                .capture_ty = if (input) |capture_record| capture_record.ty else null,
+                .capture_ty = .of(if (input) |capture_record| capture_record.ty else null),
                 .return_reuse = task.return_reuse,
             };
             if (self.worker_callback) {
@@ -3951,7 +3959,7 @@ const Lowerer = struct {
                 .id = undefined,
                 .source = member.lambda,
                 .target = target,
-                .capture_ty = .of(self.fn_entries.items[@backingInt(target)].spec.capture_ty),
+                .capture_ty = self.fn_entries.items[@backingInt(target)].spec.capture_ty,
             });
         }
         if (task.variants.items.len < solved_members.len) {
@@ -4030,7 +4038,7 @@ const Lowerer = struct {
     fn comptimeExhaustivenessFailed(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.CFStmt {
         _ = try self.lowerComptimeSite(site);
         const source = self.solved.lifted.comptimeSite(site);
-        return .{ .comptime_exhaustiveness_failed = .{ .owner = source.owner, .checked_site = source.checked_site } };
+        return .{ .comptime_exhaustiveness_failed = .{ .owner = source.owner, .checked_site = source.checked_site.get() } };
     }
 
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
@@ -4044,7 +4052,7 @@ const Lowerer = struct {
         const lowered = try self.result.addComptimeSite(switch (source.kind) {
             .match => .match,
             .destructure => .destructure,
-        }, source.owner, source.region, source.checked_site, proc);
+        }, source.owner, source.region, source.checked_site.get(), proc);
         self.comptime_site_map.set(index, lowered);
         return lowered;
     }
@@ -4152,7 +4160,7 @@ const Lowerer = struct {
         }
 
         for (self.layout_requests.items) |request| {
-            const initializer = if (request.initializer) |initializer_fn| blk: {
+            const initializer = if (request.initializer.get()) |initializer_fn| blk: {
                 const proc = try self.markReachableFn(initializer_fn);
                 self.result.store.getProcSpecPtr(proc).is_static_initializer = true;
                 break :blk proc;
@@ -4168,7 +4176,7 @@ const Lowerer = struct {
                     try self.constPlanOfType(request.ty)
                 else
                     try self.layoutOnlyConstPlan(),
-                .initializer = initializer,
+                .initializer = .of(initializer),
             });
         }
     }
@@ -5660,7 +5668,7 @@ const Lowerer = struct {
                 const stored_request = self.solved.lifted.static_data_values.get(@backingInt(candidate.static_data));
                 const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
                 try self.result.static_data_values.append(self.allocator, .{
-                    .initializer = null,
+                    .initializer = .none,
                     .layout_idx = layout_idx,
                     .stored = .{
                         .module = check.CheckedModule.constModuleId(stored_request.const_locator),
@@ -5677,14 +5685,14 @@ const Lowerer = struct {
             .name = lirSymbol(self.symbols.fresh()),
             .identity = try self.staticInitializerIdentity(request),
             .args = LIR.LocalSpan.empty(),
-            .body = null,
+            .body = .none,
             .ret_layout = layout_idx,
             .abi = .roc,
             .is_static_initializer = true,
         }, self.solved.lifted.exprLoc(runtime_expr));
         const result_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = proc,
+            .initializer = .some(proc),
             .layout_idx = layout_idx,
         });
         try self.static_initializer_queue.append(self.allocator, .{
@@ -6020,7 +6028,7 @@ const Lowerer = struct {
         const failure_slot = try self.createComptimeFailureMessageSlot(value_root);
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = layout_idx,
             .compile_time_root = .{
                 .module = value_root.module,
@@ -6043,7 +6051,7 @@ const Lowerer = struct {
         const struct_idx = record_layout.getStruct().idx;
         const id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.static_data_values.items.len))));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = layout_idx,
             .compile_time_root = .{
                 .module = root.module,
@@ -6096,7 +6104,7 @@ const Lowerer = struct {
         root.role.value.plan = try self.constPlanOfType(ty);
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = layout_idx,
             .compile_time_root = root,
             .representation_of = .{ .slot = source, .storage = storage },
@@ -8079,9 +8087,9 @@ const Lowerer = struct {
         }
         const slot: LIR.StaticDataId = @fromBackingInt(@intCast(self.result.static_data_values.items.len));
         try self.result.static_data_values.append(self.allocator, .{
-            .initializer = null,
+            .initializer = .none,
             .layout_idx = layout_idx,
-            .callable = proc,
+            .callable = .some(proc),
         });
         gop.value_ptr.* = slot;
         return slot;
@@ -8236,7 +8244,7 @@ const Lowerer = struct {
                 } } };
             }
         }
-        task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty orelse
+        task.capture_ty = self.fn_entries.items[@backingInt(task.target_fn)].spec.capture_ty.get() orelse
             Common.invariant("capturing direct call target had no capture record type");
         task.capture_local = try self.addTemp(task.capture_ty);
         frame.cursor = 1;
@@ -8476,7 +8484,7 @@ const Lowerer = struct {
     /// The capture record fields of a capturing specialization, in capture
     /// order.
     fn capturedFieldsOfSpec(self: *const Lowerer, fn_id: Type.FnId) @TypeOf(self.types.captureFieldSpan(undefined)) {
-        const capture_ty = self.fn_specs.items[@backingInt(fn_id)].capture_ty orelse
+        const capture_ty = self.fn_specs.items[@backingInt(fn_id)].capture_ty.get() orelse
             Common.invariant("capturing specialization had no capture record type");
         const content = self.types.get(capture_ty);
         if (content != .capture_record) Common.invariant("function capture argument was not a capture record");
@@ -10094,7 +10102,7 @@ const Lowerer = struct {
         const fn_id = self.current_fn orelse return false;
         const spec = self.fn_entries.items[@backingInt(fn_id)].spec;
         const old_capture_ty = switch (spec.abi) {
-            .erased => spec.capture_ty,
+            .erased => spec.capture_ty.get(),
             .finite => switch (spec.return_reuse) {
                 .none => return false,
                 .erased_callable => |capture_ty| capture_ty,
@@ -10296,7 +10304,7 @@ const Lowerer = struct {
         const fn_id = self.current_fn orelse return .none;
         const spec = self.fn_entries.items[@backingInt(fn_id)].spec;
         return switch (spec.abi) {
-            .erased => .{ .erased_callable = spec.capture_ty },
+            .erased => .{ .erased_callable = spec.capture_ty.get() },
             .finite => spec.return_reuse,
         };
     }
@@ -15451,7 +15459,7 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
     errdefer check.ConstStore.freeVector(self.allocator, evidence);
     const evidence_frames = try self.allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, lifted.const_fn_evidence_frames[template.const_evidence_frames.start..][0..template.const_evidence_frames.len]);
     return .{
-        .frozen_fn = if (template.frozen_fn) |id| @backingInt(id) else null,
+        .frozen_fn = .of(if (template.frozen_fn.get()) |id| @backingInt(id) else null),
         .frozen_worker = template.frozen_worker,
         .frozen_context = .{
             .abi = switch (spec.abi) {
@@ -15468,7 +15476,7 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
         .fn_def = constFnDefFromMono(template.fn_def),
         .source_fn_ty = template.source_fn_ty,
         .source_fn_key = template.source_fn_key,
-        .owner_fn_ty = if (template.owner_fn_ty) |owner_fn_ty| try self.constTypeOfMono(owner_fn_ty) else null,
+        .owner_fn_ty = .of(if (template.owner_fn_ty.get()) |owner_fn_ty| try self.constTypeOfMono(owner_fn_ty) else null),
         .evidence = evidence,
         .evidence_frames = evidence_frames,
         .evidence_frame_head = template.const_evidence_frame_head,
@@ -15476,7 +15484,7 @@ fn constFnTemplateForFn(self: *Lowerer, fn_id: Type.FnId) std.mem.Allocator.Erro
 }
 
 fn requireConstFnEvidenceTopology(template: Mono.FnTemplate) void {
-    if (template.const_evidence_frames.len != 0 and template.const_evidence_frame_head != null) return;
+    if (template.const_evidence_frames.len != 0 and template.const_evidence_frame_head != .none) return;
     switch (template.fn_def) {
         .parser_runtime, .encoder_for_runtime => {},
         .nested => Common.invariant("nested callable reached solved LIR without explicit evidence topology"),
@@ -15581,7 +15589,7 @@ test "shared procedure scheduling preserves exact specialization demand" {
                     .solved_fn_ty = @fromBackingInt(@intCast(@as(u32, @intCast(index)))),
                     .abi = .finite,
                     .captures = CaptureSpanId.fromOwn(0, 0),
-                    .capture_ty = null,
+                    .capture_ty = .none,
                     .return_reuse = .none,
                 },
                 .symbol = lowerer.symbols.fresh(),
@@ -15685,7 +15693,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             .identity = LIR.ProcIdentity.forTest(0),
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try lowerer.result.store.addLocalSpan(&.{target}),
-            .body = next,
+            .body = .some(next),
             .ret_layout = .u8,
             .is_static_initializer = true,
         }, .none);

@@ -351,7 +351,8 @@ pub const Constants = struct {
     /// 165: compile-time reads persist placement and semantic root identity.
     /// 176: platform invocation scheme uses and deferred diagnostic captures.
     /// 177: type-store columns serialize independently in declared field order.
-    pub const CACHE_VERSION = 177;
+    /// 178: selected hoisted roots store their optional ids in four bytes.
+    pub const CACHE_VERSION = 178;
 };
 
 /// Configuration for the Roc cache system.

@@ -1133,7 +1133,7 @@ test "parser records nested associated owner paths" {
         const owner_path = decl.owner_type_path.get() orelse return error.MissingOwnerPath;
         const owner = ast.decl_index.type_paths.items[@backingInt(owner_path)];
         try std.testing.expectEqualStrings("Nested", env.getIdent(owner.name));
-        const parent_path = owner.parent orelse return error.MissingParentPath;
+        const parent_path = owner.parent.get() orelse return error.MissingParentPath;
         const parent = ast.decl_index.type_paths.items[@backingInt(parent_path)];
         try std.testing.expectEqualStrings("Parent", env.getIdent(parent.name));
 
