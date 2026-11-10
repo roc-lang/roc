@@ -13845,7 +13845,7 @@ module's layouts, descriptors, and workers are a function of its own checked
 module and its imports' checked modules alone (Per-Module Output, below), so
 two modules never need to agree on anything a third module decided.
 
-A record field's default identity is part of its immutable semantic type,
+A record field's default identity is part of its immutable checked type,
 even though required and defaulted fields have identical inline layouts.
 Boxy interns and digests the declaring module's content identity and default
 expression identity, preserving them through substitution and stored-function
