@@ -86,6 +86,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const collections = @import("collections");
 const dev_diagnostics = base.dev_diagnostics;
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -1096,6 +1097,11 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
     base.ice_context.setThreadRole(.{ .name = "main" });
     base.ice_context.setInvocation(args);
+    if (base.dev_diagnostics.isSet(.storage_work)) {
+        // Every exit path, including `std.process.exit` from a command,
+        // runs the process's exit handlers.
+        _ = storage_work_exit.atexit(storage_work_exit.printCounters);
+    }
     defer base.ice_context.clearInvocation();
     if (comptime base.ice_context.forced_ice_supported) {
         if (init.environ_map.get(base.ice_context.forced_ice_env_var)) |spec| {
@@ -1131,6 +1137,19 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         tracy.waitForShutdown(init.io);
     }
 }
+
+/// Prints the `storage_work` counters when the process exits. Referenced only
+/// in compilers that read developer diagnostics, which always link libc.
+const storage_work_exit = struct {
+    extern "c" fn atexit(handler: *const fn () callconv(.c) void) c_int;
+
+    fn printCounters() callconv(.c) void {
+        var buffer: [2048]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        collections.storage_work.print(&writer) catch {};
+        std.debug.print("{s}", .{writer.buffered()});
+    }
+};
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());
@@ -6664,7 +6683,7 @@ const RunUnitTables = struct {
     fn init(ctx: *CliCtx) RunUnitTables {
         return .{
             .interfaces = postcheck.Boxy.Lower.ExportInterfaces.init(ctx.gpa, ctx.io.std_io),
-            .digests = .{ .gpa = ctx.gpa, .names = .{} },
+            .digests = .{ .gpa = ctx.gpa, .io = ctx.io.std_io, .names = .{} },
         };
     }
 
@@ -10335,6 +10354,23 @@ const BoxyReachTask = struct {
     }
 };
 
+/// Hash one module's own part of its digests (`Digests.ensurePrepared`)
+/// as a post-check task, on a lane that would otherwise idle while the
+/// units' import chains unwind, so a unit's own task finds it hashed.
+const BoxyDigestTask = struct {
+    digests: *compile.boxy_interface.Digests,
+    artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
+    failed: ?Allocator.Error = null,
+
+    fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
+        const self: *BoxyDigestTask = @ptrCast(@alignCast(context));
+        self.digests.ensurePrepared(self.artifact) catch |err| {
+            self.failed = err;
+        };
+        return null;
+    }
+};
+
 /// What a test unit adds to its image (`compile.boxy_unit.Built`).
 const BoxyUnitTests = struct {
     expect_sites: []const compile.boxy_object_cache.ExpectSiteRecord,
@@ -10461,6 +10497,7 @@ fn buildBoxyLibraryObjects(
     // The units run on the executor's lanes, so each phase of this timing
     // sums the units' work rather than measuring elapsed time.
     var unit_timing = lir.CheckedPipeline.Timing.init(ctx.io.std_io);
+    const phase_started_ns = std.Io.Timestamp.now(ctx.io.std_io, .awake).nanoseconds;
     const tasks = try ctx.gpa.alloc(BoxyUnitTask, units.items.len);
     defer {
         for (tasks) |*task| task.deinit(ctx.gpa);
@@ -10481,20 +10518,15 @@ fn buildBoxyLibraryObjects(
             .views = try build_env.collectImportedArtifactViews(ctx.gpa, artifact),
             .target = target,
             .interfaces = interfaces,
-            .names = &digests.names,
+            .digests = digests,
+            .build_env = build_env,
             .cache_manager = if (policy.no_cache) null else build_env.cache_manager,
             .timing = &unit_timing,
+            .executor = build_env.postCheckExecutor(),
+            .phase_started_ns = phase_started_ns,
             .want_pieces = !want_images,
         };
     }
-    // A unit's key reads what its imports' units recorded, so it is computed
-    // here, once they are done and before its own task can start.
-    const Prepare = struct {
-        fn run(unit_tasks: []BoxyUnitTask, unit_digests: *compile.boxy_interface.Digests, index: u32) Allocator.Error!void {
-            const task = &unit_tasks[index];
-            task.key = try boxyObjectKey(task.gpa, unit_digests, task.artifact, task.platform, task.policy, task.target, &.{}, false);
-        }
-    };
 
     // The units' objects in unit order, whatever order they finish in, so
     // the link's inputs (and so the executable) are the same every build.
@@ -10516,50 +10548,29 @@ fn buildBoxyLibraryObjects(
     var restored: u32 = 0;
     var built: u32 = 0;
     var done: usize = 0;
-    // An object compile-time evaluation built or restored under this
-    // build's key is linked as it is; its exports are in `interfaces`. A key
-    // reads what the unit's imports recorded, so this walks imports first,
-    // and a unit left to run holds back its importers.
+    // A unit runs once its imports' units are done: its task keys it from
+    // what they recorded, then restores or builds it. A unit left to run
+    // holds back its importers. Lanes no unit is ready for hash the
+    // waiting units' own parts of their digests meanwhile, so a unit whose
+    // turn comes keys itself from what is already hashed; the digest tasks
+    // take ids past the units'.
     var ready: std.ArrayList(u32) = .empty;
     defer ready.deinit(ctx.gpa);
-    var keyable: std.ArrayList(u32) = .empty;
-    defer keyable.deinit(ctx.gpa);
-    for (remaining, 0..) |count, index| if (count == 0) try keyable.append(ctx.gpa, @intCast(index));
-    while (keyable.pop()) |index| {
-        const task = &tasks[index];
-        try Prepare.run(tasks, digests, index);
-        const known = build_env.boxyObjectWithKey(task.artifact, task.key) orelse {
-            try ready.append(ctx.gpa, index);
-            continue;
-        };
-        // Compile-time evaluation never builds an instrumented test unit.
-        // Its ordinary objects can also serve expect-free test dependencies.
-        std.debug.assert(!task.policy.test_units);
-        try build_env.boxyAdoptExports(digests, task.artifact);
-        if (known.restored) restored += 1 else built += 1;
-        if (want_images) {
-            const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
-            images[index] = image.bytes;
-            if (policy.test_units) unit_tests[index] = .{
-                .expect_sites = &.{},
-                .test_roots = &.{},
-                .code_locations = image.code_locations,
-            };
-        } else {
-            objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
+    for (remaining, 0..) |count, index| if (count == 0) try ready.append(ctx.gpa, @intCast(index));
+    const digest_tasks = try ctx.gpa.alloc(BoxyDigestTask, units.items.len);
+    defer ctx.gpa.free(digest_tasks);
+    for (digest_tasks, units.items) |*task, artifact| task.* = .{ .digests = digests, .artifact = artifact };
+    // The units the import chains reach last are hashed first: a unit with
+    // more imports waits longer for its turn.
+    const digest_order = try ctx.gpa.alloc(u32, units.items.len);
+    defer ctx.gpa.free(digest_order);
+    for (digest_order, 0..) |*slot, index| slot.* = @intCast(index);
+    std.mem.sort(u32, digest_order, remaining, struct {
+        fn moreImports(import_counts: []const u32, a: u32, b: u32) bool {
+            return import_counts[a] > import_counts[b] or (import_counts[a] == import_counts[b] and a < b);
         }
-        keys[index] = task.key.bytes;
-        for (known.hosted_symbols) |symbol| {
-            const owned = try ctx.arena.dupe(u8, symbol);
-            if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
-            try hosted_symbols.append(ctx.arena, owned);
-        }
-        done += 1;
-        for (dependents[index].items) |dependent| {
-            remaining[dependent] -= 1;
-            if (remaining[dependent] == 0) try keyable.append(ctx.gpa, dependent);
-        }
-    }
+    }.moreImports);
+    var next_digest: usize = 0;
     var first_error: ?CliMainError = null;
     var executor_session: ?base.post_check_task_executor.Session = if (build_env.postCheckExecutor()) |executor| try executor.begin() else null;
     defer if (executor_session) |*open| open.end();
@@ -10568,18 +10579,29 @@ fn buildBoxyLibraryObjects(
         if (executor_session) |*open| {
             while (ready.items.len != 0 and open.canSubmit() and first_error == null) {
                 const index = ready.pop().?;
-                try Prepare.run(tasks, digests, index);
+                tasks[index].trace("submitted");
                 try open.submit(.{ .id = index, .context = &tasks[index], .run = BoxyUnitTask.run });
             }
+            // Every lane but one, so a unit becoming ready finds a lane.
+            while (next_digest < digest_order.len and open.outstanding + 1 < open.executor.worker_count and first_error == null) : (next_digest += 1) {
+                const index = digest_order[next_digest];
+                try open.submit(.{ .id = tasks.len + index, .context = &digest_tasks[index], .run = BoxyDigestTask.run });
+            }
             if (open.outstanding != 0) {
-                completed = @intCast(open.receive().id);
+                const id = open.receive().id;
+                if (id >= tasks.len) {
+                    if (digest_tasks[id - tasks.len].failed) |err| {
+                        if (first_error == null) first_error = err;
+                    }
+                    continue;
+                }
+                completed = @intCast(id);
             } else if (first_error == null) {
                 base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
             } else break;
         } else {
             if (first_error != null) break;
             const index = ready.pop() orelse base.invariant("roc build invariant violated: a .boxy unit waits for an import no unit lowers", .{});
-            try Prepare.run(tasks, digests, index);
             _ = BoxyUnitTask.run(&tasks[index], .{ .id = 0, .allocator = ctx.gpa, .scratch = ctx.gpa, .lane_state = undefined });
             completed = index;
         }
@@ -10591,6 +10613,34 @@ fn buildBoxyLibraryObjects(
             .failed => |err| {
                 if (first_error == null) first_error = err;
                 continue;
+            },
+            // An object compile-time evaluation built or restored under
+            // this build's key is linked as it is; its exports are in
+            // `interfaces`.
+            .known => |known| {
+                if (first_error != null) continue;
+                // Compile-time evaluation never builds an instrumented test unit.
+                // Its ordinary objects can also serve expect-free test dependencies.
+                std.debug.assert(!task.policy.test_units);
+                try build_env.boxyAdoptExports(digests, task.artifact);
+                if (known.restored) restored += 1 else built += 1;
+                if (want_images) {
+                    const image = known.image orelse base.invariant("roc build invariant violated: a fast dev link unit has no image", .{});
+                    images[index] = image.bytes;
+                    if (policy.test_units) unit_tests[index] = .{
+                        .expect_sites = &.{},
+                        .test_roots = &.{},
+                        .code_locations = image.code_locations,
+                    };
+                } else {
+                    objects[index] = known.pieces orelse base.invariant("roc build invariant violated: a unit compile-time evaluation recorded for a composing link has no pieces", .{});
+                }
+                keys[index] = task.key.bytes;
+                for (known.hosted_symbols) |symbol| {
+                    const owned = try ctx.arena.dupe(u8, symbol);
+                    if ((try seen_hosted.getOrPut(owned)).found_existing) continue;
+                    try hosted_symbols.append(ctx.arena, owned);
+                }
             },
             .done => |*result| {
                 if (first_error != null) continue;
@@ -10621,13 +10671,17 @@ fn buildBoxyLibraryObjects(
                 }
                 result.deinitKeepingCode(ctx.gpa);
                 task.outcome = .pending;
-                for (dependents[index].items) |dependent| {
-                    remaining[dependent] -= 1;
-                    if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
-                }
             },
         }
+        for (dependents[index].items) |dependent| {
+            remaining[dependent] -= 1;
+            if (remaining[dependent] == 0) try ready.append(ctx.gpa, dependent);
+        }
     }
+    // Digest tasks still out hashed for units that are done.
+    if (executor_session) |*open| while (open.outstanding != 0) {
+        _ = open.receive();
+    };
     if (reach_session) |*open| _ = open.receive();
     if (first_error) |err| return err;
     const reach = switch (reach_task.outcome) {
@@ -10817,8 +10871,9 @@ fn boxyUnitPlatform(artifact: *const check.CheckedArtifact.CheckedModuleArtifact
 }
 
 /// One library module's unit, run as a post-check task: its object restored
-/// from the cache, or lowered, compiled, and filed there. The task owns no
-/// executor of its own; the parallelism is across units.
+/// from the cache, or lowered, compiled, and filed there. Units run in
+/// parallel across the lanes, and a unit's own per-procedure work fans out
+/// over them too (`executor`).
 const BoxyUnitTask = struct {
     gpa: Allocator,
     io: std.Io,
@@ -10828,32 +10883,77 @@ const BoxyUnitTask = struct {
     views: []check.CheckedArtifact.ImportedModuleView,
     target: RocTarget,
     interfaces: *postcheck.Boxy.Lower.ExportInterfaces,
-    names: *const postcheck.Boxy.Types.ModuleNames,
+    /// The link's digests, which the task keys its unit from: its own
+    /// part hashed on its lane, its imports' parts recorded by their units.
+    digests: *compile.boxy_interface.Digests,
+    build_env: *BuildEnv,
     cache_manager: ?*CacheManager,
     timing: *lir.CheckedPipeline.Timing,
+    /// The executor the unit's per-procedure work (the LIR passes, ARC and
+    /// native code generation) fans out over, in sessions of its own
+    /// nested in the one running the unit: a lone rebuilt unit then uses
+    /// every lane rather than the one its task holds.
+    executor: ?base.post_check_task_executor.Executor,
+    /// When the units' phase began, for the work trace.
+    phase_started_ns: i96,
+    /// The unit's key, computed by its task (`keyAndBuild`).
     key: compile.boxy_object_cache.Key = undefined,
     want_pieces: bool,
-    outcome: union(enum) { pending, failed: CliMainError, done: compile.boxy_unit.Built } = .pending,
+    outcome: Outcome = .pending,
+
+    const Outcome = union(enum) {
+        pending,
+        failed: CliMainError,
+        done: compile.boxy_unit.Built,
+        /// Compile-time evaluation built or restored the object under this
+        /// build's key.
+        known: BuildEnv.BoxyKnownObject,
+    };
 
     fn deinit(self: *BoxyUnitTask, gpa: Allocator) void {
         gpa.free(self.views);
         switch (self.outcome) {
-            .pending, .failed => {},
+            // A known object belongs to the compilation.
+            .pending, .failed, .known => {},
             .done => |result| result.deinit(gpa),
         }
     }
 
     fn run(context: *anyopaque, _: base.post_check_task_executor.Worker) ?*anyopaque {
         const self: *BoxyUnitTask = @ptrCast(@alignCast(context));
-        self.outcome = if (self.build()) |result| .{ .done = result } else |err| .{ .failed = err };
+        self.outcome = self.keyAndBuild() catch |err| .{ .failed = err };
         return context;
+    }
+
+    /// Print `event` of this unit with the time since the phase began.
+    fn trace(self: *const BoxyUnitTask, comptime event: []const u8) void {
+        if (!dev_diagnostics.isSet(.trace_boxy_work)) return;
+        const now_ns = std.Io.Timestamp.now(self.io, .awake).nanoseconds;
+        const elapsed_us: u64 = @intCast(@divTrunc(now_ns - self.phase_started_ns, std.time.ns_per_us));
+        std.debug.print("boxy-work: +{d}.{d:0>3} ms (clock {d} ns) " ++ event ++ " {s}\n", .{ elapsed_us / std.time.us_per_ms, elapsed_us % std.time.us_per_ms, now_ns, self.artifact.canonical_names.moduleNameText(self.artifact.module_identity.module_name) });
+    }
+
+    /// Key the unit from the digests, then take the object compile-time
+    /// evaluation left under that key, or restore or build it.
+    fn keyAndBuild(self: *BoxyUnitTask) CliMainError!Outcome {
+        try self.digests.ensurePrepared(self.artifact);
+        self.key = try boxyObjectKey(self.gpa, self.digests, self.artifact, self.platform, self.policy, self.target, &.{}, false);
+        self.trace("keyed");
+        if (self.build_env.boxyObjectWithKey(self.artifact, self.key)) |known| {
+            self.trace("known");
+            return .{ .known = known };
+        }
+        const result = try self.build();
+        if (result.restored) self.trace("restored") else self.trace("built");
+        return .{ .done = result };
     }
 
     fn build(self: *BoxyUnitTask) CliMainError!compile.boxy_unit.Built {
         var config = checkedRuntimeLoweringConfig(.linked_output, self.policy.opt, .boxy, self.target, self.policy.synthetic_default_platform);
-        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = self.names, .expect_sites = self.policy.test_units };
+        config.target.boxy_unit = .{ .imports = self.interfaces, .root = false, .names = &self.digests.names, .expect_sites = self.policy.test_units };
         config.target.timing = self.timing;
-        return try compile.boxy_unit.restoreOrBuild(.{
+        config.target.post_check_executor = self.executor;
+        const built = try compile.boxy_unit.restoreOrBuild(.{
             .gpa = self.gpa,
             .artifact = self.artifact,
             .platform = self.platform,
@@ -10867,6 +10967,8 @@ const BoxyUnitTask = struct {
             .test_unit = self.policy.test_units,
             .wasm_stack_checks = self.policy.wasm_stack_checks,
         });
+        errdefer built.deinit(self.gpa);
+        return built;
     }
 };
 
@@ -12116,7 +12218,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     defer if (boxy_interfaces) |*interfaces| interfaces.deinit();
     // Filled once checking has published every module; the root unit reads
     // its names only when it lowers, after that.
-    var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .names = .{} };
+    var boxy_digests = compile.boxy_interface.Digests{ .gpa = ctx.gpa, .io = ctx.io.std_io, .names = .{} };
     defer boxy_digests.deinit();
     const boxy_root_unit: ?postcheck.Boxy.Lower.ModuleUnit = if (boxy_interfaces) |*interfaces| .{ .imports = interfaces, .root = true, .names = &boxy_digests.names } else null;
     runtime_lowering.target.boxy_unit = boxy_root_unit;
@@ -12711,6 +12813,10 @@ const CliTestTranscriptEvent = struct {
     payload: []const u8,
 };
 
+/// An outcome's position in a module's outcome file.
+const OutcomeIndex = enum(u32) { first = 0, _ };
+const OptionalOutcomeIndex = collections.OptionalId(OutcomeIndex);
+
 /// Where a result's `failure_detail` came from: the expect's own source,
 /// which a reused outcome rebuilds from the current checked module, or
 /// execution, whose message a reused outcome stores (design.md "Test
@@ -12911,14 +13017,14 @@ const CliTestPlanModule = struct {
     /// For each source root, the index of its outcome in the module's
     /// outcome file when that outcome is reused (design.md "Test outcome
     /// files"); only roots without one run.
-    reused: []?u32,
+    reused: []OptionalOutcomeIndex,
     /// The module's outcome file, when this command caches test outcomes.
     outcome_file: ?CliTestOutcomeFile = null,
 
     /// How many of the module's roots this command runs.
     fn runCount(self: *const CliTestPlanModule) usize {
         var count: usize = 0;
-        for (self.reused) |reused| count += @intFromBool(reused == null);
+        for (self.reused) |reused| count += @intFromBool(reused == .none);
         return count;
     }
 
@@ -13153,9 +13259,9 @@ fn buildCliTestPlan(
 
         const result_indices = try ctx.gpa.alloc(u32, test_roots.len);
         errdefer ctx.gpa.free(result_indices);
-        const reused = try ctx.gpa.alloc(?u32, test_roots.len);
+        const reused = try ctx.gpa.alloc(OptionalOutcomeIndex, test_roots.len);
         errdefer ctx.gpa.free(reused);
-        @memset(reused, null);
+        @memset(reused, .none);
         for (test_roots, result_indices, 0..) |root, *result_slot, root_index| {
             const result_index: u32 = @intCast(entries.items.len);
             result_slot.* = result_index;
@@ -13267,7 +13373,7 @@ fn admitCliTestOutcomes(
                 if (source_module.env == null) renderable = false;
             }
             if (!renderable) continue;
-            reused.* = @intCast(index);
+            reused.* = .some(@fromBackingInt(@as(u32, @intCast(index))));
             reused_count += 1;
         }
     }
@@ -13430,8 +13536,8 @@ fn publishCliTestOutcomes(
     try outcomes.ensureTotalCapacity(ctx.gpa, planned.test_roots.len);
     const observations = results[planned.test_roots.len..];
     for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-        if (reused) |index| {
-            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[index]));
+        if (reused.get()) |index| {
+            outcomes.appendAssumeCapacity(try test_outcome_file.dupeBorrowed(ctx.gpa, file.outcomes[@backingInt(index)]));
             continue;
         }
         const own = results[root_index];
@@ -14084,7 +14190,7 @@ fn collectCliTestRootRuns(
             );
         }
         const root_index: usize = @intCast(test_plan.root_index);
-        if (planned.reused[root_index] != null) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
+        if (planned.reused[root_index] != .none) base.invariant("CLI test invariant violated: a test root whose outcome is reused was lowered", .{});
         const root = planned.test_roots[root_index];
         const plan_entry = plan_entries[@intCast(test_plan.result_index)];
         if (builtin.mode == .debug and
@@ -15053,14 +15159,14 @@ fn mergeCliRootOutcomes(ctx: *CliCtx, planned: *CliTestPlanModule, fresh: []cons
     // handed over in the merged slice; `fresh` items are the caller's.
     var reused_own_end: usize = 0;
     errdefer {
-        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != null) deinitCliTestResultItemPayload(allocator, item);
+        for (merged.items[0..reused_own_end], planned.reused[0..reused_own_end]) |item, reused| if (reused != .none) deinitCliTestResultItemPayload(allocator, item);
         deinitCliTestResultItemPayloads(allocator, reused_inline.items);
         merged.deinit(allocator);
     }
     var fresh_index: usize = 0;
     for (planned.test_roots, planned.reused) |root, reused| {
-        if (reused) |index| {
-            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &merged, &reused_inline);
+        if (reused.get()) |index| {
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[@backingInt(index)], source_modules, &merged, &reused_inline);
             reused_own_end = merged.items.len;
             continue;
         }
@@ -15102,7 +15208,7 @@ fn completePlannedModuleResults(
         // Replayed root payloads were allocated by mergeCliRootOutcomes;
         // inline replay items only borrow current source-module data.
         for (results[0..planned.test_roots.len], planned.reused) |item, reused| {
-            if (reused != null) deinitCliTestResultItemPayload(ctx.gpa, item);
+            if (reused != .none) deinitCliTestResultItemPayload(ctx.gpa, item);
         }
         ctx.gpa.free(results);
     }
@@ -15147,7 +15253,7 @@ fn exerciseCliOutcomeOwnership(
     var manager = CacheManager.init(allocator, .{ .enabled = false }, ctx.coreCtx());
     defer manager.deinit();
 
-    const replay_index: usize = if (planned.reused[0] != null) 0 else 1;
+    const replay_index: usize = if (planned.reused[0] != .none) 0 else 1;
     const fresh_index = 1 - replay_index;
     if (operation == .replay) {
         var own: std.ArrayList(CliTestResultItem) = .empty;
@@ -15264,7 +15370,7 @@ fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error
         .inline_expects = &.{.{ .module = identity, .region_start = 7, .region_end = 9, .passed = 3, .failed = 1 }},
     }};
     var indices = [_]u32{ 0, 1 };
-    var reused = [_]?u32{ 0, null };
+    var reused = [_]OptionalOutcomeIndex{ .some(.first), .none };
     var planned: CliTestPlanModule = .{
         .module_index = 0,
         .module = .{
@@ -15289,8 +15395,8 @@ fn checkCliOutcomeOwnership(operation: CliOutcomeOwnershipTest) (Allocator.Error
     // Both first-entry constructors must be safe: replay duplicates borrowed
     // arrays, while fresh publication constructs them from result items.
     for (0..2) |replay_index| {
-        reused = .{ null, null };
-        reused[replay_index] = 0;
+        reused = .{ .none, .none };
+        reused[replay_index] = .some(.first);
         outcomes[0].order = @intCast(replay_index);
         try std.testing.checkAllAllocationFailures(deterministic.allocator(), exerciseCliOutcomeOwnership, .{ &planned, &sources, operation });
     }
@@ -15382,8 +15488,8 @@ fn publishReusedCliTestOutcomesLive(
     defer inline_expects.deinit(ctx.gpa);
     for (test_plan.modules) |*planned| {
         for (planned.test_roots, planned.reused, planned.result_indices) |root, reused, result_index| {
-            const index = reused orelse continue;
-            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[index], source_modules, &own, &inline_expects);
+            const index = reused.get() orelse continue;
+            try appendReusedCliTestOutcome(ctx, planned, root, planned.outcome_file.?.outcomes[@backingInt(index)], source_modules, &own, &inline_expects);
             live.publishCopiedEntry(result_index, planned.module.semantic.env, planned.module.path, own.items[own.items.len - 1]);
         }
     }
@@ -15912,7 +16018,7 @@ fn unitTestRootImage(
 /// report every planned module's outcomes as `runCompiledTestPlan` does.
 fn runUnitImageTestPlan(
     ctx: *CliCtx,
-    program: *const UnitImageTestProgram,
+    program: *UnitImageTestProgram,
     test_plan: *CliTestPlan,
     opt: cli_args.OptLevel,
     dev_timing: ?*eval.test_helpers.DevBoolRootTiming,
@@ -15947,7 +16053,7 @@ fn runUnitImageTestPlan(
         errdefer ctx.gpa.free(roots);
         var cursor: usize = 0;
         for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-            if (reused != null) continue;
+            if (reused != .none) continue;
             const entry = program.wrappers.get(.{ .module = module, .root_index = @intCast(root_index) }) orelse
                 base.invariant("roc test invariant violated: no loaded test unit exports the wrapper of root {d} of module {s}", .{ root_index, planned.module.semantic.env.qualifiedModuleName() });
             roots[cursor] = .{ .entry = entry };
@@ -17249,7 +17355,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) CliMainEr
     defer runtime_metadata.deinit(ctx.gpa);
     for (test_plan.modules) |planned| {
         for (planned.test_roots, planned.reused, 0..) |root, reused, root_index| {
-            if (reused != null) continue;
+            if (reused != .none) continue;
             try runtime_requests.append(ctx.gpa, root);
             try runtime_sources.append(ctx.gpa, planned.artifact.key.digest());
             const entry = test_plan.entries[planned.result_indices[root_index]];

@@ -20,6 +20,10 @@ pub const Var = enum {
     /// strategy, and Boxy lowering's. A specialized compilation whose
     /// compile-time roots are all complete produces no events.
     trace_boxy_work,
+    /// Print each part of every Boxy module digest, so two traces show
+    /// which part an edit changed. Hashing the parts separately costs more
+    /// than the digests themselves, so the work trace leaves it out.
+    trace_boxy_digests,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
@@ -57,6 +61,10 @@ pub const Var = enum {
     /// Write every wasm unit image a wasm build restores or builds into the
     /// named directory, one file per unit named by its unit key.
     dump_wasm_unit_images,
+    /// Print deterministic table storage counters (bytes filled, bytes copied
+    /// on growth, mappings, reservations, commits, trims, epoch wraps and
+    /// relocations) at exit.
+    storage_work,
     /// Append `<start> <size> <name>` for every function of each unit image
     /// the compiler loads into its own process (`roc test`'s and compile-time
     /// evaluation's) to `/tmp/perf-<pid>.map`, so `perf` names them: by the
@@ -69,6 +77,7 @@ pub const Var = enum {
         return switch (self) {
             .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
+            .trace_boxy_digests => "ROC_TRACE_BOXY_DIGESTS",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
@@ -84,6 +93,7 @@ pub const Var = enum {
             .dump_run_image => "ROC_DUMP_RUN_IMAGE",
             .wasm_split_bytes => "ROC_WASM_SPLIT_BYTES",
             .dump_wasm_unit_images => "ROC_DUMP_WASM_UNIT_IMAGES",
+            .storage_work => "ROC_STORAGE_WORK",
             .perf_map => "ROC_PERF_MAP",
         };
     }

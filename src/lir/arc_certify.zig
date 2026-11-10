@@ -489,9 +489,8 @@ fn certifyUniqueArgs(
     sigs: arc_sig.SigTable,
     diag: *Diagnostic,
 ) CertifyError!void {
-    const local_to_dense = try allocator.alloc(u32, store.localCount());
-    defer allocator.free(local_to_dense);
-    @memset(local_to_dense, no_dense);
+    var local_to_dense = try arc_solve.DenseLocalColumn.initFilled(allocator, store.localCount());
+    defer local_to_dense.deinit(allocator);
     var dense_locals = std.ArrayList(LIR.LocalId).empty;
     defer dense_locals.deinit(allocator);
     var proc_stmts = std.ArrayList(LIR.CFStmtId).empty;
@@ -503,13 +502,13 @@ fn certifyUniqueArgs(
         fn go(
             alloc: Allocator,
             rc: []const bool,
-            mapping: []u32,
+            mapping: *arc_solve.DenseLocalColumn,
             locals: *std.ArrayList(LIR.LocalId),
             local: LIR.LocalId,
         ) Allocator.Error!void {
             const raw = @backingInt(local);
-            if (raw >= rc.len or !rc[raw] or mapping[raw] != no_dense) return;
-            mapping[raw] = @intCast(locals.items.len);
+            if (raw >= rc.len or !rc[raw] or mapping.isPresent(raw)) return;
+            mapping.set(raw, @fromBackingInt(@as(u32, @intCast(locals.items.len))));
             try locals.append(alloc, local);
         }
     }.go;
@@ -520,15 +519,15 @@ fn certifyUniqueArgs(
         const body = proc.arcBody() orelse continue;
         const sig = sigs.get(proc_id);
 
-        for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;
+        for (dense_locals.items) |local| local_to_dense.clear(@backingInt(local));
         dense_locals.clearRetainingCapacity();
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |index| {
-            try addLocal(allocator, rc_local, local_to_dense, &dense_locals, GuardedList.at(params, index));
+            try addLocal(allocator, rc_local, &local_to_dense, &dense_locals, GuardedList.at(params, index));
         }
         const frame_locals = store.getLocalSpan(proc.frame_locals);
         for (0..GuardedList.borrowLen(frame_locals)) |index| {
-            try addLocal(allocator, rc_local, local_to_dense, &dense_locals, GuardedList.at(frame_locals, index));
+            try addLocal(allocator, rc_local, &local_to_dense, &dense_locals, GuardedList.at(frame_locals, index));
         }
 
         try arc_solve.collectProcStatements(allocator, store, body, &proc_stmts);
@@ -539,7 +538,7 @@ fn certifyUniqueArgs(
             sigs,
             proc_id,
             proc_stmts.items,
-            local_to_dense,
+            local_to_dense.view(),
             dense_locals.items,
             layouts,
             &order_scratch,
@@ -566,11 +565,13 @@ fn certifyUniqueArgs(
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 if ((unique_args & bit) == 0) continue;
                 const raw = @backingInt(arg);
-                const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
+                const dense = if (raw < local_to_dense.len()) local_to_dense.get(raw) else null;
                 // The birth must hold under the parameter positions this
                 // emission's signature seeds born-unique.
-                if (dense != no_dense and uniqueness.born_unique.isSet(dense) and
-                    (uniqueness.conds[dense] & ~sig.unique_params) == 0) continue;
+                if (dense) |dense_id| {
+                    if (uniqueness.born_unique.isSet(@backingInt(dense_id)) and
+                        (uniqueness.conds[@backingInt(dense_id)] & ~sig.unique_params) == 0) continue;
+                }
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
                 diag.set("stmt={d}: check-free uniqueness claim on argument {d} (local {d}) without a unique birth under the seeded parameters", .{ stmt_index, position, raw });
@@ -891,7 +892,7 @@ const PresenceCondition = struct {
 /// of enumerating the cell's initialized and uninitialized runtime states.
 const MaybeUninitializedConditions = struct {
     allocator: Allocator,
-    condition: []u32,
+    condition: collections.OptionalIndexColumn(LIR.LocalId),
     mask: []u64,
 
     fn init(
@@ -899,11 +900,10 @@ const MaybeUninitializedConditions = struct {
         store: *const LirStore,
         diag: *Diagnostic,
     ) CertifyError!MaybeUninitializedConditions {
-        const condition = try allocator.alloc(u32, store.localCount());
-        errdefer allocator.free(condition);
+        var condition = try collections.OptionalIndexColumn(LIR.LocalId).initFilled(allocator, store.localCount());
+        errdefer condition.deinit(allocator);
         const mask = try allocator.alloc(u64, store.localCount());
         errdefer allocator.free(mask);
-        @memset(condition, no_dense);
         @memset(mask, 0);
 
         for (0..store.cfStmtCount()) |stmt_index| {
@@ -926,15 +926,15 @@ const MaybeUninitializedConditions = struct {
                 const presence = GuardedList.at(conditions, index);
                 const presence_mask = GuardedList.at(masks, index);
                 const param_index = @backingInt(param);
-                if (param_index >= condition.len or @backingInt(presence) >= condition.len) {
+                if (param_index >= condition.len() or @backingInt(presence) >= condition.len()) {
                     diag.context_stmt = stmt_id;
                     diag.set("stmt={d}: maybe-uninitialized join metadata names an out-of-bounds local", .{stmt_index});
                     return error.Certification;
                 }
-                if (condition[param_index] == no_dense) {
-                    condition[param_index] = @backingInt(presence);
+                if (!condition.isPresent(param_index)) {
+                    condition.set(param_index, presence);
                     mask[param_index] = presence_mask;
-                } else if (condition[param_index] != @backingInt(presence) or mask[param_index] != presence_mask) {
+                } else if (condition.get(param_index).? != presence or mask[param_index] != presence_mask) {
                     diag.context_stmt = stmt_id;
                     diag.context_local = param;
                     diag.set("stmt={d}: maybe-uninitialized local {d} has conflicting presence conditions", .{ stmt_index, param_index });
@@ -947,15 +947,16 @@ const MaybeUninitializedConditions = struct {
     }
 
     fn deinit(self: *MaybeUninitializedConditions) void {
-        self.allocator.free(self.condition);
+        self.condition.deinit(self.allocator);
         self.allocator.free(self.mask);
     }
 
     fn get(self: *const MaybeUninitializedConditions, local: LIR.LocalId) ?PresenceCondition {
         const index = @backingInt(local);
-        if (index >= self.condition.len or self.condition[index] == no_dense) return null;
+        if (index >= self.condition.len()) return null;
+        const condition = self.condition.get(index) orelse return null;
         return .{
-            .local = @fromBackingInt(@intCast(self.condition[index])),
+            .local = condition,
             .mask = self.mask[index],
         };
     }

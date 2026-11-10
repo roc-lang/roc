@@ -1488,7 +1488,7 @@ const BoxyObjects = struct {
             .function_cache = .{ .allocator = coordinator.gpa, .io = coordinator.roc_ctx.std_io },
             .lowering = unit_lowering,
             .manager = manager,
-            .digests = .{ .gpa = coordinator.gpa, .names = .{} },
+            .digests = .{ .gpa = coordinator.gpa, .io = coordinator.roc_ctx.std_io, .names = .{} },
             .interfaces = undefined,
             .owned_interfaces = if (lowering.interfaces == null) .init(coordinator.gpa, coordinator.roc_ctx.std_io) else null,
             .session = try coordinator.postCheckExecutor().begin(),
@@ -1784,12 +1784,19 @@ const BoxyObjects = struct {
         } };
     }
 
-    /// Key `prepared`'s unit. A key reads what the unit's imports recorded,
-    /// so this runs on the coordinating thread once they are done.
+    /// Admit `prepared`'s unit and its import closure to the digests, on
+    /// the coordinating thread, before the unit's task keys it from them.
+    fn admitUnit(self: *BoxyObjects, prepared: *const Prepared) Error!void {
+        try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
+        try self.addToDigests(prepared.unit.artifact);
+    }
+
+    /// Key `prepared`'s unit, on the lane running it. A key reads what the
+    /// unit's imports recorded, which they had by the time the unit was
+    /// ready, and the unit's own part of its digests, hashed here.
     fn keyUnit(self: *BoxyObjects, prepared: *Prepared) Error!void {
         const unit = &prepared.unit;
-        try self.addToDigests(&self.coordinator.builtin_modules.checked_artifact);
-        try self.addToDigests(unit.artifact);
+        try self.digests.ensurePrepared(unit.artifact);
         unit.key = try boxy_unit.objectKey(self.coordinator.gpa, &self.digests, unit.artifact, unit.platform, self.lowering.opt, self.lowering.inline_expects, self.lowering.target, &.{}, false, false, false);
     }
 
@@ -1850,6 +1857,7 @@ const BoxyObjects = struct {
 
     /// One unit's build as a post-check task.
     const UnitTask = struct {
+        objects: *BoxyObjects,
         artifact: *const Artifact,
         prepared: Prepared,
         /// The imports whose objects are not known yet.
@@ -1858,8 +1866,13 @@ const BoxyObjects = struct {
 
         fn run(context: *anyopaque, _: post_check_executor.Worker) ?*anyopaque {
             const self: *UnitTask = @ptrCast(@alignCast(context));
-            self.outcome = if (self.prepared.build()) |built| .{ .done = built } else |err| .{ .failed = err };
+            self.outcome = if (self.keyAndBuild()) |built| .{ .done = built } else |err| .{ .failed = err };
             return null;
+        }
+
+        fn keyAndBuild(self: *UnitTask) Error!boxy_unit.Built {
+            try self.objects.keyUnit(&self.prepared);
+            return try self.prepared.build();
         }
 
         fn destroy(self: *UnitTask, gpa: Allocator) void {
@@ -1894,7 +1907,7 @@ const BoxyObjects = struct {
         }
         const task = try gpa.create(UnitTask);
         errdefer gpa.destroy(task);
-        task.* = .{ .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
+        task.* = .{ .objects = self, .artifact = artifact, .prepared = try self.prepare(artifact), .remaining = 0 };
         errdefer task.prepared.deinit(gpa);
         try self.units.put(gpa, artifact.key.bytes, task);
         errdefer _ = self.units.remove(artifact.key.bytes);
@@ -2057,8 +2070,8 @@ const BoxyObjects = struct {
         }
         while (self.ready.items.len != 0 and self.first_error == null and self.session.canSubmit() and self.session.outstanding < limit) {
             const task = self.ready.pop().?;
-            try self.keyUnit(&task.prepared);
-            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} key {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, &std.fmt.bytesToHex(task.artifact.key.bytes[0..8], .lower), self.session.outstanding + 1 });
+            try self.admitUnit(&task.prepared);
+            if (base.dev_diagnostics.isSet(.trace_boxy_work)) std.debug.print("boxy-work: building {s} ({d} units in progress)\n", .{ task.artifact.moduleEnvConst().module_name, self.session.outstanding + 1 });
             self.session.submit(.{ .id = @intFromPtr(task), .context = task, .run = UnitTask.run }) catch |err| {
                 self.ready.appendAssumeCapacity(task);
                 return err;
@@ -4679,7 +4692,7 @@ pub const Coordinator = struct {
                 if (mod.checkedArtifact()) |artifact| try artifacts.append(self.gpa, artifact);
             }
         }
-        return try boxy_interface.Digests.init(self.gpa, artifacts.items);
+        return try boxy_interface.Digests.init(self.gpa, self.roc_ctx.std_io, artifacts.items);
     }
 
     fn checkedModuleCacheKey(
@@ -10561,8 +10574,8 @@ const lifted_const_lib_source =
     \\}
 ;
 
-/// Read one checked-module cache entry's bytes, or null when the cache holds
-/// no entry under `key`.
+/// Read bytes using the checked-entry storage key recorded by the producer,
+/// not the artifact's semantic identity.
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };

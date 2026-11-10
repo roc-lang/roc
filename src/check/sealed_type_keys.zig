@@ -182,25 +182,24 @@ const HeapKeyPages = struct {
 };
 const KeyIndex = std.AutoHashMapUnmanaged([32]u8, Var);
 
-/// A canonical id memo using atomics supported by every compiler host.
-/// The extra bit distinguishes an empty slot from the largest valid id;
-/// all other ids need only the word load.
+/// A canonical id memo in one atomic word. Zero is the empty slot, so the
+/// column can start on fresh zero pages, and an id `n` is stored as `n + 1`.
+/// `maxInt(u32)` has no stored form: it is left unmemoized, so its readers
+/// compute the same immutable answer each time.
 pub const CanonicalIdSlot = struct {
-    value: std.atomic.Value(u32) = .init(std.math.maxInt(u32)),
-    largest_ready: std.atomic.Value(bool) = .init(false),
+    word: std.atomic.Value(u32) = .init(0),
 
     pub fn get(self: *const CanonicalIdSlot) ?CheckedTypeId {
-        const raw = self.value.load(.acquire);
-        if (raw == std.math.maxInt(u32) and !self.largest_ready.load(.acquire)) return null;
-        return @fromBackingInt(raw);
+        const word = self.word.load(.acquire);
+        if (word == 0) return null;
+        return @fromBackingInt(word - 1);
     }
 
     /// Concurrent publishers must publish the same immutable answer.
     pub fn put(self: *CanonicalIdSlot, id: CheckedTypeId) void {
         const raw = @backingInt(id);
-        if (raw == std.math.maxInt(u32)) {
-            self.largest_ready.store(true, .release);
-        } else self.value.store(raw, .release);
+        if (raw == std.math.maxInt(u32)) return;
+        self.word.store(raw + 1, .release);
     }
 };
 
@@ -220,20 +219,19 @@ pub const SealedTypeKeys = struct {
     writer: ?canonical_type_keys.TypeWriter = null,
     /// Per variable: 0 while unknown, else 1 + whether a walk found the
     /// variable reaches an identity variable.
-    identity: []std.atomic.Value(u8),
+    identity: collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)),
     /// Canonical ids of settled source types, recorded on first request.
-    canonical: []CanonicalIdSlot,
+    canonical: collections.zeroed_pages.SparseSlice(CanonicalIdSlot),
 
     /// Key slots for `env`'s sealed store. `allocator` must be safe to use
     /// from every thread that reads the module's types.
     pub fn create(allocator: Allocator, io: std.Io, env: *const ModuleEnv) Allocator.Error!*SealedTypeKeys {
         const keys = try allocator.create(SealedTypeKeys);
         errdefer allocator.destroy(keys);
-        const identity = try allocator.alloc(std.atomic.Value(u8), @intCast(env.types.len()));
-        errdefer allocator.free(identity);
-        @memset(identity, .init(0));
-        const canonical_ids = try allocator.alloc(CanonicalIdSlot, identity.len);
-        @memset(canonical_ids, .{});
+        var identity = try collections.zeroed_pages.SparseSlice(std.atomic.Value(u8)).init(allocator, @intCast(env.types.len()));
+        errdefer identity.deinit(allocator);
+        var canonical_ids = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(allocator, identity.items.len);
+        errdefer canonical_ids.deinit(allocator);
         keys.* = .{ .allocator = allocator, .io = io, .env = env, .identity = identity, .canonical = canonical_ids };
         return keys;
     }
@@ -246,8 +244,8 @@ pub const SealedTypeKeys = struct {
             allocator.destroy(index);
         }
         if (self.writer) |*writer| writer.deinit();
-        allocator.free(self.identity);
-        allocator.free(self.canonical);
+        self.identity.deinit(allocator);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -262,10 +260,10 @@ pub const SealedTypeKeys = struct {
         defer self.writer_mutex.unlock(self.io);
         const storage_memory = if (self.table.peek()) |backing| backing.memory() else StorageMemory{};
         const memory: canonical_type_keys.TypeWriter.KeyMemory = if (self.writer) |*writer| writer.retainedKeyMemory() else .{};
-        const slots = if (self.table.peek() != null) self.identity.len else 0;
+        const slots = if (self.table.peek() != null) self.identity.items.len else 0;
         const slot_bytes = storage_memory.allocated_bytes;
         const directory_bytes = storage_memory.directory_bytes;
-        const identity_bytes = self.identity.len * @sizeOf(std.atomic.Value(u8));
+        const identity_bytes = self.identity.items.len * @sizeOf(std.atomic.Value(u8));
         const index_bytes = if (self.index.peek()) |index| @sizeOf(KeyIndex) + type_key_engine.hashRetainedBytes([32]u8, Var, index.*) else @as(usize, 0);
         const persistent = memory.engine.persistent();
         const scratch = memory.engine.scratch + memory.adapter_scratch;
@@ -287,12 +285,12 @@ pub const SealedTypeKeys = struct {
 
     fn allocateStorage(self: *SealedTypeKeys) Allocator.Error!KeyStorage {
         if (self.test_fail_storage.enabled()) return error.OutOfMemory;
-        return KeyStorage.init(self.allocator, self.identity.len);
+        return KeyStorage.init(self.allocator, self.identity.items.len);
     }
 
     fn slot(self: *SealedTypeKeys, var_: Var) Allocator.Error!*KeySlot {
         const raw: usize = @backingInt(var_);
-        std.debug.assert(raw < self.identity.len);
+        std.debug.assert(raw < self.identity.items.len);
         const storage_ = try self.storage();
         return storage_.slot(self.allocator, self.io, raw);
     }
@@ -325,8 +323,8 @@ pub const SealedTypeKeys = struct {
     /// Whether `var_` reaches an identity variable, when a walk recorded it.
     pub fn knownIdentity(self: *const SealedTypeKeys, var_: Var) ?bool {
         const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.len);
-        return switch (self.identity[index].load(.acquire)) {
+        std.debug.assert(index < self.identity.items.len);
+        return switch (self.identity.items[index].load(.acquire)) {
             0 => null,
             1 => false,
             else => true,
@@ -336,18 +334,18 @@ pub const SealedTypeKeys = struct {
     /// Record whether `var_` reaches an identity variable.
     pub fn recordIdentity(self: *SealedTypeKeys, var_: Var, value: bool) void {
         const index: usize = @backingInt(var_);
-        std.debug.assert(index < self.identity.len);
-        self.identity[index].store(if (value) 2 else 1, .release);
+        std.debug.assert(index < self.identity.items.len);
+        self.identity.items[index].store(if (value) 2 else 1, .release);
     }
 
     /// The previously recorded canonical id of a settled source type.
     pub fn knownCanonical(self: *const SealedTypeKeys, var_: Var) ?CheckedTypeId {
-        return self.canonical[@backingInt(var_)].get();
+        return self.canonical.items[@backingInt(var_)].get();
     }
 
     /// Record the canonical id selected from the immutable source key index.
     pub fn recordCanonical(self: *SealedTypeKeys, var_: Var, id: CheckedTypeId) void {
-        self.canonical[@backingInt(var_)].put(id);
+        self.canonical.items[@backingInt(var_)].put(id);
     }
 
     /// The lowest reached checked representative of `view`'s store whose key
@@ -382,13 +380,33 @@ pub const SealedTypeKeys = struct {
     };
 };
 
-test "canonical id slots distinguish unknown from every boundary id" {
-    for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) }) |raw| {
+test "canonical id slots distinguish unknown from every encodable id" {
+    for ([_]u32{ 0, 1 << 31, std.math.maxInt(u32) - 1 }) |raw| {
         var slot: CanonicalIdSlot = .{};
         try std.testing.expect(slot.get() == null);
         const id: CheckedTypeId = @fromBackingInt(raw);
         slot.put(id);
         try std.testing.expectEqual(id, slot.get().?);
+    }
+}
+
+test "a canonical id slot leaves the unencodable largest id unmemoized" {
+    var slot: CanonicalIdSlot = .{};
+    slot.put(@fromBackingInt(std.math.maxInt(u32)));
+    try std.testing.expect(slot.get() == null);
+    slot.put(@fromBackingInt(7));
+    slot.put(@fromBackingInt(std.math.maxInt(u32)));
+    try std.testing.expectEqual(@as(CheckedTypeId, @fromBackingInt(7)), slot.get().?);
+}
+
+test "the zero word is an empty canonical id slot of four bytes" {
+    try std.testing.expectEqual(@as(usize, 4), @sizeOf(CanonicalIdSlot));
+    // One column below the small-table threshold and one on fresh zero pages.
+    const page_backed_len = collections.zeroed_pages.small_table_bytes / @sizeOf(CanonicalIdSlot) + 1;
+    for ([_]usize{ 8, page_backed_len }) |len| {
+        var column = try collections.zeroed_pages.SparseSlice(CanonicalIdSlot).init(std.testing.allocator, len);
+        defer column.deinit(std.testing.allocator);
+        for (column.items) |*slot| try std.testing.expect(slot.get() == null);
     }
 }
 

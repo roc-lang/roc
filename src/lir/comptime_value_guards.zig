@@ -1,5 +1,6 @@
 //! Final post-ARC guards borrow the immutable compile-time failure image.
 const std = @import("std");
+const collections = @import("collections");
 const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const DenseMap = @import("collections").DenseMap;
@@ -25,8 +26,8 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         }
     } else false;
     if (!has_value_slots) return;
-    const completed_exports: []?u32 = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else &.{};
-    defer allocator.free(completed_exports);
+    var completed_exports: ExportBySlot = if (completed) |frozen| try exportsBySlot(allocator, program, frozen) else .{};
+    defer completed_exports.deinit(allocator);
     var uses: std.ArrayList(Use) = .empty;
     defer uses.deinit(allocator);
     var work: std.ArrayList(LIR.CFStmtId) = .empty;
@@ -61,7 +62,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;
             if (completed) |frozen| {
-                if (!completedValueFailed(program, frozen, completed_exports, root.role.value.failure_slot)) continue;
+                if (!completedValueFailed(program, frozen, &completed_exports, root.role.value.failure_slot)) continue;
             }
             try uses.append(allocator, .{ .proc = proc_id, .stmt = stmt_id, .slot = slot });
         }
@@ -167,13 +168,16 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
     }
 }
 
+/// A position in a frozen image's exports.
+const ExportPosition = enum(u32) { _ };
+const ExportBySlot = collections.OptionalIndexColumn(ExportPosition);
+
 /// The frozen export holding each static data slot's completed bytes.
-fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) std.mem.Allocator.Error![]?u32 {
-    const exports = try allocator.alloc(?u32, program.static_data_values.items.len);
-    @memset(exports, null);
+fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) std.mem.Allocator.Error!ExportBySlot {
+    var exports = try ExportBySlot.initFilled(allocator, program.static_data_values.items.len);
     for (frozen.exports, 0..) |item, index| {
         const slot = item.value_id orelse continue;
-        exports[@backingInt(slot)] = @intCast(index);
+        exports.set(@backingInt(slot), @fromBackingInt(@as(u32, @intCast(index))));
     }
     return exports;
 }
@@ -181,10 +185,10 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
 /// Whether the value owning `failure_slot` failed or is yet to be evaluated:
 /// the `failed` flag of its failure record in the frozen image, when the
 /// image has one.
-fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
+fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: *const ExportBySlot, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@backingInt(failure_slot)] orelse return true;
-    const record = frozen.exports[index];
+    const index = exports.get(@backingInt(failure_slot)) orelse return true;
+    const record = frozen.exports[@backingInt(index)];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }
 

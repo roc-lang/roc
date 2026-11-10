@@ -1972,11 +1972,17 @@ fn addErrorTestModule(modules: *Modules, store: *checked.CheckedTypeStore) Alloc
     return try modules.add(view);
 }
 
+fn errorTestStore(allocator: Allocator) Allocator.Error!checked.CheckedTypeStore {
+    var store = checked.CheckedTypeStore{};
+    store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(allocator, std.testing.io, 0));
+    return store;
+}
+
 test "Boxy error reachability separates modules and preserves proofs across append-only publication" {
     const a = std.testing.allocator;
-    var first = checked.CheckedTypeStore{};
+    var first = try errorTestStore(a);
     defer first.deinit(a);
-    var second = checked.CheckedTypeStore{};
+    var second = try errorTestStore(a);
     defer second.deinit(a);
     const bad = try first.appendSyntheticPayloadRoot(a, .err);
     const good = try second.appendSyntheticPayloadRoot(a, .empty_record);
@@ -2005,7 +2011,7 @@ test "Boxy error reachability separates modules and preserves proofs across appe
 
 test "Boxy error reachability matches old traversal for late-positive cycles and false diamonds" {
     const a = std.testing.allocator;
-    var store = checked.CheckedTypeStore{};
+    var store = try errorTestStore(a);
     defer store.deinit(a);
     var ids: [8]checked.CheckedTypeId = undefined;
     for (&ids) |*id| id.* = try store.reserveSyntheticTypeRoot(a);
@@ -2038,9 +2044,8 @@ test "Boxy error reachability matches old traversal for late-positive cycles and
 
 test "Boxy error reachability preserves value-error edges and field-kind semantics" {
     const a = std.testing.allocator;
-    var store = checked.CheckedTypeStore{};
+    var store = try errorTestStore(a);
     defer store.deinit(a);
-    store.attachSynthesizedKeys(try checked.SynthesizedTypeKeys.create(a, std.testing.io, 0));
     var canonical_names = names.CanonicalNameStore.init(a);
     defer canonical_names.deinit();
     store.key_names = &canonical_names;
@@ -2131,7 +2136,7 @@ fn errorTypesAllocationCase(allocator: Allocator, modules: *const Modules, modul
 
 test "Boxy error reachability propagates OOM and retries without stale proofs" {
     const a = std.testing.allocator;
-    var store = checked.CheckedTypeStore{};
+    var store = try errorTestStore(a);
     defer store.deinit(a);
     const bad = try store.appendSyntheticPayloadRoot(a, .err);
     const first = try store.reserveSyntheticTypeRoot(a);
@@ -2162,7 +2167,7 @@ test "Boxy error reachability propagates OOM and retries without stale proofs" {
 test "Boxy error reachability work stays bounded by shared graph nodes" {
     const a = std.testing.allocator;
     for ([_]usize{ 16, 128, 1024 }) |count| {
-        var store = checked.CheckedTypeStore{};
+        var store = try errorTestStore(a);
         defer store.deinit(a);
         const ids = try a.alloc(checked.CheckedTypeId, count);
         defer a.free(ids);

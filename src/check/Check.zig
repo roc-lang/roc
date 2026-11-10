@@ -378,6 +378,8 @@ nominal_dependencies: exhaustive.SharedNominalDependencies,
 /// Holds one match's exhaustiveness analysis and result; reset after each
 /// match, keeping a bounded chunk for the next one.
 exhaustiveness_arena: base.SingleThreadArena,
+/// Temporary tables released together at each graph-analysis boundary.
+table_scratch: collections.ScratchArena,
 /// Whether a check's result still lives in `exhaustiveness_arena`; checks
 /// never nest, so a second one never starts while it is set.
 exhaustiveness_arena_in_use: bool = false,
@@ -1744,6 +1746,7 @@ pub const state_inventory = state_discipline.inventory(Self, .{
     .type_decl_validity_final = .keyed,
     .nominal_dependencies = .keyed,
     .exhaustiveness_arena = .scratch,
+    .table_scratch = .scratch,
     .exhaustiveness_arena_in_use = .lexical,
     .scratch_vars = .scratch,
     .anno_apply_reaches = .scratch,
@@ -4690,6 +4693,7 @@ fn initAssumePrepared(
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
         .exhaustiveness_arena = base.SingleThreadArena.init(gpa),
+        .table_scratch = collections.ScratchArena.init(gpa),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
@@ -10443,25 +10447,24 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     const decl_count = self.type_decl_statements.items.len;
     if (decl_count == 0) return;
 
-    var dependent_counts = try self.gpa.alloc(usize, decl_count);
-    defer self.gpa.free(dependent_counts);
+    const scratch = self.table_scratch.allocator();
+    defer self.table_scratch.reset();
+
+    const dependent_counts = try scratch.alloc(u32, decl_count);
     @memset(dependent_counts, 0);
 
     for (self.type_decl_dependencies.items) |edge| {
         dependent_counts[edge.dependency] += 1;
     }
 
-    var dependent_offsets = try self.gpa.alloc(usize, decl_count + 1);
-    defer self.gpa.free(dependent_offsets);
+    const dependent_offsets = try scratch.alloc(usize, decl_count + 1);
     dependent_offsets[0] = 0;
     for (dependent_counts, 0..) |count, dense_idx| {
         dependent_offsets[dense_idx + 1] = dependent_offsets[dense_idx] + count;
     }
 
-    var fill_offsets = try self.gpa.dupe(usize, dependent_offsets[0..decl_count]);
-    defer self.gpa.free(fill_offsets);
-    const dependents = try self.gpa.alloc(u32, self.type_decl_dependencies.items.len);
-    defer self.gpa.free(dependents);
+    const fill_offsets = try scratch.dupe(usize, dependent_offsets[0..decl_count]);
+    const dependents = try scratch.alloc(u32, self.type_decl_dependencies.items.len);
 
     for (self.type_decl_dependencies.items) |edge| {
         const offset = fill_offsets[edge.dependency];
@@ -10473,12 +10476,10 @@ fn finalizeTypeDeclarationValidity(self: *Self) std.mem.Allocator.Error!void {
     defer worklist.deinit(self.gpa);
     try worklist.ensureTotalCapacity(self.gpa, decl_count);
 
-    const propagated = try self.gpa.alloc(bool, decl_count);
-    defer self.gpa.free(propagated);
+    const propagated = try scratch.alloc(bool, decl_count);
     @memset(propagated, false);
 
-    const poisoned = try self.gpa.alloc(bool, decl_count);
-    defer self.gpa.free(poisoned);
+    const poisoned = try scratch.alloc(bool, decl_count);
     @memset(poisoned, false);
 
     self.propagateTypeDeclarationInvalidity(dependent_offsets, dependents, propagated, &worklist);
@@ -10622,11 +10623,14 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     // Slot table: local, still-valid declarations with nominal content.
     var slots: std.ArrayListUnmanaged(types_mod.NominalDecl.Idx) = .empty;
     defer slots.deinit(self.gpa);
-    // Each declaration's slot, or `no_slot`, as a column over declarations.
-    const no_slot = std.math.maxInt(u32);
-    const slot_by_decl = try self.gpa.alloc(u32, decl_count);
-    defer self.gpa.free(slot_by_decl);
-    @memset(slot_by_decl, no_slot);
+    const SlotId = enum(u32) { _ };
+    const SlotColumn = collections.ZeroSentinelIndexColumn(SlotId);
+    const first_slot: usize = 1;
+    if (decl_count == 0) return;
+    // Slot zero is the column's absence sentinel; every pass starts at first_slot.
+    try slots.append(self.gpa, undefined);
+    var slot_by_decl = try SlotColumn.initFilled(self.gpa, decl_count);
+    defer slot_by_decl.deinit(self.gpa);
 
     var decl_int: u32 = 0;
     while (decl_int < decl_count) : (decl_int += 1) {
@@ -10639,9 +10643,9 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
         if (resolved != .structure or resolved.structure != .nominal_type) continue;
         const slot: u32 = @intCast(slots.items.len);
         try slots.append(self.gpa, decl_idx);
-        slot_by_decl[decl_int] = slot;
+        slot_by_decl.set(decl_int, @fromBackingInt(slot));
     }
-    if (slots.items.len == 0) return;
+    if (slots.items.len == first_slot) return;
     const slot_count = slots.items.len;
 
     // Collect every local-declaration mention inside each backing template
@@ -10655,7 +10659,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    for (slots.items, 0..) |decl_idx, from_slot_usize| {
+    for (slots.items[first_slot..], first_slot..) |decl_idx, from_slot_usize| {
         const from_slot: u32 = @intCast(from_slot_usize);
         const decl = self.types.getNominalDecl(decl_idx);
         visited.clearRetainingCapacity();
@@ -10670,11 +10674,10 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal_type| {
                         if (self.types.lookupNominalDecl(nominal_type)) |target_idx| {
-                            const to_slot = slot_by_decl[@backingInt(target_idx)];
-                            if (to_slot != no_slot) {
+                            if (slot_by_decl.get(@backingInt(target_idx))) |to_slot| {
                                 try mentions.append(self.gpa, .{
                                     .from_slot = from_slot,
-                                    .to_slot = to_slot,
+                                    .to_slot = @backingInt(to_slot),
                                     .args = nominal_type.args,
                                 });
                             }
@@ -10745,7 +10748,8 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var formal_base = try self.gpa.alloc(u32, slot_count + 1);
     defer self.gpa.free(formal_base);
     formal_base[0] = 0;
-    for (slots.items, 0..) |decl_idx, slot| {
+    formal_base[first_slot] = 0;
+    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
         const decl = self.types.getNominalDecl(decl_idx);
         formal_base[slot + 1] = formal_base[slot] + @as(u32, @intCast(self.types.sliceVars(decl.formals).len));
     }
@@ -10753,7 +10757,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     var formal_roots = try self.gpa.alloc(Var, formal_count);
     defer self.gpa.free(formal_roots);
     var max_decl_formals: usize = 0;
-    for (slots.items, 0..) |decl_idx, slot| {
+    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
         const decl = self.types.getNominalDecl(decl_idx);
         const formals = self.types.sliceVars(decl.formals);
         max_decl_formals = @max(max_decl_formals, formals.len);
@@ -10765,8 +10769,8 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     const reported = try self.gpa.alloc(bool, slot_count);
     defer self.gpa.free(reported);
     @memset(reported, false);
-    const found_formals = try self.gpa.alloc(bool, max_decl_formals);
-    defer self.gpa.free(found_formals);
+    var found_formals = try collections.EpochSet(usize, .bitset, .internal).init(self.gpa, max_decl_formals);
+    defer found_formals.deinit(self.gpa);
 
     // Classify every mention argument into formal-flow edges, rejecting
     // recursive mentions that carry unbindable variables outright.
@@ -10807,11 +10811,11 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
                 },
                 .err, .field_presence => {},
                 .structure, .alias => {
-                    @memset(found_formals[0..owner_formals.len], false);
+                    found_formals.reset();
                     const saw_non_formal = try self.collectFormalOccurrences(
                         arg_root.var_,
                         owner_formals,
-                        found_formals,
+                        &found_formals,
                         &walk_stack,
                         &visited,
                     );
@@ -10820,8 +10824,8 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
                         try self.reportChangingNominalDecl(slots.items[mention.from_slot], .growing_args);
                         continue :mention_loop;
                     }
-                    for (found_formals[0..owner_formals.len], 0..) |occurred, formal_position| {
-                        if (!occurred) continue;
+                    for (0..owner_formals.len) |formal_position| {
+                        if (!found_formals.contains(formal_position)) continue;
                         try flow_edges.append(self.gpa, .{
                             .from_formal = formal_base[mention.from_slot] + @as(u32, @intCast(formal_position)),
                             .to_formal = to_formal,
@@ -10861,7 +10865,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
     // Two formals of one declaration share a component exactly when a
     // formal-flow cycle brings one back as the other, so a trip around the
     // recursion reorders the declaration's arguments.
-    for (slots.items, 0..) |decl_idx, slot| {
+    for (slots.items[first_slot..], first_slot..) |decl_idx, slot| {
         if (reported[slot]) continue;
         const formal_components = flow_component[formal_base[slot]..formal_base[slot + 1]];
         const reorders = for (formal_components, 0..) |component, position| {
@@ -10934,7 +10938,7 @@ fn collectFormalOccurrences(
     self: *Self,
     start: Var,
     formals: []const Var,
-    found: []bool,
+    found: *collections.EpochSet(usize, .bitset, .internal),
     walk_stack: *std.ArrayListUnmanaged(Var),
     visited: *collections.DenseMap(Var, void),
 ) std.mem.Allocator.Error!bool {
@@ -10951,7 +10955,7 @@ fn collectFormalOccurrences(
                 var matched = false;
                 for (formals, 0..) |formal, position| {
                     if (formal == root.var_) {
-                        found[position] = true;
+                        found.insert(position);
                         matched = true;
                         break;
                     }
@@ -11013,22 +11017,27 @@ fn stronglyConnectedComponents(
     adjacency: []const std.ArrayListUnmanaged(u32),
     component_of: []u32,
 ) std.mem.Allocator.Error!void {
+    // A caller may hold its own tables in the arena, so release only this
+    // pass's.
+    const scratch = self.table_scratch.allocator();
+    const position = self.table_scratch.mark();
+    defer self.table_scratch.resetTo(position);
     const node_count = adjacency.len;
     const unvisited = std.math.maxInt(u32);
-    const index_of = try self.gpa.alloc(u32, node_count);
-    defer self.gpa.free(index_of);
+    const index_of = try scratch.alloc(u32, node_count);
+    defer scratch.free(index_of);
     @memset(index_of, unvisited);
-    const low_of = try self.gpa.alloc(u32, node_count);
-    defer self.gpa.free(low_of);
-    const on_stack = try self.gpa.alloc(bool, node_count);
-    defer self.gpa.free(on_stack);
+    const low_of = try scratch.alloc(u32, node_count);
+    defer scratch.free(low_of);
+    const on_stack = try scratch.alloc(bool, node_count);
+    defer scratch.free(on_stack);
     @memset(on_stack, false);
 
     var component_stack: std.ArrayListUnmanaged(u32) = .empty;
-    defer component_stack.deinit(self.gpa);
+    defer component_stack.deinit(scratch);
     const WalkFrame = struct { node: u32, edge: u32 };
     var walk_frames: std.ArrayListUnmanaged(WalkFrame) = .empty;
-    defer walk_frames.deinit(self.gpa);
+    defer walk_frames.deinit(scratch);
 
     var next_index: u32 = 0;
     var next_component: u32 = 0;
@@ -11037,9 +11046,9 @@ fn stronglyConnectedComponents(
         index_of[start] = next_index;
         low_of[start] = next_index;
         next_index += 1;
-        try component_stack.append(self.gpa, @intCast(start));
+        try component_stack.append(scratch, @intCast(start));
         on_stack[start] = true;
-        try walk_frames.append(self.gpa, .{ .node = @intCast(start), .edge = 0 });
+        try walk_frames.append(scratch, .{ .node = @intCast(start), .edge = 0 });
         while (walk_frames.items.len != 0) {
             const frame = &walk_frames.items[walk_frames.items.len - 1];
             const node = frame.node;
@@ -11050,9 +11059,9 @@ fn stronglyConnectedComponents(
                     index_of[next] = next_index;
                     low_of[next] = next_index;
                     next_index += 1;
-                    try component_stack.append(self.gpa, next);
+                    try component_stack.append(scratch, next);
                     on_stack[next] = true;
-                    try walk_frames.append(self.gpa, .{ .node = next, .edge = 0 });
+                    try walk_frames.append(scratch, .{ .node = next, .edge = 0 });
                 } else if (on_stack[next]) {
                     low_of[node] = @min(low_of[node], index_of[next]);
                 }
@@ -15150,7 +15159,7 @@ fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
     var found = false;
     var reachable_groups = std.ArrayList(u32).empty;
     defer reachable_groups.deinit(self.gpa);
-    var group_seen = std.DynamicBitSetUnmanaged{};
+    var group_seen = try collections.EpochSet(u32, .bitset, .internal).init(self.gpa, check_order.sccs.len);
     defer group_seen.deinit(self.gpa);
     var reachable_defs = std.ArrayList(CIR.Def.Idx).empty;
     defer reachable_defs.deinit(self.gpa);
@@ -15160,19 +15169,17 @@ fn rejectUncheckedStrictValueCycles(self: *Self) Allocator.Error!bool {
             if (!isFunctionDef(&self.cir.store, self.cir.store.getExpr(self.cir.store.getDef(def_idx).expr))) break;
         } else continue;
 
-        try group_seen.resize(self.gpa, check_order.sccs.len, false);
-        group_seen.unsetAll();
+        group_seen.reset();
         reachable_groups.clearRetainingCapacity();
         reachable_defs.clearRetainingCapacity();
-        group_seen.set(group_index);
+        group_seen.insert(@intCast(group_index));
         try reachable_groups.append(self.gpa, @intCast(group_index));
         var next: usize = 0;
         while (next < reachable_groups.items.len) : (next += 1) {
             const reached = reachable_groups.items[next];
             try reachable_defs.appendSlice(self.gpa, check_order.sccs[reached].defs);
             for (check_order.dependenciesOf(reached)) |dependency| {
-                if (group_seen.isSet(dependency)) continue;
-                group_seen.set(dependency);
+                if (group_seen.testAndInsert(dependency)) continue;
                 try reachable_groups.append(self.gpa, dependency);
             }
         }
@@ -40497,12 +40504,12 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
 
     var evidence = DefaultWalkEvidence{
         .omitted_defaults_by_expr = .init(self.gpa),
-        .next_omitted_default = try self.gpa.alloc(?u32, self.cir.record_omitted_defaults.items.items.len),
+        .next_omitted_default = try self.gpa.alloc(EvidenceLink, self.cir.record_omitted_defaults.items.items.len),
     };
     defer evidence.deinit(self.gpa);
     for (self.cir.record_omitted_defaults.items.items, 0..) |omitted, index| {
         const entry = try evidence.omitted_defaults_by_expr.getOrPut(omitted.expr);
-        evidence.next_omitted_default[index] = if (entry.found_existing) entry.value_ptr.* else null;
+        evidence.next_omitted_default[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
         entry.value_ptr.* = @intCast(index);
     }
 
@@ -40537,18 +40544,18 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     //    index and is never compared against local nodes here).
     // Records are linked from the last, so each node's chain runs in record order.
     const scheme_use_records = self.cir.scheme_uses.items.items;
-    evidence.next_node_scheme_use = try self.gpa.alloc(?u32, scheme_use_records.len);
+    evidence.next_node_scheme_use = try self.gpa.alloc(EvidenceLink, scheme_use_records.len);
     var record_cursor = scheme_use_records.len;
     while (record_cursor > 0) {
         record_cursor -= 1;
         const record = scheme_use_records[record_cursor];
         const record_index: u32 = @intCast(record_cursor);
-        evidence.next_node_scheme_use[record_index] = null;
+        evidence.next_node_scheme_use[record_index] = .none;
         const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
         switch (slot) {
             .value_use, .nested_function_use => {
                 const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
-                evidence.next_node_scheme_use[record_index] = if (entry.found_existing) entry.value_ptr.* else null;
+                evidence.next_node_scheme_use[record_index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
                 entry.value_ptr.* = record_index;
             },
             .dispatch_target => {
@@ -40576,14 +40583,14 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
         }
     }
     const instantiations = self.dispatch_target_instantiations.items;
-    evidence.next_instantiation = try self.gpa.alloc(?u32, instantiations.len);
+    evidence.next_instantiation = try self.gpa.alloc(EvidenceLink, instantiations.len);
     var instantiation_cursor = instantiations.len;
     while (instantiation_cursor > 0) {
         instantiation_cursor -= 1;
         const index: u32 = @intCast(instantiation_cursor);
         const resolved = self.types.resolveVar(instantiations[instantiation_cursor].constraint_fn_var).var_;
         const entry = try evidence.instantiations_by_var.getOrPut(self.gpa, resolved);
-        evidence.next_instantiation[index] = if (entry.found_existing) entry.value_ptr.* else null;
+        evidence.next_instantiation[index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
         entry.value_ptr.* = index;
     }
 
@@ -40876,19 +40883,28 @@ fn rejectDefaultParameterAliasing(
     try self.rejected_default_exprs.put(self.gpa, pending.default_expr, {});
 }
 
+/// A record index in one of the checker's evidence tables.
+const EvidenceRecordIndex = enum(u32) { _ };
+/// The next record of a chain through one evidence table, absent at its end.
+const EvidenceLink = collections.OptionalId(EvidenceRecordIndex);
+
+fn linkedRecord(link: EvidenceLink) ?u32 {
+    return if (link.get()) |index| @backingInt(index) else null;
+}
+
 /// Prebuilt evidence indexes for one `checkDefaultRestrictions` run (built
 /// once, shared by every default's residue walk).
 const DefaultWalkEvidence = struct {
     /// Construction -> first recorded omission, with links into the CIR table.
     /// Built once so cycle walks consume exact omission evidence in O(fields).
     omitted_defaults_by_expr: collections.DenseMap(CIR.Expr.Idx, u32),
-    next_omitted_default: []?u32,
+    next_omitted_default: []EvidenceLink,
     pattern_to_def_expr: collections.DenseMapUnmanaged(CIR.Pattern.Idx, CIR.Expr.Idx) = .empty,
     /// Local instantiating node -> its first scheme-use record index
     /// (`value_use`/`nested_function_use` slots only); `next_node_scheme_use`
     /// links each record to the node's next one, in record order.
     node_to_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
-    next_node_scheme_use: []?u32 = &.{},
+    next_node_scheme_use: []EvidenceLink = &.{},
     /// Discharged constraint's raw fn var -> its `dispatch_target`
     /// scheme-use record index.
     dispatch_scheme_uses: collections.DenseMapUnmanaged(u32, u32) = .empty,
@@ -40896,7 +40912,7 @@ const DefaultWalkEvidence = struct {
     /// index; `next_instantiation` links each instantiation to the var's next
     /// one, in instantiation order.
     instantiations_by_var: collections.DenseMapUnmanaged(Var, u32) = .empty,
-    next_instantiation: []?u32 = &.{},
+    next_instantiation: []EvidenceLink = &.{},
 
     fn deinit(evidence: *DefaultWalkEvidence, gpa: std.mem.Allocator) void {
         evidence.omitted_defaults_by_expr.deinit();
@@ -41016,7 +41032,7 @@ fn defaultMaterializationIsRecursive(
             if (seen_seed.found_existing) continue;
             var next_inst = evidence.instantiations_by_var.get(resolved_seed);
             while (next_inst) |inst_index| {
-                next_inst = evidence.next_instantiation[inst_index];
+                next_inst = linkedRecord(evidence.next_instantiation[inst_index]);
                 const seen_inst = try visited_instantiations.getOrPut(self.gpa, inst_index);
                 if (seen_inst.found_existing) continue;
                 const instantiation = self.dispatch_target_instantiations.items[inst_index];
@@ -41164,7 +41180,7 @@ fn defaultMaterializationIsRecursive(
         // dispatch node carries the pristine scheme's var, never the copy.
         var next_record = evidence.node_to_scheme_uses.get(@backingInt(expr_idx));
         while (next_record) |record_index| {
-            next_record = evidence.next_node_scheme_use[record_index];
+            next_record = linkedRecord(evidence.next_node_scheme_use[record_index]);
             const record = self.cir.scheme_uses.items.items[record_index];
             const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
             for (pairs) |pair| {
@@ -41494,7 +41510,7 @@ fn appendOmittedDefaultDependencies(
     var next = evidence.omitted_defaults_by_expr.get(record_expr);
     while (next) |index| {
         const omitted = self.cir.record_omitted_defaults.items.items[index];
-        next = evidence.next_omitted_default[index];
+        next = linkedRecord(evidence.next_omitted_default[index]);
         if (omitted.origin_module != self_module) continue;
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);
@@ -46965,13 +46981,15 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
     try scratch.out_start.appendNTimes(self.gpa, 0, node_count + 1);
     for (scratch.edge_nodes.items) |node| scratch.out_start.items[node + 1] += 1;
     for (1..scratch.out_start.items.len) |i| scratch.out_start.items[i] += scratch.out_start.items[i - 1];
-    try scratch.out_edges.appendNTimes(self.gpa, 0, scratch.edges.items.len);
     {
+        var out_edges = try collections.WriteFirstSlice(u32).wrap(self.gpa, try scratch.out_edges.addManyAsSlice(self.gpa, scratch.edges.items.len));
+        errdefer out_edges.release(self.gpa);
         try scratch.index.appendSlice(self.gpa, scratch.out_start.items[0..node_count]);
         for (scratch.edge_nodes.items, 0..) |node, owned_idx| {
-            scratch.out_edges.items[scratch.index.items[node]] = @intCast(owned_idx);
+            out_edges.set(scratch.index.items[node], @intCast(owned_idx));
             scratch.index.items[node] += 1;
         }
+        _ = out_edges.finish(self.gpa);
         scratch.index.clearRetainingCapacity();
     }
 
@@ -47009,9 +47027,11 @@ fn tryRowFixpointComponents(self: *Self, node_count: u32) Allocator.Error!void {
     const scratch = &self.try_row_fixpoint_scratch;
     const unvisited = std.math.maxInt(u32);
     try scratch.index.appendNTimes(self.gpa, unvisited, node_count);
-    try scratch.lowlink.appendNTimes(self.gpa, 0, node_count);
+    // Every node is a root or reached from one, and is written on its visit
+    // and at its component's completion, before either column is read.
+    _ = try scratch.lowlink.addManyAsSlice(self.gpa, node_count);
     try scratch.on_stack.appendNTimes(self.gpa, false, node_count);
-    try scratch.component.appendNTimes(self.gpa, 0, node_count);
+    _ = try scratch.component.addManyAsSlice(self.gpa, node_count);
     try scratch.order_start.append(self.gpa, 0);
     var next_index: u32 = 0;
     for (0..node_count) |root_usize| {
@@ -53771,7 +53791,7 @@ fn closeTagRowsForDerivationHelp(
                         arg_span.dropFirstElem();
                         var i: usize = 0;
                         while (i < arg_span.count) : (i += 1) {
-                            try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(arg_span.start) + i] });
+                            try pending.append(self.gpa, .{ .var_ = self.types.vars.items[@backingInt(arg_span.start) + i] });
                         }
                         try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias) });
                     },
@@ -53788,14 +53808,14 @@ fn closeTagRowsForDerivationHelp(
                         .tuple => |tuple| {
                             var i: usize = 0;
                             while (i < tuple.elems.count) : (i += 1) {
-                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(tuple.elems.start) + i] });
+                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items[@backingInt(tuple.elems.start) + i] });
                             }
                         },
                         .nominal_type => |nominal| {
                             const args_range = types_mod.Store.getNominalArgsRange(nominal);
                             var i: usize = 0;
                             while (i < args_range.count) : (i += 1) {
-                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(args_range.start) + i] });
+                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items[@backingInt(args_range.start) + i] });
                             }
                         },
                         .tag_union => |tag_union| {
@@ -53805,7 +53825,7 @@ fn closeTagRowsForDerivationHelp(
                                 const tag_args = self.types.tags.get(@fromBackingInt(@intCast(@backingInt(tags_range.start) + tag_i))).args;
                                 var arg_i: usize = 0;
                                 while (arg_i < tag_args.count) : (arg_i += 1) {
-                                    try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(tag_args.start) + arg_i] });
+                                    try pending.append(self.gpa, .{ .var_ = self.types.vars.items[@backingInt(tag_args.start) + arg_i] });
                                 }
                             }
                             try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });

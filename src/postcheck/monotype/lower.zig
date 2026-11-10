@@ -15,6 +15,10 @@ const LiteralDemand = @import("../literal_demand.zig");
 const AnyAll = collections.AnyAll;
 const Ast = @import("ast.zig");
 const Type = @import("type.zig");
+/// An operand's checked expression, absent for an operand without one.
+const OptionalCheckedExpr = collections.OptionalId(CIR.Expr.Idx);
+/// A root's function type while it is resolved, zero when not yet lowered.
+const OptionalTypeId = collections.OptionalId(Type.TypeId);
 const specialize = @import("specialize.zig");
 const LayoutKey = @import("layout_key.zig");
 const solve = @import("solve.zig");
@@ -7295,7 +7299,7 @@ const Builder = struct {
         self: *Builder,
         request: checked.RootRequest,
         source_module: checked.ModuleId,
-        fn_ty_slot: *?Type.TypeId,
+        fn_ty_slot: *OptionalTypeId,
     ) Allocator.Error!void {
         const source_view = self.moduleForId(source_module);
         const def = if (request.procedure_binding) |binding|
@@ -7424,7 +7428,7 @@ const Builder = struct {
         defer demanded_later_requests.deinit(self.allocator);
         var demanded_later_sources = std.ArrayList(checked.ModuleId).empty;
         defer demanded_later_sources.deinit(self.allocator);
-        var demanded_later_fn_tys = std.ArrayList(?Type.TypeId).empty;
+        var demanded_later_fn_tys = std.ArrayList(OptionalTypeId).empty;
         defer demanded_later_fn_tys.deinit(self.allocator);
         var requests = all_requests;
         var source_modules = all_source_modules;
@@ -7432,14 +7436,14 @@ const Builder = struct {
         // A template root's function type is a function of its checked type
         // alone. Compile-time roots reach `lowerTemplate` twice, so each
         // request lowers its type once, and on the lanes when there are any.
-        const fn_tys = try self.allocator.alloc(?Type.TypeId, all_requests.len);
+        const fn_tys = try self.allocator.alloc(OptionalTypeId, all_requests.len);
         defer self.allocator.free(fn_tys);
-        @memset(fn_tys, null);
+        @memset(fn_tys, .none);
         if (self.post_check_executor) |executor| {
             if (executor.worker_count > 1) try self.lowerTemplateRootTypes(executor, all_requests, all_source_modules, fn_tys);
         }
         // The function types of `requests`, position for position.
-        var root_fn_tys: []?Type.TypeId = fn_tys;
+        var root_fn_tys: []OptionalTypeId = fn_tys;
         if (self.comptime_value_reads) {
             for (all_requests, 0..) |request, i| {
                 if (request.abi != .compile_time) continue;
@@ -7513,7 +7517,7 @@ const Builder = struct {
         return if (index >= start) .discovery else .evaluation;
     }
 
-    fn lowerRootWithDemand(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId, demand: Demand, fn_ty: *?Type.TypeId) Allocator.Error!void {
+    fn lowerRootWithDemand(self: *Builder, request: checked.RootRequest, source_module: checked.ModuleId, demand: Demand, fn_ty: *OptionalTypeId) Allocator.Error!void {
         self.root_demand = demand;
         if (demand == .discovery) self.demand_counters.discovery_roots += 1;
         try self.lowerRoot(request, source_module, fn_ty);
@@ -7537,7 +7541,7 @@ const Builder = struct {
         executor: base.post_check_task_executor.Executor,
         requests: []const checked.RootRequest,
         source_modules: []const checked.ModuleId,
-        fn_tys: []?Type.TypeId,
+        fn_tys: []OptionalTypeId,
     ) Allocator.Error!void {
         var task_count: usize = 0;
         for (requests) |request| {
@@ -7630,7 +7634,7 @@ const Builder = struct {
                 &self.program.names,
                 committedTypeRelocation(commit_domain, self.program),
             );
-            fn_tys[context.request_index] = try committed_types.commitType(shard.fn_ty);
+            fn_tys[context.request_index] = .some(try committed_types.commitType(shard.fn_ty));
             context.shard = null;
         }
     }
@@ -7876,7 +7880,7 @@ const Builder = struct {
                     if (self.comptimeValueReadDeclared(view, root)) {
                         const owners = self.borrowed_comptime_roots orelse &self.declared_comptime_roots;
                         const ordinal = owners.get(.{ .module = view.key, .root = root }).?;
-                        var fn_ty: ?Type.TypeId = null;
+                        var fn_ty: OptionalTypeId = .none;
                         const fn_id = try self.prepareDeclaredRoot(ordinal, &fn_ty);
                         const initializer = try self.program.addExpr(.{
                             .ty = ret_ty,
@@ -8522,15 +8526,15 @@ const Builder = struct {
         source_ty_view: ModuleView,
         source_fn_ty: checked.CheckedTypeId,
         root_evidence: ?checked.CheckedEvidenceSpan,
-        fn_ty_slot: *?Type.TypeId,
+        fn_ty_slot: *OptionalTypeId,
     ) Allocator.Error!Ast.DefId {
-        const fn_ty = fn_ty_slot.* orelse lowered: {
+        const fn_ty = fn_ty_slot.get() orelse lowered: {
             const lowered = try self.lowerContextFreeSpecializationType(
                 source_ty_view,
                 template_ref,
                 source_fn_ty,
             );
-            fn_ty_slot.* = lowered;
+            fn_ty_slot.* = .some(lowered);
             break :lowered lowered;
         };
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
@@ -9465,7 +9469,7 @@ const Builder = struct {
 
     /// Prepare the signature and reserve a body only for an explicitly read
     /// or validated root. Request ordinals stay immutable across worker epochs.
-    fn prepareDeclaredRoot(self: *Builder, ordinal: u32, fn_ty: *?Type.TypeId) Allocator.Error!Ast.FnId {
+    fn prepareDeclaredRoot(self: *Builder, ordinal: u32, fn_ty: *OptionalTypeId) Allocator.Error!Ast.FnId {
         if (self.borrowed_comptime_roots != null) Common.invariant("worker attempted to reserve a declared root");
         const root = self.declared_roots.items[ordinal];
         if (root.fn_id) |id| return id;
@@ -9494,7 +9498,7 @@ const Builder = struct {
         for (0..draft.exprs.items.len) |index| {
             const data = draft.exprs.items[index].data;
             if (data != .call_proc or data.call_proc.callee != .declared_root) continue;
-            var fn_ty: ?Type.TypeId = null;
+            var fn_ty: OptionalTypeId = .none;
             const id = try self.prepareDeclaredRoot(data.call_proc.callee.declared_root, &fn_ty);
             draft.exprs.items[index].data.call_proc.callee = .{ .func = .{ .local = .{ .final = id } } };
         }
@@ -9552,7 +9556,7 @@ const Builder = struct {
             }
             defer newly_demanded.clearRetainingCapacity();
             for (newly_demanded.items) |declared| {
-                var fn_ty: ?Type.TypeId = null;
+                var fn_ty: OptionalTypeId = .none;
                 const fn_id = try self.prepareDeclaredRoot(declared, &fn_ty);
                 view = self.program.view();
                 try state.index(self.allocator, self, view);
@@ -13999,15 +14003,19 @@ const Builder = struct {
         }
     };
 
+    /// A final program ID in one draft core kind's domain.
+    const DraftCoreFinalId = enum(u32) { _ };
+    const DraftCoreIdMap = collections.OptionalIndexColumn(DraftCoreFinalId);
+
     const DraftCoreMaps = struct {
-        values: [draft_core_kind_count][]u32,
+        values: [draft_core_kind_count]DraftCoreIdMap,
 
         fn deinit(self: *DraftCoreMaps, allocator: Allocator) void {
-            for (self.values) |map| allocator.free(map);
+            for (&self.values) |*map| map.deinit(allocator);
         }
 
         fn retained(self: *const DraftCoreMaps, kind: DraftCoreKind, index: usize) bool {
-            return self.values[@backingInt(kind)][index] != std.math.maxInt(u32);
+            return self.values[@backingInt(kind)].isPresent(index);
         }
     };
 
@@ -14044,10 +14052,9 @@ const Builder = struct {
         errdefer self.allocator.destroy(maps);
         const lengths = body_draft.coreLengths();
         var initialized: usize = 0;
-        errdefer for (maps.values[0..initialized]) |map| self.allocator.free(map);
+        errdefer for (maps.values[0..initialized]) |*map| map.deinit(self.allocator);
         for (0..draft_core_kind_count) |raw_kind| {
-            maps.values[raw_kind] = try self.allocator.alloc(u32, lengths[raw_kind]);
-            @memset(maps.values[raw_kind], std.math.maxInt(u32));
+            maps.values[raw_kind] = try DraftCoreIdMap.initFilled(self.allocator, lengths[raw_kind]);
             initialized += 1;
         }
 
@@ -14057,7 +14064,7 @@ const Builder = struct {
             for (0..draft_core_kind_count) |raw_kind| {
                 var index = owner_run.starts[raw_kind];
                 while (index < owner_run.ends[raw_kind]) : (index += 1) {
-                    maps.values[raw_kind][index] = next[raw_kind];
+                    maps.values[raw_kind].set(index, @fromBackingInt(next[raw_kind]));
                     next[raw_kind] += 1;
                 }
             }
@@ -14294,9 +14301,8 @@ const Builder = struct {
         body_draft: *BodyDraftStore,
     ) Allocator.Error!void {
         const expr_count = body_draft.exprs.items.len;
-        const sources = try self.allocator.alloc(?DraftExprId, expr_count);
-        defer self.allocator.free(sources);
-        @memset(sources, null);
+        var sources = try collections.OptionalIndexColumn(DraftExprId).initFilled(self.allocator, expr_count);
+        defer sources.deinit(self.allocator);
 
         const states = try self.allocator.alloc(DraftReservationState, expr_count);
         defer self.allocator.free(states);
@@ -14315,10 +14321,10 @@ const Builder = struct {
             if (body_draft.expr_impossibility_proofs.get(reservation_index) != boundary.proof_reservation) {
                 Common.invariant("deferred const reservation lost its stable impossibility proof");
             }
-            if (sources[reservation_index] != null) {
+            if (sources.isPresent(reservation_index)) {
                 Common.invariant("deferred const reservation had more than one dependency");
             }
-            sources[reservation_index] = restored;
+            sources.set(reservation_index, restored);
         }
 
         for (body_draft.active_const_bindings.items) |active| {
@@ -14326,23 +14332,23 @@ const Builder = struct {
             if (body_draft.exprs.items[reservation_index].data != .pending_deferred) continue;
             const restored = active.restored_source orelse
                 Common.invariant("active const reservation had no explicit restored source");
-            if (sources[reservation_index] != null) {
+            if (sources.isPresent(reservation_index)) {
                 Common.invariant("active const reservation had more than one dependency");
             }
-            sources[reservation_index] = restored;
+            sources.set(reservation_index, restored);
         }
 
         for (body_draft.deferred_const_uses.items) |boundary| {
-            try resolveDraftReservationChain(body_draft, sources, states, stack, boundary.expr);
+            try resolveDraftReservationChain(body_draft, &sources, states, stack, boundary.expr);
         }
         for (body_draft.active_const_bindings.items) |active| {
-            try resolveDraftReservationChain(body_draft, sources, states, stack, active.reservation);
+            try resolveDraftReservationChain(body_draft, &sources, states, stack, active.reservation);
         }
     }
 
     fn resolveDraftReservationChain(
         body_draft: *BodyDraftStore,
-        sources: []const ?DraftExprId,
+        sources: *const collections.OptionalIndexColumn(DraftExprId),
         states: []DraftReservationState,
         stack: []DraftExprId,
         start: DraftExprId,
@@ -14356,7 +14362,7 @@ const Builder = struct {
                     states[cursor_index] = .visiting;
                     stack[depth] = cursor;
                     depth += 1;
-                    cursor = sources[cursor_index] orelse
+                    cursor = sources.get(cursor_index) orelse
                         Common.invariant("pending const reservation had no explicit dependency");
                 },
                 .visiting => Common.invariant("deferred const reservation dependencies formed a cycle"),
@@ -14368,7 +14374,7 @@ const Builder = struct {
             depth -= 1;
             const reservation = stack[depth];
             const reservation_index = @backingInt(reservation);
-            const restored = sources[reservation_index] orelse
+            const restored = sources.get(reservation_index) orelse
                 Common.invariant("pending const reservation lost its explicit dependency");
             const restored_index = @backingInt(restored);
             const restored_expr = body_draft.exprs.items[restored_index];
@@ -15241,7 +15247,8 @@ const Builder = struct {
         const fn_demand_shaped = try self.allocator.alloc(bool, if (any_demand_shaped) body_draft.fns.items.len else 0);
         errdefer self.allocator.free(fn_demand_shaped);
         @memset(fn_demand_shaped, false);
-        const def_ids = try self.allocator.alloc(?Ast.DefId, body_draft.defs.items.len);
+        // Every entry is written by the definition pass below before any read.
+        const def_ids = try self.allocator.alloc(collections.OptionalId(Ast.DefId), body_draft.defs.items.len);
         errdefer self.allocator.free(def_ids);
         const emit_fns = try self.allocator.alloc(bool, body_draft.fns.items.len);
         errdefer self.allocator.free(emit_fns);
@@ -15296,7 +15303,9 @@ const Builder = struct {
         }
         var prior_identities = std.AutoHashMap(specialize.SpecLookupAddress, u32).init(self.allocator);
         defer prior_identities.deinit();
-        const previous_same_identity = try self.allocator.alloc(?u32, body_draft.fns.items.len);
+        // Written for each function as it joins its identity's chain, before
+        // any later function walks the chain through it.
+        const previous_same_identity = try self.allocator.alloc(collections.OptionalId(DraftFnId), body_draft.fns.items.len);
         defer self.allocator.free(previous_same_identity);
 
         var next_fn: u32 = @intCast(self.program.fnCount());
@@ -15379,7 +15388,7 @@ const Builder = struct {
             if (identity) |wanted| {
                 const address = specialize.SpecLookupAddress.fromIdentity(wanted);
                 var candidate = if (allow_identity_merge) prior_identities.get(address) else null;
-                while (candidate) |prior| : (candidate = previous_same_identity[prior]) {
+                while (candidate) |prior| : (candidate = if (previous_same_identity[prior].get()) |previous| @backingInt(previous) else null) {
                     self.countBodyDiagnostic("draft_commit_lookup_steps");
                     if (identities[prior]) |existing| {
                         if (try self.draftSpecIdentityEql(existing, wanted)) {
@@ -15474,7 +15483,7 @@ const Builder = struct {
                     }
                     if (allow_identity_merge) {
                         const entry = try prior_identities.getOrPut(address);
-                        previous_same_identity[raw_index] = if (entry.found_existing) entry.value_ptr.* else null;
+                        previous_same_identity[raw_index] = if (entry.found_existing) .some(@fromBackingInt(entry.value_ptr.*)) else .none;
                         entry.value_ptr.* = @intCast(raw_index);
                     }
                 }
@@ -15488,11 +15497,11 @@ const Builder = struct {
         var next_def: u32 = @intCast(self.program.defCount());
         for (body_draft.defs.items, body_draft.def_owners.items, 0..) |_, owner, raw_index| {
             if (!draftOwnerRetained(owner, emit_fns)) {
-                def_ids[raw_index] = null;
+                def_ids[raw_index] = .none;
                 emit_defs[raw_index] = false;
                 continue;
             }
-            def_ids[raw_index] = @fromBackingInt(@intCast(next_def));
+            def_ids[raw_index] = .some(@fromBackingInt(@intCast(next_def)));
             next_def += 1;
             emit_defs[raw_index] = true;
         }
@@ -21622,7 +21631,7 @@ const FinalIdOffsets = struct {
     /// specialization, so every call to it is demand-shaped. Empty when no
     /// draft function resolved to one.
     fn_demand_shaped: []const bool = &.{},
-    def_ids: []const ?Ast.DefId = &.{},
+    def_ids: []const collections.OptionalId(Ast.DefId) = &.{},
     /// Literal root definitions this draft converts at a type an earlier
     /// commit already owns a root for, mapped to that root's definition.
     shared_literal_root_defs: ?*const collections.DenseMap(DraftDefId, Ast.DefId) = null,
@@ -21632,11 +21641,9 @@ const FinalIdOffsets = struct {
         return switch (self.core_id_mode) {
             .identity => identity_start + raw,
             .remapped => |maps| blk: {
-                const mapped = maps.values[@backingInt(kind)][raw];
-                if (mapped == std.math.maxInt(u32)) {
+                const mapped = maps.values[@backingInt(kind)].get(raw) orelse
                     Common.invariant("retained body draft content referenced suppressed owned content");
-                }
-                break :blk mapped;
+                break :blk @backingInt(mapped);
             },
         };
     }
@@ -21687,7 +21694,7 @@ const FinalIdOffsets = struct {
 
     fn def(self: FinalIdOffsets, id: DraftDefId) Ast.DefId {
         if (self.shared_literal_root_defs) |shared| if (shared.get(id)) |root_def| return root_def;
-        if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)] orelse
+        if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)].get() orelse
             Common.invariant("draft definition required a local id after its function converged to an imported specialization");
         return @fromBackingInt(@intCast(self.def_start + @backingInt(id)));
     }
@@ -22281,7 +22288,7 @@ const InterfaceReplayEntry = struct {
     request: InterfaceConstraints.Identity,
     input_len: usize,
     /// The classes the request's parametric holes stood for.
-    hole_classes: []const ?NodeId,
+    hole_classes: []const solve.MaybeNodeId,
     /// The request's node for each parametric hole slot.
     hole_sources: []const NodeId,
     /// Whether some hole slot's node is another unfinished expansion's hole
@@ -28921,9 +28928,9 @@ const BodyContext = struct {
         };
         const input_arena = &expansion.input_arena;
         const holes = try self.parametricRequestHoles(input_arena.allocator(), template_ref, callee_view, &template, edge.subst);
-        const hole_classes = try input_arena.allocator().alloc(?NodeId, holes.nodes.len);
+        const hole_classes = try input_arena.allocator().alloc(solve.MaybeNodeId, holes.nodes.len);
         const input = try InterfaceConstraints.captureRequestWithHoles(self.graph, input_arena.allocator(), request_roots.items, holes.nodes, hole_classes);
-        for (hole_classes) |hole_class| if (hole_class != null) {
+        for (hole_classes) |hole_class| if (hole_class != .none) {
             self.builder.count("interface_parametric_requests");
             break;
         };
@@ -29008,7 +29015,7 @@ const BodyContext = struct {
             .evidence = stored_evidence,
             .request = try request.copy(self.graph.arena(), InterfaceSummaryCopy{}),
             .input_len = shape.bytes.len,
-            .hole_classes = try self.graph.arena().dupe(?NodeId, hole_classes),
+            .hole_classes = try self.graph.arena().dupe(solve.MaybeNodeId, hole_classes),
             .hole_sources = try self.graph.arena().dupe(NodeId, holes.nodes),
             .hole_reaches_unfinished_cell = for (holes.nodes) |hole| {
                 if (self.unfinishedHoleSource(replay_state, hole, replay_state.stack.items.len) != null) break true;
@@ -29085,7 +29092,7 @@ const BodyContext = struct {
         parent: ?usize = null,
         restores_current: bool = false,
         replay_index: usize = undefined,
-        hole_classes: []const ?NodeId = &.{},
+        hole_classes: []const solve.MaybeNodeId = &.{},
         roots: []const NodeId = &.{},
 
         /// The child frame applying the callee's open relations, once.
@@ -29136,7 +29143,7 @@ const BodyContext = struct {
             const single_request_component = replay_state.entries.items[replay_index].lowlink == replay_index and
                 replay_state.stack.items[replay_state.stack.items.len - 1] == replay_index;
             const parametric_request = for (hole_classes) |hole_class| {
-                if (hole_class != null) break true;
+                if (hole_class != .none) break true;
             } else false;
             var component_scratch = self.graph.acquireArena();
             defer self.graph.releaseArena(component_scratch);
@@ -29164,7 +29171,7 @@ const BodyContext = struct {
                     // was settled by that member's request, which this
                     // member's request identity does not record.
                     const parametric = for (entry.hole_classes) |hole_class| {
-                        if (hole_class != null) break true;
+                        if (hole_class != .none) break true;
                     } else false;
                     if (entry.joined_beyond_own_cells or ((parametric or entry.hole_reaches_unfinished_cell) and !single_request_component)) {
                         entry.status = .ready;
@@ -40013,7 +40020,7 @@ const BodyContext = struct {
         procedure: checked.IteratorProcedureId,
         public_fn_node: NodeId,
         request_fn_node: NodeId,
-        checked_args: []const ?CIR.Expr.Idx,
+        checked_args: []const OptionalCheckedExpr,
     ) Allocator.Error!?NodeId {
         const public_fn = try self.graph.functionNodes(public_fn_node);
         const request_fn = try self.graph.functionNodes(request_fn_node);
@@ -40060,7 +40067,7 @@ const BodyContext = struct {
                     return try self.graphFunctionNode(&.{ components[0], request_fn.args[1], components[1] }, expected);
                 }
                 const state_is_private = try self.graph.containsGeneratedPrivate(request_fn.args[0]);
-                const advance_arg = checked_args[2] orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
+                const advance_arg = checked_args[2].get() orelse Common.invariant("custom iterator source's advance operand was not a checked expression");
                 const advance_node = if (state_is_private)
                     try self.iterCustomAdvanceRequestNode(ExprSite.read(advance_arg), request_fn.args[0])
                 else
@@ -40221,7 +40228,7 @@ const BodyContext = struct {
         kind: Type.IteratorKind,
         public_ret: NodeId,
         args: []const NodeId,
-        checked_args: []const ?CIR.Expr.Idx,
+        checked_args: []const OptionalCheckedExpr,
         expected_ret: ?NodeId,
         callable_index: ?usize,
     ) Allocator.Error!?NodeId {
@@ -40233,7 +40240,7 @@ const BodyContext = struct {
         if (try self.generatedIteratorExpectedProducerFunctionNode(kind, args, expected_ret)) |expected_fn| return expected_fn;
         if (!(try self.isGeneratedIteratorEvidenceNode(args[0]))) return null;
         const callable_evidence = if (callable_index) |index|
-            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index] orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
+            try self.callableArgumentEvidenceDigest(ExprSite.read(checked_args[index].get() orelse Common.invariant("iterator adapter's callable operand was not a checked expression")))
         else
             null;
         return try self.graphFunctionNode(
@@ -55714,21 +55721,21 @@ const BodyContext = struct {
     fn checkedExprIteratorDispatchOperands(
         self: *BodyContext,
         operands: []const static_dispatch.IteratorDispatchOperand,
-    ) Allocator.Error![]?CIR.Expr.Idx {
-        const checked_args = try self.allocator.alloc(?CIR.Expr.Idx, operands.len);
+    ) Allocator.Error![]OptionalCheckedExpr {
+        const checked_args = try self.allocator.alloc(OptionalCheckedExpr, operands.len);
         for (operands, checked_args) |operand, *checked_arg| {
             checked_arg.* = switch (operand) {
-                .checked_expr => |expr| expr,
-                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => null,
+                .checked_expr => |expr| .some(expr),
+                .loop_iterator_state, .interpolation_seed, .interpolation_iterator, .interpolation_value => .none,
             };
         }
         return checked_args;
     }
 
     /// `args` as the optional operands `generatedIteratorFunctionNode` takes.
-    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]?CIR.Expr.Idx {
-        const out = try self.allocator.alloc(?CIR.Expr.Idx, args.len);
-        for (args, out) |arg, *slot| slot.* = arg;
+    fn optionalCheckedArgs(self: *BodyContext, args: []const CIR.Expr.Idx) Allocator.Error![]OptionalCheckedExpr {
+        const out = try self.allocator.alloc(OptionalCheckedExpr, args.len);
+        for (args, out) |arg, *slot| slot.* = .some(arg);
         return out;
     }
 
@@ -72764,11 +72771,12 @@ test "body draft definition retention follows explicit reservation ownership" {
 }
 
 test "body draft block statement spans use the retained compaction map" {
-    var empty: [0]u32 = .{};
-    var values: [draft_core_kind_count][]u32 = undefined;
-    for (&values) |*value| value.* = empty[0..];
-    var stmt_ids = [_]u32{ std.math.maxInt(u32), 40, 41 };
-    values[@backingInt(DraftCoreKind.stmt_ids)] = stmt_ids[0..];
+    var values: [draft_core_kind_count]Builder.DraftCoreIdMap = @splat(.{});
+    var stmt_ids = try Builder.DraftCoreIdMap.initFilled(std.testing.allocator, 3);
+    defer stmt_ids.deinit(std.testing.allocator);
+    stmt_ids.set(1, @fromBackingInt(40));
+    stmt_ids.set(2, @fromBackingInt(41));
+    values[@backingInt(DraftCoreKind.stmt_ids)] = stmt_ids;
     var maps = Builder.DraftCoreMaps{ .values = values };
 
     var ids: FinalIdOffsets = undefined;

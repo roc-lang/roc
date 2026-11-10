@@ -389,8 +389,7 @@ pub const Store = struct {
     /// on every closed direct call.
     iterator_interface_pending: std.ArrayList(TypeId),
     iterator_interface_visited: std.ArrayList(TypeId),
-    iterator_interface_visit_epochs: StoreList(u32, "iterator_interface_visit_epochs"),
-    iterator_interface_visit_epoch: u32,
+    iterator_interface_visit_epochs: collections.EpochSet(TypeId, .stamps, .internal),
     /// Every recursive group the digests have settled (`base.recursive_digest`),
     /// shared by every digest mode. It is content addressed, so it stays valid
     /// across `restore` truncations and needs no rollback.
@@ -458,8 +457,7 @@ pub const Store = struct {
             .containment_cache = .empty,
             .iterator_interface_pending = .empty,
             .iterator_interface_visited = .empty,
-            .iterator_interface_visit_epochs = .empty,
-            .iterator_interface_visit_epoch = 0,
+            .iterator_interface_visit_epochs = .{},
             .recursive_digests = recursive_digest.Settled.init(allocator, "roc.monotype.type.v2"),
             .full_digest_interned = std.AutoHashMap(DigestBucketKey, TypeId).init(allocator),
             .spans = .empty,
@@ -482,9 +480,12 @@ pub const Store = struct {
         }
         // Traversal history is local, but every cloned type still needs a slot
         // for uncached queries, including when the source is a borrowed store.
-        const visit_epochs = try allocator.alloc(u32, result.types.len());
-        @memset(visit_epochs, 0);
-        result.iterator_interface_visit_epochs = @TypeOf(result.iterator_interface_visit_epochs).fromOwnedSlice(visit_epochs);
+        const Visits = @TypeOf(result.iterator_interface_visit_epochs);
+        result.iterator_interface_visit_epochs =
+            if (result.types.len() > collections.zeroed_pages.small_table_bytes / @sizeOf(u32))
+                try Visits.initSparse(result.types.len())
+            else
+                try Visits.init(allocator, result.types.len());
         result.recursive_digests.deinit();
         result.recursive_digests = try self.recursive_digests.clone(allocator);
         try result.full_digest_interned.ensureTotalCapacity(self.full_digest_interned.count());
@@ -549,7 +550,7 @@ pub const Store = struct {
         result.digest_storage = .{};
         result.iterator_interface_pending = .empty;
         result.iterator_interface_visited = .empty;
-        result.iterator_interface_visit_epochs = .empty;
+        result.iterator_interface_visit_epochs = .{};
         return result;
     }
 
@@ -720,7 +721,7 @@ pub const Store = struct {
         errdefer _ = self.constructing.pop();
         try self.containment_cache.append(self.allocator, .unknown);
         errdefer _ = self.containment_cache.pop();
-        try self.iterator_interface_visit_epochs.append(self.allocator, 0);
+        try self.iterator_interface_visit_epochs.ensureLen(self.allocator, self.types.len());
         return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
     }
 
@@ -894,18 +895,11 @@ pub const Store = struct {
         self.iterator_interface_visited.clearRetainingCapacity();
         defer self.iterator_interface_pending.clearRetainingCapacity();
         defer self.iterator_interface_visited.clearRetainingCapacity();
-        if (self.iterator_interface_visit_epoch == std.math.maxInt(u32)) {
-            @memset(self.iterator_interface_visit_epochs.unsafeRawItemsMutForStore(), 0);
-            self.iterator_interface_visit_epoch = 1;
-        } else {
-            self.iterator_interface_visit_epoch += 1;
-        }
-        const visit_epoch = self.iterator_interface_visit_epoch;
+        self.iterator_interface_visit_epochs.reset();
         try self.iterator_interface_pending.append(self.allocator, root);
         while (self.iterator_interface_pending.pop()) |ty| {
             const ty_index = @backingInt(ty);
-            if (self.iterator_interface_visit_epochs.unsafeRawItemsForView()[ty_index] == visit_epoch) continue;
-            self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
+            if (self.iterator_interface_visit_epochs.testAndInsert(ty)) continue;
             try self.iterator_interface_visited.append(self.allocator, ty);
             self.requireConstructed(ty);
             if (ty != root) {
@@ -1250,7 +1244,7 @@ pub const Store = struct {
         if (mark_.unfinished_type_count != 0) {
             @memset(self.containment_cache.unsafeRawItemsMutForStore(), .unknown);
         }
-        self.iterator_interface_visit_epochs.restoreLen(mark_.iterator_interface_visit_epochs_len);
+        self.iterator_interface_visit_epochs.shrinkRetainingCapacity(mark_.iterator_interface_visit_epochs_len);
         self.spans.restoreLen(mark_.spans_len);
         self.fields.restoreLen(mark_.fields_len);
         self.tags.restoreLen(mark_.tags_len);
@@ -1503,9 +1497,9 @@ pub const Store = struct {
         defer self.allocator.free(order);
         // The class each classified offset joined: a durable id, or the
         // speculative id of the class's first classified member.
-        const classes = try temp.alloc(?TypeId, suffix_len);
-        @memset(classes, null);
-        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
+        var classes = try collections.OptionalIndexColumn(TypeId).initFilled(temp, suffix_len);
+        defer classes.deinit(temp);
+        const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes.view() };
 
         for (order) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
@@ -1529,10 +1523,10 @@ pub const Store = struct {
                         const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
                         std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
                     }
-                    class = classes[earlier];
+                    class = classes.get(earlier);
                 }
             }
-            classes[offset] = class orelse candidate;
+            classes.set(offset, class orelse candidate);
         }
 
         // Each speculative class is represented by its lowest offset, and
@@ -1540,7 +1534,7 @@ pub const Store = struct {
         var class_representatives = collections.DenseMap(TypeId, TypeId).init(temp);
         for (0..suffix_len) |offset| {
             const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
-            const class = classes[offset].?;
+            const class = classes.get(offset).?;
             if (@backingInt(class) < mark_.types_len) {
                 interned_original[offset] = class;
                 continue;
@@ -3490,14 +3484,14 @@ pub const TypeMatchMode = enum {
 /// whose equality is already decided.
 const SuffixClasses = struct {
     start: u32,
-    classes: []const ?TypeId,
+    classes: collections.OptionalIndexColumn(TypeId).View,
 
     fn resolve(self: SuffixClasses, ty: TypeId) TypeId {
         const index = @backingInt(ty);
         if (index < self.start) return ty;
         const offset = index - self.start;
-        if (offset >= self.classes.len) return ty;
-        return self.classes[offset] orelse ty;
+        if (offset >= self.classes.len()) return ty;
+        return self.classes.get(offset) orelse ty;
     }
 };
 
@@ -6317,7 +6311,7 @@ test "frozen monotype clone owns fresh iterator traversal slots for uncached que
             var copy = try original.cloneFrozen(gpa);
             defer copy.deinit();
             try std.testing.expectEqual(original.types.len(), copy.iterator_interface_visit_epochs.len());
-            for (copy.iterator_interface_visit_epochs.unsafeRawItemsForView()) |epoch| {
+            for (copy.iterator_interface_visit_epochs.storage[0..copy.iterator_interface_visit_epochs.len()]) |epoch| {
                 try std.testing.expectEqual(@as(u32, 0), epoch);
             }
             try std.testing.expect(!try copy.containsIteratorInterface(root));
@@ -6415,7 +6409,7 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     try std.testing.expectEqualDeep(Store.ReadSharingQueries.spec_constr, store.read_sharing_coverage);
     for (store.specialization_digests.unsafeRawItemsForView()) |digest| try std.testing.expect(digest == null);
     for (store.containment_cache.unsafeRawItemsForView()) |answer| try std.testing.expect(answer.get(.iterator_interface) == null);
-    try std.testing.expectEqual(@as(u32, 0), store.iterator_interface_visit_epoch);
+    try std.testing.expectEqual(@as(u32, 1), store.iterator_interface_visit_epochs.epoch.current);
     var stats: Store.DigestStats = .{};
     store.digest_stats = &stats;
     try store.prepareForReadSharingQueries(&name_store, .spec_constr);

@@ -221,6 +221,7 @@ const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
+const OptionalExprId = collections.OptionalId(Ast.ExprId);
 
 const SourceLoc = @import("base").SourceLoc;
 const Region = @import("base").Region;
@@ -2071,13 +2072,13 @@ const Pass = struct {
 
     /// Index the source bodies for the clones' direct-inline admission.
     fn buildCrossingIndex(self: *Pass) Allocator.Error!*InlineCrossing.Index {
-        const bodies = try self.allocator.alloc(?Ast.ExprId, self.plans.len);
-        defer self.allocator.free(bodies);
-        for (bodies, self.plans) |*body, plan| body.* = switch (plan.source.body) {
-            .roc => |roc_body| roc_body,
-            .hosted => null,
+        var bodies = try InlineCrossing.BodyColumn.initFilled(self.allocator, self.plans.len);
+        defer bodies.deinit(self.allocator);
+        for (self.plans, 0..) |plan, index| switch (plan.source.body) {
+            .roc => |roc_body| bodies.set(index, roc_body),
+            .hosted => {},
         };
-        return InlineCrossing.Index.build(self.allocator, self.program, bodies);
+        return InlineCrossing.Index.build(self.allocator, self.program, bodies.view());
     }
 
     fn runIteratorFusion(self: *Pass) Common.LowerError!void {
@@ -5736,7 +5737,7 @@ const ClonerScratch = struct {
     inline_stack: std.ArrayList(InlineFrame),
     loop_stack: std.ArrayList(LoopPattern),
     loop_exit_stack: std.ArrayList(?LoopExitSelection),
-    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []OptionalExprId),
     join_stack: std.ArrayList(ActiveJoinClone),
     let_case_builds: std.ArrayList(*LetCaseBuild),
     clone_templates: std.ArrayList(ExprIdRange),
@@ -5840,7 +5841,7 @@ const Cloner = struct {
     /// shadows any selection owned by an enclosing loop.
     loop_exit_stack: std.ArrayList(?LoopExitSelection),
     exit_demands: ?*const ExitDemand.Inventory = null,
-    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []OptionalExprId),
     join_stack: std.ArrayList(ActiveJoinClone),
     /// Remaining arms the shape-preserving let-of-case rewrite may still
     /// process. Each arm receives its own clone of the small dispatch, so on
@@ -7910,7 +7911,7 @@ const Cloner = struct {
         change_start: usize = 0,
         plan: *const ExitDemand.Plan = undefined,
         params: []Ast.TypedLocal = &.{},
-        tuple_items: ?[]?Ast.ExprId = null,
+        tuple_items: ?[]OptionalExprId = null,
         rest_ty: Type.TypeId = undefined,
         result_ty: Type.TypeId = undefined,
         target: ?Ast.JoinPointId = null,
@@ -7933,10 +7934,10 @@ const Cloner = struct {
                 const types = try self.arena.allocator().alloc(Type.TypeId, count);
                 task.params = try self.arena.allocator().alloc(Ast.TypedLocal, count);
                 task.tuple_items = if (plan.aggregate != null)
-                    try self.arena.allocator().alloc(?Ast.ExprId, plan.items.len)
+                    try self.arena.allocator().alloc(OptionalExprId, plan.items.len)
                 else
                     null;
-                if (task.tuple_items) |items| @memset(items, null);
+                if (task.tuple_items) |items| @memset(items, .none);
                 var index: usize = 0;
                 for (plan.items, 0..) |item, source_index| {
                     if (!item.used) continue;
@@ -7973,7 +7974,7 @@ const Cloner = struct {
                     if (!item.used) continue;
                     const ref = Value{ .expr = try self.addExpr(.{ .ty = item.ty, .data = .{ .local = task.params[index].local } }) };
                     if (item.local) |local| try self.subst.put(self.pass.program, local, ref);
-                    if (task.tuple_items) |items| items[source_index] = ref.expr;
+                    if (task.tuple_items) |items| items[source_index] = .some(ref.expr);
                     index += 1;
                 }
                 if (plan.aggregate) |local| {
@@ -13785,7 +13786,7 @@ const Cloner = struct {
         if (source != .local) return null;
         const items = self.exit_tuple_items.get(source.local) orelse return null;
         if (access.elem_index >= items.len) Common.invariant("selected tuple access exceeded its source type");
-        return items[access.elem_index] orelse Common.invariant("continuation read an unselected tuple item");
+        return items[access.elem_index].get() orelse Common.invariant("continuation read an unselected tuple item");
     }
 
     /// Total work budget for measuring one known value's constructor size.

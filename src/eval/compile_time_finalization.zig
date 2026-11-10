@@ -271,6 +271,30 @@ const DebugEvents = struct {
     }
 };
 
+/// A position in one finalization's prepared modules.
+const ModulePosition = enum(u32) { _ };
+const ModulePositionColumn = collections.OptionalIndexColumn(ModulePosition);
+/// A position in `ModuleEvaluations.items`.
+const EvaluationPosition = enum(u32) { _ };
+const EvaluationColumn = collections.OptionalIndexColumn(EvaluationPosition);
+/// A root producer's ordinal in a finalization's root plan.
+const RootOrdinal = enum(u32) { _ };
+const RootOrdinalColumn = collections.OptionalIndexColumn(RootOrdinal);
+/// A position in one lowered program's root or literal plans.
+const ProgramPlanIndex = enum(u32) { _ };
+const ProgramPlanColumn = collections.OptionalIndexColumn(ProgramPlanIndex);
+const SlotSymbolColumn = collections.OptionalIndexColumn(static_data_exports.StaticDataSymbolId);
+const OptionalStaticData = collections.OptionalId(lir.LIR.StaticDataId);
+/// A position in a module's pending roots.
+const PendingPosition = enum(u32) { _ };
+const PendingPositionColumn = collections.OptionalIndexColumn(PendingPosition);
+/// A position in a module's compile-time request stream.
+const RequestPosition = enum(u32) { _ };
+const RequestPositionColumn = collections.OptionalIndexColumn(RequestPosition);
+/// A position in the materialized static-data exports.
+const ExportPosition = enum(u32) { _ };
+const ExportPositionColumn = collections.OptionalIndexColumn(ExportPosition);
+
 /// A prepared module and its checking-owned diagnostic destination.
 pub const ProgramModule = struct {
     module: *checked.CheckedModuleArtifact,
@@ -288,9 +312,9 @@ const ModuleOwners = struct {
     modules: []const ProgramModule,
     /// Position in `modules` per `LIR.LoweringModuleId`, or null when the
     /// lowering carried a checked module this finalization does not complete.
-    positions: []const ?u32,
+    positions: ModulePositionColumn,
     /// Independently owned artifacts with the same checked identity.
-    next_alias: []const ?u32,
+    next_alias: ModulePositionColumn,
     /// Site observations apply once to every artifact of the declared owner.
     report_sites: bool = true,
     /// The lowering's module table, by `LIR.LoweringModuleId`.
@@ -320,7 +344,7 @@ const ModuleOwners = struct {
                 return target;
             }
             const index = self.next orelse return null;
-            self.next = self.owners.next_alias[index];
+            self.next = self.owners.nextAlias(index);
             const owner = self.owners.modules[index];
             return .{ .module = owner.module, .problem_store = owner.problem_store };
         }
@@ -331,34 +355,43 @@ const ModuleOwners = struct {
         lowering_modules: []const checked.ModuleId,
         modules: []const ProgramModule,
     ) Allocator.Error!ModuleOwners {
-        const positions = try allocator.alloc(?u32, lowering_modules.len);
-        errdefer allocator.free(positions);
-        const next_alias = try allocator.alloc(?u32, modules.len);
-        errdefer allocator.free(next_alias);
-        @memset(next_alias, null);
-        for (lowering_modules, positions) |key, *slot| {
-            slot.* = null;
-            var tail = slot;
+        var positions = try ModulePositionColumn.initFilled(allocator, lowering_modules.len);
+        errdefer positions.deinit(allocator);
+        var next_alias = try ModulePositionColumn.initFilled(allocator, modules.len);
+        errdefer next_alias.deinit(allocator);
+        for (lowering_modules, 0..) |key, lowering_index| {
+            var previous: ?usize = null;
             for (modules, 0..) |entry, index| {
                 if (!entry.module.key.digest().eql(key)) continue;
-                tail.* = @intCast(index);
-                tail = &next_alias[index];
+                const module_position: ModulePosition = @fromBackingInt(@as(u32, @intCast(index)));
+                if (previous) |prior| {
+                    next_alias.set(prior, module_position);
+                } else {
+                    positions.set(lowering_index, module_position);
+                }
+                previous = index;
             }
         }
         return .{ .modules = modules, .positions = positions, .next_alias = next_alias, .lowering_modules = lowering_modules };
     }
 
-    fn deinit(self: *const ModuleOwners, allocator: Allocator) void {
-        allocator.free(self.next_alias);
-        allocator.free(self.positions);
+    fn deinit(self: *ModuleOwners, allocator: Allocator) void {
+        self.next_alias.deinit(allocator);
+        self.positions.deinit(allocator);
+    }
+
+    /// The next artifact sharing the checked identity of the artifact at
+    /// `index`, or null at the end of the chain.
+    fn nextAlias(self: *const ModuleOwners, index: usize) ?u32 {
+        return if (self.next_alias.get(index)) |next| @backingInt(next) else null;
     }
 
     fn position(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?u32 {
         const raw = @backingInt(id);
-        if (raw >= self.positions.len) {
+        if (raw >= self.positions.len()) {
             finalizationInvariant("lowered row named a checked module outside the lowering's module table");
         }
-        return self.positions[raw];
+        return if (self.positions.get(raw)) |position_id| @backingInt(position_id) else null;
     }
 
     fn get(self: *const ModuleOwners, id: lir.LIR.LoweringModuleId) ?ProgramModule {
@@ -543,7 +576,7 @@ pub const CompletedStages = struct {
     /// pointers evaluation keeps stay valid as stages are added.
     stages: std.ArrayList(*lir.CheckedPipeline.LoweredProgram) = .empty,
     /// Per stage, the frozen export of each of its slots.
-    stage_symbols: std.ArrayList([]?static_data_exports.StaticDataSymbolId) = .empty,
+    stage_symbols: std.ArrayList(SlotSymbolColumn) = .empty,
     /// The stage and slot holding each completed producer's value and
     /// failure record.
     sources: std.AutoHashMapUnmanaged(SlotKey, StageSlot) = .empty,
@@ -583,7 +616,7 @@ pub const CompletedStages = struct {
             self.allocator.destroy(stage);
         }
         self.stages.deinit(self.allocator);
-        for (self.stage_symbols.items) |symbols| self.allocator.free(symbols);
+        for (self.stage_symbols.items) |*symbols| symbols.deinit(self.allocator);
         self.stage_symbols.deinit(self.allocator);
         self.sources.deinit(self.allocator);
         self.scalar_values.deinit(self.allocator);
@@ -643,12 +676,11 @@ pub const CompletedStages = struct {
         const stage_index: u32 = @intCast(self.stages.items.len - 1);
         const stage = self.stages.items[stage_index];
         const frozen = if (stage.frozen_static_data) |*frozen| frozen else finalizationInvariant("compile-time stage froze no completed values");
-        const symbols = try self.allocator.alloc(?static_data_exports.StaticDataSymbolId, stage.lir_result.static_data_values.items.len);
-        errdefer self.allocator.free(symbols);
-        @memset(symbols, null);
+        var symbols = try SlotSymbolColumn.initFilled(self.allocator, stage.lir_result.static_data_values.items.len);
+        errdefer symbols.deinit(self.allocator);
         for (frozen.exports, 0..) |item, symbol| {
             const slot = item.value_id orelse continue;
-            symbols[@backingInt(slot)] = @fromBackingInt(@intCast(symbol));
+            symbols.set(@backingInt(slot), @fromBackingInt(@as(u32, @intCast(symbol))));
         }
         try self.stage_symbols.append(self.allocator, symbols);
         for (stage.lir_result.static_data_values.items, 0..) |entry, ordinal| {
@@ -683,7 +715,7 @@ pub const CompletedStages = struct {
         const found = self.sources.get(.{ .module = module, .root = root, .role = role }) orelse return null;
         return .{
             .program = self.stages.items[found.stage],
-            .symbols = self.stage_symbols.items[found.stage],
+            .symbols = self.stage_symbols.items[found.stage].view(),
             .slot = found.slot,
         };
     }
@@ -714,7 +746,7 @@ pub const CompletedStages = struct {
 const SlotSource = struct {
     program: *const lir.CheckedPipeline.LoweredProgram,
     /// That program's frozen export of each of its slots.
-    symbols: []const ?static_data_exports.StaticDataSymbolId,
+    symbols: SlotSymbolColumn.View,
     slot: u32,
 };
 
@@ -722,17 +754,16 @@ const SlotSource = struct {
 /// source.
 const ProgramSlots = struct {
     program: *const lir.CheckedPipeline.LoweredProgram,
-    symbols: []?static_data_exports.StaticDataSymbolId,
+    symbols: SlotSymbolColumn,
     slots: std.AutoHashMapUnmanaged(CompletedStages.SlotKey, u32) = .empty,
 
     fn init(allocator: Allocator, program: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!ProgramSlots {
         const frozen = program.frozen_static_data orelse finalizationInvariant("host program omitted its completed frozen values");
-        const symbols = try allocator.alloc(?static_data_exports.StaticDataSymbolId, program.lir_result.static_data_values.items.len);
-        errdefer allocator.free(symbols);
-        @memset(symbols, null);
+        var symbols = try SlotSymbolColumn.initFilled(allocator, program.lir_result.static_data_values.items.len);
+        errdefer symbols.deinit(allocator);
         for (frozen.exports, 0..) |item, symbol| {
             const slot = item.value_id orelse continue;
-            symbols[@backingInt(slot)] = @fromBackingInt(@intCast(symbol));
+            symbols.set(@backingInt(slot), @fromBackingInt(@as(u32, @intCast(symbol))));
         }
         var result = ProgramSlots{ .program = program, .symbols = symbols };
         errdefer result.slots.deinit(allocator);
@@ -747,13 +778,13 @@ const ProgramSlots = struct {
     }
 
     fn deinit(self: *ProgramSlots, allocator: Allocator) void {
-        allocator.free(self.symbols);
+        self.symbols.deinit(allocator);
         self.slots.deinit(allocator);
     }
 
     fn find(self: *const ProgramSlots, module: checked.ModuleId, root: lir.LIR.ComptimeProducer, role: std.meta.Tag(@FieldType(CompletedStages.ComptimeRootOwner, "role"))) ?SlotSource {
         const slot = self.slots.get(.{ .module = module, .root = root, .role = role }) orelse return null;
-        return .{ .program = self.program, .symbols = self.symbols, .slot = slot };
+        return .{ .program = self.program, .symbols = self.symbols.view(), .slot = slot };
     }
 
     fn evaluatesHere(_: *const ProgramSlots, _: checked.ModuleId, _: lir.LIR.ComptimeProducer) bool {
@@ -828,8 +859,8 @@ fn transcodeCompletedSlots(
     return .{ .allocator = allocator, .exports = try static_data_exports.mergeIdenticalNodes(allocator, try exports.toOwnedSlice(allocator)) };
 }
 
-fn frozenSlotSymbol(symbols: []const ?static_data_exports.StaticDataSymbolId, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
-    return symbols[@backingInt(slot)] orelse finalizationInvariant("completed frozen graph omitted a declared slot");
+fn frozenSlotSymbol(symbols: SlotSymbolColumn.View, slot: lir.LIR.StaticDataId) static_data_exports.StaticDataSymbolId {
+    return symbols.get(@backingInt(slot)) orelse finalizationInvariant("completed frozen graph omitted a declared slot");
 }
 
 /// Failed values have no representation to convert, and their explicit guard
@@ -2077,18 +2108,17 @@ const ModuleEvaluations = struct {
     allocator: Allocator,
     items: []ModuleEvaluation,
     /// Each module's evaluation, by position in the modules.
-    of_module: []?u32,
+    of_module: EvaluationColumn,
     /// Evaluations not yet complete.
     remaining: usize,
 
     fn init(allocator: Allocator, modules: []const ProgramModule, roots: []const checked_root_graph.Root, graph: *const checked_root_graph.Graph) FinalizeError!ModuleEvaluations {
-        const of_module = try allocator.alloc(?u32, modules.len);
-        errdefer allocator.free(of_module);
-        @memset(of_module, null);
+        var of_module = try EvaluationColumn.initFilled(allocator, modules.len);
+        errdefer of_module.deinit(allocator);
         var count: usize = 0;
         for (roots) |root| {
-            if (of_module[root.module] != null) continue;
-            of_module[root.module] = @intCast(count);
+            if (of_module.isPresent(root.module)) continue;
+            of_module.set(root.module, @fromBackingInt(@as(u32, @intCast(count))));
             count += 1;
         }
         const items = try allocator.alloc(ModuleEvaluation, count);
@@ -2102,7 +2132,7 @@ const ModuleEvaluations = struct {
         const read = try allocator.alloc(bool, count);
         defer allocator.free(read);
         for (modules, 0..) |_, module_index| {
-            const position = of_module[module_index] orelse continue;
+            const position: u32 = @backingInt(of_module.get(module_index) orelse continue);
             members.clearRetainingCapacity();
             reads.clearRetainingCapacity();
             @memset(read, false);
@@ -2112,7 +2142,7 @@ const ModuleEvaluations = struct {
                 // The graph names every value a root's evaluation reads,
                 // through everything its lowering reaches.
                 for (graph.deps[ordinal]) |dep| {
-                    const other = of_module[roots[dep].module].?;
+                    const other: u32 = @backingInt(of_module.get(roots[dep].module).?);
                     if (other == position or read[other]) continue;
                     read[other] = true;
                     try reads.append(allocator, other);
@@ -2131,10 +2161,9 @@ const ModuleEvaluations = struct {
 
     /// One evaluation of every root of `roots`, whatever its module.
     fn initOne(allocator: Allocator, modules: []const ProgramModule, roots: []const checked_root_graph.Root) FinalizeError!ModuleEvaluations {
-        const of_module = try allocator.alloc(?u32, modules.len);
-        errdefer allocator.free(of_module);
-        @memset(of_module, null);
-        for (roots) |root| of_module[root.module] = 0;
+        var of_module = try EvaluationColumn.initFilled(allocator, modules.len);
+        errdefer of_module.deinit(allocator);
+        for (roots) |root| of_module.set(root.module, @fromBackingInt(0));
         const items = try allocator.alloc(ModuleEvaluation, 1);
         errdefer allocator.free(items);
         const members = try allocator.alloc(u32, roots.len);
@@ -2152,7 +2181,7 @@ const ModuleEvaluations = struct {
     fn deinit(self: *ModuleEvaluations) void {
         for (self.items) |*item| item.deinit(self.allocator);
         self.allocator.free(self.items);
-        self.allocator.free(self.of_module);
+        self.of_module.deinit(self.allocator);
     }
 
     /// Whether every evaluation `evaluation`'s roots read a value of is
@@ -2170,7 +2199,7 @@ const ModuleEvaluations = struct {
         const source = options.boxy_objects;
         // A module with no pending root is complete before anything runs.
         for (shared.modules, 0..) |entry, module_index| {
-            if (self.of_module[module_index] != null) continue;
+            if (self.of_module.isPresent(module_index)) continue;
             if (source) |objects| try objects.completed(objects.context, entry.module);
         }
         while (self.remaining != 0) {
@@ -2305,7 +2334,7 @@ const ModuleEvaluation = struct {
             for (shared.graph.deps[member]) |dep| {
                 // A root another evaluation owns completed before this one
                 // started (`ModuleEvaluations.readsDone`).
-                if (evaluations.of_module[roots[dep].module].? != self.index) {
+                if (@backingInt(evaluations.of_module.get(roots[dep].module).?) != self.index) {
                     if (!shared.states[roots[dep].module].isDone(roots[dep].root)) finalizationInvariant("a compile-time root reads a value of a module evaluated after its own");
                     continue;
                 }
@@ -2624,10 +2653,9 @@ const ProgramBuild = struct {
         const allocator = self.allocator;
         const roots = self.roots;
         const pending = self.pending;
-        const position = try allocator.alloc(u32, roots.len);
-        defer allocator.free(position);
-        @memset(position, std.math.maxInt(u32));
-        for (pending, 0..) |member, index| position[member] = @intCast(index);
+        var position = try PendingPositionColumn.initFilled(allocator, roots.len);
+        defer position.deinit(allocator);
+        for (pending, 0..) |member, index| position.set(member, @fromBackingInt(@as(u32, @intCast(index))));
         const local_deps = try allocator.alloc([]const u32, pending.len);
         var built_deps: usize = 0;
         defer {
@@ -2638,7 +2666,7 @@ const ProgramBuild = struct {
             var deps = std.ArrayList(u32).empty;
             errdefer deps.deinit(allocator);
             for (self.graph.deps[member]) |dep| {
-                if (position[dep] != std.math.maxInt(u32)) try deps.append(allocator, position[dep]);
+                if (position.get(dep)) |dep_position| try deps.append(allocator, @backingInt(dep_position));
             }
             out.* = try deps.toOwnedSlice(allocator);
             built_deps += 1;
@@ -3247,7 +3275,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
             completion: RootCompletionState,
             /// The first producer naming each of this module's compile-time
             /// roots, by root id.
-            ordinals: []?usize,
+            ordinals: RootOrdinalColumn,
         };
         const Root = struct { module: usize, request: usize };
 
@@ -3271,8 +3299,8 @@ fn Evaluation(comptime ProgramPtr: type) type {
         lowered: *lir.CheckedPipeline.LoweredProgram = undefined,
         program: ProgramPtr = undefined,
         /// The current program's plan of each producer it evaluates.
-        root_plans: []?u32,
-        literal_plans: []?u32,
+        root_plans: ProgramPlanColumn,
+        literal_plans: ProgramPlanColumn,
 
         fn init(
             self: *Self,
@@ -3291,16 +3319,17 @@ fn Evaluation(comptime ProgramPtr: type) type {
             errdefer {
                 for (states[0..initialized]) |*state| {
                     state.completion.deinit();
-                    allocator.free(state.ordinals);
+                    state.ordinals.deinit(allocator);
                 }
                 allocator.free(states);
             }
             for (modules, states, published.by_module) |entry, *state, requests| {
                 var completion = try RootCompletionState.init(allocator, entry.module, requests);
                 errdefer completion.deinit();
-                const ordinals = try allocator.alloc(?usize, entry.module.compile_time_roots.roots.len);
-                @memset(ordinals, null);
-                state.* = .{ .completion = completion, .ordinals = ordinals };
+                state.* = .{
+                    .completion = completion,
+                    .ordinals = try RootOrdinalColumn.initFilled(allocator, entry.module.compile_time_roots.roots.len),
+                };
                 initialized += 1;
             }
             const roots = try allocator.alloc(Root, producers.roots.len);
@@ -3315,9 +3344,9 @@ fn Evaluation(comptime ProgramPtr: type) type {
                     finalizationInvariant("compile-time root request reached finalization without its checked root identity");
                 const state = &states[module_index];
                 root.* = .{ .module = module_index, .request = state.completion.requestIndexForRoot(root_id) };
-                const slot = &state.ordinals[@backingInt(root_id)];
-                if (slot.*) |existing| {
-                    if (owners.next_alias[module_index] == null) {
+                if (state.ordinals.get(@backingInt(root_id))) |existing_ordinal| {
+                    const existing: usize = @backingInt(existing_ordinal);
+                    if (owners.nextAlias(module_index) == null) {
                         finalizationInvariant("root plan named one compile-time root twice");
                     }
                     // Shared identity permits repeated requests, never
@@ -3327,15 +3356,15 @@ fn Evaluation(comptime ProgramPtr: type) type {
                     }
                 } else {
                     var alias: ?u32 = module_index;
-                    while (alias) |index| : (alias = owners.next_alias[index]) {
+                    while (alias) |index| : (alias = owners.nextAlias(index)) {
                         _ = states[index].completion.requestIndexForRoot(root_id);
-                        states[index].ordinals[@backingInt(root_id)] = ordinal;
+                        states[index].ordinals.set(@backingInt(root_id), @fromBackingInt(@as(u32, @intCast(ordinal))));
                     }
                 }
             }
             for (states) |*state| {
                 for (state.completion.request_root_ids) |id| {
-                    if (state.ordinals[@backingInt(id)] == null) {
+                    if (!state.ordinals.isPresent(@backingInt(id))) {
                         finalizationInvariant("root plan omitted a requested compile-time root");
                     }
                 }
@@ -3348,9 +3377,9 @@ fn Evaluation(comptime ProgramPtr: type) type {
             const literal_programs = try allocator.alloc(?*lir.CheckedPipeline.LoweredProgram, producers.literals.len);
             errdefer allocator.free(literal_programs);
             @memset(literal_programs, null);
-            const root_plans = try allocator.alloc(?u32, producers.roots.len);
-            errdefer allocator.free(root_plans);
-            const literal_plans = try allocator.alloc(?u32, producers.literals.len);
+            var root_plans = try ProgramPlanColumn.initFilled(allocator, producers.roots.len);
+            errdefer root_plans.deinit(allocator);
+            const literal_plans = try ProgramPlanColumn.initFilled(allocator, producers.literals.len);
             self.* = .{
                 .allocator = allocator,
                 .modules = modules,
@@ -3372,15 +3401,15 @@ fn Evaluation(comptime ProgramPtr: type) type {
         fn deinit(self: *Self) void {
             for (self.states) |*state| {
                 state.completion.deinit();
-                self.allocator.free(state.ordinals);
+                state.ordinals.deinit(self.allocator);
             }
             self.allocator.free(self.states);
             self.allocator.free(self.roots);
             self.allocator.free(self.literal_done);
             self.literal_failures.deinit(self.allocator);
             self.allocator.free(self.literal_programs);
-            self.allocator.free(self.root_plans);
-            self.allocator.free(self.literal_plans);
+            self.root_plans.deinit(self.allocator);
+            self.literal_plans.deinit(self.allocator);
             self.owners.deinit(self.allocator);
         }
 
@@ -3390,21 +3419,21 @@ fn Evaluation(comptime ProgramPtr: type) type {
         fn enterStage(self: *Self, lowered: *lir.CheckedPipeline.LoweredProgram, program: ProgramPtr, root_ordinals: []const u32) FinalizeError!void {
             self.lowered = lowered;
             self.program = program;
-            @memset(self.root_plans, null);
-            @memset(self.literal_plans, null);
+            self.root_plans.clearAll();
+            self.literal_plans.clearAll();
             const const_roots = lowered.lir_result.const_roots.items;
             if (const_roots.len != root_ordinals.len) finalizationInvariant("lowered program published a different count of compile-time roots than it was asked for");
             for (const_roots, root_ordinals, 0..) |plan, ordinal, index| {
                 const producer = self.producers.roots[ordinal];
                 if (plan.owner != producer.owner or !std.meta.eql(plan.request, producer.request))
                     finalizationInvariant("lowered program changed a compile-time root's plan");
-                self.root_plans[ordinal] = @intCast(index);
+                self.root_plans.set(ordinal, @fromBackingInt(@as(u32, @intCast(index))));
             }
             for (lowered.lir_result.literal_roots.items, 0..) |plan, index| {
                 const raw = @backingInt(plan.id);
-                if (raw >= self.literal_plans.len or self.literal_plans[raw] != null)
+                if (raw >= self.literal_plans.len() or self.literal_plans.isPresent(raw))
                     finalizationInvariant("lowered program published a literal root outside its producers");
-                self.literal_plans[raw] = @intCast(index);
+                self.literal_plans.set(raw, @fromBackingInt(@as(u32, @intCast(index))));
                 self.literal_programs[raw] = lowered;
             }
             // Every compile-time value slot is some producer's.
@@ -3424,7 +3453,7 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 .checked => |id| {
                     for (self.modules, self.states) |entry, state| {
                         if (!entry.module.key.digest().eql(module)) continue;
-                        return state.ordinals[@backingInt(id)] orelse continue;
+                        return @backingInt(state.ordinals.get(@backingInt(id)) orelse continue);
                     }
                     finalizationInvariant("compile-time slot has no declared producer");
                 },
@@ -3440,17 +3469,17 @@ fn Evaluation(comptime ProgramPtr: type) type {
         /// checked identity.
         fn canonical(self: *const Self, ordinal: usize) usize {
             if (ordinal >= self.roots.len) return ordinal;
-            return self.states[self.roots[ordinal].module].ordinals[@backingInt(self.rootId(ordinal))].?;
+            return @backingInt(self.states[self.roots[ordinal].module].ordinals.get(@backingInt(self.rootId(ordinal))).?);
         }
 
         fn rootPlan(self: *const Self, ordinal: usize) LirProgram.ConstRootPlan {
-            const index = self.root_plans[ordinal] orelse finalizationInvariant("a compile-time root ran in a program that does not lower it");
-            return self.lowered.lir_result.const_roots.items[index];
+            const index = self.root_plans.get(ordinal) orelse finalizationInvariant("a compile-time root ran in a program that does not lower it");
+            return self.lowered.lir_result.const_roots.items[@backingInt(index)];
         }
 
         fn literalPlan(self: *const Self, index: usize) LirProgram.LiteralRootPlan {
-            const plan = self.literal_plans[index] orelse finalizationInvariant("a literal root ran in a program that does not lower it");
-            return self.lowered.lir_result.literal_roots.items[plan];
+            const plan = self.literal_plans.get(index) orelse finalizationInvariant("a literal root ran in a program that does not lower it");
+            return self.lowered.lir_result.literal_roots.items[@backingInt(plan)];
         }
 
         /// Run every group of `level`: those that read no member of their
@@ -3516,8 +3545,8 @@ fn Evaluation(comptime ProgramPtr: type) type {
                 defer self.owners.report_sites = previous_report_sites;
                 _ = try evalProgramRoots(self.allocator, entry.module, requests, root_ids, &state.completion, entry.problem_store, &self.owners, self.options, self.lowered, plans, self.program);
             }
-            var alias: ?u32 = self.owners.next_alias[module_index];
-            while (alias) |index| : (alias = self.owners.next_alias[index]) {
+            var alias: ?u32 = self.owners.nextAlias(module_index);
+            while (alias) |index| : (alias = self.owners.nextAlias(index)) {
                 const alias_entry = self.modules[index];
                 const alias_state = &self.states[index];
                 const alias_requests = self.published.by_module[index];
@@ -4121,10 +4150,9 @@ const RootCompletionState = struct {
     requested_roots: []bool,
     request_root_ids: []checked.ComptimeRootId,
     /// Position in `request_root_ids` per compile-time root id, or
-    /// `no_request` when this module requests no evaluation of that root.
-    request_index_by_root: []u32,
-    visited_templates: []u32,
-    visit: u32,
+    /// absent when this module requests no evaluation of that root.
+    request_index_by_root: RequestPositionColumn,
+    visited_templates: collections.EpochSet(u32, .stamps, .internal),
     /// Procedure templates whose dependencies are still to be checked.
     pending_templates: std.ArrayList(canonical.ProcedureTemplateRef) = .empty,
     current_root_id: ?checked.ComptimeRootId = null,
@@ -4146,9 +4174,8 @@ const RootCompletionState = struct {
 
         const request_root_ids = try allocator.alloc(checked.ComptimeRootId, requests.len);
         errdefer allocator.free(request_root_ids);
-        const request_index_by_root = try allocator.alloc(u32, module.compile_time_roots.roots.len);
-        errdefer allocator.free(request_index_by_root);
-        @memset(request_index_by_root, no_request);
+        var request_index_by_root = try RequestPositionColumn.initFilled(allocator, module.compile_time_roots.roots.len);
+        errdefer request_index_by_root.deinit(allocator);
         for (requests, 0..) |request, i| {
             const root_id = compileTimeRootForRequest(module, request);
             const raw = @backingInt(root_id);
@@ -4157,12 +4184,11 @@ const RootCompletionState = struct {
             }
             requested_roots[raw] = true;
             request_root_ids[i] = root_id;
-            request_index_by_root[raw] = @intCast(i);
+            request_index_by_root.set(raw, @fromBackingInt(@as(u32, @intCast(i))));
         }
 
-        const visited_templates = try allocator.alloc(u32, module.checked_procedure_templates.templates.items.len);
-        errdefer allocator.free(visited_templates);
-        @memset(visited_templates, 0);
+        var visited_templates = try collections.EpochSet(u32, .stamps, .internal).init(allocator, module.checked_procedure_templates.templates.items.len);
+        errdefer visited_templates.deinit(allocator);
 
         return .{
             .allocator = allocator,
@@ -4172,12 +4198,8 @@ const RootCompletionState = struct {
             .request_root_ids = request_root_ids,
             .request_index_by_root = request_index_by_root,
             .visited_templates = visited_templates,
-            .visit = 0,
         };
     }
-
-    /// No compile-time request of this module evaluates the root.
-    const no_request: u32 = std.math.maxInt(u32);
 
     /// Position of a compile-time root in this module's request stream. The
     /// producer records the owner and root id on each lowered root plan, so
@@ -4185,21 +4207,19 @@ const RootCompletionState = struct {
     /// plan appears at the same offset the request did.
     fn requestIndexForRoot(self: *const RootCompletionState, root_id: checked.ComptimeRootId) usize {
         const raw = @backingInt(root_id);
-        if (raw >= self.request_index_by_root.len) {
+        if (raw >= self.request_index_by_root.len()) {
             finalizationInvariant("compile-time root id is outside its declared owner's root table");
         }
-        const index = self.request_index_by_root[raw];
-        if (index == no_request) {
+        const index = self.request_index_by_root.get(raw) orelse
             finalizationInvariant("lowered compile-time root was not requested by its declared owner");
-        }
-        return index;
+        return @backingInt(index);
     }
 
     fn deinit(self: *RootCompletionState) void {
         const allocator = self.allocator;
         self.pending_templates.deinit(allocator);
-        allocator.free(self.visited_templates);
-        allocator.free(self.request_index_by_root);
+        self.visited_templates.deinit(allocator);
+        self.request_index_by_root.deinit(allocator);
         allocator.free(self.request_root_ids);
         allocator.free(self.requested_roots);
         allocator.free(self.statuses);
@@ -4230,11 +4250,7 @@ const RootCompletionState = struct {
         defer self.current_root_id = saved_current_root_id;
         self.current_root_id = request_root_id;
 
-        self.visit +%= 1;
-        if (self.visit == 0) {
-            @memset(self.visited_templates, 0);
-            self.visit = 1;
-        }
+        self.visited_templates.reset();
         const template_ref = request.procedure_template orelse
             finalizationInvariant("compile-time root had no checked wrapper template");
 
@@ -4276,11 +4292,10 @@ const RootCompletionState = struct {
     ) Allocator.Error!bool {
         if (!artifactMatches(template_ref.artifact, self.module.key)) return true;
         const index = @backingInt(template_ref.template);
-        if (index >= self.visited_templates.len) {
+        if (index >= self.visited_templates.len()) {
             finalizationInvariant("compile-time dependency referenced an unknown local procedure template");
         }
-        if (self.visited_templates[index] == self.visit) return true;
-        self.visited_templates[index] = self.visit;
+        if (self.visited_templates.testAndInsert(index)) return true;
 
         const template = self.module.checked_procedure_templates.get(template_ref.template);
         const refs = template.resolved_value_refs;
@@ -5670,22 +5685,21 @@ const InterpreterProgram = struct {
 /// Module and root ids are the existing lowering identities, including every
 /// representation of a checked root. No source identities are reconstructed.
 const PublicationSlots = struct {
-    checked_heads: []std.ArrayList(?lir.LIR.StaticDataId),
-    literal_heads: []?lir.LIR.StaticDataId,
-    next: []?lir.LIR.StaticDataId,
+    checked_heads: []std.ArrayList(OptionalStaticData),
+    literal_heads: []OptionalStaticData,
+    next: collections.OptionalIndexColumn(lir.LIR.StaticDataId),
 
     fn init(allocator: Allocator, result: *const LirProgram.Result) Allocator.Error!PublicationSlots {
-        const checked_heads = try allocator.alloc(std.ArrayList(?lir.LIR.StaticDataId), result.lowering_modules.items.len);
+        const checked_heads = try allocator.alloc(std.ArrayList(OptionalStaticData), result.lowering_modules.items.len);
         @memset(checked_heads, .empty);
         errdefer {
             for (checked_heads) |*heads| heads.deinit(allocator);
             allocator.free(checked_heads);
         }
-        var literal_heads = std.ArrayList(?lir.LIR.StaticDataId).empty;
+        var literal_heads = std.ArrayList(OptionalStaticData).empty;
         errdefer literal_heads.deinit(allocator);
-        const next = try allocator.alloc(?lir.LIR.StaticDataId, result.static_data_values.items.len);
-        errdefer allocator.free(next);
-        @memset(next, null);
+        var next = try collections.OptionalIndexColumn(lir.LIR.StaticDataId).initFilled(allocator, result.static_data_values.items.len);
+        errdefer next.deinit(allocator);
         var last_key: ?checked.ModuleId = null;
         var last_owner: lir.LIR.LoweringModuleId = undefined;
         for (result.static_data_values.items, 0..) |entry, index| {
@@ -5693,7 +5707,7 @@ const PublicationSlots = struct {
             const head = switch (root.root) {
                 .literal => |id| blk: {
                     const raw = @backingInt(id);
-                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, null, raw + 1 - literal_heads.items.len);
+                    if (raw >= literal_heads.items.len) try literal_heads.appendNTimes(allocator, .none, raw + 1 - literal_heads.items.len);
                     break :blk &literal_heads.items[raw];
                 },
                 .checked => |id| blk: {
@@ -5705,23 +5719,23 @@ const PublicationSlots = struct {
                     }
                     const heads = &checked_heads[@backingInt(last_owner)];
                     const raw = @backingInt(id);
-                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, null, raw + 1 - heads.items.len);
+                    if (raw >= heads.items.len) try heads.appendNTimes(allocator, .none, raw + 1 - heads.items.len);
                     break :blk &heads.items[raw];
                 },
             };
-            next[index] = head.*;
-            head.* = @fromBackingInt(@intCast(index));
+            if (head.get()) |previous| next.set(index, previous);
+            head.* = .some(@fromBackingInt(@intCast(index)));
         }
         return .{ .checked_heads = checked_heads, .literal_heads = try literal_heads.toOwnedSlice(allocator), .next = next };
     }
 
     fn first(self: *const PublicationSlots, owner: lir.LIR.LoweringModuleId, producer: lir.LIR.ComptimeProducer) ?lir.LIR.StaticDataId {
         return switch (producer) {
-            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)] else null,
+            .literal => |id| if (@backingInt(id) < self.literal_heads.len) self.literal_heads[@backingInt(id)].get() else null,
             .checked => |id| blk: {
                 const heads = self.checked_heads[@backingInt(owner)].items;
                 const raw = @backingInt(id);
-                break :blk if (raw < heads.len) heads[raw] else null;
+                break :blk if (raw < heads.len) heads[raw].get() else null;
             },
         };
     }
@@ -5730,7 +5744,7 @@ const PublicationSlots = struct {
         for (self.checked_heads) |*heads| heads.deinit(allocator);
         allocator.free(self.checked_heads);
         allocator.free(self.literal_heads);
-        allocator.free(self.next);
+        self.next.deinit(allocator);
     }
 };
 
@@ -5777,10 +5791,10 @@ fn testPublicationSlots(allocator: Allocator) (Allocator.Error || error{TestExpe
     defer publication.deinit(allocator);
     const slot = lir.LIR.StaticDataId;
     try std.testing.expectEqual(@as(?slot, slots[2]), publication.first(first_module, producers[0]));
-    try std.testing.expectEqual(@as(?slot, slots[0]), publication.next[@backingInt(slots[2])]);
-    try std.testing.expectEqual(@as(?slot, null), publication.next[@backingInt(slots[0])]);
+    try std.testing.expectEqual(@as(?slot, slots[0]), publication.next.get(@backingInt(slots[2])));
+    try std.testing.expectEqual(@as(?slot, null), publication.next.get(@backingInt(slots[0])));
     try std.testing.expectEqual(@as(?slot, slots[1]), publication.first(second_module, producers[1]));
-    try std.testing.expectEqual(@as(?slot, null), publication.next[@backingInt(slots[1])]);
+    try std.testing.expectEqual(@as(?slot, null), publication.next.get(@backingInt(slots[1])));
     try std.testing.expectEqual(@as(?slot, slots[3]), publication.first(second_module, producers[3]));
     try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @fromBackingInt(@intCast(6)) }));
     try std.testing.expectEqual(@as(?slot, null), publication.first(first_module, .{ .checked = @fromBackingInt(@intCast(8)) }));
@@ -5796,7 +5810,7 @@ const StaticSlotEnvironment = struct {
     /// Layout of every image this environment builds, chosen by its evaluator.
     image_options: backend.StaticDataImage.Options = .{},
     publication: PublicationSlots,
-    export_positions: []?usize,
+    export_positions: ExportPositionColumn,
     /// Where each failed producer failed. A read of its failed value that
     /// reports the failure reports it there.
     producer_origins: std.AutoHashMapUnmanaged(ProducerOriginKey, lir.LIR.ComptimeFailureOrigin) = .empty,
@@ -5873,16 +5887,15 @@ const StaticSlotEnvironment = struct {
         errdefer allocator.free(native_static_data);
         var publication = try PublicationSlots.init(allocator, &lowered.lir_result);
         errdefer publication.deinit(allocator);
-        const export_positions = try exportPositions(allocator, materialized_static_data, native_static_data.len);
-        errdefer allocator.free(export_positions);
+        var export_positions = try exportPositions(allocator, materialized_static_data, native_static_data.len);
+        errdefer export_positions.deinit(allocator);
         return .{ .allocator = allocator, .materialized = materialized_static_data, .image = static_data_image, .addresses = native_static_data, .image_options = image_options, .publication = publication, .export_positions = export_positions };
     }
 
-    fn exportPositions(allocator: Allocator, exports: []const static_data_exports.StaticDataExport, count: usize) Allocator.Error![]?usize {
-        const positions = try allocator.alloc(?usize, count);
-        @memset(positions, null);
+    fn exportPositions(allocator: Allocator, exports: []const static_data_exports.StaticDataExport, count: usize) Allocator.Error!ExportPositionColumn {
+        var positions = try ExportPositionColumn.initFilled(allocator, count);
         for (exports, 0..) |entry, index| if (entry.value_id) |slot| {
-            positions[@backingInt(slot)] = index;
+            positions.set(@backingInt(slot), @fromBackingInt(@as(u32, @intCast(index))));
         };
         return positions;
     }
@@ -5900,7 +5913,7 @@ const StaticSlotEnvironment = struct {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
             const index = @backingInt(slot);
-            next = self.publication.next[index];
+            next = self.publication.next.get(index);
             const entry = lowered.lir_result.static_data_values.items[index];
             const root = entry.compile_time_root.?;
             if (root.role != .value) continue;
@@ -5987,7 +6000,7 @@ const StaticSlotEnvironment = struct {
         var next = self.publication.first(module, producer);
         while (next) |slot| {
             const index = @backingInt(slot);
-            next = self.publication.next[index];
+            next = self.publication.next.get(index);
             const entry = lowered.lir_result.static_data_values.items[index];
             const root = entry.compile_time_root.?;
             if (root.role != .failure_message) continue;
@@ -6061,7 +6074,7 @@ const StaticSlotEnvironment = struct {
             const cloned = try static_data_exports.cloneStaticData(self.allocator, completed.exports);
             defer self.allocator.free(cloned);
             const slot = cloned[0].value_id.?;
-            const index = self.export_positions[@backingInt(slot)] orelse finalizationInvariant("completed root had no allocated value slot");
+            const index: usize = @backingInt(self.export_positions.get(@backingInt(slot)) orelse finalizationInvariant("completed root had no allocated value slot"));
             const nested_start = all.items.len;
             for (cloned) |*item| for (@constCast(item.relocations)) |*relocation| {
                 if (relocation.target == .data_symbol) {
@@ -6085,7 +6098,7 @@ const StaticSlotEnvironment = struct {
         self.completed_roots.deinit(self.allocator);
         self.producer_origins.deinit(self.allocator);
         self.publication.deinit(self.allocator);
-        self.allocator.free(self.export_positions);
+        self.export_positions.deinit(self.allocator);
         self.allocator.free(self.addresses);
         self.image.deinit();
         static_data_exports.deinitStaticData(self.allocator, self.materialized);
@@ -7213,7 +7226,7 @@ fn appendCompileTimeExhaustivenessProblem(
     var alias: ?u32 = owners.position(site_owner) orelse
         finalizationInvariant("empirical exhaustiveness failure named a checked module this finalization does not complete");
     discardUnreachedRootComptimeSites(owners, lir_result, root_proc, site_owner, checked_site);
-    while (alias) |index| : (alias = owners.next_alias[index]) {
+    while (alias) |index| : (alias = owners.nextAlias(index)) {
         const owner = owners.modules[index];
         const problem_store = owner.problem_store orelse {
             finalizationInvariant("compile-time root reached an empirical exhaustiveness failure without a checking problem store");
@@ -7249,7 +7262,7 @@ fn discardUnreachedRootComptimeSites(
         const checked_site = root_site.checked_site orelse continue;
         if (root_site.owner == failed_owner and checked_site == failed_checked_site) continue;
         var alias = owners.position(root_site.owner);
-        while (alias) |index| : (alias = owners.next_alias[index]) {
+        while (alias) |index| : (alias = owners.nextAlias(index)) {
             const owner = owners.modules[index];
             const problem_store = owner.problem_store orelse continue;
             const site = owner.module.exhaustiveness_sites.get(checked_site);
@@ -7779,9 +7792,9 @@ test "module owners resolve a lowered program's module ids to their finalized mo
     try std.testing.expect(owners.get(@fromBackingInt(@intCast(1))) == null);
     try std.testing.expectEqual(&artifacts[0], owners.get(@fromBackingInt(@intCast(2))).?.module);
     try std.testing.expectEqual(&artifacts[1], owners.get(.first).?.module);
-    try std.testing.expectEqual(@as(?u32, 2), owners.next_alias[0]);
-    try std.testing.expectEqual(@as(?u32, null), owners.next_alias[1]);
-    try std.testing.expectEqual(@as(?u32, null), owners.next_alias[2]);
+    try std.testing.expectEqual(@as(?u32, 2), owners.nextAlias(0));
+    try std.testing.expectEqual(@as(?u32, null), owners.nextAlias(1));
+    try std.testing.expectEqual(@as(?u32, null), owners.nextAlias(2));
 }
 
 test "compile-time progress elapsed rejects unset and future timestamps" {

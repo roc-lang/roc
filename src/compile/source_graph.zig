@@ -1,6 +1,7 @@
 //! Import-graph line counting without canonicalization, checking or evaluation.
 const std = @import("std");
 const base = @import("base");
+const collections = @import("collections");
 const parse = @import("parse");
 const CoreCtx = @import("ctx").CoreCtx;
 const discovery = @import("module_discovery.zig");
@@ -8,6 +9,9 @@ const inventory = @import("source_inventory.zig");
 const Resolved = @import("package_resolution.zig").Resolved;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const Allocator = std.mem.Allocator;
+
+/// A position in `Graph.files`.
+const FileIndex = enum(u32) { _ };
 
 /// Physical lines and the subset containing code.
 pub const Counts = struct {
@@ -78,7 +82,7 @@ pub const Graph = struct {
     physical_modules: std.StringHashMapUnmanaged([]const u8) = .empty,
     package_roots: []const []const u8 = &.{},
     queue: std.ArrayList(Module) = .empty,
-    roots: []?usize = &.{},
+    roots: collections.OptionalIndexColumn(FileIndex) = .{},
     failure: Failure = .{},
     cache_hits: usize = 0,
     parses: usize = 0,
@@ -97,8 +101,8 @@ pub const Graph = struct {
 
     /// Classify the entry, including headerless default-platform applications.
     pub fn rootKind(self: *const Graph) @import("package_resolution.zig").HeaderKind {
-        const root = self.roots[Resolved.root_index] orelse base.invariant("completed source graph has a root inventory", .{});
-        return if (self.files.items[root].imports.is_application) .app else self.resolved.packages[0].kind;
+        const root = self.roots.get(Resolved.root_index) orelse base.invariant("completed source graph has a root inventory", .{});
+        return if (self.files.items[@backingInt(root)].imports.is_application) .app else self.resolved.packages[0].kind;
     }
 
     /// Sum each counted file once in its selected ownership category.
@@ -113,8 +117,7 @@ pub const Graph = struct {
     /// Visit the exact import closure of the entry and selected platform.
     pub fn run(self: *Graph) Error!void {
         const a = self.arena.allocator();
-        self.roots = try a.alloc(?usize, self.resolved.packages.len);
-        @memset(self.roots, null);
+        self.roots = try collections.OptionalIndexColumn(FileIndex).initFilled(a, self.resolved.packages.len);
         const package_roots = try a.alloc([]const u8, self.resolved.packages.len);
         for (self.resolved.packages, package_roots) |package, *out| out.* = try self.fs.canonicalize(package.root_dir, a);
         self.package_roots = package_roots;
@@ -179,9 +182,9 @@ pub const Graph = struct {
     }
 
     fn loadRoot(self: *Graph, package_index: usize) Error!usize {
-        if (self.roots[package_index]) |index| return index;
+        if (self.roots.get(package_index)) |index| return @backingInt(index);
         const index = try self.loadFile(self.resolved.packages[package_index].root_file);
-        self.roots[package_index] = index;
+        self.roots.set(package_index, @fromBackingInt(@as(u32, @intCast(index))));
         return index;
     }
 

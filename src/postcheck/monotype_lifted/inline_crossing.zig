@@ -159,6 +159,11 @@ const UseRow = struct { body: u32, use: Use, next: u32 };
 
 const LocalUseRow = struct { body: u32, expr: Ast.ExprId, next: u32 };
 
+/// Each function's body, by function index; absent for a function without one.
+pub const BodyColumn = collections.OptionalIndexColumn(Ast.ExprId);
+/// A borrowed `BodyColumn`.
+pub const Bodies = BodyColumn.View;
+
 const LoopKey = struct { body: u32, loop: u32 };
 
 /// The program-wide data every query reads. Built once, before any clone or
@@ -167,7 +172,7 @@ const LoopKey = struct { body: u32, loop: u32 };
 pub const Index = struct {
     gpa: Allocator,
     /// Each original function's source body.
-    bodies: []const ?Ast.ExprId,
+    bodies: BodyColumn,
     /// The first use of each source expression, by expression id, in a
     /// list of every body's uses of it.
     use_head: []u32,
@@ -191,24 +196,26 @@ pub const Index = struct {
     wrapper: []bool,
 
     /// Index the source bodies of `program`'s original functions.
-    pub fn build(gpa: Allocator, program: *const Ast.Program, source_bodies: []const ?Ast.ExprId) Allocator.Error!*Index {
+    pub fn build(gpa: Allocator, program: *const Ast.Program, source_bodies: Bodies) Allocator.Error!*Index {
         const expr_count = program.exprCount();
+        const fn_count = source_bodies.len();
         const self = try gpa.create(Index);
         errdefer gpa.destroy(self);
         self.* = .{
             .gpa = gpa,
-            .bodies = try gpa.dupe(?Ast.ExprId, source_bodies),
+            .bodies = try BodyColumn.initFilled(gpa, fn_count),
             .use_head = try gpa.alloc(u32, expr_count),
-            .returns = try gpa.alloc(std.ArrayList(Ast.ExprId), source_bodies.len),
-            .scc = try gpa.alloc(u32, source_bodies.len),
-            .on_cycle = try gpa.alloc(bool, source_bodies.len),
-            .wrapper = try gpa.alloc(bool, source_bodies.len),
+            .returns = try gpa.alloc(std.ArrayList(Ast.ExprId), fn_count),
+            .scc = try gpa.alloc(u32, fn_count),
+            .on_cycle = try gpa.alloc(bool, fn_count),
+            .wrapper = try gpa.alloc(bool, fn_count),
         };
         @memset(self.use_head, none);
         for (self.returns) |*list| list.* = .empty;
         @memset(self.wrapper, false);
-        for (source_bodies, 0..) |maybe_body, index| {
-            const body = maybe_body orelse continue;
+        for (0..fn_count) |index| {
+            const body = source_bodies.get(index) orelse continue;
+            self.bodies.set(index, body);
             try self.indexFn(program, @fromBackingInt(@as(u32, @intCast(index))), body);
         }
         try self.computeSccs(program);
@@ -218,7 +225,7 @@ pub const Index = struct {
     /// Free the index.
     pub fn deinit(self: *Index) void {
         const gpa = self.gpa;
-        gpa.free(self.bodies);
+        self.bodies.deinit(gpa);
         gpa.free(self.use_head);
         self.uses.deinit(gpa);
         self.local_use_head.deinit(gpa);
@@ -235,7 +242,7 @@ pub const Index = struct {
     }
 
     fn isOriginal(self: *const Index, fn_id: Ast.FnId) bool {
-        return @backingInt(fn_id) < self.bodies.len;
+        return @backingInt(fn_id) < self.bodies.len();
     }
 
     /// Whether the source body of `fn_id` holds `expr`.
@@ -531,7 +538,7 @@ pub const Index = struct {
     /// explicit stack so call chains never become native call depth.
     fn computeSccs(self: *Index, program: *const Ast.Program) Allocator.Error!void {
         const gpa = self.gpa;
-        const n = self.bodies.len;
+        const n = self.bodies.len();
         const edges = try gpa.alloc(std.ArrayList(u32), n);
         defer {
             for (edges) |*list| list.deinit(gpa);
@@ -540,8 +547,8 @@ pub const Index = struct {
         for (edges) |*list| list.* = .empty;
         var stack: std.ArrayList(Ast.ExprChild) = .empty;
         defer stack.deinit(gpa);
-        for (self.bodies, 0..) |maybe_body, index| {
-            const body = maybe_body orelse continue;
+        for (0..self.bodies.len()) |index| {
+            const body = self.bodies.get(index) orelse continue;
             stack.clearRetainingCapacity();
             try stack.append(gpa, .{ .expr = body });
             while (stack.pop()) |child| switch (child) {
@@ -639,8 +646,8 @@ pub const Index = struct {
         const program = session.program;
         var stack: std.ArrayList(Ast.ExprChild) = .empty;
         defer stack.deinit(gpa);
-        for (self.bodies, 0..) |maybe_body, index| {
-            const body = maybe_body orelse continue;
+        for (0..self.bodies.len()) |index| {
+            const body = self.bodies.get(index) orelse continue;
             const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
             if (self.on_cycle[index]) continue;
             if (try WrapperBody.wrapperBody(gpa, program, fn_id) == null) continue;
@@ -868,7 +875,7 @@ pub const Session = struct {
         const path = key.path;
         switch (key.kind) {
             .result => {
-                const body = self.index.bodies[key.id] orelse return .{};
+                const body = self.index.bodies.get(key.id) orelse return .{};
                 var result = self.child(exprKey(body, path), missing) orelse return .{};
                 for (self.index.returns[key.id].items) |ret| {
                     const value = self.child(exprKey(ret, path), missing) orelse return .{};
@@ -1294,7 +1301,7 @@ const Walk = struct {
     fn enterCall(self: *Walk, caller: ?Caller, callee: Ast.FnId, slot: Slot, path: PathId, node: u32) Allocator.Error!void {
         const index = self.session.index;
         if (!index.isOriginal(callee)) return;
-        if (index.bodies[@backingInt(callee)] == null) return;
+        if (!index.bodies.isPresent(@backingInt(callee))) return;
         if (caller) |c| {
             // Within a call cycle, a part wrapped in a frame the cycle
             // itself pushed grows on every round, and the clone never
@@ -1708,11 +1715,11 @@ const TestProgram = struct {
         });
     }
 
-    fn bodies(self: *TestProgram, gpa: Allocator) Allocator.Error![]?Ast.ExprId {
-        const out = try gpa.alloc(?Ast.ExprId, self.program.fnCount());
-        for (out, 0..) |*body, index| body.* = switch (self.program.getFnAt(index).body) {
-            .roc => |b| b,
-            .hosted => null,
+    fn bodies(self: *TestProgram, gpa: Allocator) Allocator.Error!BodyColumn {
+        var out = try BodyColumn.initFilled(gpa, self.program.fnCount());
+        for (0..out.len()) |index| switch (self.program.getFnAt(index).body) {
+            .roc => |b| out.set(index, b),
+            .hosted => {},
         };
         return out;
     }
@@ -1746,9 +1753,9 @@ const record_kinds: Consumers = .initOne(.project);
 /// of a freshly indexed `t`.
 fn testConsumes(t: *TestProgram, seed: *TestSeed, callee: Ast.FnId) Allocator.Error!bool {
     const gpa = std.testing.allocator;
-    const bodies = try t.bodies(gpa);
-    defer gpa.free(bodies);
-    const index = try Index.build(gpa, &t.program, bodies);
+    var bodies = try t.bodies(gpa);
+    defer bodies.deinit(gpa);
+    const index = try Index.build(gpa, &t.program, bodies.view());
     defer index.deinit();
     var session = try Session.init(gpa, index, &t.program);
     defer session.deinit();
@@ -1899,9 +1906,9 @@ test "an argument the callee returns meets the caller's match" {
     const r = try t.local();
     const call = try t.call(identity, &.{try t.tag("A", &.{})});
     const caller = try t.function(&.{}, &.{}, try t.let(r, call, try t.matchOne(try t.ref(r), try t.tagPat("A", &.{}), try t.unit())));
-    const bodies = try t.bodies(gpa);
-    defer gpa.free(bodies);
-    const index = try Index.build(gpa, &t.program, bodies);
+    var bodies = try t.bodies(gpa);
+    defer bodies.deinit(gpa);
+    const index = try Index.build(gpa, &t.program, bodies.view());
     defer index.deinit();
     var session = try Session.init(gpa, index, &t.program);
     defer session.deinit();

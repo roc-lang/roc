@@ -14,9 +14,16 @@
 
 const std = @import("std");
 const SingleThreadArena = @import("SingleThreadArena.zig");
+const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndexColumn;
 const Allocator = std.mem.Allocator;
 
 const LoopForest = @This();
+
+/// A loop's position in `loops`.
+const LoopIndex = enum(u32) { _ };
+/// A node's depth-first preorder number.
+const PreorderNumber = enum(u32) { _ };
+const PreorderColumn = OptionalIndexColumn(PreorderNumber);
 
 /// No loop, or no node.
 pub const none = std.math.maxInt(u32);
@@ -36,8 +43,8 @@ pub const Loop = struct {
 
 allocator: Allocator,
 loops: []Loop,
-/// Each node's innermost loop, or `none`.
-innermost: []u32,
+/// Each node's innermost loop, when it has one.
+innermost: OptionalIndexColumn(LoopIndex),
 /// Loop indices in loop-tree preorder (parents before children).
 preorder: []u32,
 /// `lift[level * loops.len + loop]` is the loop's ancestor 2^level levels up,
@@ -64,8 +71,7 @@ pub fn build(
     // Depth-first preorder; `last[n]` is the largest preorder number in n's
     // subtree, so v is an ancestor-or-self of u exactly when
     // pre[v] <= pre[u] <= last[v].
-    const pre = try scratch.alloc(u32, node_count);
-    @memset(pre, none);
+    var pre = try PreorderColumn.initFilled(scratch, node_count);
     const last = try scratch.alloc(u32, node_count);
     const by_pre = try scratch.alloc(u32, node_count);
     {
@@ -73,8 +79,8 @@ pub fn build(
         var frames = std.ArrayList(Frame).empty;
         var counter: u32 = 0;
         for (0..node_count) |root| {
-            if (pre[root] != none) continue;
-            pre[root] = counter;
+            if (pre.isPresent(root)) continue;
+            pre.set(root, @fromBackingInt(counter));
             by_pre[counter] = @intCast(root);
             counter += 1;
             try frames.append(scratch, .{ .node = @intCast(root), .next = succ_starts[root] });
@@ -83,8 +89,8 @@ pub fn build(
                 if (frame.next < succ_starts[frame.node + 1]) {
                     const successor = succs[frame.next];
                     frame.next += 1;
-                    if (pre[successor] == none) {
-                        pre[successor] = counter;
+                    if (!pre.isPresent(successor)) {
+                        pre.set(successor, @fromBackingInt(counter));
                         by_pre[counter] = successor;
                         counter += 1;
                         try frames.append(scratch, .{ .node = successor, .next = succ_starts[successor] });
@@ -99,15 +105,12 @@ pub fn build(
 
     var loops = std.ArrayList(Loop).empty;
     errdefer loops.deinit(allocator);
-    const innermost = try allocator.alloc(u32, node_count);
-    errdefer allocator.free(innermost);
-    @memset(innermost, none);
-    const loop_of_header = try scratch.alloc(u32, node_count);
-    @memset(loop_of_header, none);
+    var innermost = try OptionalIndexColumn(LoopIndex).initFilled(allocator, node_count);
+    errdefer innermost.deinit(allocator);
+    var loop_of_header = try OptionalIndexColumn(LoopIndex).initFilled(scratch, node_count);
     const union_parent = try scratch.alloc(u32, node_count);
     for (union_parent, 0..) |*parent, index| parent.* = @intCast(index);
-    const in_body = try scratch.alloc(u32, node_count);
-    @memset(in_body, none);
+    var in_body = try OptionalIndexColumn(LoopIndex).initFilled(scratch, node_count);
     var body = std.ArrayList(u32).empty;
     var work = std.ArrayList(u32).empty;
 
@@ -116,43 +119,44 @@ pub fn build(
         order_index -= 1;
         const header = by_pre[order_index];
         const loop_index: u32 = @intCast(loops.items.len);
+        const loop_id: LoopIndex = @fromBackingInt(loop_index);
         body.clearRetainingCapacity();
         work.clearRetainingCapacity();
         var has_back_edge = false;
         for (preds[pred_starts[header]..pred_starts[header + 1]]) |predecessor| {
-            if (!isAncestorOrSelf(pre, last, header, predecessor)) continue;
+            if (!isAncestorOrSelf(&pre, last, header, predecessor)) continue;
             has_back_edge = true;
             const representative = find(union_parent, predecessor);
-            if (representative == header or in_body[representative] == loop_index) continue;
-            in_body[representative] = loop_index;
+            if (representative == header or in_body.get(representative) == loop_id) continue;
+            in_body.set(representative, loop_id);
             try body.append(scratch, representative);
             try work.append(scratch, representative);
         }
         if (!has_back_edge) continue;
         try loops.append(allocator, .{ .header = header });
-        loop_of_header[header] = loop_index;
-        innermost[header] = loop_index;
+        loop_of_header.set(header, loop_id);
+        innermost.set(header, loop_id);
         while (work.pop()) |member| {
             for (preds[pred_starts[member]..pred_starts[member + 1]]) |predecessor| {
                 const representative = find(union_parent, predecessor);
-                if (representative == header or representative == member or in_body[representative] == loop_index) continue;
-                if (!isAncestorOrSelf(pre, last, header, representative)) {
+                if (representative == header or representative == member or in_body.get(representative) == loop_id) continue;
+                if (!isAncestorOrSelf(&pre, last, header, representative)) {
                     // Not reachable from the header: an entry of the loop
                     // that bypasses its header.
                     loops.items[loop_index].irreducible = true;
                     continue;
                 }
-                in_body[representative] = loop_index;
+                in_body.set(representative, loop_id);
                 try body.append(scratch, representative);
                 try work.append(scratch, representative);
             }
         }
         for (body.items) |member| {
             union_parent[member] = header;
-            if (loop_of_header[member] != none) {
-                loops.items[loop_of_header[member]].parent = loop_index;
+            if (loop_of_header.get(member)) |inner_loop| {
+                loops.items[@backingInt(inner_loop)].parent = loop_index;
             } else {
-                innermost[member] = loop_index;
+                innermost.set(member, loop_id);
             }
         }
     }
@@ -226,8 +230,13 @@ pub fn build(
 pub fn deinit(self: *LoopForest) void {
     self.allocator.free(self.lift);
     self.allocator.free(self.preorder);
-    self.allocator.free(self.innermost);
+    self.innermost.deinit(self.allocator);
     self.allocator.free(self.loops);
+}
+
+/// The innermost loop containing `node`, or `none`.
+pub inline fn innermostOf(self: *const LoopForest, node: usize) u32 {
+    return self.innermost.rawOrMaxInt(node);
 }
 
 /// Whether loop `outer` contains loop `inner` (or is it).
@@ -237,7 +246,7 @@ pub fn contains(self: *const LoopForest, outer: u32, inner: u32) bool {
 
 /// Whether loop `loop` contains node `node`.
 pub fn containsNode(self: *const LoopForest, loop: u32, node: u32) bool {
-    const inner = self.innermost[node];
+    const inner = self.innermostOf(node);
     return inner != none and self.contains(loop, inner);
 }
 
@@ -256,8 +265,10 @@ pub fn outermostWhile(self: *const LoopForest, loop: u32, context: anytype, comp
     return current;
 }
 
-fn isAncestorOrSelf(pre: []const u32, last: []const u32, ancestor: u32, node: u32) bool {
-    return pre[ancestor] <= pre[node] and pre[node] <= last[ancestor];
+fn isAncestorOrSelf(pre: *const PreorderColumn, last: []const u32, ancestor: u32, node: u32) bool {
+    const ancestor_pre: u32 = @backingInt(pre.get(ancestor).?);
+    const node_pre: u32 = @backingInt(pre.get(node).?);
+    return ancestor_pre <= node_pre and node_pre <= last[ancestor];
 }
 
 fn find(parents: []u32, start: u32) u32 {
@@ -310,14 +321,14 @@ test "nested loops nest in the forest" {
     var forest = try testForest(&.{ .{ 0, 1 }, .{ 1, 2 }, .{ 2, 3 }, .{ 3, 2 }, .{ 3, 4 }, .{ 4, 1 }, .{ 1, 5 } }, 6);
     defer forest.deinit();
     try std.testing.expectEqual(@as(usize, 2), forest.loops.len);
-    const outer = forest.innermost[1];
-    const inner = forest.innermost[2];
+    const outer = forest.innermostOf(1);
+    const inner = forest.innermostOf(2);
     try std.testing.expect(outer != none and inner != none and outer != inner);
     try std.testing.expectEqual(outer, forest.loops[inner].parent);
-    try std.testing.expectEqual(inner, forest.innermost[3]);
-    try std.testing.expectEqual(outer, forest.innermost[4]);
-    try std.testing.expectEqual(none, forest.innermost[0]);
-    try std.testing.expectEqual(none, forest.innermost[5]);
+    try std.testing.expectEqual(inner, forest.innermostOf(3));
+    try std.testing.expectEqual(outer, forest.innermostOf(4));
+    try std.testing.expectEqual(none, forest.innermostOf(0));
+    try std.testing.expectEqual(none, forest.innermostOf(5));
     try std.testing.expect(forest.contains(outer, inner));
     try std.testing.expect(!forest.contains(inner, outer));
     try std.testing.expect(forest.containsNode(outer, 3));
@@ -329,6 +340,6 @@ test "a cycle entered at two nodes is one irreducible loop" {
     defer forest.deinit();
     try std.testing.expectEqual(@as(usize, 1), forest.loops.len);
     try std.testing.expect(forest.loops[0].irreducible);
-    try std.testing.expectEqual(forest.innermost[1], forest.innermost[2]);
-    try std.testing.expectEqual(none, forest.innermost[0]);
+    try std.testing.expectEqual(forest.innermostOf(1), forest.innermostOf(2));
+    try std.testing.expectEqual(none, forest.innermostOf(0));
 }

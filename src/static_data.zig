@@ -200,7 +200,7 @@ const StaticInitializerMachine = struct {
     allocations: std.ArrayList(*SymbolicAllocation),
     static_roots: []?*SymbolicValue,
     static_active: []bool,
-    frozen_roots: []?StaticDataSymbolId,
+    frozen_roots: collections.OptionalIndexColumn(StaticDataSymbolId),
     string_backings: std.AutoHashMapUnmanaged(@import("base").StringLiteral.Idx, SymbolicAllocationId),
     /// Frames for initializers that are running, followed by released frames
     /// kept for reuse. An initializer reading a static value evaluates that
@@ -222,14 +222,13 @@ const StaticInitializerMachine = struct {
         @memset(static_roots, null);
         const static_active = try arena_allocator.alloc(bool, static_count);
         @memset(static_active, false);
-        const frozen_roots = try arena_allocator.alloc(?StaticDataSymbolId, static_count);
-        @memset(frozen_roots, null);
+        var frozen_roots = try collections.OptionalIndexColumn(StaticDataSymbolId).initFilled(arena_allocator, static_count);
         if (lowered.frozen_static_data) |frozen| {
             for (frozen.exports, 0..) |item, index| {
                 if (item.value_id) |id| {
                     const raw = @backingInt(id);
-                    if (raw >= static_count or frozen_roots[raw] != null) staticDataInvariant("frozen static slot identity is missing or duplicated");
-                    frozen_roots[raw] = @fromBackingInt(@intCast(index));
+                    if (raw >= static_count or frozen_roots.isPresent(raw)) staticDataInvariant("frozen static slot identity is missing or duplicated");
+                    frozen_roots.set(raw, @fromBackingInt(@as(u32, @intCast(index))));
                 }
             }
         }
@@ -427,7 +426,7 @@ const StaticInitializerMachine = struct {
             self.static_roots[raw] = root;
             return root;
         }
-        if (self.frozen_roots[raw]) |symbol| {
+        if (self.frozen_roots.get(raw)) |symbol| {
             const root = try self.readFrozenValue(symbol, self.lowered.lir_result.static_data_values.items[raw].layout_idx);
             self.static_roots[raw] = root;
             return root;
@@ -448,7 +447,7 @@ const StaticInitializerMachine = struct {
                 .assign_literal => |assign| blk: {
                     switch (assign.value) {
                         .static_data => |dependency| if (self.static_roots[@backingInt(dependency.id)] == null and
-                            self.frozen_roots[@backingInt(dependency.id)] == null)
+                            !self.frozen_roots.isPresent(@backingInt(dependency.id)))
                         {
                             if (try self.readyStatic(dependency.id) == null) return dependency.id;
                         },
@@ -2085,7 +2084,7 @@ const StaticDataBuilder = struct {
 
     fn buildInternalStaticValues(self: *StaticDataBuilder) MaterializationError!void {
         for (0..self.lowered.lir_result.static_data_values.items.len) |index| {
-            if (self.initializer_machine.frozen_roots[index] != null) continue;
+            if (self.initializer_machine.frozen_roots.isPresent(index)) continue;
             const static_data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, static_data_id);
             errdefer self.allocator.free(symbol_name);

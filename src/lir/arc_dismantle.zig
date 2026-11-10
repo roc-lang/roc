@@ -520,11 +520,6 @@ const EquivalencedRead = struct {
     representative: LIR.LocalId,
 };
 
-const MentionEdge = struct {
-    stmt: u32,
-    next: u32,
-};
-
 /// One edge of the solved borrow forest, reversed: a binding borrowed from
 /// the local whose list holds the edge.
 const BorrowChildEdge = struct { local: u32, next: u32 };
@@ -629,12 +624,12 @@ const Analysis = struct {
     /// Join cells with explicit initialization edges. Each edge supplies a
     /// fresh intact container independently of the other incoming values.
     explicit_init_join: []const bool,
-    /// Every operand mention of a solved-borrowed refcounted local, as a
-    /// per-local linked list into `mention_edges`. A binding borrowed through
+    /// Every operand mention of a solved-borrowed refcounted local, grouped
+    /// contiguously in reverse discovery order. A binding borrowed through
     /// a candidate's field read observes that field at each of its mentions,
     /// so the take dataflow rejects takes such a mention could follow.
-    mention_heads: []u32,
-    mention_edges: std.ArrayList(MentionEdge) = .empty,
+    mention_builder: collections.CsrGroups(u32).Builder,
+    mentions: collections.CsrGroups(u32) = .{},
 
     fn deinit(self: *Analysis) void {
         var it = self.candidates.valueIterator();
@@ -660,8 +655,8 @@ const Analysis = struct {
         self.gpa.free(self.read_through_view);
         self.gpa.free(self.view_head);
         self.gpa.free(self.view_parent);
-        self.gpa.free(self.mention_heads);
-        self.mention_edges.deinit(self.gpa);
+        self.mention_builder.deinit(self.gpa);
+        self.mentions.deinit(self.gpa);
         self.gpa.free(self.state);
     }
 
@@ -731,11 +726,7 @@ const Analysis = struct {
     fn noteMention(self: *Analysis, stmt: LIR.CFStmtId, local: LIR.LocalId) Error!void {
         const index = @backingInt(local);
         if (!self.rc_local[index] or !self.solution.isBorrowed(local)) return;
-        try self.mention_edges.append(self.gpa, .{
-            .stmt = @backingInt(stmt),
-            .next = self.mention_heads[index],
-        });
-        self.mention_heads[index] = @intCast(self.mention_edges.items.len - 1);
+        try self.mention_builder.add(self.gpa, @intCast(index), @backingInt(stmt));
     }
 
     /// Any occurrence that is not a field read: the local (or the container
@@ -2617,11 +2608,8 @@ fn forwardsWholeOnEveryReturn(
     };
     scratch.forwards.clearRetainingCapacity();
     for (forest.items) |member| {
-        var mention = analysis.mention_heads[member];
-        while (mention != no_index) {
-            const edge = analysis.mention_edges.items[mention];
-            mention = edge.next;
-            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+        for (analysis.mentions.group(member)) |mention| {
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(mention);
             switch (store.getCFStmtImmediate(stmt_id).*) {
                 .assign_ref => |stmt| {
                     if (stmt.op.kind == .discriminant) continue;
@@ -2647,7 +2635,7 @@ fn forwardsWholeOnEveryReturn(
                         found = true;
                     }
                     if (!found) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_low_level => |stmt| {
                     const args = store.getLocalSpan(stmt.args);
@@ -2662,25 +2650,25 @@ fn forwardsWholeOnEveryReturn(
                         found = true;
                     }
                     if (!found) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_struct => |stmt| {
                     if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.fields))) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_list => |stmt| {
                     if (!aggregateMovesWhole(solution, analysis, forest_mark, root, store.getLocalSpan(stmt.elems))) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .assign_tag => |stmt| {
                     const payload = stmt.payload orelse return false;
                     if (!forest_mark[@backingInt(payload)] or !carriesReadValue(analysis, solution, payload, root)) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .ret => |stmt| {
                     if (sig.ret_mode != .owned) return false;
                     if (!forest_mark[@backingInt(stmt.value)] or !carriesReadValue(analysis, solution, stmt.value, root)) return false;
-                    try scratch.forwards.append(gpa, edge.stmt);
+                    try scratch.forwards.append(gpa, mention);
                 },
                 .init_uninitialized,
                 .assign_literal,
@@ -2809,11 +2797,8 @@ fn forestHasOperandSite(
     root: u32,
 ) bool {
     for (forest) |borrower| {
-        var mention = analysis.mention_heads[borrower];
-        while (mention != no_index) {
-            const edge = analysis.mention_edges.items[mention];
-            mention = edge.next;
-            const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+        for (analysis.mentions.group(borrower)) |mention| {
+            const stmt: LIR.CFStmtId = @fromBackingInt(mention);
             if (operandSiteUse(store, solution, analysis, owner, param_benefits, rc_local, forest_mark, root, stmt) != null) return true;
         }
     }
@@ -3289,62 +3274,46 @@ pub fn compute(
     for (projection_edges.items) |edge| projected_stmt[@backingInt(edge.target)] = @backingInt(edge.stmt);
     // Compare only projections of the same explicit ownership root, rather
     // than scanning every local in the module for each projected container.
-    const root_heads = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(root_heads);
-    @memset(root_heads, no_index);
-    const root_next = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(root_next);
-    @memset(root_next, no_index);
-    for (projected_root, 0..) |root, index| {
-        if (root == no_index or projected_stmt[index] == no_index) continue;
-        root_next[index] = root_heads[root];
-        root_heads[root] = @intCast(index);
-    }
-    // The writes of each root, so a read that a write can separate from an
-    // earlier read of the same root keeps its own read: it may observe the
-    // written value, which the earlier read never saw.
-    const write_heads = try gpa.alloc(u32, store.localCount());
-    defer gpa.free(write_heads);
-    @memset(write_heads, no_index);
-    var write_edges = std.ArrayList(struct { stmt: LIR.CFStmtId, next: u32 }).empty;
-    defer write_edges.deinit(gpa);
-    for (fact_ranges) |range| {
-        for (range.rebinds.items) |rebind| {
-            const target_index = @backingInt(rebind.target);
-            try write_edges.append(gpa, .{ .stmt = rebind.stmt, .next = write_heads[target_index] });
-            write_heads[target_index] = @intCast(write_edges.items.len - 1);
+    var roots = try collections.CsrGroups(u32).fromIndices(gpa, store.localCount(), projected_root.len, .{
+        .roots = projected_root,
+        .stmts = projected_stmt,
+    }, struct {
+        fn key(context: anytype, index: usize) ?u32 {
+            return if (context.roots[index] == no_index or context.stmts[index] == no_index) null else context.roots[index];
         }
+    }.key, true);
+    defer roots.deinit(gpa);
+    var writes_builder = collections.CsrGroups(LIR.CFStmtId).Builder.init(store.localCount());
+    defer writes_builder.deinit(gpa);
+    for (fact_ranges) |range| {
+        for (range.rebinds.items) |rebind| try writes_builder.add(gpa, @backingInt(rebind.target), rebind.stmt);
     }
-    var root_writes = std.ArrayList(LIR.CFStmtId).empty;
-    defer root_writes.deinit(gpa);
+    var writes = try writes_builder.buildReversed(gpa);
+    defer writes.deinit(gpa);
+    writes_builder.deinit(gpa);
     var dense_writes = std.ArrayList(u32).empty;
     defer dense_writes.deinit(gpa);
     var rebind_memo = RebindMemo{};
     defer rebind_memo.deinit(gpa);
-    for (root_heads, 0..) |head, root| {
-        if (head == no_index) continue;
-        root_writes.clearRetainingCapacity();
-        var write_index = write_heads[root];
-        while (write_index != no_index) : (write_index = write_edges.items[write_index].next) {
-            try root_writes.append(gpa, write_edges.items[write_index].stmt);
-        }
+    for (0..roots.keyCount()) |root| {
+        const members = roots.group(root);
+        if (members.len == 0) continue;
+        const root_writes = writes.group(root);
         rebind_memo.reset();
-        var local_index = head;
-        while (local_index != no_index) : (local_index = root_next[local_index]) {
+        for (members) |local_index| {
             const local: LIR.LocalId = @fromBackingInt(local_index);
             const local_layout = layouts.getLayout(store.getLocal(local).layout_idx);
             if (local_layout.tag != .struct_) continue;
             const target_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[local_index]);
             var representative: u32 = local_index;
-            var other_index = head;
-            while (other_index != no_index) : (other_index = root_next[other_index]) {
+            for (members) |other_index| {
                 // A projection dominates itself and the representative it starts as.
                 if (other_index == local_index) continue;
                 const other: LIR.LocalId = @fromBackingInt(other_index);
                 if (store.getLocal(other).layout_idx != store.getLocal(local).layout_idx) continue;
                 const other_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[other_index]);
                 if (!try dominance.dominates(gpa, other_stmt, target_stmt)) continue;
-                if (try dominance.rebindOnPath(gpa, &rebind_memo, other_stmt, target_stmt, root_writes.items, &dense_writes)) continue;
+                if (try dominance.rebindOnPath(gpa, &rebind_memo, other_stmt, target_stmt, root_writes, &dense_writes)) continue;
                 const representative_stmt: LIR.CFStmtId = @fromBackingInt(projected_stmt[representative]);
                 if (try dominance.dominates(gpa, other_stmt, representative_stmt)) {
                     representative = other_index;
@@ -3374,7 +3343,7 @@ pub fn compute(
         .projection_source = projection_source,
         .projected_container = projected_container,
         .explicit_init_join = explicit_init_join,
-        .mention_heads = try gpa.alloc(u32, store.localCount()),
+        .mention_builder = .init(store.localCount()),
     };
     defer analysis.deinit();
     @memset(analysis.state, .unknown);
@@ -3384,7 +3353,6 @@ pub fn compute(
     @memset(analysis.view_head, no_index);
     @memset(analysis.view_parent, no_index);
     @memset(analysis.view_root, no_index);
-    @memset(analysis.mention_heads, no_index);
 
     // One linear scan over every reachable statement, classifying each
     // occurrence of each local. The order is one depth-first walk from every
@@ -3416,6 +3384,9 @@ pub fn compute(
             }
         }
     }
+
+    analysis.mentions = try analysis.mention_builder.buildReversed(gpa);
+    analysis.mention_builder.deinit(gpa);
 
     var own_counts_it = analysis.candidates.valueIterator();
     while (own_counts_it.next()) |candidate| {
@@ -3723,32 +3694,17 @@ pub fn compute(
         source: u32,
         target: u32,
         kind: PlaceEdgeKind,
-        next: u32,
     };
     var places = std.AutoHashMapUnmanaged(u32, PlaceOrigin).empty;
     defer places.deinit(gpa);
     var component_place_keys = std.ArrayList(u32).empty;
     defer component_place_keys.deinit(gpa);
-    var place_edges = std.ArrayList(PlaceEdge).empty;
+    var place_edges: collections.SortedGroups(PlaceEdge) = .{};
     defer place_edges.deinit(gpa);
-    // Per-component edge lists, headed by flat per-key tables whose touched
-    // entries alone are reset between components.
-    const place_heads = try scc_allocator.alloc(u32, store.localCount());
-    @memset(place_heads, no_index);
-    var place_sources = std.ArrayList(u32).empty;
-    defer place_sources.deinit(gpa);
     var place_work = std.ArrayList(u32).empty;
     defer place_work.deinit(gpa);
-    const BenefitEdge = struct {
-        source_key: u32,
-        next: u32,
-    };
-    var benefit_edges = std.ArrayList(BenefitEdge).empty;
+    var benefit_edges: collections.SortedGroups(u32) = .{};
     defer benefit_edges.deinit(gpa);
-    const benefit_heads = try scc_allocator.alloc(u32, proc_count * arc_sig.tracked_param_count);
-    @memset(benefit_heads, no_index);
-    var benefit_targets = std.ArrayList(u32).empty;
-    defer benefit_targets.deinit(gpa);
     var benefit_work = std.ArrayList(u32).empty;
     defer benefit_work.deinit(gpa);
 
@@ -4066,11 +4022,8 @@ pub fn compute(
                         if (demanded and !declined_takes.contains(target_index)) continue;
                         try collectBorrowForest(gpa, store, &analysis, borrow_child_heads, borrow_child_edges.items, &borrow_stack, &forest, forest_mark, target_index);
                         for (forest.items) |borrower| {
-                            var mention = analysis.mention_heads[borrower];
-                            while (mention != no_index) {
-                                const edge = analysis.mention_edges.items[mention];
-                                mention = edge.next;
-                                const stmt: LIR.CFStmtId = @fromBackingInt(@intCast(edge.stmt));
+                            for (analysis.mentions.group(borrower)) |mention| {
+                                const stmt: LIR.CFStmtId = @fromBackingInt(mention);
                                 const site_use = operandSiteUse(store, solution, &analysis, @fromBackingInt(@intCast(owner)), operand_benefits, rc_local, forest_mark, target_index, stmt);
                                 const slot = try read_kinds.getOrPut(stmt);
                                 if (site_use) |use| {
@@ -4464,21 +4417,15 @@ pub fn compute(
             // A projection that materializes as an alias of its committed
             // representative links as that alias.
             place_edges.clearRetainingCapacity();
-            for (place_sources.items) |source| place_heads[source] = no_index;
-            place_sources.clearRetainingCapacity();
             component_place_keys.clearRetainingCapacity();
             for (scc_place_reads) |read_index| {
                 const read = all_place_reads.items[read_index];
                 const link = materializedPlaceLink(store, layouts, solution, &result, projected_container, projected_stmt, read) orelse continue;
-                const previous_head = place_heads[link.source];
-                if (previous_head == no_index) try place_sources.append(gpa, link.source);
-                try place_edges.append(gpa, .{
+                try place_edges.add(gpa, link.source, .{
                     .source = link.source,
                     .target = link.target,
                     .kind = link.kind,
-                    .next = previous_head,
                 });
-                place_heads[link.source] = @intCast(place_edges.items.len - 1);
             }
 
             // Seed only locals that can actually carry a unit: owned
@@ -4487,8 +4434,11 @@ pub fn compute(
             // resolves to one of those roots. A borrowed payload local is
             // therefore reached only through its explicit complete-projection
             // edge.
+            place_edges.finish();
             place_work.clearRetainingCapacity();
-            for (place_sources.items) |source_index| {
+            var place_runs = place_edges.runs();
+            while (place_runs.next()) |run| {
+                const source_index = run.key;
                 const source: LIR.LocalId = @fromBackingInt(source_index);
                 const root = solution.unitLocalOf(source);
                 const root_index = @backingInt(root);
@@ -4509,9 +4459,11 @@ pub fn compute(
             while (place_work.pop()) |source_index| {
                 const source_origin = places.get(source_index) orelse continue;
                 if (source_origin.root == ambiguous_index) continue;
-                var edge_index = place_heads[source_index];
-                while (edge_index != no_index) {
-                    const edge = place_edges.items[edge_index];
+                const edges = place_edges.group(source_index);
+                var edge_index = edges.len;
+                while (edge_index > 0) {
+                    edge_index -= 1;
+                    const edge = edges[edge_index].item;
                     const target: LIR.LocalId = @fromBackingInt(edge.target);
                     // A join parameter is a cell with one definition per
                     // incoming edge, not an SSA value. Its edge-specific
@@ -4519,11 +4471,9 @@ pub fn compute(
                     // origin would incorrectly apply one edge's source to
                     // every arrival.
                     if (solution.isJoinParam(target)) {
-                        edge_index = edge.next;
                         continue;
                     }
                     if (edge.kind == .projection and !solution.isBorrowed(target)) {
-                        edge_index = edge.next;
                         continue;
                     }
                     // A take binding (owned-only ones included, in the
@@ -4558,7 +4508,6 @@ pub fn compute(
                             try place_work.append(gpa, edge.target);
                         }
                     }
-                    edge_index = edge.next;
                 }
             }
 
@@ -4568,7 +4517,8 @@ pub fn compute(
             // path solver remains responsible for proving whether the move is
             // legal at this particular read (including outcome-conditioned
             // restitution).
-            for (place_edges.items) |edge| {
+            for (place_edges.pairs.items) |pair| {
+                const edge = pair.item;
                 if (edge.kind != .projection) continue;
                 if (solution.isBorrowed(@fromBackingInt(edge.target))) continue;
                 const origin = places.get(edge.source) orelse continue;
@@ -4588,8 +4538,6 @@ pub fn compute(
             // variants all the way up a derived-encoder wrapper chain. Every
             // callee outside the component is already final.
             benefit_edges.clearRetainingCapacity();
-            for (benefit_targets.items) |target_key| benefit_heads[target_key] = no_index;
-            benefit_targets.clearRetainingCapacity();
             benefit_work.clearRetainingCapacity();
             for (scc_calls) |call_index| {
                 const call = store.getCFStmtImmediate(@fromBackingInt(call_index)).assign_call;
@@ -4607,20 +4555,18 @@ pub fn compute(
                         dismantleInvariant("ARC dismantle parameter benefit left its call-graph component");
                     }
                     const target_key: u32 = @intCast(@backingInt(call.proc) * arc_sig.tracked_param_count + position);
-                    const previous_head = benefit_heads[target_key];
-                    try benefit_edges.append(gpa, .{
-                        .source_key = @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position),
-                        .next = previous_head,
-                    });
-                    benefit_heads[target_key] = @intCast(benefit_edges.items.len - 1);
-                    if (previous_head == no_index) try benefit_targets.append(gpa, target_key);
-                    // A final benefit outside the component seeds the
-                    // propagation once; the component's own bits seed below.
-                    if (previous_head == no_index and component_of_proc[@backingInt(call.proc)] != component and
-                        (result.owned_only_param_benefits[@backingInt(call.proc)] & arc_sig.paramBit(position).?) != 0)
-                    {
-                        try benefit_work.append(gpa, target_key);
-                    }
+                    try benefit_edges.add(gpa, target_key, @intCast(source_info.proc * arc_sig.tracked_param_count + source_info.position));
+                }
+            }
+            benefit_edges.finish();
+            var benefit_runs = benefit_edges.runs();
+            while (benefit_runs.next()) |run| {
+                const proc_index = run.key / arc_sig.tracked_param_count;
+                const position = run.key % arc_sig.tracked_param_count;
+                if (component_of_proc[proc_index] != component and
+                    (result.owned_only_param_benefits[proc_index] & arc_sig.paramBit(position).?) != 0)
+                {
+                    try benefit_work.append(gpa, run.key);
                 }
             }
             // Propagate each newly beneficial parameter exactly once. A
@@ -4634,16 +4580,17 @@ pub fn compute(
                 }
             }
             while (benefit_work.pop()) |target_key| {
-                var edge_index = benefit_heads[target_key];
-                while (edge_index != no_index) {
-                    const edge = benefit_edges.items[edge_index];
-                    const source_proc_index = edge.source_key / arc_sig.tracked_param_count;
-                    const source_bit = arc_sig.paramBit(edge.source_key % arc_sig.tracked_param_count).?;
+                const edges = benefit_edges.group(target_key);
+                var edge_index = edges.len;
+                while (edge_index > 0) {
+                    edge_index -= 1;
+                    const source_key = edges[edge_index].item;
+                    const source_proc_index = source_key / arc_sig.tracked_param_count;
+                    const source_bit = arc_sig.paramBit(source_key % arc_sig.tracked_param_count).?;
                     if ((result.owned_only_param_benefits[source_proc_index] & source_bit) == 0) {
                         result.owned_only_param_benefits[source_proc_index] |= source_bit;
-                        try benefit_work.append(gpa, edge.source_key);
+                        try benefit_work.append(gpa, source_key);
                     }
-                    edge_index = edge.next;
                 }
             }
 
@@ -4663,7 +4610,8 @@ pub fn compute(
             if (!solution.isBorrowed(local) or solution.isJoinParam(local)) continue;
             try result.projection_units.put(local, @fromBackingInt(origin.owner));
         }
-        for (place_edges.items) |edge| {
+        for (place_edges.pairs.items) |pair| {
+            const edge = pair.item;
             if (edge.kind != .projection) continue;
             const target: LIR.LocalId = @fromBackingInt(edge.target);
             // Unlike a borrowed place origin, this move is attached to one

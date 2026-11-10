@@ -350,7 +350,8 @@ pub const Constants = struct {
     ///      integer offset that the cache validator checks.
     /// 165: compile-time reads persist placement and semantic root identity.
     /// 176: platform invocation scheme uses and deferred diagnostic captures.
-    pub const CACHE_VERSION = 176;
+    /// 177: type-store columns serialize independently in declared field order.
+    pub const CACHE_VERSION = 177;
 };
 
 /// Configuration for the Roc cache system.

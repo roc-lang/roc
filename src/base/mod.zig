@@ -229,6 +229,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("source_utils.zig"));
     std.testing.refAllDecls(@import("stack_overflow.zig"));
     std.testing.refAllDecls(@import("StringLiteral.zig"));
+    std.testing.refAllDecls(@import("table_storage_death_test.zig"));
     std.testing.refAllDecls(@import("target.zig"));
     std.testing.refAllDecls(@import("url.zig"));
     std.testing.refAllDecls(@import("doc_comment.zig"));

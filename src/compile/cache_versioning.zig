@@ -44,13 +44,14 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 20 stores reproducible reports in
+/// reflected in layout fingerprints. Version 21 stores reproducible reports in
 /// the combined checking entry, Boxy callable capture graphs including
 /// descriptor scopes, field-default identities in Boxy stored-function types,
 /// the item type naming an integer list worker of a stored function's recipe,
-/// and a platform pairing's callable forwarding after binding its
-/// requirements. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 20;
+/// a platform pairing's callable forwarding after binding its requirements,
+/// and request completion for both strategies. Platform-pairing entries share
+/// the envelope.
+const checked_envelope_version: u32 = 21;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
@@ -149,8 +150,8 @@ test "module_env_layout golden value" {
     // an *intentional* layout change, bump `Constants.CACHE_VERSION` and replace the
     // golden bytes below with the ones this assertion prints.
     const golden: [32]u8 = .{
-        0x23, 0x37, 0xCA, 0xEA, 0xF3, 0xF1, 0xB8, 0x2A, 0x66, 0xD7, 0x79, 0x74, 0x51, 0xE9, 0x9A, 0x84,
-        0xD0, 0x9A, 0xFB, 0xA9, 0x93, 0xE4, 0xC0, 0x21, 0xC8, 0x96, 0x7B, 0xBD, 0x3F, 0x4D, 0xCC, 0x43,
+        0xC5, 0xE2, 0x79, 0x23, 0x20, 0x39, 0x39, 0xC4, 0xF1, 0xA1, 0x25, 0x9E, 0x69, 0xC6, 0x6E, 0xA5,
+        0xE6, 0xB6, 0x2A, 0x37, 0x39, 0xEE, 0x83, 0x2A, 0x1A, 0xC0, 0xCB, 0xE0, 0x49, 0xBD, 0x6F, 0x3F,
     };
     try std.testing.expectEqualSlices(u8, &golden, &module_env_layout);
 }
