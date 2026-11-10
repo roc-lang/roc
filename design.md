@@ -15534,7 +15534,15 @@ and Per-Module Output is the invariant that makes it possible:
   modules, so their keys already cover them. A key names one file.
 - An edit to a module changes its checked entry key and therefore the key of
   every module whose checked entry covers it, so the edited module and its
-  importers rebuild. A compile-time value a module computes by running an
+  importers rebuild. A unit's task computes its key on its lane, once its
+  imports' units are done: the module's own part of its digests (its stored
+  values and public surface, the bulk of the hashing) is hashed there, or
+  earlier by a lane no unit was ready for, and the imports' parts come from
+  the digest table their units recorded into, which the lanes share under a
+  mutex (`boxy_interface.Digests`). The exports digest a finished unit
+  records folds the object's stored export-record digest with its imports',
+  so the thread that sequences the units hashes no module content itself. A
+  compile-time value a module computes by running an
   import's code is part of the module's own evaluation output, so an edit that
   changes that value rebuilds the module.
 - NAMES come from the link, not from content. A worker's symbol and a nominal
@@ -15573,8 +15581,9 @@ and Per-Module Output is the invariant that makes it possible:
   with its imports' export digests (`Digests.recordExportsDigest`), so a
   restored object's records are not hashed again. This is a semantic
   interface digest, never a payload-integrity hash. The v2 export digest
-  composition changes hash bytes; object format 18 invalidates the older
-  entries. Its inputs remain the module's own export records and its imports,
+  composition changes hash bytes; object format 19 also incorporates stored
+  field-default identities alongside integer worker bindings and invalidates
+  the older entries. Its inputs remain the module's own export records and its imports,
   never its importers or other modules in the program. There
   is no index, no manifest, no second cache the file refers to, and nothing
   in it comes from any other cache. `ROC_VERIFY_BOXY_OBJECT_REUSE` rebuilds
@@ -26776,7 +26785,10 @@ the link is image relative: a 32-bit image-relative field (`rva32`) takes
 it as is, an absolute field adds the image base. The build id is written
 into the host's CodeView debug entry. When the host's header page cannot
 hold the inserted section headers, the host's section contents move one
-page down the file.
+page down the file. Regions with no virtual extent have no PE section header:
+Windows rejects empty mapped sections. Headers and symbols share dense section
+numbers for the remaining regions, including zero-fill-only regions, without
+changing their image-relative placement.
 
 ## Watch Mode For Check And Test
 
@@ -27339,7 +27351,15 @@ execution times include the recording overhead and are not benchmark results.
 
 `ROC_TRACE_BOXY_WORK` also separates checked-root graph construction from
 function-containing-root classification when evaluation timings are available.
-These diagnostic durations exclude the trace's per-root printing.
+These diagnostic durations exclude the trace's per-root printing. A build's
+library units print a timeline under it: when each unit was submitted, keyed,
+and restored, built or taken from compile-time evaluation, as milliseconds
+since the units' phase began and as the raw clock reading, which lines up
+with a `perf record -k CLOCK_MONOTONIC` profile. `ROC_TRACE_BOXY_DIGESTS`
+prints each part of every module's interface and object-input digest, so two
+traces show which part an edit changed; it hashes the parts separately,
+which costs more than the digests themselves, so the work trace leaves it
+out.
 
 
 
