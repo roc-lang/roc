@@ -464,11 +464,25 @@ roc-pg cycles. The largest are byte appends of digests and names
 0.67%, `recursive_digest` 0.25%, `Type.Store.addFields` 0.20%); none is a
 by-value copy of a view or store.
 
-The same profile shows one cost outside the storage tables: the worklist
-`append` called from `InstGraph.unifyConcrete` is 2.1% of roc-pg cycles on
+The same profile shows one cost outside the storage tables: a worklist
+`append` called from `InstGraph.unifyConcrete` is 2.2% of roc-pg cycles on
 both trees, and 69% of its samples are on the instruction after an
 eight-byte load of a `NodePair` whose two four-byte ids the caller has just
-stored.
+stored. `pushPair` stores each field into the new list slot. With it the
+`append` leaves the profile, `addOne` is 0.6% and `unifyConcrete` rises from
+2.2% to 2.7%. Against a control binary of the same tree without `pushPair`,
+instructions are unchanged (within 0.5%) and task-clock time is:
+
+| Workload | Cold | Post-edit |
+| --- | ---: | ---: |
+| roc-pg test, specialized | -1.86% | -0.87% |
+| roc-pg test, Boxy | -1.12% | -5.65% |
+| roc-pdf test, specialized | -1.61% | +0.22% |
+| roc-pdf test, Boxy | -0.25% | -0.02% |
+
+The three post-edit specialized roc-pg runs with `pushPair` are each faster
+than all three control runs (21.41 to 21.50 s against 21.53 to 21.69 s). The
+post-edit Boxy roc-pg row is a 0.9-second run.
 
 Storage work for cold roc-pg runs of the measured tree, from the
 `-Ddev-diagnostics` ReleaseFast build:

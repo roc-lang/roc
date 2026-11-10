@@ -2005,6 +2005,23 @@ const NodePair = struct {
     row_width: RowWidthRelation = .exact,
 };
 
+/// Appends one pair to a unification worklist, storing each field into the
+/// new slot. Unification queues a pair per structural child, and a pair built
+/// in the caller and copied in as one wide load waits on the narrower stores
+/// that built it.
+inline fn pushPair(
+    pending: *std.ArrayList(NodePair),
+    allocator: Allocator,
+    left: NodeId,
+    right: NodeId,
+    row_width: RowWidthRelation,
+) Allocator.Error!void {
+    const slot = try pending.addOne(allocator);
+    slot.left = left;
+    slot.right = right;
+    slot.row_width = row_width;
+}
+
 /// Unification visits one pair set entry per structural step, so the pair set
 /// hashes its three small integers directly instead of streaming them through
 /// a general-purpose byte hasher.
@@ -5708,7 +5725,7 @@ pub const InstGraph = struct {
         defer pending.deinit(self.allocator);
         var related = NodePairSet.init(self.allocator);
         defer related.deinit();
-        try pending.append(self.allocator, .{ .left = public_node, .right = private_node, .row_width = row_width });
+        try pushPair(&pending, self.allocator, public_node, private_node, row_width);
         while (pending.pop()) |pair| {
             try self.relateOpaqueInterfacePair(pair, &pending, &related);
         }
@@ -6026,7 +6043,7 @@ pub const InstGraph = struct {
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
         if (try self.containsGeneratedPrivate(private_node)) {
-            try pending.append(self.allocator, .{ .left = public_node, .right = private_node, .row_width = row_width });
+            try pushPair(pending, self.allocator, public_node, private_node, row_width);
         } else {
             try self.unifyAtRowWidth(public_node, private_node, row_width);
         }
@@ -7214,7 +7231,7 @@ pub const InstGraph = struct {
             }
             self.unify_scratch_pool.append(self.allocator, scratch) catch scratch.deinit(self.allocator);
         }
-        try scratch.pending.append(self.allocator, .{ .left = a, .right = b, .row_width = row_width });
+        try pushPair(&scratch.pending, self.allocator, a, b, row_width);
         {
             self.unify_depth += 1;
             defer self.unify_depth -= 1;
@@ -7353,7 +7370,7 @@ pub const InstGraph = struct {
             },
             .list => |left_elem| {
                 if (right_content == .list) {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.list, .row_width = row_width });
+                    try pushPair(pending, self.allocator, left_elem, right_content.list, row_width);
                     try self.union_(left, right);
                 } else if (right_content == .named) {
                     try self.unifyThroughBacking(right, right_content, left, row_width, pending);
@@ -7363,7 +7380,7 @@ pub const InstGraph = struct {
             },
             .box => |left_elem| {
                 if (right_content == .box) {
-                    try pending.append(self.allocator, .{ .left = left_elem, .right = right_content.box, .row_width = row_width });
+                    try pushPair(pending, self.allocator, left_elem, right_content.box, row_width);
                     try self.union_(left, right);
                 } else if (right_content == .named) {
                     try self.unifyThroughBacking(right, right_content, left, row_width, pending);
@@ -7376,7 +7393,7 @@ pub const InstGraph = struct {
                     const right_items = right_content.tuple;
                     if (left_items.len != right_items.len) Common.invariant("instantiation unified tuples of different arity");
                     for (left_items, right_items) |left_item, right_item| {
-                        try pending.append(self.allocator, .{ .left = left_item, .right = right_item, .row_width = row_width });
+                        try pushPair(pending, self.allocator, left_item, right_item, row_width);
                     }
                     try self.union_(left, right);
                 } else if (right_content == .named) {
@@ -7390,9 +7407,9 @@ pub const InstGraph = struct {
                     const right_fn = right_content.func;
                     if (left_fn.args.len != right_fn.args.len) Common.invariant("instantiation unified functions of different arity");
                     for (left_fn.args, right_fn.args) |left_arg, right_arg| {
-                        try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg, .row_width = row_width });
+                        try pushPair(pending, self.allocator, left_arg, right_arg, row_width);
                     }
-                    try pending.append(self.allocator, .{ .left = left_fn.ret, .right = right_fn.ret, .row_width = row_width });
+                    try pushPair(pending, self.allocator, left_fn.ret, right_fn.ret, row_width);
                     try self.union_(left, right);
                 } else if (right_content == .named) {
                     try self.unifyThroughBacking(right, right_content, left, row_width, pending);
@@ -7461,11 +7478,7 @@ pub const InstGraph = struct {
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted/public iterator pair reached Monotype instantiation without a public item argument");
                             }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                                .row_width = row_width,
-                            });
+                            try pushPair(pending, self.allocator, left_named.args[0], right_named.args[0], row_width);
                             if (left_named.def.iterator_representation == .minted) {
                                 try self.union_(left, right);
                             } else {
@@ -7477,11 +7490,7 @@ pub const InstGraph = struct {
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("forced-dynamic iterator reached Monotype instantiation without a public item argument");
                             }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                                .row_width = row_width,
-                            });
+                            try pushPair(pending, self.allocator, left_named.args[0], right_named.args[0], row_width);
                             if (left_named.def.iterator_representation == .forced_dynamic) {
                                 try self.union_(left, right);
                             } else {
@@ -7493,11 +7502,7 @@ pub const InstGraph = struct {
                             if (left_named.args.len == 0 or right_named.args.len == 0) {
                                 Common.invariant("minted iterator join reached Monotype instantiation without a public item argument");
                             }
-                            try pending.append(self.allocator, .{
-                                .left = left_named.args[0],
-                                .right = right_named.args[0],
-                                .row_width = row_width,
-                            });
+                            try pushPair(pending, self.allocator, left_named.args[0], right_named.args[0], row_width);
                             if (left_named.backing) |left_backing| {
                                 const right_backing = right_named.backing orelse
                                     Common.invariant("minted iterator join found backing on only one side");
@@ -7507,11 +7512,7 @@ pub const InstGraph = struct {
                                 if (left_backing.authority != right_backing.authority) {
                                     Common.invariant("minted iterator join found different backing authorities");
                                 }
-                                try pending.append(self.allocator, .{
-                                    .left = left_backing.node,
-                                    .right = right_backing.node,
-                                    .row_width = row_width,
-                                });
+                                try pushPair(pending, self.allocator, left_backing.node, right_backing.node, row_width);
                             } else if (right_named.backing != null) {
                                 Common.invariant("minted iterator join found backing on only one side");
                             }
@@ -7553,7 +7554,7 @@ pub const InstGraph = struct {
                     }
                     if (std.meta.eql(left_named.def, right_named.def) and left_named.args.len == right_named.args.len) {
                         for (left_named.args, right_named.args) |left_arg, right_arg| {
-                            try pending.append(self.allocator, .{ .left = left_arg, .right = right_arg, .row_width = row_width });
+                            try pushPair(pending, self.allocator, left_arg, right_arg, row_width);
                         }
                         if (left_named.backing) |left_backing| {
                             if (right_named.backing) |right_backing| {
@@ -7564,7 +7565,7 @@ pub const InstGraph = struct {
                                     // owners, which would turn it into a cycle.
                                     const left_node = try self.backingBeforeNamedJoin(left, left_named, right);
                                     const right_node = try self.backingBeforeNamedJoin(right, right_named, left);
-                                    try pending.append(self.allocator, .{ .left = left_node, .right = right_node, .row_width = row_width });
+                                    try pushPair(pending, self.allocator, left_node, right_node, row_width);
                                 } else {
                                     const private_is_left = left_backing.authority == .generated_private;
                                     const private_is_right = right_backing.authority == .generated_private;
@@ -7712,17 +7713,17 @@ pub const InstGraph = struct {
         // leave a non-recursive named type pointing to itself.
         if (backing_node == other) return;
         if (named.kind == .alias) {
-            try pending.append(self.allocator, .{ .left = backing_node, .right = other, .row_width = row_width });
+            try pushPair(pending, self.allocator, backing_node, other, row_width);
             return;
         }
         const other_content = try self.rootContent(other);
         if (other_content == .named) {
-            try pending.append(self.allocator, .{ .left = backing_node, .right = other, .row_width = row_width });
+            try pushPair(pending, self.allocator, backing_node, other, row_width);
             return;
         }
         const moved = try self.newNode(other_content);
         try self.union_(named_node, other);
-        try pending.append(self.allocator, .{ .left = backing_node, .right = moved, .row_width = row_width });
+        try pushPair(pending, self.allocator, backing_node, moved, row_width);
     }
 
     /// The named relation has established that these two owner roots will
@@ -8192,7 +8193,7 @@ pub const InstGraph = struct {
                     Common.invariant("instantiation unified one tag at two different payload arities");
                 }
                 for (left_tag.payloads, right_tag.payloads) |left_payload, right_payload| {
-                    try pending.append(self.allocator, .{ .left = left_payload, .right = right_payload, .row_width = row_width });
+                    try pushPair(pending, self.allocator, left_payload, right_payload, row_width);
                 }
                 merged.appendAssumeCapacity(left_tag);
                 left_index += 1;
@@ -8293,7 +8294,7 @@ pub const InstGraph = struct {
             try self.setContent(ext_root, try self.rowNode(kind, entries, tail_ext));
         } else {
             const rest = try self.newNode(try self.rowNode(kind, entries, tail_ext));
-            try pending.append(self.allocator, .{ .left = ext_root, .right = rest, .row_width = row_width });
+            try pushPair(pending, self.allocator, ext_root, rest, row_width);
         }
     }
 
@@ -8362,7 +8363,7 @@ pub const InstGraph = struct {
 
     /// Queue two row extensions as a pending pair.
     fn queueExtPair(self: *InstGraph, left: NodeId, right: NodeId, row_width: RowWidthRelation, pending: *std.ArrayList(NodePair)) Allocator.Error!void {
-        try pending.append(self.allocator, .{ .left = left, .right = right, .row_width = row_width });
+        try pushPair(pending, self.allocator, left, right, row_width);
     }
 
     fn unifyRecordRows(
@@ -8410,12 +8411,8 @@ pub const InstGraph = struct {
                     right_field.kind,
                     right_field.default,
                 );
-                try pending.append(self.allocator, .{
-                    .left = left_field.value_ty.get() orelse left_field.ty,
-                    .right = right_field.value_ty.get() orelse right_field.ty,
-                    .row_width = row_width,
-                });
-                try pending.append(self.allocator, .{ .left = left_field.ty, .right = right_field.ty, .row_width = row_width });
+                try pushPair(pending, self.allocator, left_field.value_ty.get() orelse left_field.ty, right_field.value_ty.get() orelse right_field.ty, row_width);
+                try pushPair(pending, self.allocator, left_field.ty, right_field.ty, row_width);
                 const resolved_default = if (self.resolvedFieldKind(merged_kind)) |resolved|
                     resolved.defaultIdentity()
                 else
