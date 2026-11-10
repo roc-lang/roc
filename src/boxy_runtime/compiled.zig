@@ -620,3 +620,24 @@ pub fn listOp(req: *const ListOpRequest, ops: *RocOps) void {
             list.listReverse(a, e.alignment, e.width, e.rc, e.context, e.inc, e.context, e.dec, m0, &walk.elemCopy, ops)),
     }
 }
+
+test "list op requests and erased callable payloads at 32-bit" {
+    // The dev backend lays these out at the target's pointer width; a 32-bit
+    // target cannot build the backend yet, so pin the 32-bit layouts here.
+    const request = desc_mod.externLayout(ListOpRequest, .u32);
+    try std.testing.expectEqual(@as(u32, 0), request.of(.op));
+    try std.testing.expectEqual(@as(u32, 4), request.of(.unique_args));
+    try std.testing.expectEqual(@as(u32, 8), request.of(.elem));
+    try std.testing.expectEqual(@as(u32, 12), request.of(.out));
+    try std.testing.expectEqual(@as(u32, 32), request.of(.element));
+    try std.testing.expectEqual(@as(u32, 40), request.of(.n));
+    try std.testing.expectEqual(@as(u32, 64), request.size);
+
+    const payload = desc_mod.externLayout(builtins.erased_callable.Payload, .u32);
+    try std.testing.expectEqual(@as(u32, 4), payload.of(.on_drop));
+    try std.testing.expectEqual(@as(u32, 8), payload.of(.on_copy));
+    try std.testing.expectEqual(@as(u32, 12), payload.of(.capture_size));
+    try std.testing.expectEqual(@as(u32, 16), payload.size);
+    try std.testing.expectEqual(@as(u32, 16), std.mem.alignForward(u32, payload.size, builtins.erased_callable.capture_alignment));
+    try std.testing.expectEqual(@as(u32, 16), builtins.erased_callable.captureOffset(4));
+}

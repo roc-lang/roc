@@ -24565,13 +24565,18 @@ use the word width because they work on addresses (`emitLeaStack`). A `u64` or
 `i64` argument to a C function is passed with a `…Wide64` builder method. In
 debug builds, each call checks its arguments against the function's
 parameters: there must be one argument per parameter, and the `…Wide64`
-arguments must sit exactly at the `u64` and `i64` parameters. Word sizes and
-register bit counts use `target_ptr_size`, `word_bits` or `scalar_bits`, never
-a literal 8 or 64. A 64-bit value's own size stays 8. Stack argument slots
-stay 8 bytes until the 32-bit calling convention. A 32-bit instruction set's
-`RegisterWidth` has no `w64` member, so `wide64_width`, `scalar_width` and a
-stray `.w64` are compile errors on it until the driver routes those values
-through register pairs.
+arguments must sit exactly at the `u64` and `i64` parameters. A struct that
+the generated code shares with the runtime, such as a request it passes to a
+builtin, is laid out at the target's pointer width by the runtime's own
+target-width function where it has one, such as
+`native_callable.pendingByteSize`, and otherwise by
+`boxy_runtime.desc.externLayout`; never by `@offsetOf` or `@sizeOf`, which
+describe the compiler's own machine. Word sizes and register bit counts use
+`target_ptr_size`, `word_bits` or `scalar_bits`, never a literal 8 or 64. A
+64-bit value's own size stays 8. Stack argument slots stay 8 bytes until the
+32-bit calling convention. A 32-bit instruction set's `RegisterWidth` has no
+`w64` member, so `wide64_width`, `scalar_width` and a stray `.w64` are compile
+errors on it until the driver routes those values through register pairs.
 
 ## Dev Backend Register Lifetimes
 
