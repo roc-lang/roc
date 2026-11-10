@@ -471,8 +471,20 @@ pub const CheckedBodies = struct {
     analyses: *body_analyses.BodyAnalyses,
     tables: Tables = .{},
 
+    /// The module index (`body_analyses.ModuleIndex`), which the reader's
+    /// consumer demanded (`demandIndex`) before reading the bodies.
     pub fn index(self: CheckedBodies) *const body_analyses.ModuleIndex {
-        return &self.analyses.index;
+        return self.analyses.index();
+    }
+
+    /// Build the module index if no consumer has yet.
+    pub fn demandIndex(self: CheckedBodies) Allocator.Error!void {
+        _ = try self.analyses.demandIndex();
+    }
+
+    /// The number of `defaultExprs`, counted without the module index.
+    pub fn defaultExprCount(self: CheckedBodies, allocator: Allocator) Allocator.Error!usize {
+        return body_analyses.defaultExprCount(allocator, self.env);
     }
 
     /// The number of nodes of the module, which bounds every node id.

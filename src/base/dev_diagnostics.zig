@@ -20,6 +20,10 @@ pub const Var = enum {
     /// strategy, and Boxy lowering's. A specialized compilation whose
     /// compile-time roots are all complete produces no events.
     trace_boxy_work,
+    /// Print each part of every Boxy module digest, so two traces show
+    /// which part an edit changed. Hashing the parts separately costs more
+    /// than the digests themselves, so the work trace leaves it out.
+    trace_boxy_digests,
     /// Rebuild every restored Boxy object and compare it with the cached one.
     verify_boxy_object_reuse,
     /// Separate coordinator request-resolution costs into exclusive phases.
@@ -69,6 +73,7 @@ pub const Var = enum {
         return switch (self) {
             .spec_resolution_profile => "ROC_SPEC_RESOLUTION_PROFILE",
             .trace_boxy_work => "ROC_TRACE_BOXY_WORK",
+            .trace_boxy_digests => "ROC_TRACE_BOXY_DIGESTS",
             .verify_boxy_object_reuse => "ROC_VERIFY_BOXY_OBJECT_REUSE",
             .lir_dump => "ROC_LIR_DUMP",
             .spec_census => "ROC_SPEC_CENSUS",
