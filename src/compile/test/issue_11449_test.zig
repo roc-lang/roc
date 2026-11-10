@@ -7,9 +7,9 @@ const harness = @import("lower_to_lir_harness.zig");
 const two_record_json_parses =
     \\main! = |args| {
     \\    input = Str.join_with(args, ",")
-    \\    decoded : Try({ s : Str, a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+    \\    decoded : Try({ s : Str, a : U64 }, [InvalidJson(Str)])
     \\    decoded = Json.parse(input)
-    \\    skipped : Try({ a : U64 }, [InvalidJson(Str), MissingRequiredField(Str)])
+    \\    skipped : Try({ a : U64 }, [InvalidJson(Str)])
     \\    skipped = Json.parse(input)
     \\    if decoded == Ok({ s: "x", a: 7 }) and skipped == Ok({ a: 7 }) { Ok({}) } else { Err(Exit(1)) }
     \\}

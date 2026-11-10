@@ -1171,6 +1171,66 @@ fn expectLowLevelAbsent(result: *const lir.Program.Result, op: lir.LIR.LowLevel)
     }
 }
 
+test "Boxy recursive callable evaluation templates instantiate their open result row" {
+    try @import("lower_to_lir_harness.zig").expectLowersToLirWithOptions(
+        \\pick : U64 -> [A, B]
+        \\pick = {
+        \\    z = 0
+        \\    |n| if n == z { A } else if n == 1 { B } else { pick(n - 2) }
+        \\}
+        \\main! = |args| {
+        \\    echo!(Str.inspect(pick(args.len())))
+        \\    echo!(Str.inspect(pick(args.len() + 1)))
+        \\    Ok({})
+        \\}
+    , .{ .specialization_strategy = .boxy });
+}
+
+test "computed callable aliases retain evaluation requests while proven forwards omit them" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "Aliases.roc", .data =
+        \\module [computed, alias, forwarded]
+        \\make : () -> (U64 -> U64)
+        \\make = || |n| n + 1
+        \\direct : U64 -> U64
+        \\direct = |n| n
+        \\computed = make()
+        \\alias = computed
+        \\forwarded = direct
+    });
+    const cwd = try tmp.dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(cwd);
+    const path = try tmp.dir.realPathFileAlloc(io, "Aliases.roc", gpa);
+    defer gpa.free(path);
+    for ([_]base.SpecializationStrategy{ .lss, .boxy }) |strategy| {
+        var build = try @import("../compile_build.zig").BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
+        defer build.deinit();
+        build.setSpecializationStrategy(strategy);
+        try build.build(path);
+        const artifact = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
+        var evaluated: usize = 0;
+        var forwarded: usize = 0;
+        for (artifact.callable_eval_templates.templates.items) |template| {
+            const requested = for (artifact.root_requests.compile_time_requests) |request| {
+                if (request.compile_time_root == template.root) break true;
+            } else false;
+            if (template.forwarded_lookup != null) {
+                forwarded += 1;
+                try std.testing.expect(!requested);
+            } else {
+                evaluated += 1;
+                try std.testing.expect(requested);
+                try std.testing.expect(!artifact.compile_time_roots.root(template.root).needsEvaluation(strategy));
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), evaluated);
+        try std.testing.expectEqual(@as(usize, 1), forwarded);
+    }
+}
+
 test "callable binding with alias annotation is const-evaluated" {
     // Regression test: a function-typed top-level def whose annotation
     // mentions a type alias (here `MyErr`) must still be scheduled for

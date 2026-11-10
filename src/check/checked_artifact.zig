@@ -1079,7 +1079,8 @@ pub const RootRequest = struct {
     order: u32,
     /// Producer-selected root withheld until the platform has its app bindings.
     requires_pairing: bool = false,
-    /// This session borrows both strategies' completed root from its platform.
+    /// This session borrows both strategies' completed representations of a
+    /// previously evaluated root from its platform.
     evaluation_complete: bool = false,
     /// Full same-module evaluation order, including withheld roots.
     evaluation_order: ?u32 = null,
@@ -1133,7 +1134,6 @@ pub const RootRequestTable = struct {
         platform_required_declarations: *const PlatformRequiredDeclarationTable,
         platform_required_bindings: *const PlatformRequiredBindingTable,
         provided_exports: *const ProvidedExportTable,
-        bodies: CheckedBodies,
         resolved_value_refs: *const ResolvedValueRefTable,
         top_level_values: *const TopLevelValueTable,
         top_level_procedure_bindings: *const TopLevelProcedureBindingTable,
@@ -1200,11 +1200,11 @@ pub const RootRequestTable = struct {
             }
         }
 
+        var forwarding_roots = try callable_eval_templates.forwardingRoots(allocator, compile_time_roots.roots.len);
+        defer forwarding_roots.deinit(allocator);
         for (compile_time_roots.roots) |root| {
             if (!compileTimeRootRequestIsEligible(root)) continue;
-            if (compileTimeCallableRootIsProcedureReference(bodies, resolved_value_refs, root)) {
-                continue;
-            }
+            if (forwarding_roots.isSet(@backingInt(root.id))) continue;
             if (compileTimeRootHasRootRequest(requests.items, root)) {
                 continue;
             }
@@ -2156,9 +2156,8 @@ fn compileTimeRootHasRootRequest(
     return false;
 }
 
-/// An exact checked procedure lookup already carries the callable identity
-/// that compile-time evaluation would rediscover. Keep its callable binding
-/// pending for runtime demand instead of scheduling an evaluator wrapper.
+/// A checked procedure lookup is a forwarding candidate. Publication still
+/// proves that its target is directly callable rather than a computed value.
 fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -3840,9 +3839,28 @@ pub const CheckedTypeStoreView = struct {
     /// finds for its key, so every root of one identity-free type shares one
     /// id.
     pub fn canonicalId(self: CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
-        if (try self.rootHasIdentityVariables(id)) return id;
-        return (try self.rootForKey(try self.rootKey(id))) orelse
-            checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        if (self.knownCanonical(id)) |known| return known;
+        const result = if (try self.rootHasIdentityVariables(id))
+            id
+        else
+            (try self.rootForKey(try self.rootKey(id))) orelse
+                checkedArtifactInvariant("an identity-free checked type has no root for its own key", .{});
+        // An unfinished synthesized graph has no settled identity fact.
+        if (self.knownIdentity(id) != null) {
+            if (type_ids.isSynthesized(id)) {
+                self.synthesizedKeys().canonical.items[self.synthesizedIndex(id)].put(result);
+            } else self.sealedKeys().recordCanonical(type_ids.asVar(id), result);
+        }
+        return result;
+    }
+
+    fn knownCanonical(self: CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
+        if (type_ids.isSynthesized(id)) {
+            const keys = self.synthesized_keys orelse return null;
+            return keys.canonical.items[self.synthesizedIndex(id)].get();
+        }
+        const keys = self.sealed_keys orelse return null;
+        return keys.knownCanonical(type_ids.asVar(id));
     }
 
     /// Whether `left` and `right` are one checked type of this view: the same
@@ -7645,6 +7663,8 @@ pub const SynthesizedTypeKeys = struct {
     /// Per root: 0 while unknown, else 1 + whether a walk found the root
     /// reaches an identity variable.
     identity: std.ArrayList(std.atomic.Value(u8)) = .empty,
+    /// Canonical ids of settled synthesized types, recorded on first request.
+    canonical: std.ArrayList(sealed_type_keys.CanonicalIdSlot) = .empty,
     index: collections.OnceSlot(*KeyIndex, .synthesized_type_key_index) = .empty,
     writer_mutex: std.Io.Mutex = .init,
     writer: ?CheckedTypeKeyDigester = null,
@@ -7668,6 +7688,7 @@ pub const SynthesizedTypeKeys = struct {
         if (self.writer) |*writer| writer.deinit();
         self.slots.deinit(allocator);
         self.identity.deinit(allocator);
+        self.canonical.deinit(allocator);
         allocator.destroy(self);
     }
 
@@ -7678,9 +7699,11 @@ pub const SynthesizedTypeKeys = struct {
         if (self.slots.items.len >= count) return;
         try self.slots.ensureTotalCapacity(self.allocator, count);
         try self.identity.ensureTotalCapacity(self.allocator, count);
+        try self.canonical.ensureTotalCapacity(self.allocator, count);
         while (self.slots.items.len < count) {
             self.slots.appendAssumeCapacity(.empty);
             self.identity.appendAssumeCapacity(.init(0));
+            self.canonical.appendAssumeCapacity(.{});
         }
         self.dropIndex();
     }
@@ -9404,7 +9427,7 @@ test "body analyses read state merges, divergence and inspect elision from the c
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -9487,7 +9510,7 @@ test "checked binder mutability comes from the CIR var tag, not identifier spell
         ModuleId{},
         &.{},
         &.{},
-        &analyses.index,
+        try analyses.demandIndex(),
         &.{},
         &.{},
         publication_keys,
@@ -11340,6 +11363,16 @@ pub const CallableEvalTemplateTable = struct {
 
     pub fn view(self: *const CallableEvalTemplateTable) CallableEvalTemplateTableView {
         return .{ .templates = self.templates.items };
+    }
+
+    /// Only proven forwards may omit evaluation; a lookup can also name a
+    /// computed callable whose value must be produced before runtime lowering.
+    fn forwardingRoots(self: *const CallableEvalTemplateTable, allocator: Allocator, root_count: usize) Allocator.Error!std.DynamicBitSetUnmanaged {
+        var roots = try std.DynamicBitSetUnmanaged.initEmpty(allocator, root_count);
+        for (self.templates.items) |template| {
+            if (template.forwarded_lookup != null) roots.set(@backingInt(template.root));
+        }
+        return roots;
     }
 
     pub const deinit = artifact_serialize.SliceStoreDeinit(@This()).deinit;
@@ -22613,13 +22646,13 @@ pub const PlatformPairing = struct {
         platform_requirement_relations: PlatformRequirementRelationTable.Serialized,
         platform_required_bindings: PlatformRequiredBindingTable.Serialized,
         resolved_value_refs: ResolvedValueRefTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         provided_exports: ProvidedExportTable.Serialized,
         root_requests: RootRequestTable.Serialized,
         exhaustiveness_sites: CheckedExhaustivenessSiteTable.Serialized,
         lowering_visibility: LoweringVisibility.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
-        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
         const_store: ConstStore.Serialized,
@@ -22701,13 +22734,13 @@ pub const PlatformPairing = struct {
             try self.platform_requirement_relations.serialize(&artifact.platform_requirement_relations, gpa, writer);
             try self.platform_required_bindings.serialize(&artifact.platform_required_bindings, gpa, writer);
             try self.resolved_value_refs.serialize(&artifact.resolved_value_refs, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             try self.provided_exports.serialize(&artifact.provided_exports, gpa, writer);
             try self.root_requests.serialize(&artifact.root_requests, gpa, writer);
             try self.exhaustiveness_sites.serialize(&artifact.exhaustiveness_sites, gpa, writer);
             try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
-            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
             try self.compile_time_roots.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_roots else &compile_time_roots_empty, gpa, writer);
             const const_templates_empty: ConstTemplateTable = .{};
@@ -22762,13 +22795,13 @@ pub const PlatformPairing = struct {
             result.platform_requirement_relations = self.platform_requirement_relations.deserialize(address);
             result.platform_required_bindings = self.platform_required_bindings.deserialize(address);
             result.resolved_value_refs = self.resolved_value_refs.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             result.provided_exports = self.provided_exports.deserialize(address);
             result.root_requests = self.root_requests.deserialize(address);
             result.exhaustiveness_sites = self.exhaustiveness_sites.deserialize(address);
             result.lowering_visibility = self.lowering_visibility.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
-            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
             if (self.has_dependent_evaluation) result.const_templates = self.const_templates.deserialize(address);
             if (self.has_dependent_evaluation) result.const_store = self.const_store.deserialize(address, allocator);
@@ -22823,6 +22856,21 @@ pub fn pairCheckedPlatform(
             record.ref = categorizeRequiredValueRef(required.requires_idx, &result.platform_required_declarations, &result.platform_required_bindings);
         }
     }
+    // Binding requirements can turn computed callables into exact aliases.
+    // Publish the forwarding proof before classifying calls or root demand,
+    // and retain it in the pairing rather than mutating the source platform.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var type_memo = substitutions.substitutionIn(session);
     defer type_memo.deinit();
     var reaches: ?CheckedTypeSet = if (substitutions.formals.len != 0) try result.checked_types.rootsReachingAny(session, substitutions.formals) else null;
@@ -22858,7 +22906,7 @@ pub fn pairCheckedPlatform(
             if (env.store.getExpr(record.expr) != .e_lookup_required) continue;
             ResolvedValueRefTable.setRetired(retired, record.expr);
         }
-        for (platform_analyses.index.node_kinds, 0..) |kind, raw| {
+        for ((try platform_analyses.demandIndex()).node_kinds, 0..) |kind, raw| {
             if (kind != .expr) continue;
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
             const data = env.store.getExpr(call_expr);
@@ -22931,28 +22979,15 @@ pub fn pairCheckedPlatform(
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, value.checked_type, &type_memo),
         .checked_error => {},
     };
-    // Binding required procedures can turn a platform's callable bindings
-    // into exact aliases. Publish that forwarding in the pairing rather than
-    // making runtime lowering rediscover it from the bound lookup.
-    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
-    publishCallableEvalForwarding(
-        &result.callable_eval_templates,
-        result.bodies(),
-        &result.resolved_value_refs,
-        &result.compile_time_roots,
-        result.key,
-        &result.top_level_procedure_bindings,
-        &.{},
-        available_artifacts,
-        &relations,
-    );
     var roots = std.ArrayList(RootRequest).empty;
+    var forwarding_roots = try result.callable_eval_templates.forwardingRoots(session, result.compile_time_roots.roots.len);
+    defer forwarding_roots.deinit(session);
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
         // same forwarding rule as publication with already-resolved imports.
         // Runtime demand consumes its checked lookup; no evaluator is needed.
         if (request.requires_pairing and request.compile_time_root != null and
-            compileTimeCallableRootIsProcedureReference(result.bodies(), &result.resolved_value_refs, result.compile_time_roots.root(request.compile_time_root.?))) continue;
+            forwarding_roots.isSet(@backingInt(request.compile_time_root.?))) continue;
         var selected = request;
         selected.order = @intCast(roots.items.len);
         try roots.append(session, selected);
@@ -30646,7 +30681,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 115;
+    const serialized_layout_version: u32 = 116;
 
     /// Comptime fingerprint of `Serialized`'s layout. It is appended to the baked
     /// builtin artifact blob and validated on load (`expectSerializedVersion`), and
@@ -31117,6 +31152,7 @@ pub const CheckedModuleArtifact = struct {
         const type_view = self.typesView();
 
         const checked = self.bodies();
+        try checked.demandIndex();
         for (checked.index().node_kinds, 0..) |kind, raw| {
             const node: u32 = @intCast(raw);
             switch (kind) {
@@ -34086,7 +34122,7 @@ pub fn publishFromTypedModule(
     const analyses = try BodyAnalyses.create(allocator, inputs.io, module_env, promoted_local_procedures);
     var analyses_owned = true;
     errdefer if (analyses_owned) analyses.destroy();
-    const module_index = &analyses.index;
+    const module_index = try analyses.demandIndex();
 
     // Omitted defaults name their fields and origin modules through the
     // module's names.
@@ -34515,7 +34551,6 @@ pub fn publishFromTypedModule(
         &platform_required_declarations,
         &platform_required_bindings,
         &provided_exports,
-        publicationBodies(module_env, &canonical_names, &checked_type_publication, analyses, resolved_tables),
         &resolved_value_refs,
         &top_level_values,
         &top_level_procedure_bindings,
@@ -34748,7 +34783,7 @@ pub fn publishFromTypedModule(
         .const_templates = const_templates,
         .const_store = checked_const_store,
         .evaluation_state = .prepared,
-        .has_expects = analyses.index.has_expects,
+        .has_expects = module_index.has_expects,
         .body_analyses = analyses,
     };
     // The artifact owns the key slots from here on, and its views name its
@@ -35542,7 +35577,7 @@ test "checked type identity scan finds identity beside recursive tag cycle" {
     try std.testing.expect(try checkedTypeIdsContainIdentityVariables(allocator, &store, &.{root}));
 }
 
-test "provided callable-containing record constant is a data export, not a runtime root" {
+test "provided record constant with an unboxed function is rejected before publication" {
     const source =
         \\platform ""
         \\    requires {}
@@ -35556,11 +35591,9 @@ test "provided callable-containing record constant is a data export, not a runti
         \\table_for_host = { f: |value| value + 1 }
     ;
 
-    try expectProvidedExportKind(source, .{
-        .procedure_roots = 0,
-        .data_exports = 1,
-        .procedure_exports = 0,
-    });
+    var env = try @import("test/TestEnv.zig").init("Platform", source);
+    defer env.deinit();
+    try env.assertOneTypeError("Hosted Function Requires Boxed Lambda");
 }
 
 test "provided procedure remains a runtime root" {
@@ -35573,6 +35606,27 @@ test "provided procedure remains a runtime root" {
         \\
         \\add_one_for_host : I64 -> I64
         \\add_one_for_host = |value| value + 1
+    ;
+
+    try expectProvidedExportKind(source, .{
+        .procedure_roots = 1,
+        .data_exports = 0,
+        .procedure_exports = 1,
+    });
+}
+
+test "provided evaluated function binding remains a procedure signature" {
+    const source =
+        \\platform ""
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_add_one": add_one_for_host }
+        \\
+        \\make : I64 -> (I64 -> I64)
+        \\make = |amount| |value| value + amount
+        \\add_one_for_host : I64 -> I64
+        \\add_one_for_host = make(1)
     ;
 
     try expectProvidedExportKind(source, .{
@@ -36418,8 +36472,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x61, 0x55, 0x27, 0xC1, 0x3A, 0x4B, 0x3E, 0x8B, 0x2D, 0x14, 0x98, 0x64, 0x49, 0x71, 0x0A, 0x99,
-        0x6F, 0x1E, 0xF2, 0xCB, 0x90, 0xCE, 0x3B, 0x80, 0xBE, 0xD8, 0x04, 0xA8, 0xDE, 0x82, 0x0A, 0x73,
+        0x00, 0x3B, 0xBD, 0x82, 0x78, 0xD1, 0x21, 0xA7, 0x87, 0x58, 0xA2, 0xC5, 0x3B, 0x55, 0xC7, 0x81,
+        0x32, 0x26, 0xB4, 0x67, 0xAF, 0x93, 0x6F, 0x5F, 0x31, 0x50, 0x6F, 0xD9, 0xAA, 0x18, 0x9F, 0x15,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
@@ -37099,6 +37153,27 @@ test "direct dispatch classification follows instantiation clones to the scheme 
     try std.testing.expect(store.synthetic_variable_roots.contains(respecialized_tail));
     try std.testing.expect(store.synthetic_variable_roots.contains(plan_tail));
     try std.testing.expectEqual(plan_tail, store.identityOrigin(plan_tail));
+}
+
+test "canonical ids remember settled types but not pending synthesized roots" {
+    const allocator = std.testing.allocator;
+    var names = canonical.CanonicalNameStore.init(allocator);
+    defer names.deinit();
+    var store = CheckedTypeStore{};
+    defer store.deinit(allocator);
+    try attachTestSynthesizedKeys(allocator, &store, &names);
+    const first = try store.appendSyntheticPayloadRoot(allocator, .empty_record);
+    const pending = try store.reserveSyntheticTypeRoot(allocator);
+    try std.testing.expectEqual(pending, try store.view().canonicalId(pending));
+    try std.testing.expect(store.view().knownCanonical(pending) == null);
+    try store.fillSyntheticTypeRoot(allocator, pending, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
+    try std.testing.expectEqual(first, store.view().knownCanonical(pending).?);
+    // Appended roots cannot precede the selected lowest existing root.
+    const later = try store.reserveSyntheticTypeRoot(allocator);
+    try store.fillSyntheticTypeRoot(allocator, later, .empty_record);
+    try std.testing.expectEqual(first, try store.view().canonicalId(later));
+    try std.testing.expectEqual(first, try store.view().canonicalId(pending));
 }
 
 test "pairing type columns borrow frozen storage until written" {

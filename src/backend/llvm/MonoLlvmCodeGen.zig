@@ -407,9 +407,6 @@ pub const MonoLlvmCodeGen = struct {
     /// immediates and relocatable addresses it is made of rather than as an
     /// opaque copy from a linker symbol.
     static_data_exports: []const lir.Program.StaticDataExport = &.{},
-    /// Standalone plugins carry their frozen graph instead of depending on a
-    /// separately linked readonly object or addresses in the compiling process.
-    embed_static_data_exports: bool = false,
     static_data_export_rows: std.AutoHashMap(u32, u32),
     /// External declarations of readonly-object symbols, by name, so a
     /// symbol referenced from several constants is declared once.
@@ -1755,6 +1752,14 @@ pub const MonoLlvmCodeGen = struct {
 
     /// Declares and compiles every procedure in dependency-index order.
     pub fn compileAllProcSpecs(self: *MonoLlvmCodeGen, procs: []const LirProcSpec) Error!void {
+        // Standalone in-process objects have no separately linked readonly
+        // object. Declare the whole image first so cyclic data references
+        // and procedure bodies resolve through the same symbol map.
+        const static_globals = if (self.program_kind == .in_process and self.static_data_addresses == null)
+            try self.declareStaticDataDefinitions()
+        else
+            &.{};
+        defer self.allocator.free(static_globals);
         try self.ensureLocalScratch();
         try self.computeInlineEverywhere(procs);
         if (self.stack_checks) try self.computeStackCheckProcs(procs);
@@ -1766,7 +1771,6 @@ pub const MonoLlvmCodeGen = struct {
             if (proc.is_static_initializer) continue;
             try self.declareProcSpec(@fromBackingInt(i), proc);
         }
-        if (self.embed_static_data_exports) try self.defineStaticDataExports();
         if (self.usesTailDrivers()) try self.emitTailDrivers(procs, order);
         try self.declareRuntimeErrorHelper();
         try self.compileRuntimeErrorHelper();
@@ -1774,6 +1778,11 @@ pub const MonoLlvmCodeGen = struct {
             const proc = procs[i];
             if (proc.is_static_initializer) continue;
             try self.compileProcBody(@fromBackingInt(i), proc);
+        }
+        const builder = self.builder orelse return error.CompilationFailed;
+        for (static_globals, self.static_data_exports[0..static_globals.len]) |variable, data_export| {
+            const image = (try self.frozenExportImage(data_export, true)) orelse return error.CompilationFailed;
+            variable.setInitializer(image.value, builder) catch return error.OutOfMemory;
         }
     }
 
@@ -4472,6 +4481,7 @@ pub const MonoLlvmCodeGen = struct {
                     assign.capture,
                     assign.capture_layout,
                     assign.on_drop,
+                    assign.on_copy,
                     assign.reuse,
                     assign.reuse_unique,
                 );
@@ -5038,7 +5048,7 @@ pub const MonoLlvmCodeGen = struct {
         const ptr_ty = try self.ptrType();
         const closure_ptr = try self.loadPointer(self.slot(closure).ptr);
         const fn_ptr = try self.loadPointer(closure_ptr);
-        const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+        const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
         const reuse_ptr = if (reuse_closure) closure_ptr else builder.nullValue(ptr_ty) catch return error.OutOfMemory;
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
@@ -5074,7 +5084,7 @@ pub const MonoLlvmCodeGen = struct {
     /// An empty pending cell in this frame.
     fn allocPendingCell(self: *MonoLlvmCodeGen) Error!LlvmBuilder.Value {
         const word_size = self.targetWordSize();
-        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pending_words * word_size, LlvmBuilder.Alignment.fromByteUnits(word_size), "pending_cell");
+        const cell = try self.allocEntryBlockSlot(.i8, builtins.native_callable.pendingByteSize(word_size), LlvmBuilder.Alignment.fromByteUnits(builtins.native_callable.pendingAlignment(word_size)), "pending_cell");
         try self.storePointer(cell, try self.nullPtr());
         return cell;
     }
@@ -5126,6 +5136,7 @@ pub const MonoLlvmCodeGen = struct {
         capture: ?LocalId,
         capture_layout: ?layout.Idx,
         on_drop: lir.LIR.ErasedCallableOnDrop,
+        on_copy: lir.LIR.ErasedCallableOnDrop,
         reuse: ?LocalId,
         reuse_unique: bool,
     ) Error!void {
@@ -5150,6 +5161,13 @@ pub const MonoLlvmCodeGen = struct {
             },
         };
 
+        const on_copy_value = switch (on_copy) {
+            .none => null_ptr,
+            .rc_helper => |key| if (try self.declareRcHelper(key, .atomic)) |helper|
+                helper.toValue(builder)
+            else
+                null_ptr,
+        };
         const data_ptr = if (reuse) |reuse_local| blk: {
             const capture_src = try self.allocEntryBlockSlot(
                 .i8,
@@ -5177,7 +5195,7 @@ pub const MonoLlvmCodeGen = struct {
                 },
             );
         } else blk: {
-            const payload_size: u64 = builtins.erased_callable.payloadSize(capture_size);
+            const payload_size: u64 = builtins.erased_callable.payloadSizeFor(self.targetWordSize(), capture_size);
             const fresh_ptr = try self.callBuiltin(
                 .allocate_with_refcount,
                 ptr_ty,
@@ -5192,12 +5210,14 @@ pub const MonoLlvmCodeGen = struct {
             try self.storePointer(try self.offsetPtr(fresh_ptr, self.targetWordSize()), on_drop_value);
             if (capture) |capture_local| {
                 if (capture_size > 0) {
-                    const capture_dst = try self.offsetPtr(fresh_ptr, builtins.erased_callable.capture_offset);
+                    const capture_dst = try self.offsetPtr(fresh_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
                     try self.copyBytes(capture_dst, self.slot(capture_local).ptr, capture_size, self.alignmentForLayout(capture_layout.?));
                 }
             }
             break :blk fresh_ptr;
         };
+        try self.storePointer(try self.offsetPtr(data_ptr, 2 * self.targetWordSize()), on_copy_value);
+        try self.storeRawInt(data_ptr, 3 * self.targetWordSize(), self.ptrSizedIntType(), capture_size, self.targetWordSize());
         try self.storePointer(self.slot(target).ptr, data_ptr);
     }
 
@@ -5345,6 +5365,25 @@ pub const MonoLlvmCodeGen = struct {
             try self.materializeLocalSpanIfDeferred(arg_locals);
         }
         switch (op) {
+            .boxed_sequence_pack => {
+                const ptr_ty = try self.ptrType();
+                const record = GuardedList.at(arg_locals, 0);
+                const offset = GuardedList.at(arg_locals, 1);
+                const result = try self.callBuiltin(.boxed_sequence_pack, ptr_ty, &.{ ptr_ty, self.ptrSizedIntType(), self.ptrSizedIntType() }, &.{
+                    self.slot(record).ptr,
+                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(record))),
+                    try self.coerceScalar(try self.loadLocalScalar(offset, .u32), self.ptrSizedIntType(), false),
+                });
+                try self.storePointer(self.slot(target).ptr, result);
+            },
+            .boxed_sequence_unpack => {
+                const ptr_ty = try self.ptrType();
+                try self.callBuiltinVoid(.boxed_sequence_unpack, &.{ ptr_ty, ptr_ty, self.ptrSizedIntType() }, &.{
+                    self.slot(target).ptr,
+                    try self.loadPointer(self.slot(GuardedList.at(arg_locals, 0)).ptr),
+                    try self.intValue(self.ptrSizedIntType(), self.layoutByteSize(self.localLayout(target))),
+                });
+            },
             .num_plus, .num_minus, .num_times => unreachable, // LIR lowering commits these to typed operations through CheckedArithmetic.lowerOp
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             .bool_not => {
@@ -9321,8 +9360,9 @@ pub const MonoLlvmCodeGen = struct {
         try self.copyBytes(out.ptr, try self.staticDataGlobal(id, out.size), out.size, out.alignment);
     }
 
-    /// Exposes frozen values to LLVM's constant folding.
-    pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) std.mem.Allocator.Error!void {
+    /// Records frozen exports for standalone emission, or constant folding
+    /// from the separate readonly object of a linked program.
+    pub fn setStaticDataExports(self: *MonoLlvmCodeGen, exports: []const lir.Program.StaticDataExport) Error!void {
         self.static_data_exports = exports;
         self.static_data_export_rows.clearRetainingCapacity();
         for (exports, 0..) |data_export, row| {
@@ -9331,29 +9371,24 @@ pub const MonoLlvmCodeGen = struct {
         }
     }
 
-    fn defineStaticDataExports(self: *MonoLlvmCodeGen) Error!void {
+    fn declareStaticDataDefinitions(self: *MonoLlvmCodeGen) Error![]LlvmBuilder.Variable.Index {
         const builder = self.builder orelse return error.CompilationFailed;
         const variables = try self.allocator.alloc(LlvmBuilder.Variable.Index, self.static_data_exports.len);
-        defer self.allocator.free(variables);
-        // Publish every address before initializing any graph edge, including
-        // symbols that point past a backing allocation's reference-count header.
-        for (self.static_data_exports, variables, 0..) |data_export, *variable, row| {
+        errdefer self.allocator.free(variables);
+        for (self.static_data_exports, variables, 0..) |data_export, *variable, index| {
             const image = (try self.frozenExportImage(data_export, false)) orelse return error.CompilationFailed;
-            const name = builder.strtabStringFmt(".roc.frozen.{d}", .{row}) catch return error.OutOfMemory;
+            const name = builder.strtabStringFmt(".roc.frozen.{d}", .{index}) catch return error.OutOfMemory;
             variable.* = builder.addVariable(name, image.ty, .default) catch return error.OutOfMemory;
             variable.ptrConst(builder).global.setLinkage(.internal, builder);
             variable.setMutability(.constant, builder);
             variable.setAlignment(LlvmBuilder.Alignment.fromByteUnits(data_export.alignment), builder);
-            const offset = builder.intConst(self.ptrSizedIntType(), data_export.symbol_offset) catch return error.OutOfMemory;
+            const offset = builder.intConst(.i64, data_export.symbol_offset) catch return error.OutOfMemory;
             const address = builder.gepConst(.normal, .i8, variable.toConst(builder), null, &.{offset}) catch return error.OutOfMemory;
             const key = try self.allocator.dupe(u8, data_export.symbol_name);
             errdefer self.allocator.free(key);
-            try self.static_data_symbols.putNoClobber(key, address);
+            try self.static_data_symbols.put(key, address);
         }
-        for (self.static_data_exports, variables) |data_export, variable| {
-            const image = (try self.frozenExportImage(data_export, true)) orelse return error.CompilationFailed;
-            variable.setInitializer(image.value, builder) catch return error.OutOfMemory;
-        }
+        return variables;
     }
 
     fn staticDataGlobal(self: *MonoLlvmCodeGen, id: lir.LIR.StaticDataId, size: u32) Error!LlvmBuilder.Value {
@@ -9401,9 +9436,10 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     /// The image of a frozen export as a constant: its bytes, with each
-    /// relocation replaced by the target's address plus the addend. Ordinary
-    /// linked modules leave callable and unaligned slots to the readonly
-    /// object; standalone plugins own the whole graph and its function bodies.
+    /// relocation replaced by the target's address plus the addend. Linked
+    /// programs leave function pointers in their separate readonly object;
+    /// standalone in-process modules define the complete image themselves.
+    /// Unaligned pointer fields have no constant expression here.
     fn frozenExportConstant(self: *MonoLlvmCodeGen, data_export: lir.Program.StaticDataExport) Error!?LlvmBuilder.Constant {
         const image = (try self.frozenExportImage(data_export, true)) orelse return null;
         return image.value;
@@ -9425,8 +9461,8 @@ pub const MonoLlvmCodeGen = struct {
         }
         const word: usize = self.targetWordSize();
         for (data_export.relocations) |relocation| {
-            if (!self.embed_static_data_exports and (relocation.kind == .function_pointer or relocation.offset % word != 0)) return null;
-            if (relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
+            if (relocation.kind == .function_pointer and self.program_kind != .in_process) return null;
+            if (relocation.offset % word != 0 or relocation.offset > data_export.bytes.len or word > data_export.bytes.len - relocation.offset) return null;
         }
         const sorted = self.allocator.dupe(lir.Program.StaticDataRelocation, data_export.relocations) catch return error.OutOfMemory;
         defer self.allocator.free(sorted);
@@ -9453,16 +9489,14 @@ pub const MonoLlvmCodeGen = struct {
             if (with_value) {
                 const target = switch (relocation.kind) {
                     .address => try self.staticDataSymbol(relocation.target_symbol_name),
-                    .function_pointer => blk: {
-                        if (relocation.procedure) |proc| {
-                            const function = self.proc_registry.get(@backingInt(proc)) orelse return error.CompilationFailed;
-                            break :blk function.toConst(builder);
-                        }
-                        if (relocation.rc_helper) |key| {
-                            const function = try self.declareRcHelper(key, .atomic);
-                            break :blk if (function) |f| f.toConst(builder) else builder.nullConst(try self.ptrType()) catch return error.OutOfMemory;
-                        }
-                        break :blk try self.staticDataSymbol(relocation.target_symbol_name);
+                    .function_pointer => function_pointer: {
+                        const target_fn = if (relocation.procedure) |proc|
+                            self.proc_registry.get(@backingInt(proc)) orelse return error.CompilationFailed
+                        else if (relocation.rc_helper) |helper|
+                            (try self.declareRcHelper(helper, .atomic)) orelse return error.CompilationFailed
+                        else
+                            return error.CompilationFailed;
+                        break :function_pointer target_fn.toConst(builder);
                     },
                 };
                 const addend = builder.intConst(.i64, relocation.addend) catch return error.OutOfMemory;
@@ -12197,7 +12231,7 @@ pub const MonoLlvmCodeGen = struct {
             .call_erased => |c| {
                 const closure_ptr = try self.loadPointer(try self.bytesAddress(c.closure));
                 const fn_ptr = try self.loadPointer(closure_ptr);
-                const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.capture_offset);
+                const capture_ptr = try self.offsetPtr(closure_ptr, builtins.erased_callable.captureOffset(self.targetWordSize()));
                 const args_ptr = if (c.args) |args| try self.bytesAddress(args) else try self.nullPtr();
                 if (c.deferred) {
                     // The pending call owns the closure reference ARC
@@ -12231,18 +12265,20 @@ pub const MonoLlvmCodeGen = struct {
                 // Generated code reserves no hot-reload header before an
                 // erased callable's captures.
                 if (c.reuse) |reuse| {
-                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty }, &.{
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure_reuse", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, .i8, ptr_ty, ptr_ty, ptr_ty }, &.{
                         worker.toValue(builder),
                         try self.bytesAddress(c.capture),
                         try self.wordValue(reuse),
                         try self.intValue(.i8, @intFromBool(c.reuse_unique)),
                         try self.nullPtr(),
                         try self.nullPtr(),
+                        try self.nullPtr(),
                     }));
                 } else {
-                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
+                    try self.bindWord(target, try self.callBoxyRuntime("roc_desc_closure", ptr_ty, &.{ ptr_ty, ptr_ty, ptr_ty, ptr_ty, ptr_ty }, &.{
                         worker.toValue(builder),
                         try self.bytesAddress(c.capture),
+                        try self.nullPtr(),
                         try self.nullPtr(),
                         try self.nullPtr(),
                     }));
@@ -12261,6 +12297,7 @@ pub const MonoLlvmCodeGen = struct {
     /// emits maps to.
     fn boxyListOp(op: lir.LowLevel) ?BoxyListOp {
         return switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => null,
             .list_capacity => .capacity,
             .list_slack_unique => .slack_unique,
             .list_owned_unique => .owned_unique,
@@ -12308,6 +12345,7 @@ pub const MonoLlvmCodeGen = struct {
         const list_size = RocList.word_count * self.targetWordSize();
 
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => unreachable, // sequence operations never carry list element descriptors
             .list_prefetch => return,
             .list_len => {
                 const len = try self.loadUsize(try self.offsetPtr(try self.bytesAddress(GuardedList.at(all_args, 0)), self.rocListLenOffset()));
@@ -15226,44 +15264,67 @@ test "static-data slots with constant images are internal constants and function
     try std.testing.expect(callable.init == .no_init);
 }
 
-test "standalone plugins define frozen backing graphs and callable pointers" {
+test "standalone LLVM modules define cyclic frozen data and procedure pointers" {
     const allocator = std.testing.allocator;
     var store = lir.LirStore.init(allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(allocator, .u64);
     defer layouts.deinit();
-    const proc = try store.addProcSpec(.{ .name = .fromRaw(1), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .bool }, .none);
-    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .x86_64, .os_tag = .linux });
-    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, target);
+    const result = try store.addLocal(.{ .layout_idx = .u64 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = result,
+        .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
+        .next = ret,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = lir.LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .body = body,
+        .ret_layout = .u64,
+        .frame_locals = try store.addLocalSpan(&.{result}),
+    }, .none);
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initWithTarget(allocator, &store, target);
     defer codegen.deinit();
     codegen.layout_store = &layouts;
-    codegen.proc_symbol_mode = .local_index;
-    codegen.embed_static_data_exports = true;
-    const relocations = [_]lir.Program.StaticDataRelocation{
-        .{ .offset = 0, .target_symbol_name = "backing", .addend = 2 },
-        .{ .offset = 8, .target_symbol_name = "must_not_declare_proc", .kind = .function_pointer, .procedure = proc },
-        .{ .offset = 16, .target_symbol_name = "must_not_declare_drop", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
-    };
     const exports = [_]lir.Program.StaticDataExport{
-        .{ .symbol_name = "root", .bytes = &(@as([24]u8, @splat(0))), .alignment = 8, .relocations = &relocations },
-        .{ .symbol_name = "backing", .bytes = &(@as([16]u8, @splat(0))), .symbol_offset = 8, .alignment = 8 },
+        .{
+            .symbol_name = "first",
+            .bytes = &(@as([16]u8, @splat(0))),
+            .symbol_offset = 8,
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 8, .target_symbol_name = "second" }},
+        },
+        .{
+            .symbol_name = "second",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "first" }},
+        },
+        .{
+            .symbol_name = "callable",
+            .bytes = &(@as([8]u8, @splat(0))),
+            .alignment = 8,
+            .relocations = &.{.{ .offset = 0, .target_symbol_name = "unused_symbol_spelling", .kind = .function_pointer, .procedure = proc }},
+        },
     };
     try codegen.setStaticDataExports(&exports);
-    var builder = try codegen.createBuilder("standalone_frozen_graph");
+    var builder = try codegen.createBuilder("standalone_static_data");
     defer builder.deinit();
     codegen.builder = &builder;
     defer codegen.builder = null;
-    try codegen.declareProcSpec(proc, store.getProcSpec(proc));
-    try codegen.defineStaticDataExports();
-    try std.testing.expectEqual(@as(usize, 2), builder.variables.items.len);
-    for (builder.variables.items) |variable| {
+    try codegen.buildEntrypointModule(&builder, "standalone_static_data", &.{});
+    try std.testing.expectEqual(@as(usize, 3), codegen.static_data_symbols.count());
+    for (builder.variables.items[0..exports.len], exports, 0..) |variable, data_export, index| {
         try std.testing.expectEqual(.internal, variable.global.ptrConst(&builder).linkage);
         try std.testing.expectEqual(.constant, variable.mutability);
         try std.testing.expect(variable.init != .no_init);
+        const variable_id: LlvmBuilder.Variable.Index = @fromBackingInt(@intCast(index));
+        const expected = try builder.gepConst(.normal, .i8, variable_id.toConst(&builder), null, &.{try builder.intConst(.i64, data_export.symbol_offset)});
+        try std.testing.expectEqual(expected, codegen.static_data_symbols.get(data_export.symbol_name).?);
     }
-    try std.testing.expect(codegen.static_data_symbols.contains("backing"));
-    try std.testing.expect(!codegen.static_data_symbols.contains("must_not_declare_proc"));
-    try std.testing.expect(!codegen.static_data_symbols.contains("must_not_declare_drop"));
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {

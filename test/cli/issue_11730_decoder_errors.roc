@@ -15,8 +15,7 @@ main! = |_| {
 	for body in ["{\"a\":\"ok\"}", "{}", "invalid"] {
 		match fetch(body) {
 			Ok(value) => Stdout.line!(value)
-			Err(MissingRequiredField(field)) => Stdout.line!("missing: ${field}")
-			Err(InvalidJson(_)) => Stdout.line!("invalid")
+			Err(InvalidJson(message)) => Stdout.line!(message)
 		}
 	}
 	Ok({})

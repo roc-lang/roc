@@ -125,6 +125,8 @@ pub const BuiltinFn = enum {
     erased_callable_decref,
     erased_callable_decref_single_thread,
     erased_callable_repack,
+    boxed_sequence_pack,
+    boxed_sequence_unpack,
     native_callable_call,
     native_callable_defer,
     native_callable_drive,
@@ -134,6 +136,7 @@ pub const BuiltinFn = enum {
     hot_reload_leave,
     hot_reload_retain_current,
     hot_reload_erased_callable_drop,
+    hot_reload_erased_callable_copy,
     allocate_with_refcount,
     incref_data_ptr,
     incref_data_ptr_single_thread,
@@ -250,6 +253,7 @@ pub const BuiltinFn = enum {
         .hot_reload_leave,
         .hot_reload_retain_current,
         .hot_reload_erased_callable_drop,
+        .hot_reload_erased_callable_copy,
     };
 
     /// The linker symbol this builtin is exported and resolved under.

@@ -717,7 +717,7 @@ test "macOS and Windows executable builds retain ASLR flags and pointer fixups" 
     }
 }
 
-fn expectNativeAddressRandomization(bytes: []const u8, os: std.Target.Os.Tag) !void {
+fn expectNativeAddressRandomization(bytes: []const u8, os: std.Target.Os.Tag) error{ TestUnexpectedResult, TestExpectedEqual }!void {
     try testing.expect(bytes.len >= 128);
     if (os == .windows) {
         const pe: usize = std.mem.readInt(u32, bytes[60..64], .little);

@@ -2,8 +2,8 @@ CodecSchemeRowsPerUse :: [].{}
 
 import CodecSchemeRowsPerUseLib
 
-# One unannotated codec definition, used at several error rows in one body.
-# Each call owns its row, on every lowering path.
+# Each use checks its own codec relation against the format-owned error.
+# Ordinary wrappers can add their own errors without changing that contract.
 
 Format := [Default].{
 	parse_u64 : Format, U64 -> Try({ value : U64, rest : U64 }, [Negative])
@@ -29,6 +29,13 @@ Generic := [Default].{
 Wide : [Negative, Reset(Str)]
 
 Parsed(row) : Try({ value : U64, rest : U64 }, row)
+
+# Widen an ordinary result, not the derived parser's format contract.
+widen : Parsed([Negative]) -> Parsed(Wide)
+widen = |result| {
+	parsed = result?
+	Ok(parsed)
+}
 
 show_narrow : Parsed([Negative]) -> Str
 show_narrow = |result|
@@ -57,7 +64,7 @@ expect {
 	narrow : U64 -> Parsed([Negative])
 	narrow = any_parser({})
 	wide : U64 -> Parsed(Wide)
-	wide = any_parser({})
+	wide = |state| widen(any_parser({})(state))
 	(show_narrow(narrow(7)), show_wide(wide(7)), show_wide(wide(3))) == ("negative", "negative", "3")
 }
 
@@ -65,7 +72,7 @@ expect {
 	narrow : U64 -> Parsed([Negative])
 	narrow = forwarding({})
 	wide : U64 -> Parsed(Wide)
-	wide = forwarding({})
+	wide = |state| widen(forwarding({})(state))
 	(show_narrow(narrow(7)), show_wide(wide(3))) == ("negative", "3")
 }
 
@@ -78,10 +85,11 @@ expect {
 		Ok(_) => "ok"
 		Err(Negative) => "negative"
 	}
-	b = match second(state) {
+	with_other = if state == 0 Err(Reset("other")) else widen(second(state))
+	b = match with_other {
 		Ok(_) => "ok"
 		Err(Negative) => "negative"
-		Err(Other) => "other"
+		Err(Reset(message)) => message
 	}
 	(a, b) == ("negative", "negative")
 }
@@ -90,7 +98,7 @@ expect {
 	narrow : { parse : U64 -> Parsed([Negative]) }
 	narrow = { parse: any_parser({}) }
 	wide : { parse : U64 -> Parsed(Wide) }
-	wide = { parse: any_parser({}) }
+	wide = { parse: |state| widen(any_parser({})(state)) }
 	(show_narrow((narrow.parse)(7)), show_wide((wide.parse)(3))) == ("negative", "3")
 }
 
@@ -114,7 +122,7 @@ expect {
 expect {
 	numbers : U64 -> Parsed([Negative])
 	numbers = any_state({})
-	text : Str -> Try({ value : U64, rest : Str }, Wide)
+	text : Str -> Try({ value : U64, rest : Str }, [Negative])
 	text = any_state({})
 	second = match text("x") {
 		Ok(parsed) => parsed.rest
@@ -127,7 +135,7 @@ expect {
 	narrow : U64 -> Parsed([Negative])
 	narrow = CodecSchemeRowsPerUseLib.any_parser({})
 	wide : U64 -> Parsed(Wide)
-	wide = CodecSchemeRowsPerUseLib.any_parser({})
+	wide = |state| widen(CodecSchemeRowsPerUseLib.any_parser({})(state))
 	(show_narrow(narrow(7)), show_wide(wide(3))) == ("negative", "3")
 }
 
@@ -136,7 +144,7 @@ expect {
 	narrow : U64 -> Parsed([Negative])
 	narrow = alias({})
 	wide : U64 -> Parsed(Wide)
-	wide = alias({})
+	wide = |state| widen(alias({})(state))
 	(show_narrow(narrow(7)), show_wide(wide(3))) == ("negative", "3")
 }
 
@@ -169,6 +177,6 @@ expect {
 	narrow : Parsed([Negative])
 	narrow = known_state(state)
 	wide : Parsed(Wide)
-	wide = known_state(state)
+	wide = widen(known_state(state))
 	(show_narrow(narrow), show_wide(wide)) == ("negative", "negative")
 }

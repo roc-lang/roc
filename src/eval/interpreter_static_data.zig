@@ -62,21 +62,59 @@ pub const InterpreterStaticData = struct {
     }
 };
 
-/// Interpreter static-data images reserve a `StaticCallableHeader` before
-/// each erased callable's allocation.
+/// Static ownership is inline so copying an immutable step retains its identity.
 pub const image_options: backend.StaticDataImage.Options = .{
-    .callable_header_size = @sizeOf(Interpreter.StaticCallableHeader),
+    .callable_extra_bytes = callableExtraBytes,
 };
+
+const CallableTail = struct {
+    header_offset: usize,
+    capture_size: usize,
+    source_state: usize,
+    copied_state: usize,
+    state_size: usize,
+    extra_bytes: usize,
+};
+
+fn callableTail(export_: *const backend.StaticDataExport) CallableTail {
+    const callable = builtins.erased_callable;
+    const capture_start = Interpreter.static_callable_payload_offset + callable.capture_offset;
+    if (export_.bytes.len < capture_start) invariant("static callable omitted its payload header");
+    const size_offset = Interpreter.static_callable_payload_offset + @offsetOf(callable.Payload, "capture_size");
+    const capture_size = std.mem.readInt(usize, export_.bytes[size_offset..][0..@sizeOf(usize)], .little);
+    if (capture_size > export_.bytes.len - capture_start) invariant("static callable capture exceeded its allocation");
+    const source_state = std.mem.alignForward(usize, capture_start + capture_size, callable.capture_alignment);
+    const state_size = export_.bytes.len - @min(source_state, export_.bytes.len);
+    if (state_size > builtins.boxed_sequence.state_capacity) invariant("static callable has an invalid private suffix");
+    const header_offset = std.mem.alignForward(usize, export_.bytes.len, @alignOf(Interpreter.StaticCallableHeader));
+    const header_end = header_offset + @sizeOf(Interpreter.StaticCallableHeader);
+    const copied_state = std.mem.alignForward(usize, header_end, callable.capture_alignment);
+    return .{
+        .header_offset = header_offset,
+        .capture_size = header_end - capture_start,
+        .source_state = source_state,
+        .copied_state = copied_state,
+        .state_size = state_size,
+        .extra_bytes = (if (state_size == 0) header_end else copied_state + state_size) - export_.bytes.len,
+    };
+}
+
+fn callableExtraBytes(export_: *const backend.StaticDataExport) usize {
+    return callableTail(export_).extra_bytes;
+}
 
 /// Resolve explicit callable and drop-helper relocations to interpreter trampolines.
 pub fn resolveFunction(_: ?*anyopaque, relocation: backend.StaticDataRelocation) ?usize {
-    if (relocation.rc_helper != null) return Interpreter.staticErasedCallableOnDropAddress();
+    if (relocation.rc_helper) |helper| return if (helper.op == .incref)
+        Interpreter.staticErasedCallableOnCopyAddress()
+    else
+        Interpreter.staticErasedCallableOnDropAddress();
     if (relocation.callable_capture_offset == null or relocation.procedure == null) return null;
     return Interpreter.staticErasedCallableTrampolineAddress();
 }
 
-/// Write each frozen callable's owner and declared procedure into the header
-/// that `image_options` reserved before its allocation.
+/// Put each frozen callable's owner inside its capture. A private sequence view
+/// follows that capture; copy its relocated bytes after the new owner trailer.
 pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *const backend.StaticDataImage, owner: *const Interpreter.StaticCallableOwner) void {
     for (exports) |export_| {
         const symbol = image.symbolAddress(export_.symbol_name) orelse invariant("interpreter image omitted a committed export");
@@ -87,11 +125,17 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
             if (relocation.offset != Interpreter.static_callable_payload_offset or capture_offset != builtins.erased_callable.capture_offset) {
                 invariant("static callable payload was not at its allocation's payload offset");
             }
-            const header: *Interpreter.StaticCallableHeader = @ptrFromInt(allocation - @sizeOf(Interpreter.StaticCallableHeader));
+            const tail = callableTail(&export_);
+            const header: *Interpreter.StaticCallableHeader = @ptrFromInt(allocation + tail.header_offset);
             header.* = .{
                 .owner = owner,
                 .proc_id = @backingInt(relocation.procedure orelse invariant("interpreter callable omitted its procedure")),
             };
+            const data: [*]u8 = @ptrFromInt(allocation);
+            builtins.erased_callable.payloadPtr(data + Interpreter.static_callable_payload_offset).capture_size = tail.capture_size;
+            if (tail.state_size != 0) {
+                @memcpy((data + tail.copied_state)[0..tail.state_size], (data + tail.source_state)[0..tail.state_size]);
+            }
         }
     }
 }

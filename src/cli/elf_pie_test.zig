@@ -16,7 +16,7 @@ const layouts = [_]host_prelink.Provide{
 };
 const keep = [_][]const u8{ "host_callback", "host_value" };
 
-fn command(a: std.mem.Allocator, argv: []const []const u8) ![]const u8 {
+fn command(a: std.mem.Allocator, argv: []const []const u8) (std.process.RunError || error{CommandFailed})![]const u8 {
     const result = try std.process.run(a, std.testing.io, .{ .argv = argv });
     if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("command {s}: {any}\n{s}\n{s}\n", .{ argv[0], result.term, result.stdout, result.stderr });

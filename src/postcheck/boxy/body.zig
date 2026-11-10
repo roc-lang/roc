@@ -185,7 +185,7 @@ pub const Task = union(enum) {
     finish_restore_struct: struct { ty: TypeId, count: u32 },
     finish_restore_tag: struct { ty: TypeId, name: types.NameId, count: u32 },
     finish_static_list: struct { ty: TypeId, count: u32 },
-    finish_static_box: TypeId,
+    finish_static_box: struct { ty: TypeId, sequence_step_offset: ?u32 = null },
     remember_static_value: lower.Program.StoredValueKey,
     /// Push a value of `ty` for an expression whose evaluation diverged.
     unreachable_value: TypeId,
@@ -565,12 +565,14 @@ pub const Builder = struct {
 
     pub fn init(program: *Program, id: WorkerId) Allocator.Error!Builder {
         const worker = program.worker(id);
+        try program.module(worker.module).bodies().demandIndex();
         const bound = try program.arena.allocator().alloc(TypeId, worker.scheme_vars.len);
         for (bound, 0..) |*slot, index| slot.* = try program.store.variable(@intCast(index));
-        // A `List(U8)` worker's body, and its lambdas', is lowered with the
-        // list item variable bound to `U8` (design.md "Pre-Specialized
-        // List(U8) Workers"): every value of the item type is static.
-        if (worker.list_u8_slot) |slot| bound[slot] = try program.store.primitive(.u8);
+        // An integer list worker's body, and its lambdas', is lowered with
+        // the list item variable bound to its integer type (design.md
+        // "Pre-Specialized Integer List Workers"): every value of the item
+        // type is static.
+        if (worker.list_int) |list_int| bound[list_int.slot] = try program.store.primitive(list_int.item.primitive());
         return .{
             .program = program,
             .allocator = program.allocator,
@@ -1621,10 +1623,19 @@ pub const Builder = struct {
                 if (params.len != 0) invariant("an entry wrapper has parameters");
                 self.own_root = wrapper.root;
                 try self.tasks.append(self.allocator, .ret);
-                // Generic literal arguments are explicitly ineligible for
-                // compile-time evaluation; their wrappers convert at runtime.
-                if (!self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending)
-                    invariant("a runtime entry wrapper has no completed Boxy value");
+                // Unit producers also supply factories for CTFE, and contextual
+                // constants retain factory bodies. Polymorphic constants are
+                // explicit evaluation templates, instantiated at their runtime
+                // read rather than CTFE roots. A whole runtime program instead
+                // promises a completed value for context-free roots.
+                if (self.program.moduleUnit() == null and !self.program.input.compile_time and root.request_eligibility == .eligible and root.payloadFor(.boxy) == .pending) {
+                    // Exact aliases also compute their already-proven
+                    // procedure reference without an evaluator.
+                    const forwards = for (self.view.view.callable_eval_templates.templates) |alias| {
+                        if (alias.root == wrapper.root) break alias.forwarded_lookup != null;
+                    } else false;
+                    if (!forwards) invariant("a runtime entry wrapper has no completed Boxy value");
+                }
                 if (root.boxy_value) |stored| {
                     try self.push(.{ .restore = .{ .source = .{ .module = self.module }, .node = stored.node, .ty = self.currentWorker().ret } });
                 } else switch (root.kind) {
@@ -2063,7 +2074,7 @@ pub const Builder = struct {
             },
             .function => {
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const inputs = try self.descInputWords(0, self.var_descs.len);
+                const inputs = try self.descInputWords(0, self.program.descCount(adapter));
                 const static_inputs = for (inputs) |word| {
                     if (word == .recipe and try self.readsInputs(word.recipe)) break false;
                 } else true;
@@ -2197,7 +2208,7 @@ pub const Builder = struct {
             .function => {
                 // The adapter captures the dictionary, then its table.
                 const adapter = try self.program.adapterWorker(self.worker_id, from, to);
-                const descs = try self.descInputWords(0, self.var_descs.len);
+                const descs = try self.descInputWords(0, self.program.descCount(adapter));
                 var captures: [2]Word = .{ dictionary, undefined };
                 const count: usize = if (descs.len == 0) 1 else 2;
                 if (descs.len != 0) captures[1] = try self.tableWord(adapter, descs);
@@ -2477,12 +2488,16 @@ pub const Builder = struct {
     /// The value of the `??` default `default`: its declaring module's
     /// default expression, evaluated now.
     pub fn defaultValue(self: *Builder, default: checked.CheckedFieldDefault) Allocator.Error!LocalId {
-        const origin_module = default.origin() orelse invariant("a field default has no declaring module");
-        const module_index = self.program.by_identity.get(self.view.nameStore().moduleIdentityBytes(origin_module).*) orelse
-            invariant("a field default's declaring module is not in this lowering");
-        const expr = self.program.module(module_index).bodies().defaultExpr(default.expr_node) orelse
+        return self.fieldDefaultValue(self.program.modules.fieldDefault(self.module, default));
+    }
+
+    /// Materialize a default whose declaring module is already program-owned.
+    pub fn fieldDefaultValue(self: *Builder, default: types.FieldDefault) Allocator.Error!LocalId {
+        const default_bodies = self.program.module(default.module).bodies();
+        try default_bodies.demandIndex();
+        const expr = default_bodies.defaultExpr(default.expr_node) orelse
             invariant("a field default's expression was not archived");
-        const worker = try self.program.defaultWorker(module_index, expr);
+        const worker = try self.program.defaultWorker(default.module, expr);
         const target = try self.localOf(self.program.worker(worker).ret, .frame);
         try self.emitLinear(.{ .assign_call = .{ .target = target, .proc = self.program.worker(worker).proc, .args = LIR.LocalSpan.empty(), .next = undefined } });
         return target;
@@ -2956,17 +2971,20 @@ pub const Builder = struct {
                 const template = owner.view.callable_eval_templates.templates[@backingInt(eval.template)];
                 const root = owner.view.compile_time_roots.root(template.root);
                 if (root.boxy_value) |stored| return try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = stored.node, .ty = eval.ty } });
-                switch (root.payloadFor(.boxy)) {
+                const payload = root.payloadFor(.boxy);
+                switch (payload) {
                     .fn_value => invariant("a Boxy callable root view exposed an LSS function"),
                     // Evaluation stored a value that is not a function: the
                     // crash a rejected binding is.
                     .const_node => |node| try self.push(.{ .restore = .{ .source = .{ .module = eval.module }, .node = node, .ty = eval.ty } }),
-                    // No compile-time evaluation produced the value (a
-                    // binding of the app a platform's roots name, or one
-                    // whose evaluation failed where it was guarded): its
-                    // entry wrapper computes it.
-                    .pending => try self.pendingValueRead(eval.module, template.root, eval.ty),
-                    .unevaluated, .runtime => {
+                    .pending, .unevaluated, .runtime => {
+                        // An ineligible root is a checked instantiation
+                        // template, not a value waiting for an evaluator.
+                        // Its wrapper receives this use's type arguments.
+                        // Eligible pending roots still require their producer.
+                        if (payload == .pending and root.request_eligibility != .ineligible) {
+                            return try self.pendingValueRead(eval.module, template.root, eval.ty);
+                        }
                         const wrapper = self.program.wrapper_by_root.get(.{ .module = eval.module, .root = template.root }) orelse
                             invariant("a callable-eval binding's root has no entry wrapper");
                         const callee = try self.program.templateRefWorker(wrapper);
@@ -3016,7 +3034,7 @@ pub const Builder = struct {
                 try self.pushValue(try self.staticPartsLocal(try self.program.layouts.layoutOf(restore.ty), .{ .tag = @intCast(variant) }, values));
             },
             .finish_static_list => |value| try self.finishStaticParts(value.ty, value.count, .list),
-            .finish_static_box => |ty| try self.finishStaticParts(ty, 1, .box),
+            .finish_static_box => |value| try self.finishStaticParts(value.ty, 1, if (value.sequence_step_offset) |offset| .{ .boxed_sequence = offset } else .box),
             .remember_static_value => |key| {
                 const value = self.popValue();
                 try self.program.stored_value_slots.put(self.allocator, key, try self.constantSlot(value));
@@ -4151,6 +4169,9 @@ pub const Builder = struct {
                 .literal => {
                     if (!literal_requirement.site.module.eql(self.view.key)) invariant("a literal literal_requirement's literal is in another module than its scheme");
                     const node = literal_requirement.site.node;
+                    // Forwarding can enter an imported scheme whose linked
+                    // worker needed no body index. Reading its literal does.
+                    try self.bodies().demandIndex();
                     // A custom literal pattern's literal converts at the
                     // pattern's type.
                     if (self.bodies().index().nodeKind(node) == .pattern) {
@@ -5307,7 +5328,12 @@ pub const Builder = struct {
                     .box => |payload| payload,
                     .primitive, .empty_record, .record, .tuple, .tag_union, .list, .nominal, .function, .variable => invariant("a stored box restored at a non-Box type"),
                 };
-                try self.push(.{ .finish_static_box = raw_ty });
+                const sequence_step_offset: ?u32 = if (store.isSequence(payload)) blk: {
+                    const payload_layout = try self.program.layouts.layoutOf(payload);
+                    const layouts = &self.program.result.layouts;
+                    break :blk layouts.getStructFieldOffsetByOriginalIndex(layouts.getLayout(payload_layout).getStruct().idx, 1);
+                } else null;
+                try self.push(.{ .finish_static_box = .{ .ty = raw_ty, .sequence_step_offset = sequence_step_offset } });
                 try self.push(.{ .restore = .{ .source = source, .node = child, .ty = payload } });
             },
             .tuple, .record => |children| {
@@ -5402,7 +5428,7 @@ pub const Builder = struct {
                 // worker evaluating that default, which has no scheme and no
                 // dictionaries of its own.
                 const owner_worker = if (nested.default_root) |identity| blk: {
-                    const declaring = self.program.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
+                    const declaring = self.program.modules.by_identity.get(identity.bytes) orelse invariant("a stored default-root closure's module is not in this lowering");
                     const declaring_view = self.program.module(declaring);
                     const default_site = declaring_view.view.nested_proc_sites.sites[@backingInt(nested.site)];
                     break :blk switch (default_site.owner) {
@@ -7097,7 +7123,7 @@ pub const Builder = struct {
                     if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
                     if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
-                    const declaring = self.program.by_identity.get(identity) orelse
+                    const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
                     const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
                     const view = self.program.module(declaring);
@@ -7351,8 +7377,9 @@ pub const Builder = struct {
                 return try self.pushValue(try self.adaptValue(value, ret, result_ty));
             }
         }
-        // A `List` template called at `U8` calls its `List(U8)` worker, whose
-        // inputs are the generic worker's.
+        // A `List` template called at a fixed-size integer item type calls
+        // its integer list worker for that type, whose inputs are the
+        // generic worker's.
         const direct = try self.program.directCallTarget(callee, bound);
         try self.argsAtParams(explicit, arg_types, direct, bound, null);
         // The callee's one hidden argument: its type table at the hidden
@@ -7769,11 +7796,14 @@ pub const Builder = struct {
         // `Box(function)` is the function's erased callable: boxing or
         // unboxing one is the callable itself.
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached checked-body lowering"),
             .box_box => if (store.get(result_ty) == .box and store.get(store.get(result_ty).box) == .function) return try self.pushValue(args[0]),
             .box_unbox, .box_unbox_borrowed => if (store.get(result_ty) == .function) return try self.pushValue(args[0]),
             .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_from_parts, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_capacity, .list_get_unsafe, .list_prefetched, .list_prefetch, .list_append_unsafe, .list_concat, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_sublist, .list_append_le_bytes, .list_append_le_bytes_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_can_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_move_out_unsafe, .list_map_write_unsafe, .list_item_size_at_most, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => {},
         }
-        if (!open) {
+        const sequence_box = (op == .box_box and store.get(result_ty) == .box and store.isSequence(store.get(result_ty).box)) or
+            ((op == .box_unbox or op == .box_unbox_borrowed) and store.isSequence(result_ty));
+        if (!open and !sequence_box) {
             const target = try self.localOf(result_ty, .frame);
             // Source arithmetic commits to its operand type's behavior.
             const committed = if (args.len != 0) CheckedArithmetic.lowerOp(op, self.store.getLocal(args[0]).layout_idx) else op;
@@ -7781,6 +7811,7 @@ pub const Builder = struct {
             return try self.pushValue(target);
         }
         switch (op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => invariant("LIR-only sequence operation reached a generic source operation"),
             .box_box => {
                 const target = try self.localOf(result_ty, .frame);
                 try self.emitDyn(target, .{ .box = .{ .desc = try self.descOf(arg_types[0]), .payload = args[0] } });
@@ -8122,6 +8153,11 @@ pub const Builder = struct {
                 .capture = capture,
                 .capture_layout = capture_layout,
                 .on_drop = on_drop,
+                .on_copy = on_drop.copyCallback(),
+                .frozen_capture_layout = switch (on_drop) {
+                    .none => null,
+                    .rc_helper => |helper| try self.program.result.layouts.putPrefixedCaptureLayout(helper.layout_idx, self.program.result.erased_capture_prefix),
+                },
                 .reuse = reuse,
             }),
             .next = undefined,
@@ -8170,9 +8206,14 @@ pub const Builder = struct {
             if (table) |local| try fields.append(self.allocator, local);
         }
         const proc = self.program.worker(worker).proc;
-        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{});
+        if (fields.items.len == 0) return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc } }, &.{});
         const record = try self.staticPartsLocal(record_layout, .product, fields.items);
-        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = proc }, &.{record});
+        const layouts = &self.program.result.layouts;
+        const on_drop: LIR.ErasedCallableOnDrop = if (layouts.layoutContainsRefcounted(layouts.getLayout(record_layout)))
+            .{ .rc_helper = .{ .op = .host_drop, .layout_idx = try layouts.putPrefixedCaptureLayout(record_layout, self.program.result.erased_capture_prefix) } }
+        else
+            .none;
+        return self.staticPartsLocal(try self.erasedLayout(), .{ .callable = .{ .proc = proc, .on_drop = on_drop } }, &.{record});
     }
 
     /// Pop a function value's arguments and the function value, and call it

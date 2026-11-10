@@ -9,7 +9,6 @@ const eval = @import("eval");
 const lir = @import("lir");
 const postcheck = @import("postcheck");
 const helpers = eval.test_helpers;
-const static_data_exports = @import("static_data");
 
 const Allocator = std.mem.Allocator;
 const LIR = lir.LIR;
@@ -221,15 +220,12 @@ fn lowerModuleWithOptions(
     );
     errdefer lowered.deinit();
 
-    // Standalone lowering retains symbolic static values as well as frozen
-    // Boxy descriptors. Install the complete image, just as executable builds
-    // do, rather than assuming every interpreter input was already frozen.
-    const exports = try static_data_exports.buildStaticDataForWidth(allocator, .{
+    const static_data = try eval.buildStaticDataForWidth(allocator, .{
         .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
         .imports = import_views,
-    }, &lowered, base.target.TargetUsize.native, .{});
-    if (lowered.frozen_static_data) |*frozen| frozen.deinit();
-    lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
+    }, &lowered, lowered.target_usize, .{});
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = static_data };
 
     return .{
         .resources = resources,
@@ -397,6 +393,7 @@ const StructuralJsonMonotypeStats = struct {
     functions: usize,
     definitions: usize,
     expressions: usize,
+    static_candidates: usize,
     locals: usize,
     template_misses: u64,
     nested_misses: u64,
@@ -429,7 +426,7 @@ fn structuralJsonSource(
     try source.appendSlice(allocator, "}\n\n");
     switch (operation) {
         .parse => try source.appendSlice(allocator,
-            \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+            \\main : Str -> Try(Shape, [InvalidJson(Str)])
             \\main = |json| Json.parse(json)
             \\
         ),
@@ -468,7 +465,7 @@ fn nestedOptionalStructuralJsonParserSource(
         \\
         \\Shape : { outer : Try({ mid : Try({ inner : Try(Fields, [Missing]) }, [Missing]) }, [Missing]) }
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
         \\
     );
@@ -486,10 +483,15 @@ fn structuralJsonMonotypeStatsForSource(
     });
     defer lowered.deinit(allocator);
 
+    var static_candidates: usize = 0;
+    for (lowered.mono.view().exprs) |expr| {
+        if (expr.data == .static_data_candidate) static_candidates += 1;
+    }
     return .{
         .functions = lowered.mono.view().fns.len,
         .definitions = lowered.mono.view().defs.len,
         .expressions = lowered.mono.view().exprs.len,
+        .static_candidates = static_candidates,
         .locals = lowered.mono.view().locals.len,
         .template_misses = counters.template_misses,
         .nested_misses = counters.nested_misses,
@@ -572,7 +574,7 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     for (0..parse_sites) |site| {
         const parse_fn = try std.fmt.allocPrint(
             allocator,
-            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
+            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
             .{ site, site },
         );
         defer allocator.free(parse_fn);
@@ -1320,8 +1322,8 @@ fn inlinePlanDecision(source: []const u8, fn_name: []const u8) TestError!bool {
     return decision orelse error.TestUnexpectedResult;
 }
 
-/// The program's materialized static data, installed in an interpreter as
-/// every real pipeline installs it, under either lowering strategy.
+/// Both strategies execute with the immutable values materialized for their
+/// lowered program, including stored builtin values and Boxy metadata.
 const FrozenStaticData = struct {
     data: ?eval.InterpreterStaticData,
 
@@ -2118,12 +2120,13 @@ test "issue 10979 flat JSON record parser ARC growth is linear in field count" {
 test "issue 11910 boxy JSON record parser lowers each field's value parser once" {
     // The `Field`, `TryField`, and `TryFieldCaseless` events all select a
     // field and then parse its value; each field's value parser is one join
-    // they jump to. A field therefore adds two calls: the parser's
-    // constructor renaming its name, and the one call parsing its value.
+    // they jump to. A field adds three calls: construction-time renaming,
+    // the one value parser, and the format's missing_field on the cold
+    // absent-field path. No event duplicates the value parser.
     const allocator = std.testing.allocator;
     const four = (try boxyStructuralJsonParserCounts(allocator, 4, 1)).calls;
     const eight = (try boxyStructuralJsonParserCounts(allocator, 8, 1)).calls;
-    try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
+    try std.testing.expectEqual(@as(usize, 3 * 4), eight - four);
 }
 
 test "issue 11910 boxy JSON parses of one shape share its generated parser" {
@@ -2150,7 +2153,7 @@ test "boxy root that parses JSON directly receives its codec evidence" {
         \\    f1 : Str,
         \\}
         \\
-        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main : Str -> Try(Shape, [InvalidJson(Str)])
         \\main = |json| Json.parse(json)
     ,
         &.{},
@@ -2195,18 +2198,18 @@ test "issue 10979 shared JSON record continuations preserve field semantics" {
         \\
         \\main : Bool
         \\main = {
-        \\    duplicate : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    duplicate : Try(Shape, [InvalidJson(Str)])
         \\    duplicate = Json.parse("{ \"f0\": \"first\", \"f1\": \"middle\", \"f0\": \"last\" }")
-        \\    missing : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing : Try(Shape, [InvalidJson(Str)])
         \\    missing = Json.parse("{ \"f0\": \"only\" }")
-        \\    invalid : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    invalid : Try(Shape, [InvalidJson(Str)])
         \\    invalid = Json.parse("{ \"f0\": \"started\", ")
         \\    duplicate_ok = match duplicate {
         \\        Ok(record) => record.f0 == "last" and record.f1 == "middle"
         \\        Err(_) => False
         \\    }
         \\    missing_ok = match missing {
-        \\        Err(MissingRequiredField(field)) => field == "f1"
+        \\        Err(InvalidJson(message)) => message == "Missing field: f1"
         \\        _ => False
         \\    }
         \\    invalid_ok = match invalid {
@@ -2290,9 +2293,9 @@ test "issue 10121 shared JSON helpers preserve optional nested round trips" {
         \\
         \\    ok_encoded = Json.to_str(ok_original)
         \\    missing_encoded = Json.to_str(missing_original)
-        \\    ok_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    ok_parsed : Try(Shape, [InvalidJson(Str)])
         \\    ok_parsed = Json.parse(ok_encoded)
-        \\    missing_parsed : Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    missing_parsed : Try(Shape, [InvalidJson(Str)])
         \\    missing_parsed = Json.parse(missing_encoded)
         \\
         \\    ok_round_trips =
@@ -9900,7 +9903,7 @@ test "compiler-generated dispatch classes lower via checked evidence" {
         \\    lhs = { speed: Speed.Mph($sum), label: "total" }
         \\    rhs = { speed: Speed.Mph(6), label: "total" }
         \\    other = { speed: Speed.Mph(7), label: "total" }
-        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    parsed : Try({ names : Set(Str) }, [InvalidJson(Str)])
         \\    parsed = Json.parse("{ \"names\": [\"a\", \"b\"] }")
         \\    parsed_count = match parsed {
         \\        Ok(rec) => rec.names.len()
@@ -13274,12 +13277,37 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
-            // The descriptors, dictionaries, and name table a `.boxy` program froze.
-            var static_data: ?eval.InterpreterStaticData = if (lowered.lowered.frozen_static_data) |frozen|
-                try eval.InterpreterStaticData.init(allocator, frozen.exports, result.static_data_values.items.len)
-            else
-                null;
-            defer if (static_data) |*data| data.deinit();
+            var static_data = try FrozenStaticData.init(allocator, &lowered.lowered);
+            defer static_data.deinit();
+            // The top-level list is now a frozen value, not a bytes_literal
+            // instruction. Pin the two packed, padded Pair elements themselves
+            // before checking that runtime copy-on-write leaves them unchanged.
+            var found_packed = false;
+            for (result.static_data_values.items, 0..) |slot, slot_index| {
+                const slot_layout = result.layouts.getLayout(slot.layout_idx);
+                if (slot_layout.tag != .list) continue;
+                const element = result.layouts.getListInfo(slot_layout);
+                if (element.elem_layout.tag != .struct_) continue;
+                const struct_idx = element.elem_layout.getStruct().idx;
+                if (result.layouts.getStructData(struct_idx).fields.count != 2) continue;
+                if (result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0) != .u8 or
+                    result.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1) != .u64) continue;
+                const address = static_data.data.?.addresses[slot_index];
+                const list = (eval.Value{ .ptr = @ptrFromInt(address) }).read(@import("builtins").list.RocList);
+                try std.testing.expectEqual(@as(usize, 2), list.length);
+                try std.testing.expectEqual(@as(u32, 16), element.elem_size);
+                const a_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0);
+                const z_offset = result.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1);
+                try std.testing.expect(a_offset < element.elem_size and z_offset + @sizeOf(u64) <= element.elem_size);
+                try std.testing.expect(a_offset < z_offset or a_offset >= z_offset + @sizeOf(u64));
+                for (0..list.length) |index| {
+                    const pair = eval.Value{ .ptr = list.bytes.? + index * element.elem_size };
+                    try std.testing.expectEqual(@as(u8, 3), pair.offset(a_offset).read(u8));
+                    try std.testing.expectEqual(@as(u64, 42), pair.offset(z_offset).read(u64));
+                }
+                found_packed = true;
+            }
+            try std.testing.expect(found_packed);
             var static_strings = try eval.Interpreter.buildStaticStrings(allocator, &result.store);
             defer static_strings.deinit();
             var interpreter = try eval.Interpreter.init(
@@ -13290,10 +13318,7 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
                 runtime_env.get_ops(),
             );
             defer interpreter.deinit();
-            if (static_data) |*data| {
-                data.install(&interpreter);
-                data.ownByInterpreter(&interpreter);
-            }
+            static_data.install(&interpreter);
             // Cover both elements and the bounds failure without depending
             // on whether the constant list is a literal or frozen data.
             for ([_]u64{ 131, 131, 0 }, 0..) |expected, position| {
@@ -13318,6 +13343,9 @@ test "issue 11376: mixed-width products survive Boxy boundaries and copy-on-writ
 /// to emit.
 const stored_parser_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13358,51 +13386,28 @@ const stored_parser_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
 test "stored codec restore emits the same Monotype shape from Phase B" {
-    // This body's generation sits behind the graph freeze, in Phase B. No
-    // snapshot anywhere carries lowered output, so these are the numbers that
-    // stand in for "the sealed body is the body the eager restore used to
-    // emit". Measured on the compiler that still restored eagerly:
-    //   fns=10 defs=11 exprs=535 locals=108 template_misses=14 nested_misses=0
-    // and re-measured after the 2026-09-15 rebase onto upstream's codec
-    // contract machinery, which the eager restore no longer exists to be
-    // compared against, so the reference is this compiler itself:
-    //   fns=10 defs=11 exprs=597 locals=121 template_misses=14 nested_misses=0
-    // and again once a missing required field always constructs
-    // `MissingRequiredField` directly, with no remaining-state binding for an
-    // `invalid_value` call:
-    //   fns=10 defs=11 exprs=593 locals=119 template_misses=14 nested_misses=0
-    // and once a value whose closed or annotation-bounded row flows into an
-    // annotated result relates through a row coercion (design.md "Row
-    // Subsumption"), which lowers as a `row_widen` expression per such flow,
-    // except for a direct call, which is requested at the coercion's row and
-    // produces it with no `row_widen` (design.md "Closed Result Rows At
-    // Template Boundaries"). Every count is exact, including expressions and
-    // locals. The reserve-
-    // and-copy that Phase-B emission ends in is the same reserve-and-copy the
-    // eager restore already performed (it too filled a reservation with a
-    // lowered expression), so deferring orphans no expression the eager path
-    // kept and the predicted delta is zero. A window here would hide exactly
-    // the drift this gate exists to catch. Specialization misses may only
-    // fall: the eager restore keyed the callee spec as an open request, and
-    // Phase-B emission removes that cause.
+    // The format-owned missing_field callback contributes one method body;
+    // equal format errors propagate without generated row-injection branches.
+    // Exact counts pin the complete sealed body, including its reservations,
+    // so later changes cannot silently drop or duplicate generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 550), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 120), stats.locals);
-    try std.testing.expect(stats.template_misses <= 14);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 493), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 110), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -13414,6 +13419,9 @@ test "stored codec restore emits the same Monotype shape from Phase B" {
 /// the case the two-phase restore exists for.
 const stored_parser_optional_gate_source =
     \\Format := [Default].{
+    \\    missing_field : Format, Str -> [FormatError]
+    \\    missing_field = |_, _| FormatError
+    \\
     \\    rename_field : Format, Str -> Str
     \\    rename_field = |_, name| name
     \\
@@ -13454,13 +13462,13 @@ const stored_parser_optional_gate_source =
     \\
     \\State := [Present(Str), Done]
     \\
-    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\parse_stored : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\parse_stored = {
     \\    Shape : { foo : Str, bar ?: Str }
     \\    Shape.parser_for(Format.Default)
     \\}
     \\
-    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+    \\main : State -> Try({ value : { foo : Str, bar ?: Str }, rest : State }, [FormatError])
     \\main = |state| parse_stored(state)
 ;
 
@@ -13517,25 +13525,16 @@ const stored_encoder_optional_gate_source =
 ;
 
 test "stored parser restore lowers a shape with an optional field" {
-    // Not an equivalence gate: this program panicked before W2b
-    // ("resolved Monotype view requested for an unresolved instantiation
-    // node"), so there is no pre-W2b number to compare against. These are
-    // W2b's own, measured 2026-09-15, and they exist so a later change that
-    // silently drops or duplicates part of the generated optional-field
-    // parser is caught. That it lowers at all is the primary assertion.
-    // Re-measured after the 2026-09-15 rebase onto upstream's codec contract
-    // machinery (exprs 669 -> 731, locals 127 -> 140), and again once a
-    // missing required field always constructs `MissingRequiredField`
-    // directly (exprs 731 -> 727, locals 140 -> 138), and again once a value
-    // whose annotation-bounded row flows into an annotated result lowers as a
-    // `row_widen` expression (exprs 727 -> 730).
+    // Optional fields add presence handling but no second missing_field
+    // specialization. This shares the required-record gate's method counts
+    // while pinning the optional field's complete generated operations.
     const allocator = std.testing.allocator;
     const stats = try structuralJsonMonotypeStatsForSource(allocator, stored_parser_optional_gate_source);
-    try std.testing.expectEqual(@as(usize, 10), stats.functions);
-    try std.testing.expectEqual(@as(usize, 11), stats.definitions);
-    try std.testing.expectEqual(@as(usize, 680), stats.expressions);
-    try std.testing.expectEqual(@as(usize, 138), stats.locals);
-    try std.testing.expectEqual(@as(u64, 14), stats.template_misses);
+    try std.testing.expectEqual(@as(usize, 11), stats.functions);
+    try std.testing.expectEqual(@as(usize, 12), stats.definitions);
+    try std.testing.expectEqual(@as(usize, 623), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 128), stats.locals);
+    try std.testing.expectEqual(@as(u64, 16), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 0), stats.nested_misses);
 }
 
@@ -13549,6 +13548,12 @@ test "stored encoder_for restore lowers a shape with an optional field" {
     // Pin specialization, not expression/local bookkeeping within a worker.
     try std.testing.expectEqual(@as(usize, 23), stats.functions);
     try std.testing.expectEqual(@as(usize, 16), stats.definitions);
+    // Each of the two restored Values keeps its source static-data candidate,
+    // active-binding reservation, and deferred-use reservation. These six
+    // graph slots do not add helper workers; the counts above and below pin sharing.
+    try std.testing.expectEqual(@as(usize, 212), stats.expressions);
+    try std.testing.expectEqual(@as(usize, 6), stats.static_candidates);
+    try std.testing.expectEqual(@as(usize, 71), stats.locals);
     try std.testing.expectEqual(@as(u64, 18), stats.template_misses);
     try std.testing.expectEqual(@as(u64, 1), stats.nested_misses);
 }
@@ -14245,10 +14250,12 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        // The explicit parameter and one type-table pointer carrying the
-        // row and composite descriptors prepared by the caller.
+        // Hidden descriptors live in the worker's type table, not separate
+        // arguments. The row-polymorphic worker receives its dynamic value
+        // and one table pointer; the closed workers above receive no table.
         const args = result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args);
         try std.testing.expectEqual(@as(usize, 2), args.len);
+        try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
         try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }
     {

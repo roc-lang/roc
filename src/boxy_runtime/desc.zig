@@ -101,7 +101,9 @@ pub const Flags = packed struct(u8) {
     /// This type is, or stores inline, a type on a recursive size cycle: only
     /// such a type can have recursion boxes among its components.
     recursive: bool = false,
-    _: u3 = 0,
+    /// The builtin Iter/Stream record: logical fields are length then step.
+    sequence: bool = false,
+    _: u2 = 0,
 };
 
 /// A field label or tag name, which a names block holds (`Names`). Static

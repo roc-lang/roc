@@ -355,6 +355,9 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     try expectStaticDataPtr(ptr, "boxed_static_label");
 
     const payload = builtins.erased_callable.payloadPtr(ptr);
+    const before = try readRefcount(ptr);
+    builtins.erased_callable.incref(ptr, 1, roc_ops);
+    try expectEqualIsize(try readRefcount(ptr), before, "boxed_static_label incref keeps static refcount");
 
     var args = I64Arg{ .arg0 = 0 };
     var result: RocStr = undefined;
@@ -369,11 +372,16 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     );
     try expectStr(result, expected, roc_ops, "boxed_static_label call");
 
-    // A lowering can embed the immutable label directly instead of capturing
-    // it. When a capture remains, exercise its relocated final-drop helper;
-    // either representation must preserve the static string backing.
-    if (payload.on_drop) |on_drop| on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
-    try expectStr(result, expected, roc_ops, "boxed_static_label on_drop");
+    // Immortal static recipe wrappers own no runtime capture units and need
+    // no drop callback. When the producer retains one, exercise its explicit
+    // relocation too; releasing an immutable captured string preserves it.
+    if (payload.on_drop) |on_drop| {
+        on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
+        try expectStr(result, expected, roc_ops, "boxed_static_label on_drop");
+    }
+    builtins.erased_callable.decref(ptr, roc_ops);
+    try expectEqualIsize(try readRefcount(ptr), before, "boxed_static_label decref keeps static refcount");
+    try expectStr(result, expected, roc_ops, "boxed_static_label survives release");
 }
 
 fn expectStaticDataPtr(data_ptr: ?[*]u8, label: []const u8) error{StaticDataHostCheckFailed}!void {

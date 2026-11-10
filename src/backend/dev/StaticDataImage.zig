@@ -51,9 +51,8 @@ pub const StaticDataImage = struct {
 
     /// Layout choices an in-process consumer makes for its own copy of the graph.
     pub const Options = struct {
-        /// Bytes reserved immediately before every export that holds an erased
-        /// callable's code relocation, for the consumer's per-callable header.
-        callable_header_size: usize = 0,
+        /// Extra bytes after a callable export for consumer-owned inline context.
+        callable_extra_bytes: ?*const fn (*const StaticDataExport) usize = null,
     };
 
     pub fn init(allocator: Allocator, exports: []const StaticDataExport) Error!StaticDataImage {
@@ -107,10 +106,6 @@ pub const StaticDataImage = struct {
 
                 const alignment: usize = static_export.alignment;
                 allocation_alignment = @max(allocation_alignment, alignment);
-                if (options.callable_header_size != 0 and exportHoldsCallable(static_export)) {
-                    allocation_len = std.math.add(usize, allocation_len, options.callable_header_size) catch
-                        return error.InvalidStaticDataAlignment;
-                }
                 allocation_len = alignForwardChecked(allocation_len, alignment) orelse
                     return error.InvalidStaticDataAlignment;
 
@@ -120,6 +115,12 @@ pub const StaticDataImage = struct {
                 };
                 allocation_len = std.math.add(usize, allocation_len, @max(static_export.bytes.len, 1)) catch
                     return error.InvalidStaticDataAlignment;
+                if (options.callable_extra_bytes) |extra_bytes| {
+                    if (exportHoldsCallable(static_export)) {
+                        allocation_len = std.math.add(usize, allocation_len, extra_bytes(static_export)) catch
+                            return error.InvalidStaticDataAlignment;
+                    }
+                }
             }
             return .{
                 .symbols = symbols,

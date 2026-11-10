@@ -3,7 +3,7 @@ Issue10888JsonParseRepeatedNestedField :: [].{}
 RepeatedNestedField : { w : { w : { f1 : Str } } }
 
 expect {
-	parsed : Try(RepeatedNestedField, [InvalidJson(Str), MissingRequiredField(Str)])
+	parsed : Try(RepeatedNestedField, [InvalidJson(Str)])
 	parsed = Json.parse("{\"w\":{\"w\":{\"f1\":\"ok\"}}}")
 
 	match parsed {
@@ -12,7 +12,7 @@ expect {
 	}
 }
 
-parse_stored : Str -> Try(RepeatedNestedField, [InvalidJson(Str), MissingRequiredField(Str)])
+parse_stored : Str -> Try(RepeatedNestedField, [InvalidJson(Str)])
 parse_stored = Json.parser_camel()
 
 expect {

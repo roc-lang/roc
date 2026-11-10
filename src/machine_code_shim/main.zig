@@ -1014,6 +1014,12 @@ pub fn roc_hot_reload_release_retained(code_ref: ?*anyopaque) void {
     releaseDevProgramRef(program);
 }
 
+/// Retain the same code image when its closure's private captures are copied.
+pub fn roc_hot_reload_retain_existing(code_ref: ?*anyopaque) void {
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
+    acquireDevProgramRef(program);
+}
+
 comptime {
     @export(&shimGetOps, .{ .name = shim_symbols.roc_shim_get_ops });
     @export(&shimEntrypoint, .{ .name = shim_symbols.roc_entrypoint });
