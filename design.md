@@ -24556,9 +24556,14 @@ width by the kind of value, from `backend/dev/widths.zig`: `word_width`
 for a target word (pointers, lengths, sizes, addresses), `wide64_width` for a
 value that is 64 bits on every target (U64, I64, F64 bits, an i128 or Dec
 half), and `scalar_width` for an integer of up to 8 bytes held in one register
-whose width follows its layout. A width follows the kind of value, never an
-immediate's numeric value: a small U64 is still 64 bits. Every helper that
-works on a register says how wide the register is. Most take a
+whose width follows its layout. Shared code never writes `.w64`, which names
+no kind of value. `ci/zig_lints.zig` rejects a `.w64` outside code for one
+instruction set: a `switch (isa)` arm, the code after a `switch (isa)` that
+only one instruction set reaches, an `if` on a `comptime switch (isa)` that is
+true for one instruction set, a function on the lint's list of
+single-instruction-set functions, or a test. A width follows the kind of
+value, never an immediate's numeric value: a small U64 is still 64 bits. Every
+helper that works on a register says how wide the register is. Most take a
 `comptime width: widths.RegisterWidth` argument, so a call without one does
 not compile. The rest have the width in their name (`emitLoadW8`), or always
 use the word width because they work on addresses (`emitLeaStack`). A `u64` or

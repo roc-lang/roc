@@ -216,7 +216,33 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    // Lint 7: Check for top level comments in new Zig files
+    // Lint 7: Check that the dev backend's shared driver names every register width.
+    try stdout.print("Checking for raw .w64 in the dev backend's shared driver...\n", .{});
+
+    {
+        for (shared_driver_paths) |file_path| {
+            const errors = try checkRawW64(gpa, io, file_path);
+            defer gpa.free(errors);
+
+            if (errors.len > 0) {
+                try stdout.print("{s}", .{errors});
+                found_errors = true;
+            }
+        }
+
+        if (found_errors) {
+            try stdout.print("\n", .{});
+            try stdout.print("Shared driver code names the width of a value: widths.word_width, wide64_width or scalar_width.\n", .{});
+            try stdout.print("A raw .w64 is allowed only in code for one instruction set: a switch (isa) arm, the code after a\n", .{});
+            try stdout.print("switch (isa) that only one instruction set reaches, an if on a comptime switch (isa) that is true for\n", .{});
+            try stdout.print("one instruction set, a function on the lint's single_isa_functions list, or a test.\n", .{});
+            try stdout.print("\n", .{});
+            try stdout.flush();
+            std.process.exit(1);
+        }
+    }
+
+    // Lint 8: Check for top level comments in new Zig files
     try stdout.print("Checking for top level comments in new Zig files...\n", .{});
 
     var new_zig_files = try getNewZigFiles(gpa, io);
@@ -377,6 +403,188 @@ fn checkElseSwitchProngs(allocator: Allocator, io: std.Io, file_path: []const u8
     }
 
     return errors.toOwnedSlice(allocator);
+}
+
+/// The dev backend's shared driver: the files whose raw `.w64` the lint
+/// checks (design.md "Dev Backend Instruction Sets").
+const shared_driver_paths = [_][]const u8{
+    "src/backend/dev/LirCodeGen.zig",
+    "src/backend/dev/FrameBuilder.zig",
+    "src/backend/dev/CallingConvention.zig",
+};
+
+/// Functions in the shared driver that serve one instruction set, so their
+/// bodies may write `.w64`. Listed by name rather than matched by a name
+/// pattern, so a shared function never passes because of its name; a new
+/// single-instruction-set function is added here, where review sees it.
+const single_isa_functions = [_]struct { path: []const u8, name: []const u8 }{
+    .{ .path = "src/backend/dev/CallingConvention.zig", .name = "adjustStackPointerAarch64" },
+    .{ .path = "src/backend/dev/CallingConvention.zig", .name = "emitStackArgAarch64" },
+    .{ .path = "src/backend/dev/CallingConvention.zig", .name = "emitStackArgX86" },
+    .{ .path = "src/backend/dev/CallingConvention.zig", .name = "storeNarrowedAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitCallerStackArgBaseAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitEpilogueAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitEpilogueX86_64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitPrologueAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitPrologueX86_64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitRestoreCalleeSavedAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitRestoreCalleeSavedX86_64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitSaveCalleeSavedAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitSaveCalleeSavedX86_64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitStackProbeAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitStackProbeX86_64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitStackSubAarch64" },
+    .{ .path = "src/backend/dev/FrameBuilder.zig", .name = "emitTailCallExitAarch64" },
+    .{ .path = "src/backend/dev/LirCodeGen.zig", .name = "emitShiftRegX86" },
+    .{ .path = "src/backend/dev/LirCodeGen.zig", .name = "emitX86ArithmeticShiftQwords" },
+    .{ .path = "src/backend/dev/LirCodeGen.zig", .name = "emitX86SumNarrowLanesBaseline" },
+};
+
+const TokenRange = struct { first: std.zig.Ast.TokenIndex, last: std.zig.Ast.TokenIndex };
+
+/// Reports each `.w64` in `file_path` outside code for one instruction set,
+/// and each `single_isa_functions` entry for this file that names no function.
+fn checkRawW64(allocator: Allocator, io: std.Io, file_path: []const u8) ![]u8 {
+    const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
+    defer allocator.free(source);
+
+    var tree = try std.zig.Ast.parse(allocator, source, .{ .mode = .zig });
+    defer tree.deinit(allocator);
+
+    var errors: std.ArrayList(u8) = .empty;
+    errdefer errors.deinit(allocator);
+    try appendRawW64Errors(allocator, &errors, file_path, &tree);
+    return errors.toOwnedSlice(allocator);
+}
+
+fn appendRawW64Errors(allocator: Allocator, errors: *std.ArrayList(u8), file_path: []const u8, tree: *const std.zig.Ast) !void {
+    const Ast = std.zig.Ast;
+
+    // The token ranges of code that only one instruction set reaches.
+    var allowed: std.ArrayList(TokenRange) = .empty;
+    defer allowed.deinit(allocator);
+    var listed_found: [single_isa_functions.len]bool = @splat(false);
+
+    for (tree.nodes.items(.tag), 0..) |tag, node_usize| {
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
+        if (tag == .fn_decl) {
+            const proto, const body = tree.nodeData(node).node_and_node;
+            var buffer: [1]Ast.Node.Index = undefined;
+            const name_token = (tree.fullFnProto(&buffer, proto) orelse unreachable).name_token orelse continue;
+            const name = tree.tokenSlice(name_token);
+            for (single_isa_functions, 0..) |entry, index| {
+                if (std.mem.eql(u8, entry.path, file_path) and std.mem.eql(u8, entry.name, name)) {
+                    listed_found[index] = true;
+                    try allowed.append(allocator, nodeRange(tree, body));
+                }
+            }
+        } else if (tag == .test_decl) {
+            _, const body = tree.nodeData(node).opt_token_and_node;
+            try allowed.append(allocator, nodeRange(tree, body));
+        } else if (tag == .@"switch" or tag == .switch_comma) {
+            if (!isIsaSwitch(tree, node)) continue;
+            const switch_node = tree.fullSwitch(node) orelse unreachable;
+            for (switch_node.ast.cases) |case_node| {
+                const case = tree.fullSwitchCase(case_node) orelse unreachable;
+                try allowed.append(allocator, nodeRange(tree, case.ast.target_expr));
+            }
+        } else if (tag == .@"if" or tag == .if_simple) {
+            const if_node = tree.fullIf(node) orelse unreachable;
+            if (comptimeIsaCondition(tree, if_node.ast.cond_expr)) {
+                try allowed.append(allocator, nodeRange(tree, if_node.ast.then_expr));
+            }
+        } else if (tag == .block or tag == .block_semicolon or tag == .block_two or tag == .block_two_semicolon) {
+            var buffer: [2]Ast.Node.Index = undefined;
+            const statements = tree.blockStatements(&buffer, node) orelse unreachable;
+            for (statements, 0..) |statement, index| {
+                if (index + 1 < statements.len and isIsaSwitch(tree, statement) and isTailSwitch(tree, statement)) {
+                    try allowed.append(allocator, .{
+                        .first = tree.firstToken(statements[index + 1]),
+                        .last = tree.lastToken(statements[statements.len - 1]),
+                    });
+                }
+            }
+        }
+    }
+
+    for (tree.nodes.items(.tag), 0..) |tag, node_usize| {
+        if (tag != .enum_literal) continue;
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
+        const token = tree.nodeMainToken(node);
+        if (!std.mem.eql(u8, tree.tokenSlice(token), "w64")) continue;
+        const inside = for (allowed.items) |range| {
+            if (token >= range.first and token <= range.last) break true;
+        } else false;
+        if (!inside) {
+            const msg = try std.fmt.allocPrint(
+                allocator,
+                "{s}:{d}: raw .w64 in shared driver code\n",
+                .{ file_path, tree.tokenLocation(0, token).line + 1 },
+            );
+            defer allocator.free(msg);
+            try errors.appendSlice(allocator, msg);
+        }
+    }
+
+    for (single_isa_functions, listed_found) |entry, found| {
+        if (!std.mem.eql(u8, entry.path, file_path) or found) continue;
+        const msg = try std.fmt.allocPrint(
+            allocator,
+            "{s}: single_isa_functions lists {s}, which this file does not define\n",
+            .{ file_path, entry.name },
+        );
+        defer allocator.free(msg);
+        try errors.appendSlice(allocator, msg);
+    }
+}
+
+fn nodeRange(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) TokenRange {
+    return .{ .first = tree.firstToken(node), .last = tree.lastToken(node) };
+}
+
+/// `switch (isa) { ... }`.
+fn isIsaSwitch(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool {
+    const tag = tree.nodeTag(node);
+    if (tag != .@"switch" and tag != .switch_comma) return false;
+    const condition = (tree.fullSwitch(node) orelse unreachable).ast.condition;
+    return tree.nodeTag(condition) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(condition)), "isa");
+}
+
+/// A `switch (isa)` statement after which only one instruction set runs on:
+/// one arm for a single instruction set is an empty block, and every other
+/// arm ends in `return`.
+fn isTailSwitch(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool {
+    var empty_arms: usize = 0;
+    for ((tree.fullSwitch(node) orelse unreachable).ast.cases) |case_node| {
+        const case = tree.fullSwitchCase(case_node) orelse unreachable;
+        const target = case.ast.target_expr;
+        var buffer: [2]std.zig.Ast.Node.Index = undefined;
+        const statements = tree.blockStatements(&buffer, target);
+        if (statements != null and statements.?.len == 0) {
+            if (case.ast.values.len != 1) return false;
+            empty_arms += 1;
+        } else if (tree.nodeTag(target) == .@"return") {
+            continue;
+        } else if (statements == null or tree.nodeTag(statements.?[statements.?.len - 1]) != .@"return") {
+            return false;
+        }
+    }
+    return empty_arms == 1;
+}
+
+/// `comptime switch (isa) { ... }` whose arms are all `false` but one, as
+/// an `if` condition: its body runs for that one instruction set.
+fn comptimeIsaCondition(tree: *const std.zig.Ast, node: std.zig.Ast.Node.Index) bool {
+    if (tree.nodeTag(node) != .@"comptime") return false;
+    const switch_node = tree.nodeData(node).node;
+    if (!isIsaSwitch(tree, switch_node)) return false;
+    var non_false_arms: usize = 0;
+    for ((tree.fullSwitch(switch_node) orelse unreachable).ast.cases) |case_node| {
+        const target = (tree.fullSwitchCase(case_node) orelse unreachable).ast.target_expr;
+        const is_false = tree.nodeTag(target) == .identifier and std.mem.eql(u8, tree.tokenSlice(tree.nodeMainToken(target)), "false");
+        if (!is_false) non_false_arms += 1;
+    }
+    return non_false_arms == 1;
 }
 
 /// Checks if a line (after the //) is a horizontal line separator comment.
@@ -837,4 +1045,47 @@ test "developer-diagnostic lint flags string literals naming a variable, not com
     try appendDevDiagnosticNameErrors(std.testing.allocator, &errors, "x.zig", source, &names);
 
     try std.testing.expectEqualStrings("x.zig:2: developer-diagnostic variable \"ROC_SPEC_CENSUS\" must be read through base.dev_diagnostics\n", errors.items);
+}
+
+test "raw .w64 lint allows only code for one instruction set" {
+    const source =
+        \\fn shared(self: *Self) void {
+        \\    self.emit(.w64);
+        \\    if (comptime target.toCpuArch() == .aarch64) self.emit(.w64);
+        \\    switch (isa) {
+        \\        .x86_64 => self.emit(.w64),
+        \\        .aarch64 => {},
+        \\    }
+        \\    switch (isa) {
+        \\        .x86_64 => return self.emit(.w32),
+        \\        .aarch64 => {},
+        \\    }
+        \\    self.emit(.w64);
+        \\    if (comptime switch (isa) {
+        \\        .x86_64 => is_windows,
+        \\        .aarch64 => false,
+        \\    }) self.emit(.w64);
+        \\}
+        \\fn emitStackArgX86(self: *Self) void {
+        \\    self.emit(.w64);
+        \\}
+        \\test "one instruction set" {
+        \\    emit(.w64);
+        \\}
+    ;
+    var tree = try std.zig.Ast.parse(std.testing.allocator, source, .{ .mode = .zig });
+    defer tree.deinit(std.testing.allocator);
+
+    var errors: std.ArrayList(u8) = .empty;
+    defer errors.deinit(std.testing.allocator);
+    try appendRawW64Errors(std.testing.allocator, &errors, "src/backend/dev/CallingConvention.zig", &tree);
+
+    try std.testing.expectEqualStrings(
+        "src/backend/dev/CallingConvention.zig:2: raw .w64 in shared driver code\n" ++
+            "src/backend/dev/CallingConvention.zig:3: raw .w64 in shared driver code\n" ++
+            "src/backend/dev/CallingConvention.zig: single_isa_functions lists adjustStackPointerAarch64, which this file does not define\n" ++
+            "src/backend/dev/CallingConvention.zig: single_isa_functions lists emitStackArgAarch64, which this file does not define\n" ++
+            "src/backend/dev/CallingConvention.zig: single_isa_functions lists storeNarrowedAarch64, which this file does not define\n",
+        errors.items,
+    );
 }

@@ -10646,41 +10646,42 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn emitPopcount64(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             // POPCNT is an SSE4.2-era instruction, so an x86 target at the
             // baseline CPU level counts bits the same way aarch64 does.
-            // Not a cached isa test: every arm names that backend's answer.
-            const use_swar = switch (isa) {
-                .aarch64 => true,
-                .x86_64 => self.cpu_level == .v1,
-            };
-            if (use_swar) {
-                // aarch64 has no scalar population-count instruction; use the
-                // classic SWAR sequence on general registers.
-                const t, const m = try self.allocTempGenerals(2);
-                // x = src
-                try self.emitMovRegReg(widths.wide64_width, dst, src);
-                // x = x - ((x >> 1) & 0x5555555555555555)
-                try self.emitShiftImm(.shr, widths.wide64_width, t, dst, 1);
-                try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x5555555555555555)));
-                try self.codegen.emitAnd(widths.wide64_width, t, t, m);
-                try self.codegen.emitSub(widths.wide64_width, dst, dst, t);
-                // x = (x & 0x3333...) + ((x >> 2) & 0x3333...)
-                try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x3333333333333333)));
-                try self.codegen.emitAnd(widths.wide64_width, t, dst, m);
-                try self.emitShiftImm(.shr, widths.wide64_width, dst, dst, 2);
-                try self.codegen.emitAnd(widths.wide64_width, dst, dst, m);
-                try self.codegen.emitAdd(widths.wide64_width, dst, dst, t);
-                // x = (x + (x >> 4)) & 0x0f0f...
-                try self.emitShiftImm(.shr, widths.wide64_width, t, dst, 4);
-                try self.codegen.emitAdd(widths.wide64_width, dst, dst, t);
-                try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x0f0f0f0f0f0f0f0f)));
-                try self.codegen.emitAnd(widths.wide64_width, dst, dst, m);
-                // count = (x * 0x0101...) >> 56
-                try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x0101010101010101)));
-                try self.codegen.emitMul(widths.wide64_width, dst, dst, m);
-                try self.emitShiftImm(.shr, widths.wide64_width, dst, dst, 56);
-                self.freeGenerals(.{ t, m });
-            } else {
-                try self.codegen.emit.popcntRegReg(.w64, dst, src);
+            switch (isa) {
+                .aarch64 => try self.emitPopcount64Swar(dst, src),
+                .x86_64 => if (self.cpu_level == .v1)
+                    try self.emitPopcount64Swar(dst, src)
+                else
+                    try self.codegen.emit.popcntRegReg(.w64, dst, src),
             }
+        }
+
+        /// `emitPopcount64` without a population-count instruction (aarch64 has
+        /// no scalar one): the classic SWAR sequence on general registers.
+        fn emitPopcount64Swar(self: *Self, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
+            const t, const m = try self.allocTempGenerals(2);
+            // x = src
+            try self.emitMovRegReg(widths.wide64_width, dst, src);
+            // x = x - ((x >> 1) & 0x5555555555555555)
+            try self.emitShiftImm(.shr, widths.wide64_width, t, dst, 1);
+            try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x5555555555555555)));
+            try self.codegen.emitAnd(widths.wide64_width, t, t, m);
+            try self.codegen.emitSub(widths.wide64_width, dst, dst, t);
+            // x = (x & 0x3333...) + ((x >> 2) & 0x3333...)
+            try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x3333333333333333)));
+            try self.codegen.emitAnd(widths.wide64_width, t, dst, m);
+            try self.emitShiftImm(.shr, widths.wide64_width, dst, dst, 2);
+            try self.codegen.emitAnd(widths.wide64_width, dst, dst, m);
+            try self.codegen.emitAdd(widths.wide64_width, dst, dst, t);
+            // x = (x + (x >> 4)) & 0x0f0f...
+            try self.emitShiftImm(.shr, widths.wide64_width, t, dst, 4);
+            try self.codegen.emitAdd(widths.wide64_width, dst, dst, t);
+            try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x0f0f0f0f0f0f0f0f)));
+            try self.codegen.emitAnd(widths.wide64_width, dst, dst, m);
+            // count = (x * 0x0101...) >> 56
+            try self.emitLoadImm(widths.wide64_width, m, @bitCast(@as(u64, 0x0101010101010101)));
+            try self.codegen.emitMul(widths.wide64_width, dst, dst, m);
+            try self.emitShiftImm(.shr, widths.wide64_width, dst, dst, 56);
+            self.freeGenerals(.{ t, m });
         }
 
         /// dst = number of leading zero bits of the full 64-bit value `src`
@@ -18261,14 +18262,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const back = try self.codegen.emitJump();
             try self.codegen.patchJump(back, loop);
             try self.codegen.patchJump(tail, self.codegen.currentOffset());
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.subRegRegReg(.w64, stack_ptr, stack_ptr, total);
-                try self.emitLoad(.w64, field, stack_ptr, 0);
-                try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
-            } else {
-                try self.codegen.emit.subRegReg(.w64, stack_ptr, total);
-                try self.emitLoad(.w64, field, stack_ptr, 0);
-                try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
+            switch (isa) {
+                .aarch64 => {
+                    try self.codegen.emit.subRegRegReg(.w64, stack_ptr, stack_ptr, total);
+                    try self.emitLoad(.w64, field, stack_ptr, 0);
+                    try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
+                },
+                .x86_64 => {
+                    try self.codegen.emit.subRegReg(.w64, stack_ptr, total);
+                    try self.emitLoad(.w64, field, stack_ptr, 0);
+                    try self.codegen.emit.movRegReg(.w64, total, stack_ptr);
+                },
             }
 
             // Each local's offset becomes its address in the region.
@@ -19566,8 +19570,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// pointer itself.
         fn emitReleaseDynRegion(self: *Self) Allocator.Error!void {
             if (!self.proc_has_dyn_region) return;
-            if (comptime target.toCpuArch() == .aarch64) {
-                try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, frame_ptr, 0);
+            switch (isa) {
+                .aarch64 => try self.codegen.emit.addRegRegImm12(.w64, stack_ptr, frame_ptr, 0),
+                .x86_64 => {},
             }
         }
 
