@@ -1670,15 +1670,52 @@ pub const RecordDestruct = struct {
 /// back.
 pub const ListPattern = struct {
     patterns: Span(PatId),
-    rest: ?ListRestPattern,
+    rest: OptionalListRest(ListRestPattern),
 };
 
 /// The `..`/`.. as name` portion of a list pattern. `index` is how many fixed
 /// element patterns precede it; `pattern` binds the captured slice when present.
 pub const ListRestPattern = struct {
     index: u32,
-    pattern: ?PatId,
+    pattern: collections.OptionalId(PatId),
 };
+
+/// A list pattern's rest, or its absence, in eight bytes. `stored_index` is
+/// the rest's index plus one, so zero means the list pattern has no rest.
+pub fn OptionalListRest(comptime Rest: type) type {
+    return struct {
+        stored_index: u32 = 0,
+        pattern: @FieldType(Rest, "pattern") = .none,
+
+        const Self = @This();
+
+        pub const none: Self = .{};
+
+        pub fn some(rest: Rest) Self {
+            std.debug.assert(rest.index < std.math.maxInt(u32));
+            return .{ .stored_index = rest.index + 1, .pattern = rest.pattern };
+        }
+
+        pub fn of(rest: ?Rest) Self {
+            return if (rest) |present| some(present) else .none;
+        }
+
+        pub fn get(self: Self) ?Rest {
+            if (self.stored_index == 0) {
+                std.debug.assert(self.pattern == .none);
+                return null;
+            }
+            return .{ .index = self.stored_index - 1, .pattern = self.pattern };
+        }
+    };
+}
+
+comptime {
+    std.debug.assert(@sizeOf(ListPattern) == 16);
+    std.debug.assert(@sizeOf(Pat) == 32);
+    std.debug.assert(@sizeOf(Stmt) == 20);
+    std.debug.assert(@sizeOf(Branch) == 20);
+}
 
 /// Match branch.
 pub const Branch = struct {
@@ -1686,7 +1723,7 @@ pub const Branch = struct {
     /// Irrefutable compiler-generated bindings evaluated after `pat` succeeds
     /// and before the user guard. Their locals remain in scope for the body.
     bindings: Span(StmtId) = Span(StmtId).empty(),
-    guard: ?ExprId = null,
+    guard: collections.OptionalId(ExprId) = .none,
     body: ExprId,
 };
 
@@ -1706,7 +1743,7 @@ pub const Stmt = union(enum(u8)) {
         pat: PatId,
         value: ExprId,
         recursive: bool = false,
-        comptime_site: ?ComptimeSiteId = null,
+        comptime_site: collections.OptionalId(ComptimeSiteId) = .none,
     },
     expr: ExprId,
     expect: ExprId,

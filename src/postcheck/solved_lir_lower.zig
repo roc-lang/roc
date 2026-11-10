@@ -2303,7 +2303,7 @@ const Lowerer = struct {
                         switch (stmt) {
                             .uninitialized => |pattern| try self.add(.{ .pattern = pattern }),
                             .let_ => |let_| {
-                                if (let_.comptime_site != null) self.admissible = false;
+                                if (let_.comptime_site != .none) self.admissible = false;
                                 try self.add(.{ .pattern = let_.pat });
                                 try self.add(.{ .expr = let_.value });
                             },
@@ -2377,7 +2377,7 @@ const Lowerer = struct {
                     for (view.branchSpan(match_.branches)) |branch| {
                         try self.add(.{ .pattern = branch.pat });
                         for (view.stmtSpan(branch.bindings)) |stmt| try self.add(.{ .statement = stmt });
-                        if (branch.guard) |guard| try self.add(.{ .expr = guard });
+                        if (branch.guard.get()) |guard| try self.add(.{ .expr = guard });
                         try self.add(.{ .expr = branch.body });
                     }
                 },
@@ -2612,7 +2612,7 @@ const Lowerer = struct {
                 },
                 .list => |list| {
                     for (view.patSpan(list.patterns)) |pattern| try self.add(.{ .pattern = pattern });
-                    if (list.rest) |rest| if (rest.pattern) |pattern| {
+                    if (list.rest.get()) |rest| if (rest.pattern.get()) |pattern| {
                         try self.add(.{ .pattern = pattern });
                     };
                 },
@@ -8992,7 +8992,7 @@ const Lowerer = struct {
             out.* = .{
                 .pat = branch.pat,
                 .bindings = branch.bindings,
-                .guard = branch.guard,
+                .guard = branch.guard.get(),
                 .body = branch.body,
                 .branch_index = @intCast(i),
             };
@@ -9287,7 +9287,7 @@ const Lowerer = struct {
                     } } };
                 }
                 const value = try self.addTemp(try self.lowerExprTy(let_.value));
-                const bind = try self.bindPatternOrCrash(where, let_.pat, value, next, let_.comptime_site);
+                const bind = try self.bindPatternOrCrash(where, let_.pat, value, next, let_.comptime_site.get());
                 break :blk .{ .tail = exprTask(where, value, let_.value, null, bind) };
             },
             .expr => |expr_id| blk: {
@@ -10741,8 +10741,8 @@ const Lowerer = struct {
                 .list => |list| {
                     const pats = self.solved.lifted.patSpan(list.patterns);
                     for (0..pats.len) |i| try pending.append(self.allocator, .{ .pattern = GuardedList.at(pats, i) });
-                    if (list.rest) |rest| {
-                        if (rest.pattern) |rest_pattern| try pending.append(self.allocator, .{ .pattern = rest_pattern });
+                    if (list.rest.get()) |rest| {
+                        if (rest.pattern.get()) |rest_pattern| try pending.append(self.allocator, .{ .pattern = rest_pattern });
                     }
                 },
                 .tag => |tag| {
@@ -10948,7 +10948,7 @@ const Lowerer = struct {
             const list = self.l.pat(pat_id).data.list;
             return .{
                 .fixed_count = @intCast(list.patterns.len),
-                .rest = if (list.rest) |rest| .{ .index = rest.index, .pattern = rest.pattern } else null,
+                .rest = if (list.rest.get()) |rest| .{ .index = rest.index, .pattern = rest.pattern.get() } else null,
             };
         }
 
@@ -11407,13 +11407,13 @@ const Lowerer = struct {
         pub fn listHasRest(self: @This(), pat_id: PatternId) bool {
             const pat_data = self.lowerer.pat(pat_id);
             const list = pat_data.data.list;
-            return list.rest != null;
+            return list.rest.get() != null;
         }
 
         pub fn listRestPattern(self: @This(), pat_id: PatternId) ?PatternId {
             const pat_data = self.lowerer.pat(pat_id);
             const list = pat_data.data.list;
-            return list.rest.?.pattern;
+            return list.rest.get().?.pattern.get();
         }
     };
 
@@ -11548,8 +11548,8 @@ const Lowerer = struct {
                 // Only an irrefutable list pattern reaches binding: `[.. as rest]`
                 // binds the whole list (aliasing the source); `[..]` binds nothing.
                 .bind => {
-                    const rest = list.rest orelse return .{ .ret = task.next };
-                    const rest_pattern = rest.pattern orelse return .{ .ret = task.next };
+                    const rest = list.rest.get() orelse return .{ .ret = task.next };
+                    const rest_pattern = rest.pattern.get() orelse return .{ .ret = task.next };
                     task.pat = rest_pattern;
                     return .{ .tail = task.* };
                 },
@@ -11699,12 +11699,12 @@ const Lowerer = struct {
         const elems = self.solved.lifted.patSpan(list.patterns);
         const elem_ty = self.listElemType(task.ty);
         const fixed_count: i64 = @intCast(elems.len);
-        const rest_index: ?u32 = if (list.rest) |rest| rest.index else null;
+        const rest_index: ?u32 = if (list.rest.get()) |rest| rest.index else null;
         switch (task.cursor) {
             ListPatternCursor.start => {
                 if (elems.len == 0) {
-                    if (list.rest) |rest| {
-                        if (rest.pattern) |rest_pattern| {
+                    if (list.rest.get()) |rest| {
+                        if (rest.pattern.get()) |rest_pattern| {
                             return .{ .tail = .{ .lowering = .bind, .pat = rest_pattern, .ty = try self.lowerPatTy(rest_pattern), .source = task.source, .next = task.next } };
                         }
                         return .{ .ret = task.next };
@@ -11721,8 +11721,8 @@ const Lowerer = struct {
                 // The captured rest binds the slice between the matched front and back
                 // elements. `[.. as rest]` with no fixed elements is the whole list and
                 // simply aliases the source; a bare `..` binds nothing.
-                if (list.rest) |rest| {
-                    if (rest.pattern) |rest_pattern| {
+                if (list.rest.get()) |rest| {
+                    if (rest.pattern.get()) |rest_pattern| {
                         task.cursor = ListPatternCursor.rest;
                         if (elems.len == 0) {
                             task.rest_local = task.source;
@@ -11736,7 +11736,7 @@ const Lowerer = struct {
             ListPatternCursor.rest => {
                 task.current = input.?;
                 if (elems.len != 0) {
-                    const rest = list.rest.?;
+                    const rest = list.rest.get().?;
                     // rest = take_first(take_last(source, len - rest.index), len - fixed_count)
                     const source_layout = self.result.store.getLocal(task.source).layout_idx;
                     const front_dropped = try self.addLocalForLayout(source_layout);
@@ -11776,7 +11776,7 @@ const Lowerer = struct {
         // pattern with a rest needs `len >= fixed_count`.
         const required = try self.addLocalForLayout(.u64);
         const cond = try self.addLocalForLayout(.bool);
-        const cmp_op: LIR.LowLevel = if (list.rest == null) .num_is_eq else .num_is_gte;
+        const cmp_op: LIR.LowLevel = if (list.rest.get() == null) .num_is_eq else .num_is_gte;
         const length_check = try self.boolSwitchNoContinuation(where, cond, task.current, try self.patternMissJump(where, task.miss));
         var head = try self.assignBinaryLowLevel(where, cond, cmp_op, task.len_local, required, length_check);
         head = try self.assignU64Literal(where, required, fixed_count, head);

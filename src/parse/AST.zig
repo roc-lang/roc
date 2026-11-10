@@ -815,7 +815,7 @@ pub fn hasMainBangDecl(self: *const AST) bool {
     while (decls.next()) |decl_idx| {
         const decl = self.decl_index.decls.items[@backingInt(decl_idx)];
         if (decl.kind != .value) continue;
-        const pattern = self.store.getPattern(@fromBackingInt(@intCast(decl.pattern.?)));
+        const pattern = self.store.getPattern(@fromBackingInt(@intCast(decl.pattern.get().?)));
         if (pattern == .ident) return true;
     }
     return false;

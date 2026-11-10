@@ -839,7 +839,7 @@ const Lifter = struct {
                 for (0..branches.len) |branch_index| {
                     const branch = GuardedList.at(branches, branch_index);
                     try children.stmts(branch.bindings);
-                    if (branch.guard) |guard| try children.child(guard);
+                    if (branch.guard.get()) |guard| try children.child(guard);
                     try children.child(branch.body);
                 }
             },
@@ -1842,7 +1842,7 @@ fn CaptureWalk(comptime Visitor: type) type {
                         for (0..bindings.len) |binding_index| {
                             try walk.push(.{ .stmt = .{ .stmt = GuardedList.at(bindings, binding_index), .ctx = ctx } });
                         }
-                        if (branch.guard) |guard| try walk.child(guard, ctx);
+                        if (branch.guard.get()) |guard| try walk.child(guard, ctx);
                         try walk.child(branch.body, ctx);
                         try walk.push(.end_scope);
                     }

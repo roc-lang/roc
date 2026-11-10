@@ -20,6 +20,30 @@ pub const DeclIdx = enum(u32) { _ };
 /// Stable index of one parser-owned type path.
 pub const TypePathIdx = enum(u32) { _ };
 
+/// A raw `u32` index or its absence in four bytes: zero means absent and a
+/// present index is stored plus one.
+pub const OptionalRawIdx = enum(u32) {
+    none = 0,
+    _,
+
+    /// Wrap an index within the owning table's bounded domain.
+    pub inline fn some(raw: u32) OptionalRawIdx {
+        std.debug.assert(raw < std.math.maxInt(u32));
+        return @fromBackingInt(raw + 1);
+    }
+
+    /// Wrap an optional index: null is absence.
+    pub inline fn of(raw: ?u32) OptionalRawIdx {
+        return if (raw) |present| some(present) else .none;
+    }
+
+    /// Read the original index, or null for absence.
+    pub inline fn get(self: OptionalRawIdx) ?u32 {
+        if (self == .none) return null;
+        return @backingInt(self) - 1;
+    }
+};
+
 /// Contiguous range into a side table.
 pub const Span = struct {
     start: u32,
@@ -253,18 +277,28 @@ pub const Decl = struct {
     kind: DeclKind,
     value_form: ValueDeclForm = .none,
     value_arity: u32 = 0,
-    name_tok: ?Token.Idx,
-    name_ident: ?Ident.Idx = null,
-    pattern: ?u32,
-    anno: ?u32,
-    paired_decl: ?DeclIdx = null,
-    paired_anno: ?DeclIdx = null,
-    associated_scope: ?ScopeIdx = null,
-    owner_type_path: ?TypePathIdx = null,
-    type_path: ?TypePathIdx = null,
+    name_tok: OptionalRawIdx,
+    /// `Ident.Idx.NONE` when the declaration has no single name.
+    name_ident: Ident.Idx = .NONE,
+    pattern: OptionalRawIdx,
+    anno: OptionalRawIdx,
+    paired_decl: collections.OptionalId(DeclIdx) = .none,
+    paired_anno: collections.OptionalId(DeclIdx) = .none,
+    associated_scope: collections.OptionalId(ScopeIdx) = .none,
+    owner_type_path: collections.OptionalId(TypePathIdx) = .none,
+    type_path: collections.OptionalId(TypePathIdx) = .none,
     type_dependencies: Span = Span.empty(),
     region: TokenRegion,
+
+    /// The declaration's single name, or null when it has none.
+    pub fn nameIdent(self: Decl) ?Ident.Idx {
+        return if (self.name_ident.isNone()) null else self.name_ident;
+    }
 };
+
+comptime {
+    std.debug.assert(@sizeOf(Decl) == 68);
+}
 
 gpa: std.mem.Allocator,
 scopes: std.ArrayList(Scope),
@@ -528,10 +562,10 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
     try self.decls.append(self.gpa, decl);
     try self.open_scope_decls.append(self.gpa, idx);
     try self.decl_by_statement.put(decl.statement, idx);
-    if (decl.name_ident) |ident| {
+    if (decl.nameIdent()) |ident| {
         if (declKindMayBindValue(decl.kind)) {
             try self.addOpenName(decl.scope, .value, ident, idx, false);
-            if (decl.owner_type_path) |owner_path| {
+            if (decl.owner_type_path.get()) |owner_path| {
                 try self.addDeclToBucket(AssocValue, &self.assoc_value_decls, .{
                     .owner = owner_path,
                     .item = ident,
@@ -539,7 +573,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
             }
         } else if (declKindMayBindType(decl.kind)) {
             try self.addOpenName(decl.scope, .type, ident, idx, false);
-            if (decl.type_path) |path| {
+            if (decl.type_path.get()) |path| {
                 try self.type_path_by_statement.put(decl.statement, path);
                 try self.addDeclToBucket(TypePathIdx, &self.type_decls_by_path, path, idx);
             }
@@ -751,8 +785,8 @@ pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
 
 /// Mark an adjacent annotation and value declaration as one source pair.
 pub fn pairAnnotation(self: *DeclIndex, anno_idx: DeclIdx, decl_idx: DeclIdx) void {
-    self.decls.items[@backingInt(anno_idx)].paired_decl = decl_idx;
-    self.decls.items[@backingInt(decl_idx)].paired_anno = anno_idx;
+    self.decls.items[@backingInt(anno_idx)].paired_decl = .some(decl_idx);
+    self.decls.items[@backingInt(decl_idx)].paired_anno = .some(anno_idx);
 }
 
 /// Return the direct declarations owned by a scope.
@@ -833,50 +867,50 @@ test "scopeValueDecls records only value-binding declarations" {
         .scope = scope_idx,
         .statement = 0,
         .kind = .value,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = value_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     _ = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 1,
         .kind = .value_anno,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = value_anno_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     _ = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 2,
         .kind = .var_decl,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = var_decl_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     _ = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 3,
         .kind = .var_anno,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = var_anno_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     const import_decl_idx = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 4,
         .kind = .import,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = import_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     try index.addImportAliasDecl(scope_idx, import_ident, import_decl_idx);
@@ -884,10 +918,10 @@ test "scopeValueDecls records only value-binding declarations" {
         .scope = scope_idx,
         .statement = 5,
         .kind = .type_alias,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = type_ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
 
@@ -954,20 +988,20 @@ test "name buckets preserve duplicate declarations in source order" {
         .scope = scope_idx,
         .statement = 0,
         .kind = .value,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     const second = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 1,
         .kind = .value_anno,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = ident,
-        .pattern = null,
-        .anno = null,
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
 
@@ -1003,11 +1037,11 @@ test "associated value declarations are keyed by structural owner path" {
         .scope = type_scope,
         .statement = 42,
         .kind = .nominal,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = nested_ident,
-        .type_path = nested_path,
-        .pattern = null,
-        .anno = null,
+        .type_path = .some(nested_path),
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     try std.testing.expectEqual(nested_path, index.typePathForStatement(42).?);
@@ -1019,11 +1053,11 @@ test "associated value declarations are keyed by structural owner path" {
         .scope = scope_idx,
         .statement = 0,
         .kind = .value,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = value_ident,
-        .owner_type_path = nested_path,
-        .pattern = null,
-        .anno = null,
+        .owner_type_path = .some(nested_path),
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     try index.exitScope(scope_idx, TokenRegion.empty());
@@ -1051,22 +1085,22 @@ test "type path buckets preserve duplicate declarations in source order" {
         .scope = scope_idx,
         .statement = 10,
         .kind = .type_alias,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = ident,
-        .type_path = path,
-        .pattern = null,
-        .anno = null,
+        .type_path = .some(path),
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
     const second = try index.addDecl(.{
         .scope = scope_idx,
         .statement = 11,
         .kind = .nominal,
-        .name_tok = null,
+        .name_tok = .none,
         .name_ident = ident,
-        .type_path = path,
-        .pattern = null,
-        .anno = null,
+        .type_path = .some(path),
+        .pattern = .none,
+        .anno = .none,
         .region = TokenRegion.empty(),
     });
 

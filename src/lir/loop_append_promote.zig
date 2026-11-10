@@ -2763,11 +2763,11 @@ const Pass = struct {
 
     /// The local a chain of pure aliases denotes, following at most a bounded
     /// number of hops through `defs`.
-    fn aliasRoot(self: *Pass, defs: *const collections.DenseMap(LocalId, ?CFStmtId), local: LocalId) LocalId {
+    fn aliasRoot(self: *Pass, defs: *const collections.DenseMap(LocalId, collections.OptionalId(CFStmtId)), local: LocalId) LocalId {
         var current = local;
         var hops: usize = 0;
         while (hops < 64) : (hops += 1) {
-            const definition = (defs.get(current) orelse return current) orelse return current;
+            const definition = (defs.get(current) orelse return current).get() orelse return current;
             switch (self.store.getCFStmtImmediate(definition).*) {
                 .assign_ref => |s| switch (s.op.kind) {
                     .local => current = s.op.source,
@@ -2787,8 +2787,8 @@ const Pass = struct {
 
     /// The literal a local holds when its single definition is an integer
     /// literal.
-    fn literalOf(self: *Pass, defs: *const collections.DenseMap(LocalId, ?CFStmtId), local: LocalId) ?i128 {
-        const definition = (defs.get(local) orelse return null) orelse return null;
+    fn literalOf(self: *Pass, defs: *const collections.DenseMap(LocalId, collections.OptionalId(CFStmtId)), local: LocalId) ?i128 {
+        const definition = (defs.get(local) orelse return null).get() orelse return null;
         switch (self.store.getCFStmtImmediate(definition).*) {
             .assign_literal => |s| return switch (s.value) {
                 .i64_literal => |lit| lit.value,
@@ -2823,7 +2823,7 @@ const Pass = struct {
 
         // Single definitions in the body (null once a local has several),
         // the counter writes on back edges, and the back-edge count.
-        var defs = collections.DenseMap(LocalId, ?CFStmtId).init(allocator);
+        var defs = collections.DenseMap(LocalId, collections.OptionalId(CFStmtId)).init(allocator);
         defer defs.deinit();
         var writes = std.ArrayList(CFStmtId).empty;
         defer writes.deinit(allocator);
@@ -2835,23 +2835,23 @@ const Pass = struct {
                 switch (self.store.getCFStmtImmediate(stmt_id).*) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |st| {
                         const entry = try defs.getOrPut(st.target);
-                        entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
+                        entry.value_ptr.* = if (entry.found_existing) .none else .some(stmt_id);
                     },
                     inline .store_struct, .store_tag => |st| {
                         const entry = try defs.getOrPut(st.dest);
-                        entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
+                        entry.value_ptr.* = if (entry.found_existing) .none else .some(stmt_id);
                     },
                     .dyn => |st| if (st.target) |target| {
                         const entry = try defs.getOrPut(target);
-                        entry.value_ptr.* = if (entry.found_existing) null else stmt_id;
+                        entry.value_ptr.* = if (entry.found_existing) .none else .some(stmt_id);
                     },
                     .set_local => |st| {
-                        try defs.put(st.target, null);
+                        try defs.put(st.target, .none);
                         if (st.mode == .initialize_join_param) try writes.append(allocator, stmt_id);
                     },
                     .join => |inner| {
                         const inner_params = self.store.getLocalSpan(inner.params);
-                        for (0..GuardedList.borrowLen(inner_params)) |i| try defs.put(GuardedList.at(inner_params, i), null);
+                        for (0..GuardedList.borrowLen(inner_params)) |i| try defs.put(GuardedList.at(inner_params, i), .none);
                     },
                     .jump => |jump| if (jump.target == join.id) {
                         back_edges += 1;
@@ -2890,7 +2890,7 @@ const Pass = struct {
         // The comparison the condition denotes, through aliases, markers and
         // negations (`!=` lowers as the negation of an equality).
         var cond_root = self.aliasRoot(&defs, test_switch.cond);
-        var cond_def = (defs.get(cond_root) orelse return null) orelse return null;
+        var cond_def = (defs.get(cond_root) orelse return null).get() orelse return null;
         var negations: usize = 0;
         while (negations < 8) : (negations += 1) {
             const negation = switch (self.store.getCFStmtImmediate(cond_def).*) {
@@ -2901,7 +2901,7 @@ const Pass = struct {
             if (GuardedList.borrowLen(negation_args) != 1) return null;
             continue_when_true = !continue_when_true;
             cond_root = self.aliasRoot(&defs, GuardedList.at(negation_args, 0));
-            cond_def = (defs.get(cond_root) orelse return null) orelse return null;
+            cond_def = (defs.get(cond_root) orelse return null).get() orelse return null;
         }
         const compare = switch (self.store.getCFStmtImmediate(cond_def).*) {
             .assign_low_level => |st| st,
@@ -2950,7 +2950,7 @@ const Pass = struct {
             if (self.store.getCFStmtImmediate(jump_stmt).jump.target != join.id) return null;
             counter_writes += 1;
             const value_root = self.aliasRoot(&defs, write.value);
-            const value_def = (defs.get(value_root) orelse return null) orelse return null;
+            const value_def = (defs.get(value_root) orelse return null).get() orelse return null;
             const step = switch (self.store.getCFStmtImmediate(value_def).*) {
                 .assign_low_level => |st| st,
                 .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .dyn, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return null,
@@ -2975,7 +2975,7 @@ const Pass = struct {
         if (defs.get(counter)) |definition| {
             // The counter's only definitions in the body are the back-edge
             // writes; a direct assignment would step it out of the bound.
-            if (definition != null) return null;
+            if (definition != .none) return null;
         }
         var direct_defs: u32 = 0;
         {

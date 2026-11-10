@@ -5,6 +5,7 @@
 //! types, function identities, and capture/binder identities verbatim.
 
 const std = @import("std");
+const collections = @import("collections");
 const ast = @import("ast.zig");
 const Mono = @import("../monotype/ast.zig");
 const Common = @import("../common.zig");
@@ -143,6 +144,7 @@ const Relocation = struct {
         if (T == Common.Symbol) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.symbol_start) self.symbol_offset else @as(u32, 0)));
         if (T == ast.JoinPointId) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.join_start) self.join_offset else @as(u32, 0)));
         if (T == ast.Span(void)) @compileError("body spans must be relocated through their owning field");
+        if (comptime isOptionalId(T)) return .of(if (item.get()) |payload| self.value(payload) else null);
         const info = @typeInfo(T);
         if (comptime std.meta.activeTag(info) == .@"struct") {
             var result = item;
@@ -170,6 +172,19 @@ const Relocation = struct {
             return result;
         }
         return item;
+    }
+
+    /// Whether `T` is a four-byte optional ID, whose present payload
+    /// relocates like the bare ID.
+    fn isOptionalId(comptime T: type) bool {
+        if (@typeInfo(T) != .@"enum" or !@hasDecl(T, "get")) return false;
+        const get_info = @typeInfo(@TypeOf(T.get));
+        if (get_info != .@"fn") return false;
+        const result_info = @typeInfo(get_info.@"fn".return_type.?);
+        if (result_info != .optional) return false;
+        const Payload = result_info.optional.child;
+        if (@typeInfo(Payload) != .@"enum" or @typeInfo(Payload).@"enum".tag_type != u32) return false;
+        return T == collections.OptionalId(Payload);
     }
 };
 

@@ -1431,7 +1431,7 @@ const Solver = struct {
                         },
                         .guard => {
                             frame.match_phase = .body;
-                            if (branch.guard) |guard| return .{ .expr = .{ .id = guard } };
+                            if (branch.guard.get()) |guard| return .{ .expr = .{ .id = guard } };
                         },
                         .body => {
                             frame.match_phase = .next_branch;
@@ -1748,7 +1748,7 @@ const Solver = struct {
                 const pats = self.lifted.patSpan(list.patterns);
                 if (index < pats.len) return .{ .pat = pats[index], .value_ty = children.elem_ty };
                 // A captured rest is itself a list with the same element type.
-                if (index == pats.len) if (list.rest) |rest| if (rest.pattern) |rest_pattern| return .{ .pat = rest_pattern, .value_ty = children.ty };
+                if (index == pats.len) if (list.rest.get()) |rest| if (rest.pattern.get()) |rest_pattern| return .{ .pat = rest_pattern, .value_ty = children.ty };
                 return null;
             },
             .tag => |tag| {
