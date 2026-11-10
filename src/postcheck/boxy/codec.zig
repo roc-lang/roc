@@ -841,24 +841,68 @@ pub fn storedEdge(b: *Builder, source: lower.ConstSource, edge: check.ConstStore
         },
         .codec => |codec| codec,
     };
-    const store_module = source.module;
-    var reached = std.AutoHashMapUnmanaged([32]u8, void).empty;
-    defer reached.deinit(b.allocator);
-    var pending = std.ArrayList(ModuleIndex).empty;
-    defer pending.deinit(b.allocator);
-    try reached.put(b.allocator, b.program.module(store_module).key.bytes, {});
-    try pending.append(b.allocator, store_module);
-    var next: usize = 0;
-    while (next < pending.items.len) : (next += 1) {
-        const module = pending.items[next];
-        const view = b.program.module(module);
-        if (try edgeIn(view, codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
-        for (view.view.direct_import_module_keys) |imported| {
-            if ((try reached.getOrPut(b.allocator, imported.bytes)).found_existing) continue;
-            try pending.append(b.allocator, b.program.modules.by_key.get(imported.bytes) orelse continue);
-        }
+    var closure = ImportClosure{ .program = b.program, .allocator = b.allocator };
+    defer closure.deinit();
+    try closure.start(source.module);
+    while (try closure.next()) |module| {
+        if (try edgeIn(b.program.module(module), codec)) |found| return .{ .module = module, .callable_ty = found.callable_ty, .id = found.id };
     }
     invariant("a stored codec edge's contract was not held by its storing module's import closure");
+}
+
+/// The modules of one module's reflexive import closure that this lowering
+/// holds, in breadth-first direct-import order.
+const ImportClosure = struct {
+    program: *Program,
+    allocator: Allocator,
+    reached: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    pending: std.ArrayList(ModuleIndex) = .empty,
+    at: usize = 0,
+
+    fn deinit(self: *ImportClosure) void {
+        self.reached.deinit(self.allocator);
+        self.pending.deinit(self.allocator);
+    }
+
+    fn start(self: *ImportClosure, module: ModuleIndex) Allocator.Error!void {
+        try self.reached.put(self.allocator, self.program.module(module).key.bytes, {});
+        try self.pending.append(self.allocator, module);
+    }
+
+    fn next(self: *ImportClosure) Allocator.Error!?ModuleIndex {
+        if (self.at == self.pending.items.len) return null;
+        const module = self.pending.items[self.at];
+        self.at += 1;
+        for (self.program.module(module).view.direct_import_module_keys) |imported| {
+            if ((try self.reached.getOrPut(self.allocator, imported.bytes)).found_existing) continue;
+            try self.pending.append(self.allocator, self.program.modules.by_key.get(imported.bytes) orelse continue);
+        }
+        return module;
+    }
+};
+
+/// The module and family root under which a function value stored in
+/// `store_module`'s constants names `piece` (`pieceFamilyRoot`). A family is
+/// shared by every module whose derivation has its content, so its own
+/// module can be one the storing module does not import. A piece of a
+/// family is named by the first module of the storing module's reflexive
+/// import closure, in breadth-first direct-import order, holding a
+/// derivation with the family's content: the stored function was lowered
+/// from bodies that closure reaches, so one of its modules recorded the
+/// derivation. A piece of no family is named by the storing module.
+pub fn storedPieceHome(program: *Program, allocator: Allocator, store_module: ModuleIndex, piece: Piece) Allocator.Error!struct { ModuleIndex, u32 } {
+    if (piece.family == no_family) return .{ store_module, no_family };
+    const family = program.codec.families.items[piece.family];
+    const owner = program.module(family.module).view.static_dispatch_plans.generated_codec_derivations[@backingInt(family.root)];
+    var closure = ImportClosure{ .program = program, .allocator = allocator };
+    defer closure.deinit();
+    try closure.start(store_module);
+    while (try closure.next()) |module| {
+        for (program.module(module).view.static_dispatch_plans.generated_codec_derivations, 0..) |derivation, index| {
+            if (derivation.kind == owner.kind and std.mem.eql(u8, &derivation.content.bytes, &owner.content.bytes)) return .{ module, @intCast(index) };
+        }
+    }
+    invariant("a stored codec piece's derivation was not held by its storing module's import closure");
 }
 
 fn edgeIn(view: *const types.ModuleView, codec: check.ConstStore.StoredCodecEdge) Allocator.Error!?struct { callable_ty: checked.CheckedTypeId, id: DerivationId } {

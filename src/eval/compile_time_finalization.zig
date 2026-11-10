@@ -6636,7 +6636,7 @@ fn evalDevProgramRoots(
     });
     if (lowered.boxy_functions) |retained| {
         if (native.linked_images) |images| retained.metadata = .{ .context = images, .get = BoxyLinkedImages.metadataFor };
-        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result });
+        writer.setBoxyFunctions(.{ .retained = retained, .result = &lowered.lir_result, .store_module = module.key.digest() });
     }
 
     var had_problem = false;

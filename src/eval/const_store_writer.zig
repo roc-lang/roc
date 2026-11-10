@@ -44,6 +44,8 @@ pub const BoxyFunctions = struct {
     retained: *lir.CheckedPipeline.BoxyStoredFunctions,
     /// The program's result, which reading a value extends.
     result: *LirProgram.Result,
+    /// The module whose constants the writer stores into.
+    store_module: checked.ModuleId,
 };
 
 /// Resolves erased-callable runtime data for the active evaluator.
@@ -146,9 +148,9 @@ pub const Writer = struct {
         const data_ptr = self.readErasedCallablePointer(value);
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
         const described = if (resolved.external) |external|
-            try functions.retained.describeImported(self.allocator, functions.result, external.owner, external.identity, resolved.capture_ptr)
+            try functions.retained.describeImported(self.allocator, functions.result, functions.store_module, external.owner, external.identity, resolved.capture_ptr)
         else
-            try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr);
+            try functions.retained.describe(self.allocator, functions.result, functions.store_module, resolved.proc, resolved.capture_ptr);
         // The frame owns the recipe only after pushStoreFrame succeeds.
         errdefer self.allocator.free(described.recipe);
         defer self.allocator.free(described.captures);

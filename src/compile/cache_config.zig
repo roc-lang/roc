@@ -353,7 +353,7 @@ pub const Constants = struct {
     /// 177: type-store columns serialize independently in declared field order.
     /// 178: checked artifacts store no platform invocation scheme uses or
     ///      deferred diagnostic captures.
-    pub const CACHE_VERSION = 178;
+    pub const CACHE_VERSION = 179;
 };
 
 /// Configuration for the Roc cache system.
