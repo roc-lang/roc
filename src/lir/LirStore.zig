@@ -2899,12 +2899,12 @@ pub fn getLocalNameRaw(self: *const Self, id: LocalId) u32 {
 }
 
 /// Remaps proc debug-name entries and drops names for pruned procs.
-pub fn compactProcDebugNames(self: *Self, old_to_new: []const ?LirProcSpecId) void {
+pub fn compactProcDebugNames(self: *Self, old_to_new: *const collections.OptionalIndexColumn(LirProcSpecId)) void {
     var write: usize = 0;
     const names = self.proc_debug_names.unsafeRawItemsMutForStore();
     for (names) |entry| {
-        if (entry.proc >= old_to_new.len) continue;
-        const new_proc = old_to_new[entry.proc] orelse continue;
+        if (entry.proc >= old_to_new.len()) continue;
+        const new_proc = old_to_new.get(entry.proc) orelse continue;
         names[write] = .{
             .proc = @backingInt(new_proc),
             .string = entry.string,

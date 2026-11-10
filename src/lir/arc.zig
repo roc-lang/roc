@@ -112,8 +112,11 @@ pub const ParallelMetrics = struct {
 };
 
 const no_stmt_node_index = std.math.maxInt(u32);
+const MaterializedStmtColumn = collections.OptionalIndexColumn(LIR.CFStmtId);
 const no_arc_bit = std.math.maxInt(u32);
-const arc_bit_needed = no_arc_bit - 1;
+/// A local's position in one of a procedure's ARC bit domains.
+const ArcBitIndex = enum(u32) { _ };
+const ArcBitColumn = collections.OptionalIndexColumn(ArcBitIndex);
 
 /// Source-owned liveness analysis. The allocator must outlive every emission
 /// using this cache (normally a durable source arena). No retained graph state
@@ -164,14 +167,14 @@ const SourceLiveness = struct {
 const ProcArcDomain = struct {
     global_local_index: *collections.DenseMap(LIR.LocalId, u32),
     frame_locals: []const LIR.LocalId,
-    resource_bit_index: []const u32,
+    resource_bit_index: ArcBitColumn.View,
     resource_locals: []const LIR.LocalId,
     /// Full committed field-place domain for dismantlable aggregate
     /// resources; zero for ordinary whole-value resources.
     resource_full_masks: []u64,
-    group_bit_index: []const u32,
+    group_bit_index: ArcBitColumn.View,
     group_leaders: []const LIR.LocalId,
-    value_use_bit_index: []const u32,
+    value_use_bit_index: ArcBitColumn.View,
     value_use_locals: []const LIR.LocalId,
     /// Holds every node of the ownership sets over this domain: the
     /// domain's own arena, or the emission arena of an emission's copy.
@@ -187,17 +190,14 @@ const ProcArcDomain = struct {
     ) ResourceError!ProcArcDomain {
         const frame = store.getLocalSpan(frame_span);
         const frame_len = GuardedList.borrowLen(frame);
-        if (frame_len >= arc_bit_needed) arcInvariant("ARC proc-local domain exceeds its dense index representation");
+        if (frame_len >= no_arc_bit) arcInvariant("ARC proc-local domain exceeds its dense index representation");
 
         const frame_locals = try allocator.alloc(LIR.LocalId, frame_len);
-        const resource_bit_index = try allocator.alloc(u32, frame_len);
-        @memset(resource_bit_index, no_arc_bit);
+        var resource_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
         const resource_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
-        const group_bit_index = try allocator.alloc(u32, frame_len);
-        @memset(group_bit_index, no_arc_bit);
+        var group_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
         const group_leaders_buffer = try allocator.alloc(LIR.LocalId, frame_len);
-        const value_use_bit_index = try allocator.alloc(u32, frame_len);
-        @memset(value_use_bit_index, no_arc_bit);
+        var value_use_bit_index = try ArcBitColumn.initFilled(allocator, frame_len);
         const value_use_locals_buffer = try allocator.alloc(LIR.LocalId, frame_len);
 
         var mapped_len: usize = 0;
@@ -231,14 +231,14 @@ const ProcArcDomain = struct {
             };
             for (resource_locals) |resource_local| {
                 const resource_frame_index = requiredFrameIndex(global_local_index, resource_local);
-                resource_bit_index[resource_frame_index] = arc_bit_needed;
+                resource_bit_index.set(resource_frame_index, @fromBackingInt(0));
             }
         }
 
         var resource_count: usize = 0;
-        for (resource_bit_index, 0..) |*bit_index, frame_index| {
-            if (bit_index.* != arc_bit_needed) continue;
-            bit_index.* = @intCast(resource_count);
+        for (0..frame_len) |frame_index| {
+            if (!resource_bit_index.isPresent(frame_index)) continue;
+            resource_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(resource_count))));
             resource_locals_buffer[resource_count] = frame_locals[frame_index];
             resource_count += 1;
         }
@@ -262,7 +262,7 @@ const ProcArcDomain = struct {
             _ = requiredFrameIndex(global_local_index, leader);
             if (leader != local) continue;
             if (group_member_counts[frame_index] <= 1) continue;
-            group_bit_index[frame_index] = @intCast(group_count);
+            group_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(group_count))));
             group_leaders_buffer[group_count] = leader;
             group_count += 1;
         }
@@ -270,7 +270,7 @@ const ProcArcDomain = struct {
         var value_use_count: usize = 0;
         for (frame_locals, 0..) |local, frame_index| {
             if (!solution.isBorrowedCallResult(local)) continue;
-            value_use_bit_index[frame_index] = @intCast(value_use_count);
+            value_use_bit_index.set(frame_index, @fromBackingInt(@as(u32, @intCast(value_use_count))));
             value_use_locals_buffer[value_use_count] = local;
             value_use_count += 1;
         }
@@ -278,12 +278,12 @@ const ProcArcDomain = struct {
         return .{
             .global_local_index = global_local_index,
             .frame_locals = frame_locals,
-            .resource_bit_index = resource_bit_index,
+            .resource_bit_index = resource_bit_index.view(),
             .resource_locals = resource_locals_buffer[0..resource_count],
             .resource_full_masks = resource_full_masks,
-            .group_bit_index = group_bit_index,
+            .group_bit_index = group_bit_index.view(),
             .group_leaders = group_leaders_buffer[0..group_count],
-            .value_use_bit_index = value_use_bit_index,
+            .value_use_bit_index = value_use_bit_index.view(),
             .value_use_locals = value_use_locals_buffer[0..value_use_count],
             .set_allocator = allocator,
         };
@@ -298,9 +298,7 @@ const ProcArcDomain = struct {
     }
 
     fn resourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
-        const bit_index = self.resource_bit_index[self.frameIndexOf(local)];
-        if (bit_index == no_arc_bit) return null;
-        return bit_index;
+        return @backingInt(self.resource_bit_index.get(self.frameIndexOf(local)) orelse return null);
     }
 
     fn requiredResourceBitOf(self: *const ProcArcDomain, local: LIR.LocalId) usize {
@@ -367,14 +365,12 @@ const ProcArcDomain = struct {
     }
 
     fn groupBitOf(self: *const ProcArcDomain, leader: LIR.LocalId) ?usize {
-        const bit_index = self.group_bit_index[self.frameIndexOf(leader)];
-        if (bit_index == no_arc_bit) return null;
+        const bit_index: usize = @backingInt(self.group_bit_index.get(self.frameIndexOf(leader)) orelse return null);
         return self.resource_locals.len + bit_index;
     }
 
     fn valueUseBitOf(self: *const ProcArcDomain, local: LIR.LocalId) ?usize {
-        const bit_index = self.value_use_bit_index[self.frameIndexOf(local)];
-        if (bit_index == no_arc_bit) return null;
+        const bit_index: usize = @backingInt(self.value_use_bit_index.get(self.frameIndexOf(local)) orelse return null);
         return self.resource_locals.len + self.group_leaders.len + bit_index;
     }
 
@@ -1886,8 +1882,8 @@ const Inserter = struct {
     /// Exact call-result refinements registered while solving this emission.
     /// Keys are ownership-neutral switch statement ids.
     restitution_switches: *collections.DenseMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = undefined,
-    materialized_plans: []?LIR.CFStmtId = &.{},
-    materialized_joins: []?LIR.CFStmtId = &.{},
+    materialized_plans: MaterializedStmtColumn = .{},
+    materialized_joins: MaterializedStmtColumn = .{},
     /// Reused planning buffers, owned by the executing lane and grown in
     /// `lane_allocator`. Their contents are ephemeral; every slice retained by
     /// an ArcPlan is copied into the proc arena first.
@@ -1950,12 +1946,8 @@ const Inserter = struct {
 
     fn materializeArcPlans(self: *Inserter) ResourceError!LIR.CFStmtId {
         if (self.arc_plans.root == no_plan) arcInvariant("ARC materialized plans without a root");
-        const materialized = try self.task_scratch.alloc(?LIR.CFStmtId, self.arc_plans.plans.items.len);
-        @memset(materialized, null);
-        self.materialized_plans = materialized;
-        const joins = try self.task_scratch.alloc(?LIR.CFStmtId, self.join_bodies.len);
-        @memset(joins, null);
-        self.materialized_joins = joins;
+        self.materialized_plans = try MaterializedStmtColumn.initFilled(self.task_scratch, self.arc_plans.plans.items.len);
+        self.materialized_joins = try MaterializedStmtColumn.initFilled(self.task_scratch, self.join_bodies.len);
 
         var result: LIR.CFStmtId = undefined;
         var tasks = std.ArrayList(MaterializeTask).empty;
@@ -1983,18 +1975,18 @@ const Inserter = struct {
         const plan = self.arcPlan(plan_index);
         const steps_head = try self.materializeArcPlanSteps(plan_index, tail);
         const head = try self.materializeTerminalReleases(plan.entry_releases.items, .{ .stmt = plan.start, .reason = .branch_entry }, steps_head);
-        if (plan_index >= self.materialized_plans.len) arcInvariant("ARC materialized path index exceeded its cache");
-        if (self.materialized_plans[plan_index]) |existing| {
+        if (plan_index >= self.materialized_plans.len()) arcInvariant("ARC materialized path index exceeded its cache");
+        if (self.materialized_plans.get(plan_index)) |existing| {
             if (existing != head) arcInvariant("ARC materialized one structured path inconsistently");
         } else {
-            self.materialized_plans[plan_index] = head;
+            self.materialized_plans.set(plan_index, head);
         }
         result.* = head;
     }
 
     fn processMaterializePath(self: *Inserter, tasks: *std.ArrayList(MaterializeTask), path: MaterializePathTask) ResourceError!void {
-        if (path.plan_index >= self.materialized_plans.len) arcInvariant("ARC materializer referenced an unknown plan");
-        if (self.materialized_plans[path.plan_index]) |cached| {
+        if (path.plan_index >= self.materialized_plans.len()) arcInvariant("ARC materializer referenced an unknown plan");
+        if (self.materialized_plans.get(path.plan_index)) |cached| {
             path.result.* = cached;
             return;
         }
@@ -2015,7 +2007,7 @@ const Inserter = struct {
                 try self.completeMaterializedPath(path.plan_index, tail, path.result);
             },
             .stop => |stop| {
-                if (self.materialized_plans[stop.target_plan]) |target| {
+                if (self.materialized_plans.get(stop.target_plan)) |target| {
                     const tail = try self.materializeTerminalReleases(stop.releases.items, .{ .stmt = stop.switch_stmt, .reason = .switch_branch_balance }, target);
                     try self.completeMaterializedPath(path.plan_index, tail, path.result);
                     return;
@@ -2026,8 +2018,8 @@ const Inserter = struct {
                 try self.pushMaterializePath(tasks, stop.target_plan, &state.target);
             },
             .join => |join| {
-                if (join.join_index >= self.materialized_joins.len) arcInvariant("ARC materializer join index exceeded its cache");
-                if (self.materialized_joins[join.join_index]) |cached_join| {
+                if (join.join_index >= self.materialized_joins.len()) arcInvariant("ARC materializer join index exceeded its cache");
+                if (self.materialized_joins.get(join.join_index)) |cached_join| {
                     const tail = try self.materializeTerminalReleases(join.releases.items, .{ .stmt = join.stmt, .reason = .join_entry_balance }, cached_join);
                     try self.completeMaterializedPath(path.plan_index, tail, path.result);
                     return;
@@ -2115,7 +2107,7 @@ const Inserter = struct {
                 .params = source.params,
                 .body = state.body,
             });
-            self.materialized_joins[terminal.join_index] = tail;
+            self.materialized_joins.set(terminal.join_index, tail);
         } else {
             tail = state.remainder;
         }
@@ -5912,9 +5904,8 @@ const Inserter = struct {
         solved_regions: collections.DenseMapUnmanaged(LIR.LocalId, PlaceUseRegion) = .empty,
         /// Units waiting while a region is solved, kept between solves.
         region_work: std.ArrayList(PlaceUseRegion.Unit) = .empty,
-        node_stamp: []u32,
-        loop_stamp: []u32,
-        stamp: u32 = 0,
+        node_seen: collections.EpochSet(u32, .stamps, .internal),
+        loop_seen: collections.EpochSet(u32, .stamps, .internal),
     };
 
     /// The statement nodes and loops from which a root's place is used
@@ -5958,7 +5949,7 @@ const Inserter = struct {
             if (facts.uses_every_place) every_place.set(node_index);
             rebinds[node_index] = facts.rebinds orelse no_rebind;
             if (facts.rebinds) |root| {
-                const loop = forest.innermost[node_index];
+                const loop = forest.innermostOf(node_index);
                 if (loop != LoopForest.none) try rebound_roots[loop].set(allocator, @backingInt(root));
             }
             for (uses.items) |local| {
@@ -6039,7 +6030,7 @@ const Inserter = struct {
         var side = std.ArrayList(SideEntry).empty;
         for (0..node_count) |target| {
             for (preds[pred_starts[target]..pred_starts[target + 1]]) |predecessor| {
-                var loop = forest.innermost[target];
+                var loop = forest.innermostOf(target);
                 while (loop != LoopForest.none and !forest.containsNode(loop, predecessor)) : (loop = forest.loops[loop].parent) {
                     if (forest.loops[loop].header != target) try side.append(allocator, .{ .loop = loop, .pred = predecessor });
                 }
@@ -6059,10 +6050,8 @@ const Inserter = struct {
             }
         }
 
-        const node_stamp = try allocator.alloc(u32, node_count);
-        @memset(node_stamp, std.math.maxInt(u32));
-        const loop_stamp = try allocator.alloc(u32, loop_count);
-        @memset(loop_stamp, std.math.maxInt(u32));
+        const node_seen = try collections.EpochSet(u32, .stamps, .internal).init(allocator, node_count);
+        const loop_seen = try collections.EpochSet(u32, .stamps, .internal).init(allocator, loop_count);
         self.place_use_facts = .{
             .forest = forest,
             .rebound_roots = rebound_roots,
@@ -6076,8 +6065,8 @@ const Inserter = struct {
             .component = components.component_of,
             .places_used_from = places_used_from,
             .rebind_component_end = rebind_component_end,
-            .node_stamp = node_stamp,
-            .loop_stamp = loop_stamp,
+            .node_seen = node_seen,
+            .loop_seen = loop_seen,
         };
         return &self.place_use_facts.?;
     }
@@ -6094,7 +6083,7 @@ const Inserter = struct {
 
         /// The largest loop around `node` that never rebinds the root.
         fn outermost(ctx: @This(), node: u32) ?u32 {
-            const loop = ctx.facts.forest.innermost[node];
+            const loop = ctx.facts.forest.innermostOf(node);
             if (loop == LoopForest.none or !ctx.transparent(loop)) return null;
             return ctx.facts.forest.outermostWhile(loop, ctx, transparent);
         }
@@ -6107,7 +6096,8 @@ const Inserter = struct {
         const allocator = self.emission_allocator;
         const graph = self.source_liveness.graphFor(self.current_sig);
         const transparency = PlaceRootTransparency{ .facts = facts, .root_bit = @backingInt(root) };
-        facts.stamp +%= 1;
+        facts.node_seen.reset();
+        facts.loop_seen.reset();
         const Unit = PlaceUseRegion.Unit;
         var region: PlaceUseRegion = .{
             .nodes = try .initEmpty(allocator, graph.nodes.items.len),
@@ -6118,12 +6108,10 @@ const Inserter = struct {
         const Reach = struct {
             fn reach(facts_: *PlaceUseFacts, transparency_: PlaceRootTransparency, work_: *std.ArrayList(Unit), allocator_: Allocator, node: u32) Allocator.Error!void {
                 if (transparency_.outermost(node)) |loop| {
-                    if (facts_.loop_stamp[loop] == facts_.stamp) return;
-                    facts_.loop_stamp[loop] = facts_.stamp;
+                    if (facts_.loop_seen.testAndInsert(loop)) return;
                     try work_.append(allocator_, .{ .loop = true, .index = loop });
                 } else {
-                    if (facts_.node_stamp[node] == facts_.stamp) return;
-                    facts_.node_stamp[node] = facts_.stamp;
+                    if (facts_.node_seen.testAndInsert(node)) return;
                     try work_.append(allocator_, .{ .loop = false, .index = node });
                 }
             }
@@ -18326,27 +18314,26 @@ test "ARC ownership iteration skips absent resources and preserves release order
     const allocator = arena.allocator();
     const width = 65536;
     const locals = try allocator.alloc(LIR.LocalId, width);
-    const indices = try allocator.alloc(u32, width);
-    const absent = try allocator.alloc(u32, width);
+    var indices = try ArcBitColumn.initFilled(allocator, width);
+    var absent = try ArcBitColumn.initFilled(allocator, width);
     const masks = try allocator.alloc(u64, width);
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(allocator);
     defer global_local_index.deinit();
-    for (locals, indices, 0..) |*local, *index, ordinal| {
+    for (locals, 0..) |*local, ordinal| {
         local.* = @fromBackingInt(@intCast(ordinal));
-        index.* = @intCast(ordinal);
-        try global_local_index.put(local.*, index.*);
+        indices.set(ordinal, @fromBackingInt(@as(u32, @intCast(ordinal))));
+        try global_local_index.put(local.*, @intCast(ordinal));
     }
-    @memset(absent, no_arc_bit);
     @memset(masks, 0);
     const domain: ProcArcDomain = .{
         .global_local_index = &global_local_index,
         .frame_locals = locals,
-        .resource_bit_index = indices,
+        .resource_bit_index = indices.view(),
         .resource_locals = locals,
         .resource_full_masks = masks,
-        .group_bit_index = absent,
+        .group_bit_index = absent.view(),
         .group_leaders = &.{},
-        .value_use_bit_index = absent,
+        .value_use_bit_index = absent.view(),
         .value_use_locals = &.{},
         .set_allocator = allocator,
     };

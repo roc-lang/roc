@@ -1379,6 +1379,17 @@ fn lowerAppPathToLir(
         lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
     }
 
+    // Execution inspectors need the same complete readonly image as real
+    // consumers, not only the already-frozen subset emitted during lowering.
+    if (inspect_lowered != null) {
+        const exports = try @import("static_data").buildStaticDataForWidth(gpa, .{
+            .root = lower_modules.root,
+            .imports = lower_modules.imports,
+        }, &lowered, opts.target_usize, .{});
+        if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
+
     if (dump) |writer| {
         const store = &lowered.lir_result.store;
         const layouts = &lowered.lir_result.layouts;

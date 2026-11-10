@@ -10574,8 +10574,8 @@ const lifted_const_lib_source =
     \\}
 ;
 
-/// Read one checked-module cache entry's bytes, or null when the cache holds
-/// no entry under `key`.
+/// Read bytes using the checked-entry storage key recorded by the producer,
+/// not the artifact's semantic identity.
 fn readCheckedModuleCacheEntry(allocator: Allocator, cache_dir: []const u8, key: [32]u8) (CorruptCheckedModuleCacheError || error{NoHomeDirectory})!?[]u8 {
     const io = std.testing.io;
     const config = CacheConfig{ .cache_dir = cache_dir };

@@ -305,7 +305,8 @@ const CaptureSpanId = struct {
 };
 
 /// Marks a compile-time site column slot whose LIR site is not added yet.
-const no_comptime_site: LIR.ComptimeSiteId = @fromBackingInt(std.math.maxInt(u32));
+const ComptimeSiteMap = collections.OptionalIndexColumn(LIR.ComptimeSiteId);
+const FieldUpdateColumn = collections.OptionalIndexColumn(Lifted.ExprId);
 
 /// A capture span identifies its captures structurally (source, start and
 /// length) rather than as a dense index, so it is a hashable key.
@@ -896,8 +897,8 @@ const Lowerer = struct {
     /// parameters without scanning enclosing parameter spans per jump.
     active_loop_params: collections.DenseMap(Lifted.LocalId, ActiveLoopParam),
     local_types: collections.DenseMap(LIR.LocalId, Type.TypeId),
-    /// Each lifted compile-time site's LIR site, or `no_comptime_site`.
-    comptime_site_map: []LIR.ComptimeSiteId,
+    /// Each lifted compile-time site's LIR site, once it is lowered.
+    comptime_site_map: ComptimeSiteMap,
     next_join_point: u32 = 0,
     loop_stack: std.ArrayList(LoopContext),
     join_stack: std.ArrayList(JoinContext),
@@ -1165,9 +1166,8 @@ const Lowerer = struct {
             }
         }
 
-        const comptime_site_map = try allocator.alloc(LIR.ComptimeSiteId, solved.lifted.comptimeSiteCount());
-        errdefer allocator.free(comptime_site_map);
-        @memset(comptime_site_map, no_comptime_site);
+        var comptime_site_map = try ComptimeSiteMap.initFilled(allocator, solved.lifted.comptimeSiteCount());
+        errdefer comptime_site_map.deinit(allocator);
 
         const own_capture_spans = try allocator.alloc(CaptureSpanId, solved.lifted.fnCount());
         errdefer allocator.free(own_capture_spans);
@@ -1367,7 +1367,7 @@ const Lowerer = struct {
         self.value_consumers.deinit(self.allocator);
         self.join_stack.deinit(self.allocator);
         self.loop_stack.deinit(self.allocator);
-        self.allocator.free(self.comptime_site_map);
+        self.comptime_site_map.deinit(self.allocator);
         self.typed_local_map.deinit();
         self.payload_conditions.deinit();
         self.active_loop_params.deinit();
@@ -1529,7 +1529,7 @@ const Lowerer = struct {
         self.comptime_read_shares_root = .empty;
         self.comptime_representations = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
-        self.comptime_site_map = &.{};
+        self.comptime_site_map = .{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
         self.value_consumers = .empty;
@@ -4031,8 +4031,7 @@ const Lowerer = struct {
 
     fn lowerComptimeSite(self: *Lowerer, site: Lifted.ComptimeSiteId) Common.LowerError!LIR.ComptimeSiteId {
         const index = @backingInt(site);
-        const existing = self.comptime_site_map[index];
-        if (existing != no_comptime_site) return existing;
+        if (self.comptime_site_map.get(index)) |existing| return existing;
         if (self.worker_callback) {
             self.missingWorkerPreparation("Solved-LIR worker referenced an unprepared compile-time site");
         }
@@ -4042,7 +4041,7 @@ const Lowerer = struct {
             .match => .match,
             .destructure => .destructure,
         }, source.owner, source.region, source.checked_site, proc);
-        self.comptime_site_map[index] = lowered;
+        self.comptime_site_map.set(index, lowered);
         return lowered;
     }
 
@@ -6264,7 +6263,7 @@ const Lowerer = struct {
         update: Lifted.RecordUpdate,
         next: LIR.CFStmtId,
         type_fields: []const Type.Field = &.{},
-        updates_by_field: []?Lifted.ExprId = &.{},
+        updates_by_field: FieldUpdateColumn = .{},
         field_locals: []LIR.LocalId = &.{},
         base_ty: Type.TypeId = undefined,
         base_local: LIR.LocalId = undefined,
@@ -6840,8 +6839,7 @@ const Lowerer = struct {
             .record_update => |*task| {
                 self.allocator.free(task.type_fields);
                 task.type_fields = &.{};
-                self.allocator.free(task.updates_by_field);
-                task.updates_by_field = &.{};
+                task.updates_by_field.deinit(self.allocator);
                 self.allocator.free(task.field_locals);
                 task.field_locals = &.{};
             },
@@ -7579,12 +7577,11 @@ const Lowerer = struct {
             task.type_fields = try self.allocator.dupe(Type.Field, shape.fields);
             const update_fields = try GuardedList.dupe(self.allocator, Lifted.FieldExpr, self.solved.lifted.fieldExprSpan(task.update.fields));
             defer self.allocator.free(update_fields);
-            task.updates_by_field = try self.allocator.alloc(?Lifted.ExprId, task.type_fields.len);
-            @memset(task.updates_by_field, null);
+            task.updates_by_field = try FieldUpdateColumn.initFilled(self.allocator, task.type_fields.len);
             for (update_fields) |field| {
                 const field_index = shape.indices.get(field.name) orelse Common.invariant("record update field missing from committed type");
-                if (task.updates_by_field[field_index] != null) Common.invariant("record update contained the same field more than once");
-                task.updates_by_field[field_index] = field.value;
+                if (task.updates_by_field.isPresent(field_index)) Common.invariant("record update contained the same field more than once");
+                task.updates_by_field.set(field_index, field.value);
             }
 
             task.base_ty = try self.lowerExprContextTy(task.update.base);
@@ -7616,7 +7613,7 @@ const Lowerer = struct {
         while (frame.index > 0) {
             frame.index -= 1;
             const index = frame.index;
-            if (task.updates_by_field[index]) |value| {
+            if (task.updates_by_field.get(index)) |value| {
                 return .{ .call = exprTask(task.where, task.field_locals[index], value, task.type_fields[index].ty, task.current) };
             }
         }
@@ -7626,7 +7623,7 @@ const Lowerer = struct {
         var index = task.type_fields.len;
         while (index > 0) {
             index -= 1;
-            if (task.updates_by_field[index] != null) continue;
+            if (task.updates_by_field.isPresent(index)) continue;
             if (task.target_is_zst) {
                 task.current = try self.assignZst(task.where, task.field_locals[index], task.current);
                 continue;

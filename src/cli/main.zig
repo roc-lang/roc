@@ -86,6 +86,7 @@ const build_options = @import("build_options");
 const shim_symbols = @import("builtins").shim_symbols;
 const Sha256Rounds = @import("builtins").sha256.Rounds;
 const base = @import("base");
+const collections = @import("collections");
 const dev_diagnostics = base.dev_diagnostics;
 const reporting = @import("reporting");
 const parse = @import("parse");
@@ -1096,6 +1097,11 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
 
     base.ice_context.setThreadRole(.{ .name = "main" });
     base.ice_context.setInvocation(args);
+    if (base.dev_diagnostics.isSet(.storage_work)) {
+        // Every exit path, including `std.process.exit` from a command,
+        // runs the process's exit handlers.
+        _ = storage_work_exit.atexit(storage_work_exit.printCounters);
+    }
     defer base.ice_context.clearInvocation();
     if (comptime base.ice_context.forced_ice_supported) {
         if (init.environ_map.get(base.ice_context.forced_ice_env_var)) |spec| {
@@ -1131,6 +1137,19 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         tracy.waitForShutdown(init.io);
     }
 }
+
+/// Prints the `storage_work` counters when the process exits. Referenced only
+/// in compilers that read developer diagnostics, which always link libc.
+const storage_work_exit = struct {
+    extern "c" fn atexit(handler: *const fn () callconv(.c) void) c_int;
+
+    fn printCounters() callconv(.c) void {
+        var buffer: [2048]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&buffer);
+        collections.storage_work.print(&writer) catch {};
+        std.debug.print("{s}", .{writer.buffered()});
+    }
+};
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8, std_io: std.Io) CliMainError!void {
     const trace = tracy.trace(@src());

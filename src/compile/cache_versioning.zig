@@ -49,8 +49,9 @@ const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.Checked
 /// descriptor scopes, field-default identities in Boxy stored-function types,
 /// the item type naming an integer list worker of a stored function's recipe,
 /// and a platform pairing's callable forwarding after binding its
-/// requirements. Platform-pairing entries share the envelope.
-const checked_envelope_version: u32 = 20;
+/// requirements, and request completion for both strategies. Platform-pairing
+/// entries share the envelope.
+const checked_envelope_version: u32 = 21;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.

@@ -389,7 +389,7 @@ pub const Interpreter = struct {
     /// Resolved immutable values indexed directly by compact `StaticDataId`.
     static_data: []const usize,
     /// Direct slot lookup per entered procedure: a frame local's slot is
-    /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
+    /// `slot_of.get(id - base)`, absent for ids outside the frame.
     /// An index is built the first time a procedure is entered and is checked
     /// against the frame-local span it was built from, so a procedure whose
     /// frame locals are rewritten gets a fresh index.
@@ -553,7 +553,7 @@ pub const Interpreter = struct {
     }
 
     const LocalSlot = struct {
-        /// `unassigned_value` until the local is assigned.
+        /// Runtime-safety builds use `unassigned_value` until the local is assigned.
         val: Value = unassigned_value,
 
         /// No allocation and no zero-sized sentinel offset is ever at this
@@ -566,10 +566,13 @@ pub const Interpreter = struct {
     };
 
     /// See `frame_slot_indexes`.
+    const FrameSlotId = enum(u32) { _ };
+    const FrameSlotColumn = collections.OptionalIndexColumn(FrameSlotId);
+
     const FrameSlotIndex = struct {
         span: LIR.LocalSpan,
         base: u32,
-        slot_of: []u32,
+        slot_of: FrameSlotColumn,
         /// The slots of the frame's zero-sized locals.
         zst_slots: []u32 = &.{},
         /// Per slot: where the local's bytes live in the frame's storage, and
@@ -582,10 +585,8 @@ pub const Interpreter = struct {
         /// bytes the procedure's `frame_alloc` places.
         dyn_frame_slots: []u32 = &.{},
 
-        const none = std.math.maxInt(u32);
-
-        fn deinit(self: FrameSlotIndex, allocator: Allocator) void {
-            allocator.free(self.slot_of);
+        fn deinit(self: *FrameSlotIndex, allocator: Allocator) void {
+            self.slot_of.deinit(allocator);
             allocator.free(self.zst_slots);
             allocator.free(self.dyn_frame_slots);
             allocator.free(self.storage_offsets);
@@ -603,7 +604,7 @@ pub const Interpreter = struct {
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
         /// The proc's slot index (see `frame_slot_indexes`).
         slot_base: u32,
-        slot_of: []const u32,
+        slot_of: FrameSlotColumn.View,
         /// The proc's join points, sorted by id.
         join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
         slots: []LocalSlot,
@@ -625,9 +626,8 @@ pub const Interpreter = struct {
             const id = @backingInt(local_id);
             if (id < self.slot_base) return null;
             const offset = id - self.slot_base;
-            if (offset >= self.slot_of.len) return null;
-            const slot = self.slot_of[offset];
-            return if (slot == FrameSlotIndex.none) null else slot;
+            if (offset >= self.slot_of.len()) return null;
+            return if (self.slot_of.get(offset)) |slot| @backingInt(slot) else null;
         }
 
         fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
@@ -1510,7 +1510,7 @@ pub const Interpreter = struct {
 
     fn getLocalChecked(self: *LirInterpreter, frame: *const Frame, local_id: LocalId) Error!Value {
         const slot = frame.slots[frame.slotIndex(local_id)];
-        if (!slot.assigned()) {
+        if (std.debug.runtime_safety and !slot.assigned()) {
             if (comptime builtin.target.os.tag != .freestanding) {
                 const proc = self.store.getProcSpec(frame.proc_id);
                 debugPrint(
@@ -2253,7 +2253,7 @@ pub const Interpreter = struct {
             .of(LocalSlot),
         )));
         const slots = slots_ptr[0..locals.len];
-        @memset(slots, .{});
+        if (std.debug.runtime_safety) @memset(slots, .{});
         // A zero-sized local holds its only value from the start.
         for (slot_index.zst_slots) |slot| slots[slot].val = Value.zst;
         const storage = try self.frame_stack.alloc(
@@ -2266,7 +2266,7 @@ pub const Interpreter = struct {
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
             .slot_base = slot_index.base,
-            .slot_of = slot_index.slot_of,
+            .slot_of = slot_index.slot_of.view(),
             .join_points = self.store.getJoinPointSpan(proc_spec.join_points),
             .slots = slots,
             .storage = storage,
@@ -2292,21 +2292,20 @@ pub const Interpreter = struct {
         }
         // Until the index is built, the entry names a span no procedure has,
         // so a failed build is rebuilt on the next entry.
-        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = &.{} };
+        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = .{} };
         if (locals.len == 0) {
             entry.value_ptr.span = span;
             return entry.value_ptr.*;
         }
         const base_id = @backingInt(GuardedList.at(locals, 0));
         const last_id = @backingInt(GuardedList.at(locals, locals.len - 1));
-        const slot_of = try self.allocator.alloc(u32, @as(usize, last_id - base_id) + 1);
-        errdefer self.allocator.free(slot_of);
-        @memset(slot_of, FrameSlotIndex.none);
+        var slot_of = try FrameSlotColumn.initFilled(self.allocator, @as(usize, last_id - base_id) + 1);
+        errdefer slot_of.deinit(self.allocator);
         var zst_count: usize = 0;
         var dyn_frame_count: usize = 0;
         for (0..locals.len) |slot| {
             const local_id = GuardedList.at(locals, slot);
-            slot_of[@backingInt(local_id) - base_id] = @intCast(slot);
+            slot_of.set(@backingInt(local_id) - base_id, @fromBackingInt(@intCast(slot)));
             const local = self.store.getLocal(local_id);
             if (self.layout_store.getLayout(local.layout_idx).tag == .zst) zst_count += 1;
             if (local.dyn) |dyn| {

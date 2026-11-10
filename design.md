@@ -242,6 +242,55 @@ must revisit an entry, so it has found a cycle, which is an invariant
 violation. A walk whose store cannot be counted detects the cycle directly.
 No walk uses a fixed step limit that a legal program could exceed.
 
+### Table Storage Lifecycles
+
+Table owners choose storage from the lifecycle, not the initial bit pattern:
+
+| Lifecycle | Storage | Reset |
+| --- | --- | --- |
+| Every entry is written before read | `WriteFirstSlice` | Produce each entry again |
+| Read-first, dense, used once | Filled slices or `OptionalIndexColumn.initFilled` | Explicit fill |
+| Read-first, sparse, large domain | Fresh zero pages or `OptionalIndexColumn.initSparse` | Guaranteed-zero page reset or release |
+| Repeated scratch over a retained domain | `EpochSet` or `EpochColumn` | Advance an epoch |
+| Small flag-only domain | Bitset form of `EpochSet` | Clear the bits |
+| Growing columns | `ReservedList` or `ReservedColumns` | Explicit append writes; trim on seal |
+| Tables with one pass lifetime | `ScratchArena` | Reset to the pass boundary |
+
+Fresh zero storage guarantees the initial state of a new mapping and newly
+accessible reservation suffix. It says nothing about retained capacity,
+rollback/regrowth, descriptor recycling, or sharing with another thread.
+Every appended entry is written explicitly. Resetting a sparse mapping must
+guarantee zeros, not merely advise that its contents may be discarded.
+
+Optional-index columns preserve the owning domain's IDs. A zero-based shared
+domain stores `id + 1`, reserving the stored zero for absence. A private domain
+may instead reserve array slot zero and issue IDs from one; its column
+stores those IDs unchanged, and every iteration over entries excludes the unused
+slot. This choice never silently renumbers IDs crossing a compiler boundary.
+Borrowed column views own no allocation.
+
+Internally counted epochs start at one. Before an advance would reach
+`maxInt(u32)`, the stamps are cleared and the epoch restarts at one. Natural
+epochs are increasing producer-owned IDs; restarting their domain requires
+clearing the stamps. Data are read only under a matching stamp.
+
+Dense storage requests huge-page backing where supported; sparse storage
+avoids it so a small touched subset does not make large regions resident.
+Address stability below a reservation limit is a performance property, never
+a consumer contract. Exceeding a reservation may relocate the column, and
+allocation failure propagates without changing logical contents or ownership.
+Borrowed serialized views own no backing memory and cannot grow.
+
+Groupings use CSR for dense keys and sorted pairs for sparse keys. Chains are
+appropriate only when construction and queries interleave. Group order is
+explicit: both collection builders preserve insertion order, so a consumer
+of a reverse-insertion chain must preserve its ordering deliberately.
+
+These primitives do not authorize blanket conversions. Each migration must
+preserve padding and value-byte initialization, prove its lifecycle,
+and pass the corpus performance gate. Reservation thresholds and commit-ahead
+policy remain measurement decisions, not guarantees of a speedup.
+
 ### Dense IDs and structural keys
 
 Compiler-owned identity domains prefer dense, store-local integer IDs. The
@@ -1877,7 +1926,10 @@ versioning, and overflow elision see the constant they would have seen from
 a literal in source; a table built by `List.repeat` with a compile-time
 length keeps no index check the prover can discharge, and no slot, failure
 record, or guard exists for the root. Small strings may likewise use their
-immediate representation. All aggregate values, including empty lists,
+immediate representation. Restoring stored constants uses the same rule:
+scalar Bool and strings fitting the target's inline representation stay
+constructions, visible to constant propagation and worker preparation.
+All other aggregate values, including empty lists,
 records, tuples, tags, boxes, and captured functions, read immutable stored
 data. There is no construction tree, runtime constructor, or fresh alternative
 for a completed value. Mutation uses the normal copy-on-write operation.
@@ -6267,6 +6319,14 @@ A record type is concrete for this purpose only when every field kind is
 resolved. An undetermined field-kind cell remains specialization-owned even
 when its associated checked type cell is otherwise concrete, so it cannot make
 a compile-time root request eligible.
+
+A Boxy entry for such an ineligible root runs its expression under the
+worker's arguments. Only an eligible context-free root requires a completed
+stored representation before runtime lowering; request eligibility itself must
+already be decided by checking.
+An exact procedure alias likewise runs its checked forwarding lookup, not an
+evaluator. Module-unit wrapper emission consumes the recorded
+`CallableEvalTemplate.forwarded_lookup` decision for this case.
 
 A data root whose value contains a callable slot is context-free only when its
 producer fixes that callable graph with an explicit source annotation. A
@@ -15304,6 +15364,10 @@ immortal callables under both strategies, rather than allocations at each use.
 The `out_desc` slot of the erased-callable ABI is always
 written null: the caller knows the result type's descriptor itself.
 
+Completed callable parts carry the producer-selected drop helper along with
+the procedure. The static-data encoder preserves that relocation: an immortal
+allocation does not erase its callable ABI, including a host's explicit drop call.
+
 Every `.boxy` erased worker (a lambda, an adapter, a method entry, a literal
 or root thunk) takes the erased ABI's reuse argument as its last parameter,
 named by `LirProcSpec.erased_reuse_arg`, and consumes it exactly once
@@ -21317,6 +21381,10 @@ from runtime descriptors. A dynamic field occupies one ownership slot;
 a concrete struct field expands into its concrete slots. An open row or an
 unknown type has no enumerated product shape and remains opaque.
 
+Field reads in an explicit product use that product's slot boundaries. A
+scalar prefix can occupy zero slots there; the standalone scalar layout's
+one-slot domain must not make the read take its neighboring field's unit.
+
 ARC uses this explicit shape for the same field-take and residual-release
 rules as concrete products. Generic record field reads copy representation
 bytes into independent frame storage; owning a projected value therefore
@@ -24809,7 +24877,9 @@ above the guard, with no compiler frames beneath the generated entry, so how
 deep a program recurses before it overflows, and the instruction that
 overflows, are a function of the program and the compiler build alone, and an
 overflow's reported position is reproducible. The crash boundary is set on the
-evaluation stack (`CrashBoundary.run`), so the escape from a crash or an
+evaluation stack (`CrashBoundary.run`). Its guarded callback is never tail-called:
+the frame containing the recovery point must remain live while the callback
+can escape to it. Thus the escape from a crash or an
 overflow lands there and the root returns to the thread's own stack through
 the switch it entered by. The guarded callback is explicitly never tail-called:
 the frame holding the recovery point must remain live until the callback returns

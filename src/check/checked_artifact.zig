@@ -1427,6 +1427,7 @@ fn collectCompileTimeRootRequests(
 }
 
 const CompileTimeRequestScheduler = struct {
+    const RequestIndex = enum(u32) { _ };
     allocator: Allocator,
     module_idx: u32,
     artifact_key: CheckedModuleArtifactKey,
@@ -1441,14 +1442,13 @@ const CompileTimeRequestScheduler = struct {
     hoisted_constants: *const HoistedConstTable,
     const_templates: *const ConstTemplateTable,
     entries: []CompileTimeRequestScheduleEntry,
-    root_to_request_index: []?usize,
+    root_to_request_index: collections.OptionalIndexColumn(RequestIndex),
     dependents: []std.ArrayList(usize),
     pairing_dependents: []std.ArrayList(usize),
     indegrees: []u32,
     emitted: []bool,
-    visited_templates: []u32,
+    visited_templates: collections.EpochSet(u32, .stamps, .internal),
     seen_edges: std.AutoHashMap(u64, void),
-    visit: u32 = 0,
     current_request_index: usize = 0,
     current_root_id: ComptimeRootId = undefined, // Set before dependency collection for each scheduled root.
 
@@ -1468,9 +1468,9 @@ const CompileTimeRequestScheduler = struct {
         const_templates: *const ConstTemplateTable,
         entries: []CompileTimeRequestScheduleEntry,
     ) Allocator.Error!CompileTimeRequestScheduler {
-        const root_to_request_index = try allocator.alloc(?usize, compile_time_roots.roots.len);
-        errdefer allocator.free(root_to_request_index);
-        @memset(root_to_request_index, null);
+        if (entries.len > std.math.maxInt(u32)) return error.OutOfMemory;
+        var root_to_request_index = try collections.OptionalIndexColumn(RequestIndex).initFilled(allocator, compile_time_roots.roots.len);
+        errdefer root_to_request_index.deinit(allocator);
 
         const dependents = try allocator.alloc(std.ArrayList(usize), entries.len);
         errdefer allocator.free(dependents);
@@ -1488,19 +1488,18 @@ const CompileTimeRequestScheduler = struct {
         errdefer allocator.free(emitted);
         @memset(emitted, false);
 
-        const visited_templates = try allocator.alloc(u32, procedure_templates.templates.items.len);
-        errdefer allocator.free(visited_templates);
-        @memset(visited_templates, 0);
+        var visited_templates = try collections.EpochSet(u32, .stamps, .internal).init(allocator, procedure_templates.templates.items.len);
+        errdefer visited_templates.deinit(allocator);
 
         for (entries, 0..) |entry, i| {
             const root_index = @backingInt(entry.root_id);
-            if (root_index >= root_to_request_index.len) {
+            if (root_index >= root_to_request_index.len()) {
                 checkedArtifactInvariant("compile-time request root id was outside the root table", .{});
             }
-            if (root_to_request_index[root_index] != null) {
+            if (root_to_request_index.isPresent(root_index)) {
                 checkedArtifactInvariant("compile-time root was requested more than once", .{});
             }
-            root_to_request_index[root_index] = i;
+            root_to_request_index.set(root_index, @fromBackingInt(@intCast(i)));
         }
 
         return .{
@@ -1530,14 +1529,14 @@ const CompileTimeRequestScheduler = struct {
 
     fn deinit(self: *CompileTimeRequestScheduler) void {
         self.seen_edges.deinit();
-        self.allocator.free(self.visited_templates);
+        self.visited_templates.deinit(self.allocator);
         self.allocator.free(self.emitted);
         self.allocator.free(self.indegrees);
         for (self.pairing_dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.pairing_dependents);
         for (self.dependents) |*list| list.deinit(self.allocator);
         self.allocator.free(self.dependents);
-        self.allocator.free(self.root_to_request_index);
+        self.root_to_request_index.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -1667,10 +1666,7 @@ const CompileTimeRequestScheduler = struct {
     }
 
     fn beginDependencyVisit(self: *CompileTimeRequestScheduler) void {
-        self.visit +%= 1;
-        if (self.visit != 0) return;
-        @memset(self.visited_templates, 0);
-        self.visit = 1;
+        self.visited_templates.reset();
     }
 
     /// Walk every local procedure template reachable from `root`, adding the
@@ -1714,11 +1710,10 @@ const CompileTimeRequestScheduler = struct {
     ) Allocator.Error!?[]const ResolvedValueRefId {
         if (!template_ref.artifact.eql(self.artifact_key.digest())) return null;
         const index = @backingInt(template_ref.template);
-        if (index >= self.visited_templates.len) {
+        if (index >= self.visited_templates.len()) {
             checkedArtifactInvariant("compile-time request dependency referenced an unknown local procedure template", .{});
         }
-        if (self.visited_templates[index] == self.visit) return null;
-        self.visited_templates[index] = self.visit;
+        if (self.visited_templates.testAndInsert(index)) return null;
 
         const template = self.procedure_templates.get(template_ref.template);
         for (self.procedure_templates.templateLiteralArgumentDemand(&template)) |root| try self.addRootDependency(root);
@@ -1899,8 +1894,8 @@ const CompileTimeRequestScheduler = struct {
         dependency_root: ComptimeRootId,
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
-        if (self.root_to_request_index[@backingInt(dependency_root)]) |dependency_index| {
-            try self.pairing_dependents[dependency_index].append(self.allocator, self.current_request_index);
+        if (self.root_to_request_index.get(@backingInt(dependency_root))) |dependency_index| {
+            try self.pairing_dependents[@backingInt(dependency_index)].append(self.allocator, self.current_request_index);
         }
         if (!self.rootDependencyIsStrict(dependency_root)) return;
         try self.addUnconditionalRootDependency(dependency_root);
@@ -1912,10 +1907,10 @@ const CompileTimeRequestScheduler = struct {
     ) Allocator.Error!void {
         if (dependency_root == self.current_root_id) return;
         const raw = @backingInt(dependency_root);
-        if (raw >= self.root_to_request_index.len) {
+        if (raw >= self.root_to_request_index.len()) {
             checkedArtifactInvariant("compile-time root dependency was outside the root table", .{});
         }
-        const dependency_index = self.root_to_request_index[raw] orelse return;
+        const dependency_index = @backingInt(self.root_to_request_index.get(raw) orelse return);
         const edge_key = dependencyEdgeKey(dependency_index, self.current_request_index);
         const edge = try self.seen_edges.getOrPut(edge_key);
         if (edge.found_existing) return;
@@ -3670,6 +3665,8 @@ const empty_builtin_nominal_declarations: BuiltinNominalDeclarationIndex = @spla
 /// Borrowed, read-only view over a `CheckedTypeStore`'s relocated slices plus its
 /// `var_names` interner, so type accessors can resolve ids without holding the owning
 /// store (used by both a live store and a deserialized, buffer-backed one).
+/// Queries borrow this metadata: copying every pool descriptor at each nested
+/// lookup would turn a read-only type query into repeated bulk memory copies.
 pub const CheckedTypeStoreView = struct {
     /// Reusable scratch for checked type equality queries. Every query
     /// clears it on entry, so one scratch serves any number of queries of
@@ -3732,33 +3729,33 @@ pub const CheckedTypeStoreView = struct {
     names: ?*const canonical.CanonicalNameStore = null,
 
     /// Text of a stored variable name id, or null when absent.
-    pub fn varName(self: CheckedTypeStoreView, id: OptionalVarNameId) ?[]const u8 {
+    pub fn varName(self: *const CheckedTypeStoreView, id: OptionalVarNameId) ?[]const u8 {
         const name_id = id.get() orelse return null;
         return self.var_names.getText(@backingInt(name_id));
     }
 
-    fn sealedView(self: CheckedTypeStoreView) sealed_type_view.SealedTypeView {
+    fn sealedView(self: *const CheckedTypeStoreView) sealed_type_view.SealedTypeView {
         return self.sealed orelse checkedArtifactInvariant("a checked source type was read from a store without its sealed solver store", .{});
     }
 
-    fn sealedKeys(self: CheckedTypeStoreView) *sealed_type_keys.SealedTypeKeys {
+    fn sealedKeys(self: *const CheckedTypeStoreView) *sealed_type_keys.SealedTypeKeys {
         return self.sealed_keys orelse checkedArtifactInvariant("a checked source type key was requested from a store without key slots", .{});
     }
 
-    fn synthesizedKeys(self: CheckedTypeStoreView) *SynthesizedTypeKeys {
+    fn synthesizedKeys(self: *const CheckedTypeStoreView) *SynthesizedTypeKeys {
         return self.synthesized_keys orelse checkedArtifactInvariant("a synthesized checked type key was requested from a store without key slots", .{});
     }
 
     /// The number of distinct checked types the view holds: an upper bound
     /// on the length of any acyclic chain through them.
-    pub fn typeCount(self: CheckedTypeStoreView) usize {
+    pub fn typeCount(self: *const CheckedTypeStoreView) usize {
         const source_count: usize = if (self.sealed) |sealed| sealed.var_facts.len else 0;
         return source_count + self.stored_payloads.len;
     }
 
     /// Whether `id` names a type of this view: a synthesized entry it holds,
     /// or a reached checked representative of its sealed store.
-    pub fn containsId(self: CheckedTypeStoreView, id: CheckedTypeId) bool {
+    pub fn containsId(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
         if (type_ids.isSynthesized(id)) return type_ids.synthesizedIndex(id) < self.stored_payloads.len;
         const sealed = self.sealed orelse return false;
         const var_ = type_ids.asVar(id);
@@ -3766,7 +3763,7 @@ pub const CheckedTypeStoreView = struct {
         return sealed.reaches(var_) and sealed.representative(var_) == var_;
     }
 
-    fn synthesizedIndex(self: CheckedTypeStoreView, id: CheckedTypeId) usize {
+    fn synthesizedIndex(self: *const CheckedTypeStoreView, id: CheckedTypeId) usize {
         const index = type_ids.synthesizedIndex(id);
         if (index >= self.stored_payloads.len) checkedArtifactInvariant("synthesized checked type id is out of range", .{});
         return index;
@@ -3774,13 +3771,13 @@ pub const CheckedTypeStoreView = struct {
 
     /// Materialize the public read-form payload for `id`. Slice fields alias the
     /// view's pools or the module's sealed solver store; no allocation.
-    pub fn payload(self: CheckedTypeStoreView, id: CheckedTypeId) CheckedTypePayload {
+    pub fn payload(self: *const CheckedTypeStoreView, id: CheckedTypeId) CheckedTypePayload {
         if (!type_ids.isSynthesized(id)) return self.sealedView().payload(type_ids.asVar(id));
         return reconstructTypeData(CheckedTypePayload, self, &self.stored_payloads[self.synthesizedIndex(id)]);
     }
 
     /// Whether `id` is a nominal or alias type.
-    pub fn isNamed(self: CheckedTypeStoreView, id: CheckedTypeId) bool {
+    pub fn isNamed(self: *const CheckedTypeStoreView, id: CheckedTypeId) bool {
         return switch (self.payload(id)) {
             .alias, .nominal => true,
             .pending, .field_kind, .err, .flex, .rigid, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => false,
@@ -3790,36 +3787,36 @@ pub const CheckedTypeStoreView = struct {
     /// A checked type keyed `key`: the lowest source type with that key, or
     /// else the lowest synthesized one. Each key index is built on its first
     /// demand.
-    pub fn rootForKey(self: CheckedTypeStoreView, key: canonical.CanonicalTypeKey) Allocator.Error!?CheckedTypeId {
+    pub fn rootForKey(self: *const CheckedTypeStoreView, key: canonical.CanonicalTypeKey) Allocator.Error!?CheckedTypeId {
         if (self.sealed) |sealed| {
             if (try self.sealedKeys().varForKey(sealed, key)) |var_| return type_ids.fromVar(var_);
         }
         if (self.roots.len == 0) return null;
-        return try self.synthesizedKeys().rootForKey(self, key);
+        return try self.synthesizedKeys().rootForKey(self.*, key);
     }
 
-    pub fn rootRows(self: CheckedTypeStoreView) []const CheckedTypeRoot {
+    pub fn rootRows(self: *const CheckedTypeStoreView) []const CheckedTypeRoot {
         return self.roots;
     }
 
     /// The key of `root` and the facts its encoding found, computed on the
     /// first demand through the root's key slot.
-    pub fn rootInfo(self: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
+    pub fn rootInfo(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical_type_keys.TypeKeyInfo {
         if (!type_ids.isSynthesized(root)) return try self.sealedKeys().info(type_ids.asVar(root));
-        return try self.synthesizedKeys().info(self, root);
+        return try self.synthesizedKeys().info(self.*, root);
     }
 
     /// Whether `root` reaches a flex or rigid variable, found by walking the
     /// types it reaches; no key is computed. The walk records the fact for
     /// every type whose result it proves, not only for `root`, so asking
     /// about each level of a deep type in turn walks each level once.
-    pub fn rootHasIdentityVariables(self: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
+    pub fn rootHasIdentityVariables(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!bool {
         if (self.knownIdentity(root)) |known| return known;
-        var scan = CheckedTypeViewIdentityScan{ .view = self };
+        var scan = CheckedTypeViewIdentityScan{ .view = self.* };
         var traversal = checked_traverse.BoolPredicateTraversal(CheckedTypeId, CheckedTypeViewIdentityScan).init(self.scanAllocator(), &scan);
         defer traversal.deinit();
         const result = try traversal.visit(root);
-        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self });
+        if (!scan.saw_pending) traversal.reportDecided(result, IdentityRecorder{ .view = self.* });
         return result;
     }
 
@@ -3832,7 +3829,7 @@ pub const CheckedTypeStoreView = struct {
     };
 
     /// The identity-variable fact of `root` a previous walk recorded.
-    fn knownIdentity(self: CheckedTypeStoreView, root: CheckedTypeId) ?bool {
+    fn knownIdentity(self: *const CheckedTypeStoreView, root: CheckedTypeId) ?bool {
         if (type_ids.isSynthesized(root)) {
             const keys = self.synthesized_keys orelse return null;
             return keys.knownIdentity(type_ids.synthesizedIndex(root));
@@ -3841,14 +3838,14 @@ pub const CheckedTypeStoreView = struct {
         return keys.knownIdentity(type_ids.asVar(root));
     }
 
-    fn recordIdentity(self: CheckedTypeStoreView, root: CheckedTypeId, value: bool) void {
+    fn recordIdentity(self: *const CheckedTypeStoreView, root: CheckedTypeId, value: bool) void {
         if (type_ids.isSynthesized(root)) {
             if (self.synthesized_keys) |keys| keys.recordIdentity(type_ids.synthesizedIndex(root), value);
         } else if (self.sealed_keys) |keys| keys.recordIdentity(type_ids.asVar(root), value);
     }
 
     /// A thread-safe allocator owned by the module the view reads.
-    fn scanAllocator(self: CheckedTypeStoreView) Allocator {
+    fn scanAllocator(self: *const CheckedTypeStoreView) Allocator {
         if (self.synthesized_keys) |keys| return keys.allocator;
         if (self.sealed_keys) |keys| return keys.allocator;
         checkedArtifactInvariant("a checked type walk was requested from a store without key slots", .{});
@@ -3858,7 +3855,7 @@ pub const CheckedTypeStoreView = struct {
     /// that reaches an identity variable, and otherwise the type `rootForKey`
     /// finds for its key, so every root of one identity-free type shares one
     /// id.
-    pub fn canonicalId(self: CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
+    pub fn canonicalId(self: *const CheckedTypeStoreView, id: CheckedTypeId) Allocator.Error!CheckedTypeId {
         if (self.knownCanonical(id)) |known| return known;
         const result = if (try self.rootHasIdentityVariables(id))
             id
@@ -3874,7 +3871,7 @@ pub const CheckedTypeStoreView = struct {
         return result;
     }
 
-    fn knownCanonical(self: CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
+    fn knownCanonical(self: *const CheckedTypeStoreView, id: CheckedTypeId) ?CheckedTypeId {
         if (type_ids.isSynthesized(id)) {
             const keys = self.synthesized_keys orelse return null;
             return keys.canonical.items[self.synthesizedIndex(id)].get();
@@ -3887,7 +3884,7 @@ pub const CheckedTypeStoreView = struct {
     /// id, or two types with one key that reach no identity variable. A key
     /// with variables identifies a type only together with where its
     /// variables come from, so such types are one type only by id.
-    pub fn sameType(self: CheckedTypeStoreView, left: CheckedTypeId, right: CheckedTypeId) Allocator.Error!bool {
+    pub fn sameType(self: *const CheckedTypeStoreView, left: CheckedTypeId, right: CheckedTypeId) Allocator.Error!bool {
         if (left == right) return true;
         if (try self.rootHasIdentityVariables(left)) return false;
         if (try self.rootHasIdentityVariables(right)) return false;
@@ -3896,14 +3893,14 @@ pub const CheckedTypeStoreView = struct {
 
     /// The checked type of the source variable `var_`, or null when
     /// publication never reached it.
-    pub fn sourceTypeRoot(self: CheckedTypeStoreView, var_: Var) ?CheckedTypeId {
+    pub fn sourceTypeRoot(self: *const CheckedTypeStoreView, var_: Var) ?CheckedTypeId {
         const sealed = self.sealed orelse return null;
         if (!sealed.reaches(var_)) return null;
         return type_ids.fromVar(sealed.representative(var_));
     }
 
     /// The scheme `id` names.
-    pub fn scheme(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) CheckedTypeScheme {
+    pub fn scheme(self: *const CheckedTypeStoreView, id: CheckedTypeSchemeId) CheckedTypeScheme {
         const raw = @backingInt(id);
         if (raw >= self.schemes.len) checkedArtifactInvariant("checked type scheme id is out of range", .{});
         return self.schemes[raw];
@@ -3911,7 +3908,7 @@ pub const CheckedTypeStoreView = struct {
 
     /// The canonical key of the scheme `id` names, computed from its root's
     /// key.
-    pub fn schemeKey(self: CheckedTypeStoreView, id: CheckedTypeSchemeId) Allocator.Error!canonical.CanonicalTypeSchemeKey {
+    pub fn schemeKey(self: *const CheckedTypeStoreView, id: CheckedTypeSchemeId) Allocator.Error!canonical.CanonicalTypeSchemeKey {
         const row = self.scheme(id);
         const root_key = try self.rootKey(row.root);
         return switch (row.domain) {
@@ -3921,7 +3918,7 @@ pub const CheckedTypeStoreView = struct {
     }
 
     /// Returns the canonical key for a checked type root in this view.
-    pub fn rootKey(self: CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical.CanonicalTypeKey {
+    pub fn rootKey(self: *const CheckedTypeStoreView, root: CheckedTypeId) Allocator.Error!canonical.CanonicalTypeKey {
         return (try self.rootInfo(root)).key;
     }
 
@@ -3929,7 +3926,7 @@ pub const CheckedTypeStoreView = struct {
     /// root. Dispatch syntax can retain an alias wrapper while the constraint
     /// relation names its backing root; both denote the same structural codec
     /// shape, unlike a nominal wrapper which remains part of the key.
-    pub fn structuralRootKey(self: CheckedTypeStoreView, raw_root: CheckedTypeId) Allocator.Error!canonical.CanonicalTypeKey {
+    pub fn structuralRootKey(self: *const CheckedTypeStoreView, raw_root: CheckedTypeId) Allocator.Error!canonical.CanonicalTypeKey {
         var root = raw_root;
         while (true) {
             switch (self.payload(root)) {
@@ -3956,26 +3953,26 @@ pub const CheckedTypeStoreView = struct {
     /// collision authority for producer contracts that intentionally merge
     /// repeated closed obligations.
     pub fn rootExactEql(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .named, self, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .named, self.*, &.{left}, &.{right}, scratch);
     }
 
     /// Same-store equality of the types two roots denote: transparent aliases
     /// are expanded at every depth, while nominal types, variables, and all
     /// other structure compare exactly as in `rootExactEql`.
     pub fn rootAliasTransparentEql(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
     ) Allocator.Error!bool {
         scratch.clear();
-        return try checkedTypeRootSliceEql(.exact, .transparent, self, &.{left}, &.{right}, scratch);
+        return try checkedTypeRootSliceEql(.exact, .transparent, self.*, &.{left}, &.{right}, scratch);
     }
 
     /// Exact same-store equality modulo a bijective renaming of flex/rigid
@@ -3984,7 +3981,7 @@ pub const CheckedTypeStoreView = struct {
     /// distinct ids even though their sharing, constraints, and surrounding
     /// structure must remain identical.
     pub fn rootAlphaExactEql(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: CheckedTypeId,
         right: CheckedTypeId,
@@ -3996,7 +3993,7 @@ pub const CheckedTypeStoreView = struct {
     /// share one variable bijection so cross-root identity and sharing remain
     /// part of the comparison.
     pub fn rootsAlphaExactEql(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: []const CheckedTypeId,
         right: []const CheckedTypeId,
@@ -4006,15 +4003,15 @@ pub const CheckedTypeStoreView = struct {
             if (!std.meta.eql(try self.rootKey(left_root), try self.rootKey(right_root))) return false;
         }
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .named, self, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .named, self.*, left, right, scratch);
     }
 
     /// Bucket key for `rootAliasTransparentEql`: a hash of the alias-resolved
     /// root's own constructor and labels, which every alias-transparent-equal
     /// type shares. Canonical keys retain alias identity, so callers bucket
     /// alias-transparent comparisons by this key instead.
-    pub fn aliasTransparentBucketKey(self: CheckedTypeStoreView, raw_root: CheckedTypeId) u64 {
-        const root = checkedTypeEqualityRoot(.transparent, self, raw_root);
+    pub fn aliasTransparentBucketKey(self: *const CheckedTypeStoreView, raw_root: CheckedTypeId) u64 {
+        const root = checkedTypeEqualityRoot(.transparent, self.*, raw_root);
         const root_payload = self.payload(root);
         var hasher = std.hash.Wyhash.init(0);
         std.hash.autoHash(&hasher, std.meta.activeTag(root_payload));
@@ -4057,18 +4054,18 @@ pub const CheckedTypeStoreView = struct {
     /// `rootAliasTransparentEql`. Canonical keys retain alias identity, so no
     /// key prefilter applies.
     pub fn rootsAliasTransparentAlphaEql(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         scratch: *EqualityScratch,
         left: []const CheckedTypeId,
         right: []const CheckedTypeId,
     ) Allocator.Error!bool {
         if (left.len != right.len) return false;
         scratch.clear();
-        return try checkedTypeRootSliceEql(.alpha, .transparent, self, left, right, scratch);
+        return try checkedTypeRootSliceEql(.alpha, .transparent, self.*, left, right, scratch);
     }
 
     pub fn nominalDeclaration(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         nominal: canonical.NominalTypeKey,
     ) ?CheckedNominalDeclaration {
         for (self.nominal_declarations) |declaration| {
@@ -4078,7 +4075,7 @@ pub const CheckedTypeStoreView = struct {
     }
 
     /// The name `declaration` declares.
-    pub fn nominalDeclarationName(self: CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
+    pub fn nominalDeclarationName(self: *const CheckedTypeStoreView, declaration: CheckedNominalDeclaration) canonical.TypeNameId {
         return switch (self.payload(declaration.declaration_root)) {
             .nominal => |nominal| nominal.name,
             .pending, .field_kind, .err, .flex, .rigid, .alias, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union => base.invariant("a nominal declaration's root is no nominal type", .{}),
@@ -4086,7 +4083,7 @@ pub const CheckedTypeStoreView = struct {
     }
 
     pub fn nominalDeclarationById(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         id: CheckedNominalDeclarationId,
     ) CheckedNominalDeclaration {
         const index: usize = @backingInt(id);
@@ -4103,7 +4100,7 @@ pub const CheckedTypeStoreView = struct {
     /// Direct declaration access from checked builtin identity. Intrinsic
     /// builtins need not have a source declaration in this store.
     pub fn builtinNominalDeclaration(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         builtin_nominal: CheckedBuiltinNominal,
     ) ?CheckedNominalDeclaration {
         const entry = self.builtin_nominal_declarations[@backingInt(builtin_nominal)];
@@ -4112,7 +4109,7 @@ pub const CheckedTypeStoreView = struct {
     }
 
     pub fn nominalDeclarationForPayload(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         nominal: CheckedNominalType,
     ) ?CheckedNominalDeclaration {
         if (nominal.builtin) |builtin_nominal| return self.builtinNominalDeclaration(builtin_nominal);
@@ -4120,7 +4117,7 @@ pub const CheckedTypeStoreView = struct {
     }
 
     pub fn nominalBackingTemplateForPayload(
-        self: CheckedTypeStoreView,
+        self: *const CheckedTypeStoreView,
         nominal: CheckedNominalType,
     ) ?CheckedTypeId {
         if (nominal.representation == .opaque_without_backing) return null;
@@ -11507,9 +11504,9 @@ fn publishCallableEvalForwarding(
 /// only connects source lookups to those identities while resolved refs are
 /// being published.
 const SelectedHoistedCallableTable = struct {
-    by_pattern: []?TopLevelProcedureBindingRef = &.{},
+    by_pattern: collections.OptionalIndexColumn(TopLevelProcedureBindingRef) = .{},
     /// Procedure bindings of promoted local functions, by binding pattern.
-    promoted_by_pattern: []?TopLevelProcedureBindingRef = &.{},
+    promoted_by_pattern: collections.OptionalIndexColumn(TopLevelProcedureBindingRef) = .{},
 
     fn fromRoots(
         allocator: Allocator,
@@ -11520,12 +11517,10 @@ const SelectedHoistedCallableTable = struct {
         checked_type_publication: *const CheckedTypePublication,
         promoted_templates: []const PromotedProcedureTemplateEntry,
     ) Allocator.Error!SelectedHoistedCallableTable {
-        const by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, module.nodeCount());
-        errdefer allocator.free(by_pattern);
-        @memset(by_pattern, null);
-        const promoted_by_pattern = try allocator.alloc(?TopLevelProcedureBindingRef, module.nodeCount());
-        errdefer allocator.free(promoted_by_pattern);
-        @memset(promoted_by_pattern, null);
+        var by_pattern = try collections.OptionalIndexColumn(TopLevelProcedureBindingRef).initFilled(allocator, module.nodeCount());
+        errdefer by_pattern.deinit(allocator);
+        var promoted_by_pattern = try collections.OptionalIndexColumn(TopLevelProcedureBindingRef).initFilled(allocator, module.nodeCount());
+        errdefer promoted_by_pattern.deinit(allocator);
 
         for (promoted_templates) |promoted| {
             const checked_pattern = promoted.pattern;
@@ -11535,9 +11530,9 @@ const SelectedHoistedCallableTable = struct {
                 .{ .artifact = promoted.template.artifact, .proc_base = promoted.template.proc_base },
                 promoted.template,
             );
-            const slot = &promoted_by_pattern[@backingInt(checked_pattern)];
-            if (slot.* != null) checkedArtifactInvariant("promoted local procedure was published more than once", .{});
-            slot.* = binding;
+            const slot = @backingInt(checked_pattern);
+            if (promoted_by_pattern.isPresent(slot)) checkedArtifactInvariant("promoted local procedure was published more than once", .{});
+            promoted_by_pattern.set(slot, binding);
         }
 
         for (roots.roots) |root| {
@@ -11568,11 +11563,11 @@ const SelectedHoistedCallableTable = struct {
                 source_scheme,
                 callable_template,
             );
-            const slot = &by_pattern[@backingInt(checked_pattern)];
-            if (slot.* != null) {
+            const slot = @backingInt(checked_pattern);
+            if (by_pattern.isPresent(slot)) {
                 checkedArtifactInvariant("selected callable pattern was published more than once", .{});
             }
-            slot.* = binding;
+            by_pattern.set(slot, binding);
         }
 
         return .{ .by_pattern = by_pattern, .promoted_by_pattern = promoted_by_pattern };
@@ -11580,21 +11575,21 @@ const SelectedHoistedCallableTable = struct {
 
     fn lookupByPattern(self: *const SelectedHoistedCallableTable, pattern: CIR.Pattern.Idx) ?TopLevelProcedureBindingRef {
         const raw = @backingInt(pattern);
-        if (raw >= self.by_pattern.len) return null;
-        return self.by_pattern[raw];
+        if (raw >= self.by_pattern.len()) return null;
+        return self.by_pattern.get(raw);
     }
 
     /// The procedure binding of the promoted local function a binding pattern
     /// declares.
     fn lookupPromotedByPattern(self: *const SelectedHoistedCallableTable, pattern: CIR.Pattern.Idx) ?TopLevelProcedureBindingRef {
         const raw = @backingInt(pattern);
-        if (raw >= self.promoted_by_pattern.len) return null;
-        return self.promoted_by_pattern[raw];
+        if (raw >= self.promoted_by_pattern.len()) return null;
+        return self.promoted_by_pattern.get(raw);
     }
 
     fn deinit(self: *SelectedHoistedCallableTable, allocator: Allocator) void {
-        allocator.free(self.by_pattern);
-        allocator.free(self.promoted_by_pattern);
+        self.by_pattern.deinit(allocator);
+        self.promoted_by_pattern.deinit(allocator);
         self.* = .{};
     }
 };
@@ -20954,6 +20949,7 @@ fn publishLiteralArgumentRoots(
     // generalized local scope's. A scope inside a defaulted field
     // expression has no template.
     const ScopeKey = struct { template: ?u32, scope: ?u32 };
+    const ScopeOwnerColumn = collections.OptionalIndexColumn(canonical.CheckedProcedureTemplateId);
     const ObligationKey = struct { site: LiteralSite, ty: [32]u8 };
     const ScopeState = struct {
         list: std.ArrayListUnmanaged(LiteralRequirement) = .empty,
@@ -20972,18 +20968,22 @@ fn publishLiteralArgumentRoots(
     }
 
     // The template whose body owns each generalized local scope.
-    const scope_owners = try allocator.alloc(?u32, scopes.len);
-    defer allocator.free(scope_owners);
-    @memset(scope_owners, null);
+    var scope_owners = try ScopeOwnerColumn.initFilled(allocator, scopes.len);
+    defer scope_owners.deinit(allocator);
     for (template_iterator_refs.scope_site_spans, 0..) |span, template_index| {
         for (template_iterator_refs.scope_sites[span.start..][0..span.len]) |site| {
             var current: ?DispatchScopeId = site.scope;
             while (current) |id| {
-                scope_owners[@backingInt(id)] = @intCast(template_index);
+                scope_owners.set(@backingInt(id), @fromBackingInt(@as(u32, @intCast(template_index))));
                 current = scopes[@backingInt(id)].parent;
             }
         }
     }
+    const rawScopeOwner = struct {
+        fn get(owners: *const ScopeOwnerColumn, scope: usize) ?u32 {
+            return if (owners.get(scope)) |template| @backingInt(template) else null;
+        }
+    }.get;
     const scopeKeyOf = struct {
         fn get(template: ?u32, scope: DispatchScope) ScopeKey {
             return switch (scope) {
@@ -21521,7 +21521,7 @@ fn publishLiteralArgumentRoots(
         artifact: ?CheckedModuleDigest,
     };
     const resolveCallee = struct {
-        fn get(ref: CalleeRef, owner: canonical.ArtifactRef, templates_: *const CheckedProcedureTemplateTable, owners: []const ?u32, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState), views: CheckedImportViews) ?Callee {
+        fn get(ref: CalleeRef, owner: canonical.ArtifactRef, templates_: *const CheckedProcedureTemplateTable, owners: *const ScopeOwnerColumn, states: *std.AutoHashMapUnmanaged(ScopeKey, ScopeState), views: CheckedImportViews) ?Callee {
             switch (ref) {
                 .template => |tref| {
                     if (tref.artifact.eql(owner)) {
@@ -21546,7 +21546,7 @@ fn publishLiteralArgumentRoots(
                 },
                 .scope => |id| {
                     const scope = templates_.dispatch_scopes[@backingInt(id)];
-                    const key: ScopeKey = .{ .template = owners[@backingInt(id)], .scope = @backingInt(id) };
+                    const key: ScopeKey = .{ .template = rawScopeOwner(owners, @backingInt(id)), .scope = @backingInt(id) };
                     return .{
                         .key = key,
                         .obligations = if (states.getPtr(key)) |state| state.list.items else &.{},
@@ -21568,7 +21568,7 @@ fn publishLiteralArgumentRoots(
     while (true) {
         var changed = false;
         for (edges.items, edge_args.items) |edge, *args| {
-            const callee = resolveCallee(edge.callee, owner_artifact, templates, scope_owners, &scope_states, import_views) orelse continue;
+            const callee = resolveCallee(edge.callee, owner_artifact, templates, &scope_owners, &scope_states, import_views) orelse continue;
             if (args.items.len >= callee.obligations.len) continue;
             if (edge.subst.len != 0 and edge.subst.len != callee.vars.len) checkedArtifactInvariant("an edge's substitution differs from its callee's scheme", .{});
             // A use with no recorded instantiation of a scheme with
@@ -21650,7 +21650,7 @@ fn publishLiteralArgumentRoots(
         }
         for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
             const start: u32 = @intCast(pool.items.len);
-            if (scope_states.getPtr(.{ .template = scope_owners[scope_index], .scope = @intCast(scope_index) })) |state| try pool.appendSlice(allocator, state.list.items);
+            if (scope_states.getPtr(.{ .template = rawScopeOwner(&scope_owners, scope_index), .scope = @intCast(scope_index) })) |state| try pool.appendSlice(allocator, state.list.items);
             scope.literal_requirements = .{ .start = start, .len = @intCast(pool.items.len - start) };
         }
         allocator.free(templates.literal_requirements_pool);
@@ -21668,7 +21668,7 @@ fn publishLiteralArgumentRoots(
             }
             for (templates.dispatch_scopes, 0..) |*scope, scope_index| {
                 for (templates.scopeLiteralRequirements(scope), 0..) |obligation, index| {
-                    std.debug.print("literal-args: scope {d} (template {?d}) obligation {d}: literal expr {d} ({s}) edge {s}, callee obligation {d}\n", .{ scope_index, scope_owners[scope_index], index, obligation.site.node, @tagName(obligation.site.kind), @tagName(obligation.edge), obligation.callee_requirement });
+                    std.debug.print("literal-args: scope {d} (template {?d}) obligation {d}: literal expr {d} ({s}) edge {s}, callee obligation {d}\n", .{ scope_index, rawScopeOwner(&scope_owners, scope_index), index, obligation.site.node, @tagName(obligation.site.kind), @tagName(obligation.edge), obligation.callee_requirement });
                 }
             }
         }
@@ -27181,13 +27181,13 @@ pub const HoistedConstTable = struct {
     entries: []HoistedConstEntry = &.{},
     by_expr: []HoistedConstByExprEntry = &.{},
     by_pattern: []HoistedConstByPatternEntry = &.{},
-    by_root: []?HoistedConstId = &.{},
+    by_root: []OptionalId(HoistedConstId) = &.{},
 
     pub const Serialized = extern struct {
         entries: SerializedSlice(HoistedConstEntry) = .{},
         by_expr: SerializedSlice(HoistedConstByExprEntry) = .{},
         by_pattern: SerializedSlice(HoistedConstByPatternEntry) = .{},
-        by_root: SerializedSlice(?HoistedConstId) = .{},
+        by_root: SerializedSlice(OptionalId(HoistedConstId)) = .{},
 
         const Serde = artifact_serialize.SliceStoreSerde(HoistedConstTable, @This());
         pub const serialize = Serde.serialize;
@@ -27212,9 +27212,9 @@ pub const HoistedConstTable = struct {
         var by_pattern = std.ArrayList(HoistedConstByPatternEntry).empty;
         errdefer by_pattern.deinit(allocator);
 
-        const by_root = try allocator.alloc(?HoistedConstId, roots.roots.len);
+        const by_root = try allocator.alloc(OptionalId(HoistedConstId), roots.roots.len);
         errdefer allocator.free(by_root);
-        @memset(by_root, null);
+        @memset(by_root, .none);
 
         for (roots.roots) |root| {
             if (root.kind != .hoisted_constant) continue;
@@ -27266,7 +27266,7 @@ pub const HoistedConstTable = struct {
                     .entry = id,
                 });
             }
-            by_root[@backingInt(root.id)] = id;
+            by_root[@backingInt(root.id)] = .some(id);
         }
 
         std.mem.sort(HoistedConstByExprEntry, by_expr.items, {}, HoistedConstByExprEntry.lessThan);
@@ -27323,7 +27323,7 @@ pub const HoistedConstTable = struct {
     pub fn lookupByRoot(self: *const HoistedConstTable, root: ComptimeRootId) ?HoistedConstEntry {
         const idx = @backingInt(root);
         if (idx >= self.by_root.len) return null;
-        const entry_id = self.by_root[idx] orelse return null;
+        const entry_id = self.by_root[idx].get() orelse return null;
         return self.entries[@backingInt(entry_id)];
     }
 
@@ -27348,11 +27348,11 @@ pub const CheckedConstBody = struct {
 /// Public `CheckedConstBodyTable` declaration.
 pub const CheckedConstBodyTable = struct {
     bodies: []CheckedConstBody = &.{},
-    by_root: []?CheckedConstBodyRef = &.{},
+    by_root: []OptionalId(CheckedConstBodyRef) = &.{},
 
     pub const Serialized = extern struct {
         bodies: SerializedSlice(CheckedConstBody) = .{},
-        by_root: SerializedSlice(?CheckedConstBodyRef) = .{},
+        by_root: SerializedSlice(OptionalId(CheckedConstBodyRef)) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedConstBodyTable, @This());
         pub const serialize = Serde.serialize;
         pub const deserialize = Serde.deserialize;
@@ -27365,9 +27365,9 @@ pub const CheckedConstBodyTable = struct {
         var bodies = std.ArrayList(CheckedConstBody).empty;
         errdefer bodies.deinit(allocator);
 
-        const by_root = try allocator.alloc(?CheckedConstBodyRef, roots.roots.len);
+        const by_root = try allocator.alloc(OptionalId(CheckedConstBodyRef), roots.roots.len);
         errdefer allocator.free(by_root);
-        @memset(by_root, null);
+        @memset(by_root, .none);
 
         for (roots.roots) |root| {
             if (!compileTimeRootHasConstBody(root.kind)) continue;
@@ -27378,7 +27378,7 @@ pub const CheckedConstBodyTable = struct {
                 .body_expr = root.rootExpr(),
                 .checked_type = root.checked_type,
             });
-            by_root[@backingInt(root.id)] = id;
+            by_root[@backingInt(root.id)] = .some(id);
         }
 
         return .{
@@ -27390,7 +27390,7 @@ pub const CheckedConstBodyTable = struct {
     pub fn bodyForRoot(self: *const CheckedConstBodyTable, root: ComptimeRootId) ?CheckedConstBodyRef {
         const idx = @backingInt(root);
         if (idx >= self.by_root.len) return null;
-        return self.by_root[idx];
+        return self.by_root[idx].get();
     }
 
     pub fn get(self: *const CheckedConstBodyTable, id: CheckedConstBodyRef) CheckedConstBody {
@@ -33988,10 +33988,10 @@ const MethodBindingTargets = struct {
     relation_modules: []const ImportedModuleView,
     /// The declaring statement of each local declaration's pattern, built
     /// on the first method that reaches an unpromoted local procedure.
-    decl_statements: ?[]?CIR.Statement.Idx = null,
+    decl_statements: ?collections.OptionalIndexColumn(CIR.Statement.Idx) = null,
 
     fn deinit(self: *MethodBindingTargets) void {
-        if (self.decl_statements) |statements| self.allocator.free(statements);
+        if (self.decl_statements) |*statements| statements.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -34146,7 +34146,7 @@ const MethodBindingTargets = struct {
     /// The target of an unpromoted local procedure a method's chain of local
     /// bindings reaches, declared at its own statement.
     fn localProcedureTarget(self: *MethodBindingTargets, local: LocalProcedureBinding) Allocator.Error!?static_dispatch.ReferencedMethodTarget {
-        const statement = (try self.declStatements())[@backingInt(local.binder)] orelse
+        const statement = (try self.declStatements()).get(@backingInt(local.binder)) orelse
             checkedArtifactInvariant("a local procedure binding had no declaring statement", .{});
         if (!self.module_index.reachesPattern(local.binder)) return null;
         if (!self.module_index.reachesStatement(statement)) return null;
@@ -34160,21 +34160,20 @@ const MethodBindingTargets = struct {
         } };
     }
 
-    fn declStatements(self: *MethodBindingTargets) Allocator.Error![]?CIR.Statement.Idx {
-        if (self.decl_statements) |statements| return statements;
+    fn declStatements(self: *MethodBindingTargets) Allocator.Error!collections.OptionalIndexColumn(CIR.Statement.Idx).View {
+        if (self.decl_statements) |*statements| return statements.view();
         const node_count = self.module.nodeCount();
-        const statements = try self.allocator.alloc(?CIR.Statement.Idx, node_count);
-        @memset(statements, null);
+        var statements = try collections.OptionalIndexColumn(CIR.Statement.Idx).initFilled(self.allocator, node_count);
         var raw_node: u32 = 0;
         while (raw_node < node_count) : (raw_node += 1) {
             if (self.module.nodeTag(@fromBackingInt(@intCast(raw_node))) != .statement_decl) continue;
             const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node));
             const statement_data = self.module.getStatement(statement);
             if (std.meta.activeTag(statement_data) != .s_decl) continue;
-            statements[@backingInt(statement_data.s_decl.pattern)] = statement;
+            statements.set(@backingInt(statement_data.s_decl.pattern), statement);
         }
         self.decl_statements = statements;
-        return statements;
+        return statements.view();
     }
 };
 
@@ -37419,6 +37418,20 @@ test "checked polarity alias publication erases hidden arguments and preserves b
     const loaded_alias = roundtrip.loaded.payload(root).alias;
     try std.testing.expectEqual(@as(usize, 1), loaded_alias.args.len);
     try std.testing.expectEqual(row.ext, roundtrip.loaded.payload(loaded_alias.backing).tag_union.ext);
+}
+
+test "checked type view queries borrow their pool metadata" {
+    inline for (.{
+        CheckedTypeStoreView.payload,
+        CheckedTypeStoreView.canonicalId,
+        CheckedTypeStoreView.rootHasIdentityVariables,
+        CheckedTypeStoreView.rootForKey,
+        CheckedTypeStoreView.rootInfo,
+        CheckedTypeStoreView.rootKey,
+    }) |query| {
+        const receiver = @typeInfo(@TypeOf(query)).@"fn".param_types[0].?;
+        try std.testing.expect(receiver == *const CheckedTypeStoreView);
+    }
 }
 
 test "root eligibility shares complete recursive proofs without conflating template and value variables" {

@@ -938,10 +938,11 @@ fn startTagUnion(
     tag_union: TagUnion,
     row_var: Var,
 ) error{ OutOfMemory, WriteFailed }!bool {
-    // Bounds check the tags range before iterating
+    // Bounds check the tags range before iterating. A range holding no tags
+    // addresses no row, so only a range with tags can reach past the column.
     const tags_start_idx = @backingInt(tag_union.tags.start);
     const tags_len = self.types.tags.len();
-    if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
+    if (tag_union.tags.count != 0 and (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len)) {
         try writer.writeAll("[Error]");
         return false;
     }
@@ -1919,6 +1920,9 @@ test "TypeWriter renders every shape the walk descends through" {
 
     try env.expectRender(empty_record, "{}");
     try env.expectRender(empty_tag_union, "[]");
+    // A row with no tags of its own is written the same as its extension,
+    // even when the store holds no tag rows past the range's start.
+    try env.expectRender(try env.types.freshFromContent(try env.types.mkTagUnion(&.{}, empty_tag_union)), "[]");
     try env.expectRender(try env.types.freshFromContent(.err), "Error");
 
     // Tuples keep their element order; nesting parenthesises.
