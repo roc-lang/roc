@@ -809,6 +809,7 @@ const CustomCase = enum {
     glue_recursive_slot_box,
     glue_generic_callable_arg,
     glue_hosted_erased_generic_callback,
+    glue_boxed_sequences,
     glue_application_only_requires,
     glue_c_tests,
     roc_test_skips_url_dependency_expects,
@@ -2639,6 +2640,7 @@ const glue_cases = [_]CliCase{
     .{ .id = 0, .suite = .glue, .name = "glue regression: recursive-slot boxed edges wrap by-value types and compile", .body = .{ .custom = .glue_recursive_slot_box } },
     .{ .id = 0, .suite = .glue, .name = "glue regression: function stored in a generic type is an erased callable in every generator", .body = .{ .custom = .glue_generic_callable_arg } },
     .{ .id = 0, .suite = .glue, .name = "issue 11505: hosted Box of a generic function is an erased callable in every generator", .body = .{ .custom = .glue_hosted_erased_generic_callback } },
+    .{ .id = 0, .suite = .glue, .name = "issue 12887: boxed sequences are opaque owning handles in every generator", .body = .{ .custom = .glue_boxed_sequences } },
     .{ .id = 0, .suite = .glue, .name = "issue 11504: application requirements are not glue roots", .body = .{ .custom = .glue_application_only_requires } },
     .{ .id = 0, .suite = .glue, .name = "CGlue.roc expect tests pass", .body = .{ .custom = .glue_c_tests } },
 };
@@ -6454,6 +6456,7 @@ fn runCustomCase(
         .glue_recursive_slot_box => customGlueRecursiveSlotBox(io, allocator, &env, &timer, timeout_ms),
         .glue_generic_callable_arg => customGlueGenericCallableArg(io, allocator, &env, &timer, timeout_ms),
         .glue_hosted_erased_generic_callback => customGlueHostedErasedGenericCallback(io, allocator, &env, &timer, timeout_ms),
+        .glue_boxed_sequences => customGlueBoxedSequences(io, allocator, &env, &timer, timeout_ms),
         .glue_application_only_requires => customGlueApplicationOnlyRequires(io, allocator, &env, &timer, timeout_ms),
         .glue_c_tests => customGlueCTests(io, allocator, &env, &timer, timeout_ms),
         .roc_test_skips_url_dependency_expects => customRocTestSkipsUrlDependencyExpects(io, allocator, &env, &timer, timeout_ms),
@@ -7152,7 +7155,7 @@ const hot_reload_host_c_source =
     \\    struct RocErasedCallablePayload *payload = (struct RocErasedCallablePayload *)boxed;
     \\    struct I64Args args = { .arg0 = value };
     \\    int64_t result = 0;
-++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + 16, NULL);\n" ++
+++ "\n    payload->callable(" ++ shim_symbols.roc_shim_get_ops ++ "(), &result, &args, boxed + " ++ std.fmt.comptimePrint("{d}", .{builtins.erased_callable.capture_offset}) ++ ", NULL);\n" ++
     \\    return result;
     \\}
     \\
@@ -8696,19 +8699,19 @@ fn issue12633PlatformSource(allocator: Allocator, target: NativeMuslTarget) CliR
         \\        {s}: {{ inputs: ["crt1.o", "libhost.a", app, "compiler_rt.o", "libc.a"] }},
         \\    }}
         \\
-        \\capture_for_host : U64 -> Box(((State -> U64) -> U64))
+        \\capture_for_host : U64 -> Box((Box((State -> U64)) -> U64))
         \\capture_for_host = |seed| {{
         \\    init_fn = main.init
         \\    state = init_fn(seed)
         \\
-        \\    Box.box(|reader| reader(state))
+        \\    Box.box(|reader| Box.unbox(reader)(state))
         \\}}
         \\
-        \\read_for_host : Box(((State -> U64) -> U64)) -> U64
+        \\read_for_host : Box((Box((State -> U64)) -> U64)) -> U64
         \\read_for_host = |boxed| {{
         \\    value_fn = main.value
         \\
-        \\    Box.unbox(boxed)(value_fn)
+        \\    Box.unbox(boxed)(Box.box(value_fn))
         \\}}
         \\
     ,
@@ -18734,9 +18737,9 @@ fn customGlueUnresolvedByValueErrors(io: std.Io, allocator: Allocator, env: *con
 
 fn customGlueRecordFunctionField(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     // A platform whose provided entrypoint returns an opaque nominal record
-    // holding a function-typed field. Layout selection stores such a record
-    // behind a compiler-owned box (the recursive-slot storage for closures
-    // that capture the record), so the host receives a pointer to a payload
+    // holding a directly boxed function field. Its compiler-owned record
+    // allocation does not exempt that field from the direct-boxing rule.
+    // The host receives a pointer to a payload
     // struct whose only field is an erased callable. Glue describes exactly
     // that committed layout.
     const output_dir = createWorkSubdir(io, allocator, env, "glue-out") catch |err|
@@ -18839,9 +18842,9 @@ fn customGlueGenericCallableArg(io: std.Io, allocator: Allocator, env: *const Ca
     // committed layouts (`Box(U64 -> Step)`) carries them, so its argument
     // and result types are emitted for the host to fill its buffers. One
     // inside a generic nominal whose argument mentions the type parameter
-    // (`Handler(a) := [H({ y : a } -> {})]`) is opaque, since the compiler has
+    // (`Handler(a) := [H(Box({ y : a } -> {}))]`) is opaque, since the compiler has
     // no standalone layout for the instantiated argument. `Box` of a nominal
-    // whose backing is a function stays a box cell, exactly as the compiler
+    // whose backing is a boxed function stays a separate box cell, exactly as the compiler
     // committed it.
     return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/generic-callable-arg/main.roc", .{
         .zig = &.{
@@ -18889,6 +18892,33 @@ fn customGlueHostedErasedGenericCallback(io: std.Io, allocator: Allocator, env: 
             "pub fn roc_notify(arg0: RocErasedCallable);",
             "pub struct CallbacksEvent {",
         },
+    });
+}
+
+fn customGlueBoxedSequences(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    return checkGlueOutput(io, allocator, env, timer, timeout_ms, "test/glue/boxed-sequences/main.roc", .{
+        .zig = &.{
+            "pub extern fn roc_iter(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
+            "pub extern fn roc_stream(arg0: RocErasedCallable) callconv(.c) RocErasedCallable;",
+            "pub extern fn roc_hold_iter(arg0: RocErasedCallable) callconv(.c) void;",
+            "pub extern fn roc_hold_stream(arg0: RocErasedCallable) callconv(.c) void;",
+            "@\"inner\": RocErasedCallable",
+        },
+        .c = &.{
+            "extern RocErasedCallable roc_iter(RocErasedCallable arg0);",
+            "extern RocErasedCallable roc_stream(RocErasedCallable arg0);",
+            "extern void roc_hold_iter(RocErasedCallable arg0);",
+            "extern void roc_hold_stream(RocErasedCallable arg0);",
+            "RocErasedCallable inner;",
+        },
+        .rust = &.{
+            "pub fn roc_iter(arg0: RocErasedCallable) -> RocErasedCallable;",
+            "pub fn roc_stream(arg0: RocErasedCallable) -> RocErasedCallable;",
+            "pub fn roc_hold_iter(arg0: RocErasedCallable);",
+            "pub fn roc_hold_stream(arg0: RocErasedCallable);",
+            "pub inner: RocErasedCallable",
+        },
+        .absent = &.{ "len_if_known", "IterStep", "StreamStep" },
     });
 }
 

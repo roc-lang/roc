@@ -36,6 +36,8 @@ platform ""
         "roc_stderr_line": Stderr.line!,
         "roc_stdin_line": Stdin.line!,
         "roc_stdout_line": Stdout.line!,
+        "roc_host_release_boxed_iter": Host.release_boxed_iter!,
+        "roc_host_release_boxed_stream": Host.release_boxed_stream!,
     }
     targets: {
         inputs_dir: "targets/",

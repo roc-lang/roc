@@ -5746,6 +5746,7 @@ const Pass = struct {
         const arg_count = GuardedList.borrowLen(args) - @intFromBool(self.store.stmtRowOrDefault(s.extra).dyn_elem_desc);
 
         switch (s.op) {
+            .boxed_sequence_pack, .boxed_sequence_unpack => {},
             .simd_concat_shift_bytes => {
                 std.debug.assert(arg_count == 3);
                 const s_extra = self.store.stmtRowOrDefault(s.extra);

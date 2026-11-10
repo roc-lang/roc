@@ -2315,6 +2315,8 @@ const Inserter = struct {
                             .capture = assign.capture,
                             .capture_layout = assign.capture_layout,
                             .on_drop = assign.on_drop,
+                            .on_copy = assign.on_copy,
+                            .frozen_capture_layout = assign.frozen_capture_layout,
                             .reuse = assign.reuse,
                             .reuse_unique = step.reuse_unique,
                         }),
@@ -18234,7 +18236,7 @@ test "ARC erased argument products take fields and preserve prefix and scalar re
         const scalar = try d.f.local(.u64);
         const product = try d.f.store.addStmtRow(LIR.ProductShape, .{
             .layouts = try d.f.store.addU32Span(&.{ @backingInt(layout_mod.Idx.opaque_ptr), @backingInt(layout_mod.Idx.u64), @backingInt(d.dynamic), @backingInt(d.dynamic) }),
-            .slots = try d.f.store.addU32Span(&.{ 0, 0, 0, 1, 2 }),
+            .slots = try d.f.store.addU32Span(&.{ 0, 0, 1, 2, 3 }),
             .descriptors = try d.f.span(&.{ word_desc, scalar_desc, field_desc, field_desc }),
         });
         d.f.store.getLocalPtr(param).product = product;

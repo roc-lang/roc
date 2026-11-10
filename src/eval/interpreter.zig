@@ -458,7 +458,7 @@ pub const Interpreter = struct {
     /// Runs the static erased callables of one interpreter static-data image.
     /// A caller of the erased-callable ABI supplies only its own RocOps and the
     /// capture pointer, so each callable reaches its owner through the
-    /// `StaticCallableHeader` stored before its allocation, never through the
+    /// `StaticCallableHeader` stored in its capture, never through the
     /// caller's RocOps.
     pub const StaticCallableOwner = struct {
         context: ?*anyopaque,
@@ -525,8 +525,7 @@ pub const Interpreter = struct {
         }
     };
 
-    /// Interpreter-private header stored immediately before the allocation of
-    /// each static erased callable in an interpreter static-data image.
+    /// Interpreter-private ownership trailer inside a static callable's capture.
     pub const StaticCallableHeader = extern struct {
         owner: *const StaticCallableOwner,
         proc_id: u32,
@@ -539,8 +538,8 @@ pub const Interpreter = struct {
         std.mem.alignForward(usize, @sizeOf(usize), builtins.erased_callable.payload_alignment);
 
     pub fn staticCallableHeader(capture_ptr: [*]u8) *const StaticCallableHeader {
-        const payload = @intFromPtr(capture_ptr) - builtins.erased_callable.capture_offset;
-        return @ptrFromInt(payload - static_callable_payload_offset - @sizeOf(StaticCallableHeader));
+        const payload = builtins.erased_callable.payloadPtr(capture_ptr - builtins.erased_callable.capture_offset);
+        return @ptrCast(@alignCast(capture_ptr + payload.capture_size - @sizeOf(StaticCallableHeader)));
     }
 
     /// Native stack overflow is not caught here: see `max_call_depth`.
@@ -960,6 +959,13 @@ pub const Interpreter = struct {
     }
 
     fn staticErasedCallableOnDrop(_: ?[*]u8, _: *RocOps) callconv(.c) void {}
+
+    /// Frozen captures name immortal allocations, so retaining them is a no-op.
+    pub fn staticErasedCallableOnCopyAddress() usize {
+        return @intFromPtr(&staticErasedCallableOnCopy);
+    }
+
+    fn staticErasedCallableOnCopy(_: ?[*]u8, _: isize) callconv(.c) void {}
 
     fn evalAllocator(self: *LirInterpreter) Allocator {
         return self.scratch.allocator();
@@ -3064,6 +3070,8 @@ pub const Interpreter = struct {
         builtins.erased_callable.payloadPtr(data_ptr).* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
             .on_drop = &interpreterErasedCallableOnDrop,
+            .on_copy = &interpreterErasedCallableOnCopy,
+            .capture_size = capture_size,
         };
         if (self.retained_owner) |owner| owner.retain();
         erasedCallableInterpreterContextFromPayload(data_ptr).* = .{
@@ -3457,6 +3465,26 @@ pub const Interpreter = struct {
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
+    fn interpreterErasedCallableOnCopy(capture: ?[*]u8, amount: isize) callconv(.c) void {
+        const context = erasedCallableInterpreterContextFromCapture(capture);
+        if (context.owner) |owner| {
+            owner.enter();
+            for (0..@intCast(amount)) |_| owner.retain();
+        }
+        defer if (context.owner) |owner| owner.leave();
+        const ptr = capture.? + context.capture_value_offset;
+        switch (@as(ErasedCallableCaptureDrop, @fromBackingInt(@intCast(context.drop_kind)))) {
+            .none => {},
+            .desc => boxy.walk.captureIncref(ptr, amount, &context.interpreter.roc_ops),
+            .rc_helper => context.interpreter.performRcHelperRequired(
+                .{ .op = .incref, .layout_idx = @fromBackingInt(@intCast(context.drop_layout_plus_one - 1)) },
+                .{ .ptr = ptr },
+                @intCast(amount),
+                .atomic,
+            ),
+        }
+    }
+
     fn dropInterpreterErasedCallableCapture(
         self: *LirInterpreter,
         context: *ErasedCallableInterpreterContext,
@@ -3791,7 +3819,9 @@ pub const Interpreter = struct {
         const data_ptr = if (assign.reuse) |reuse_local| blk: {
             const reuse_value = try self.getLocalChecked(frame, reuse_local);
             if (self.readBoxedDataPointer(reuse_value)) |reuse_ptr| {
-                if (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)) {
+                if (builtins.erased_callable.payloadPtr(reuse_ptr).capture_size >= capture_size and
+                    (assign.reuse_unique or builtins.utils.isUnique(reuse_ptr, &self.roc_ops)))
+                {
                     self.layoutRuntime().performErasedCallableFinalDrop(reuse_ptr, .decref, 1);
                     break :blk reuse_ptr;
                 }
@@ -3832,6 +3862,8 @@ pub const Interpreter = struct {
         payload.* = .{
             .callable_fn_ptr = &interpreterErasedCallableTrampoline,
             .on_drop = on_drop,
+            .on_copy = &interpreterErasedCallableOnCopy,
+            .capture_size = capture_size,
         };
 
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
@@ -5040,6 +5072,18 @@ pub const Interpreter = struct {
         const list_elems = listElemSource(ll, arg_layout);
 
         return switch (ll.op) {
+            .boxed_sequence_pack => blk: {
+                const result = try self.alloc(ll.ret_layout);
+                const handle = builtins.boxed_sequence.pack(args[0].ptr, self.helper.sizeOf(ll.arg_layouts[0]), args[1].read(u32), &self.roc_ops);
+                self.writeBoxedDataPointer(result, handle);
+                break :blk result;
+            },
+            .boxed_sequence_unpack => blk: {
+                const step = self.readBoxedDataPointer(args[0]) orelse self.invariantFailed("boxed sequence has a null step", .{});
+                const result = try self.alloc(ll.ret_layout);
+                builtins.boxed_sequence.unpack(result.ptr, step, self.helper.sizeOf(ll.ret_layout));
+                break :blk result;
+            },
             .num_plus, .num_minus, .num_times => unreachable, // lowering resolves source-policy arithmetic to a family member, and verifyArithmeticBoundary rejects it in LIR
             .list_prefetched => unreachable, // LIR lowering splits this into an alias and `list_prefetch`
             // ── String ops ──
@@ -8481,16 +8525,7 @@ pub const Interpreter = struct {
             },
             .box_payload_addr => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                // A box of a function is the callable itself.
-                if (payload.kind == .erased_callable) {
-                    try self.setComponentTarget(frame, stmt_id, target, try self.localBytes(frame, b.box));
-                    return;
-                }
-                // The box word lives in the box local's bytes, which a dynamic local
-                // holds by address.
-                const word = @as(*const usize, @ptrCast(@alignCast(try self.localBytes(frame, b.box)))).* & ~builtins.utils.DATA_PTR_TAG_MASK;
-                // A box of a zero-sized payload holds no allocation.
-                const address: [*]u8 = if (payload.size == 0 or word == 0) boxy.walk.zeroSizedPtr() else @ptrFromInt(word);
+                const address = boxy.compiled.boxPayloadAddr(payload, @ptrCast(@alignCast(try self.localBytes(frame, b.box))));
                 try self.setComponentTarget(frame, stmt_id, target, address);
             },
             .tag_discriminant => |t| {
@@ -8586,17 +8621,8 @@ pub const Interpreter = struct {
             },
             .box => |b| {
                 const payload = try self.descAt(frame, b.desc);
-                // A box of a function is the callable itself, which the box
-                // takes over.
-                const word: usize = if (payload.kind == .erased_callable)
-                    @as(*align(1) const usize, @ptrCast(try self.localBytes(frame, b.payload))).*
-                else if (payload.size == 0) 0 else blk: {
-                    const data = try self.allocRocDataWithRc(payload.size, payload.alignment, payload.containsRefcounted());
-                    @memcpy(data[0..payload.size], (try self.localBytes(frame, b.payload))[0..payload.size]);
-                    break :blk @intFromPtr(data);
-                };
                 const dst = try self.targetStorage(frame, target);
-                @as(*align(1) usize, @ptrCast(dst)).* = word;
+                boxy.compiled.buildBox(payload, @ptrCast(@alignCast(dst)), try self.localBytes(frame, b.payload), &self.roc_ops);
                 try self.finishResultStorage(frame, stmt_id, target, dst);
             },
             .eq => |e| {

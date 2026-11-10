@@ -3427,7 +3427,6 @@ pub const InstGraph = struct {
         const Pending = struct {
             node: NodeId,
             depth: u8,
-            force_dynamic: bool,
         };
         var pending = std.ArrayList(Pending).empty;
         defer pending.deinit(self.allocator);
@@ -3438,11 +3437,32 @@ pub const InstGraph = struct {
         var active = self.node_set_pool.acquire();
         defer self.node_set_pool.release(&active);
 
-        for (self.nodes.items, 0..) |_, raw_index| {
+        var raw_index: usize = 0;
+        while (raw_index < self.nodes.items.len) : (raw_index += 1) {
             const node = self.find(@fromBackingInt(@intCast(@as(u32, @intCast(raw_index)))));
             const entry = try seen.getOrPut(node);
             if (entry.found_existing) continue;
-            const named = switch ((try self.content(node))) {
+            const node_content = try self.content(node);
+            if (node_content == .box) {
+                // A boxed sequence's step and every successor must use one
+                // fixed interface, independent of its private producer state.
+                var payload = node_content.box;
+                while (true) {
+                    const content_ = try self.content(payload);
+                    if (content_ != .named) break;
+                    const named_ = content_.named;
+                    if (named_.kind == .alias) {
+                        payload = (named_.backing orelse Common.invariant("boxed alias has no backing")).node;
+                        continue;
+                    }
+                    if (named_.builtin_owner) |owner| {
+                        if (static_dispatch.isIteratorOwner(owner)) self.markForcedDynamicIteratorRoot(payload);
+                    }
+                    break;
+                }
+                continue;
+            }
+            const named = switch (node_content) {
                 .named => |named| named,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => continue,
             };
@@ -3452,7 +3472,6 @@ pub const InstGraph = struct {
             try pending.append(self.allocator, .{
                 .node = node,
                 .depth = depth,
-                .force_dynamic = self.iteratorRootRequiresForcedDynamic(node),
             });
         }
 
@@ -3463,7 +3482,7 @@ pub const InstGraph = struct {
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => Common.invariant("generated iterator representation target stopped being named"),
             };
             named.def.generated = null;
-            if (item.force_dynamic or item.depth > generated_iterator_mint_depth_limit) {
+            if (self.iteratorRootRequiresForcedDynamic(node) or item.depth > generated_iterator_mint_depth_limit) {
                 if (named.args.len == 0) {
                     Common.invariant("generated iterator representation had no item argument");
                 }

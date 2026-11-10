@@ -25343,6 +25343,34 @@ producer metadata; only non-debug size builds remove target-feature metadata.
 
 ## Host Symbol ABI
 
+Every function value, `Iter`, and `Stream` visible to the host must be the
+immediate payload of its own `Box`. Boxing an enclosing record, tuple, list,
+tag, or user nominal does not satisfy this requirement. Aliases are transparent;
+nominal and opaque user types are checked through their declared backing with
+their actual parameters substituted. The rule applies equally to hosted and
+provided arguments and results. A procedure's own signature is not a function
+value. Boxed iterators and streams are opaque handles: their private step
+closures are implementation state, not further host-visible values.
+
+Boxed sequences share the erased-callable ownership protocol. Their captures
+and private record view occupy one allocation; the view's step points back to
+that allocation without owning another reference. Unboxing retains the step
+when its record is copied. A unique step can be resized for boxing; copying a
+shared step retains its captured references independently. The callable header
+therefore carries the capture extent and its retain plan as well as final-drop
+information. Hosts need neither the capture layout nor a separate destructor.
+
+Boxing selects the existing forced-dynamic iterator interface before Monotype
+is sealed, so steps and successors agree even when producer state differs.
+This does not erase ordinary unboxed iterator pipelines. Constant storage
+preserves the checked box and nominal record while storing the same
+single-allocation representation; interpreter-owned callable context must
+remain valid when those captures are copied.
+
+Glue describes directly boxed sequences as opaque `RocErasedCallable` handles.
+It does not expose their step signatures or backing records. The host can
+retain, release, store, and return a handle, but only Roc steps it.
+
 The program's hosted catalog retains every visible hosted declaration and
 classifies its platform binding as mapped or unavailable. Only mapped entries
 carry a dispatch slot. An unavailable declaration lowers to the existing
@@ -25383,6 +25411,11 @@ stand between `src/glue/platform/*.roc` and the glue runner. Named fields select
 schema logical indices; the layout store supplies their byte offsets and
 layouts. A checked-source schema regression test locks the remaining marshaller
 field names and leaf types.
+
+The compiled glue script retains its readonly data image alongside its code.
+Code-to-data and data-to-function relocations are resolved together, and both
+images outlive extraction of the returned files; returned static strings must
+not become dangling pointers when the entrypoint returns.
 
 Glue's type table describes values. A function value, wherever it appears
 (boxed, in a record or tag payload, or in a stored signature), is one

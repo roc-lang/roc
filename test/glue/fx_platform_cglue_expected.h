@@ -148,6 +148,8 @@ typedef void (*RocErasedCallableOnDrop)(uint8_t* capture, struct RocOps* ops);
 typedef struct {
     RocErasedCallableFn callable_fn_ptr;
     RocErasedCallableOnDrop on_drop;
+    void (*on_copy)(uint8_t* capture, intptr_t amount);
+    size_t capture_size;
 } RocErasedCallablePayload;
 ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, callable_fn_ptr) == 0, "RocErasedCallablePayload.callable_fn_ptr offset mismatch");
 ROC_STATIC_ASSERT(offsetof(RocErasedCallablePayload, on_drop) == sizeof(RocErasedCallableFn), "RocErasedCallablePayload.on_drop offset mismatch");
@@ -545,7 +547,7 @@ typedef void (*HostedFn)(void);
 
 // Hosted Function Count
 
-#define HOSTED_FUNCTION_COUNT 30
+#define HOSTED_FUNCTION_COUNT 32
 
 
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
@@ -578,6 +580,8 @@ typedef void (*HostedFn)(void);
 #define HOSTED_IDX_STDERR_LINE 27
 #define HOSTED_IDX_STDIN_LINE 28
 #define HOSTED_IDX_STDOUT_LINE 29
+#define HOSTED_IDX_HOST_RELEASE_BOXED_ITER 30
+#define HOSTED_IDX_HOST_RELEASE_BOXED_STREAM 31
 
 // Argument Structures
 
@@ -901,6 +905,24 @@ typedef struct {
     RocStr arg0;
 } StdoutLineArgs;
 
+/**
+ * Arguments for Host.release_boxed_iter!
+ * Roc signature: Box(Iter(U8)) => {}
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocErasedCallable arg0;
+} HostReleaseBoxedIterArgs;
+
+/**
+ * Arguments for Host.release_boxed_stream!
+ * Roc signature: Box(Stream(U8)) => {}
+ * Refcounted fields are owned by the hosted function.
+ */
+typedef struct {
+    RocErasedCallable arg0;
+} HostReleaseBoxedStreamArgs;
+
 
 // Runtime Symbols
 
@@ -1015,6 +1037,12 @@ extern RocStr roc_stdin_line(void);
 /* Stdout.line!: Str => {} */
 extern void roc_stdout_line(RocStr arg0);
 
+/* Host.release_boxed_iter!: Box(Iter(U8)) => {} */
+extern void roc_host_release_boxed_iter(RocErasedCallable arg0);
+
+/* Host.release_boxed_stream!: Box(Stream(U8)) => {} */
+extern void roc_host_release_boxed_stream(RocErasedCallable arg0);
+
 
 // Provided Symbols
 
@@ -1059,6 +1087,8 @@ typedef struct {
     HostedFn stderr_line_bang;  /* index 27, C name: stderr_line */
     HostedFn stdin_line_bang;  /* index 28, C name: stdin_line */
     HostedFn stdout_line_bang;  /* index 29, C name: stdout_line */
+    HostedFn host_release_boxed_iter_bang;  /* index 30, C name: host_release_boxed_iter */
+    HostedFn host_release_boxed_stream_bang;  /* index 31, C name: host_release_boxed_stream */
 } HostedFunctions;
 
 

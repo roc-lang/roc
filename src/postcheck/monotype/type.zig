@@ -3472,6 +3472,11 @@ pub const TypeMatchMode = enum {
     /// concretely uninhabited is indistinguishable from a variable slot here,
     /// so callers use this mode only for a declaration known to be generic.
     declared_variable_slots_match_any,
+    /// A checked host signature: sequence implementations are private behind
+    /// their mandatory direct boxes; their public item types still match.
+    host_abi,
+    /// The host-ABI comparison with the declaration's variable slots open.
+    host_abi_variable_slots_match_any,
 };
 
 /// Transaction nodes already proven equal to a class member. Resolving a
@@ -3565,7 +3570,7 @@ const TypeViewEqlScan = struct {
             break;
         }
 
-        if (scan.mode == .declared_variable_slots_match_any and
+        if ((scan.mode == .declared_variable_slots_match_any or scan.mode == .host_abi_variable_slots_match_any) and
             lhs_content == .tag_union and
             type_view.tagSpan(lhs_content.tag_union).len == 0)
         {
@@ -3575,8 +3580,8 @@ const TypeViewEqlScan = struct {
         // An asymmetric mode reaches the same pair from both directions with
         // different meanings, so it keeps the two orderings apart.
         const pair_key = switch (scan.mode) {
-            .exact => typePairKey(raw_lhs, raw_rhs),
-            .declared_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
+            .exact, .host_abi => typePairKey(raw_lhs, raw_rhs),
+            .declared_variable_slots_match_any, .host_abi_variable_slots_match_any => orderedTypePairKey(raw_lhs, raw_rhs),
         };
         const gop = try scan.visited.getOrPut(pair_key);
         if (gop.found_existing) return .{ .value = true };
@@ -3648,6 +3653,18 @@ const TypeViewEqlScan = struct {
     /// false when those fail.
     fn addNamedChecks(scan: *TypeViewEqlScan, items: Eval.Items, lhs: anytype, rhs: anytype) std.mem.Allocator.Error!bool {
         const name_store = scan.name_store;
+        if ((scan.mode == .host_abi or scan.mode == .host_abi_variable_slots_match_any) and
+            (lhs.builtin_owner == .iter or lhs.builtin_owner == .stream))
+        {
+            if (lhs.builtin_owner != rhs.builtin_owner) return false;
+            const left_args = scan.type_view.span(lhs.args);
+            const right_args = scan.type_view.span(rhs.args);
+            if (left_args.len == 0 or right_args.len == 0) return false;
+            // Generated iterator arguments after the item describe private
+            // state. That state is inline in the erased handle, not host data.
+            try addPair(items, left_args[0], right_args[0]);
+            return true;
+        }
         if (lhs.kind != rhs.kind) return false;
         if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
         if (!std.mem.eql(u8, name_store.moduleIdentityBytes(lhs.def.module), name_store.moduleIdentityBytes(rhs.def.module))) return false;
@@ -3930,6 +3947,41 @@ test "monotype iterator relation uses complete minted producer identity" {
     other = list;
     other.builtin_owner = .stream;
     try std.testing.expectEqual(IteratorRelation.ordinary, iteratorRelation(list, other));
+}
+
+test "host ABI matching hides boxed sequence state but preserves item types" {
+    var name_store = names.NameStore.init(std.testing.allocator);
+    defer name_store.deinit();
+    var store = Store.init(std.testing.allocator);
+    defer store.deinit();
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(21))));
+    const item = try store.add(.{ .primitive = .u8 });
+    const other_item = try store.add(.{ .primitive = .u64 });
+    const state = try store.add(.{ .primitive = .str });
+    const public = try store.add(.{ .named = .{
+        .named_type = .{ .module = .{} },
+        .def = .{ .module = module, .type_name = try name_store.internTypeName("Iter") },
+        .kind = .@"opaque",
+        .builtin_owner = .iter,
+        .args = try store.addSpan(&.{item}),
+    } });
+    const declared = try store.add(.{ .box = public });
+    var private = store.get(public).named;
+    private.def.iterator_representation = .minted;
+    private.def.iterator_kind = .list;
+    private.def.iterator_depth = 1;
+    private.args = try store.addSpan(&.{ item, state });
+    const emitted = try store.add(.{ .box = try store.add(.{ .named = private }) });
+    try std.testing.expect(!try store.typeMatches(&name_store, declared, emitted, .exact));
+    try std.testing.expect(try store.typeMatches(&name_store, declared, emitted, .host_abi));
+
+    private.args = try store.addSpan(&.{ other_item, state });
+    const wrong_item = try store.add(.{ .box = try store.add(.{ .named = private }) });
+    try std.testing.expect(!try store.typeMatches(&name_store, declared, wrong_item, .host_abi));
+    private.args = try store.addSpan(&.{ item, state });
+    private.builtin_owner = .stream;
+    const wrong_kind = try store.add(.{ .box = try store.add(.{ .named = private }) });
+    try std.testing.expect(!try store.typeMatches(&name_store, declared, wrong_kind, .host_abi));
 }
 
 test "monotype type prefix views stay readable while their store grows" {
