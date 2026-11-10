@@ -13,7 +13,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 const postcheck = @import("postcheck");
 const roc_target = @import("roc_target");
-const static_data_exports = @import("static_data");
+const static_materialization = @import("static_data");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
@@ -115,6 +115,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
+    static_materialization.MaterializationError ||
     lir.CheckedPipeline.LowerResourceError ||
     @import("static_data").MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
@@ -280,14 +281,14 @@ threadlocal var inspected_modules: ?lir.CheckedPipeline.CheckedModuleSet = null;
 pub fn interpreterStaticData(lowered: *const lir.CheckedPipeline.LoweredProgram) std.mem.Allocator.Error!?eval.InterpreterStaticData {
     const modules = inspected_modules orelse
         base.invariant("interpreterStaticData is called only from a lowered or prepared inspection", .{});
-    const exports = static_data_exports.buildStaticDataForWidth(std.testing.allocator, .{
+    const exports = static_materialization.buildStaticDataForWidth(std.testing.allocator, .{
         .root = modules.root,
         .imports = modules.imports,
     }, lowered, lowered.target_usize, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedTarget => base.invariant("a harness program's own pointer width has no static data layout", .{}),
     };
-    defer static_data_exports.deinitStaticData(std.testing.allocator, exports);
+    defer static_materialization.deinitStaticData(std.testing.allocator, exports);
     if (exports.len == 0) return null;
     return try eval.InterpreterStaticData.init(std.testing.allocator, exports, lowered.lir_result.static_data_values.items.len);
 }
@@ -1348,6 +1349,14 @@ fn lowerAppPathToLir(
     }
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
+    if (lowered.lir_result.static_data_values.items.len != 0) {
+        const exports = try static_materialization.buildStaticDataForWidth(gpa, .{
+            .root = lower_modules.root,
+            .imports = imports,
+        }, &lowered, opts.target_usize, .{});
+        if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
     if (inspect_lowered != null) {
         // Executing a lowered program requires the same static-data

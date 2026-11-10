@@ -120,7 +120,8 @@ pub fn listElemAddr(elem: *const TypeDesc, roc_list: *const RocList, index: u64)
 /// zero-sized payload holds no allocation.
 pub fn boxPayloadAddr(desc: *const TypeDesc, box: *const usize) [*]u8 {
     // A box of a function is the callable itself (design.md "Function Values").
-    if (desc.kind == .erased_callable) return @ptrCast(@constCast(box));
+    if (desc.kind == .erased_callable and desc.child == null) return @ptrCast(@constCast(box));
+    if (desc.flags.sequence) return builtins.boxed_sequence.recordPtr(@ptrFromInt(box.*));
     const word = box.* & ~utils.DATA_PTR_TAG_MASK;
     if (desc.size == 0 or word == 0) return walk.zeroSizedPtr();
     return @ptrFromInt(word);
@@ -220,8 +221,15 @@ pub fn buildList(elem: *const TypeDesc, dst: *RocList, elems: []const [*]const u
 pub fn buildBox(desc: *const TypeDesc, dst: *usize, payload: [*]const u8, ops: *RocOps) void {
     // A box of a function is the callable itself (design.md "Function Values"), which
     // the box takes over.
-    if (desc.kind == .erased_callable) {
+    if (desc.kind == .erased_callable and desc.child == null) {
         dst.* = @as(*align(1) const usize, @ptrCast(payload)).*;
+        return;
+    }
+    if (desc.flags.sequence) {
+        const record = recordOf(desc, ops);
+        const fields = record.fields();
+        if (fields.len != 2) invariant(ops, "builtin sequence descriptor must contain its two-field record");
+        dst.* = @intFromPtr(builtins.boxed_sequence.pack(payload, desc.size, fields[1].offset, ops));
         return;
     }
     if (desc.size == 0) {

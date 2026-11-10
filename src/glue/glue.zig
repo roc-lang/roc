@@ -3066,9 +3066,20 @@ const TypeTable = struct {
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "List") } };
                 },
                 .box => {
-                    if (nominal.args.len >= 1) return .{ .box = .{
-                        .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect),
-                    } };
+                    if (nominal.args.len >= 1) {
+                        var payload = try self.substituteFormal(artifact, nominal.args[0]);
+                        const sequence = while (true) {
+                            switch (checkedTypePayload(payload.artifact, payload.checked_type)) {
+                                .alias => |alias| payload = try self.substituteFormal(payload.artifact, alias.backing),
+                                .nominal => |inner| break inner.builtin == .iter or inner.builtin == .stream,
+                                .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union, .flex, .rigid => break false,
+                            }
+                        };
+                        // The host owns an erased step allocation, not a
+                        // readable iterator record or a callable public API.
+                        if (sequence) return .{ .erased_callable = .{ .signature = null } };
+                        return .{ .box = .{ .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect) } };
+                    }
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "Box") } };
                 },
                 .parse_tag_union_spec,

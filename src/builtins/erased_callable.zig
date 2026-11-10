@@ -69,6 +69,13 @@ pub const OnDropFn = rc_callback_abi.HostDropFn;
 pub const Payload = extern struct {
     callable_fn_ptr: CallableFnPtr,
     on_drop: ?OnDropFn,
+    /// The compiler's retain plan for independently copying a step capture,
+    /// without retaining the enclosing allocation. A compiler-created step
+    /// omits it only when no owned references need retaining. Host-created
+    /// callables are not copied as raw step captures.
+    on_copy: ?rc_callback_abi.RcIncrefFn = null,
+    /// Capture bytes, excluding any private allocation suffix.
+    capture_size: usize = 0,
 };
 
 /// Shim-only metadata stored at the beginning of a Roc-created erased
@@ -78,6 +85,7 @@ pub const Payload = extern struct {
 pub const HotReloadCaptureHeader = extern struct {
     code_ref: ?*anyopaque,
     original_on_drop: ?OnDropFn,
+    original_on_copy: ?rc_callback_abi.RcIncrefFn = null,
 };
 
 /// Captures are aligned to this boundary so any legal Roc capture layout can be
@@ -89,7 +97,17 @@ pub const capture_alignment: u32 = 16;
 pub const payload_alignment: u32 = capture_alignment;
 
 /// Fixed byte offset from the start of `Payload` to the first capture byte.
-pub const capture_offset: u32 = @intCast(std.mem.alignForward(usize, @sizeOf(Payload), capture_alignment));
+pub const capture_offset: u32 = captureOffset(@sizeOf(usize));
+
+/// Fixed capture offset for a target's pointer width, including cross builds.
+pub fn captureOffset(word_size: u32) u32 {
+    return std.mem.alignForward(u32, 4 * word_size, capture_alignment);
+}
+
+/// Payload allocation size for a target's pointer width.
+pub fn payloadSizeFor(word_size: u32, capture_size: usize) usize {
+    return captureOffset(word_size) + capture_size;
+}
 
 /// Bytes reserved before the ordinary Roc capture in shim-execution erased
 /// callables. This is aligned like captures so the adjusted capture pointer
@@ -130,6 +148,7 @@ pub fn allocate(
     payload.* = .{
         .callable_fn_ptr = callable_fn_ptr,
         .on_drop = on_drop,
+        .capture_size = capture_size,
     };
     return data_ptr;
 }
@@ -168,6 +187,7 @@ pub fn repack(
     payloadPtr(data_ptr).* = .{
         .callable_fn_ptr = callable_fn_ptr,
         .on_drop = on_drop,
+        .capture_size = capture_size,
     };
 
     if (capture_size > 0) {

@@ -107,6 +107,11 @@ pub fn roc_desc_capture_drop(capture: ?[*]u8, _: ?*RocOps) callconv(.c) void {
     walk.captureDrop(capture, ops());
 }
 
+/// Retain each reference in an independently copied dynamic capture record.
+pub fn roc_desc_capture_copy(capture: ?[*]u8, amount: isize) callconv(.c) void {
+    walk.captureIncref(capture, amount, ops());
+}
+
 /// The C-ABI form of `walk.elemIncref`.
 pub fn roc_desc_elem_incref(context: ?*anyopaque, element: ?[*]u8) callconv(.c) void {
     walk.elemIncref(context, element);
@@ -207,12 +212,13 @@ pub fn roc_desc_closure(
     record: [*]const u8,
     hot_reload_code_ref: ?*anyopaque,
     hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+    hot_reload_copy: ?builtins.rc_callback_abi.RcIncrefFn,
 ) callconv(.c) [*]u8 {
     const erased = builtins.erased_callable;
     const record_desc = captureRecordDesc(record);
     const prefix = hotReloadPrefix(hot_reload_drop);
     const data = erased.allocate(callable_fn, hot_reload_drop orelse &roc_desc_capture_drop, prefix + record_desc.size, ops());
-    writeClosure(data, callable_fn, record, record_desc, record_desc.size, hot_reload_code_ref, hot_reload_drop);
+    writeClosure(data, callable_fn, record, record_desc, record_desc.size, hot_reload_code_ref, hot_reload_drop, hot_reload_copy);
     return data;
 }
 
@@ -229,9 +235,10 @@ pub fn roc_desc_closure_reuse(
     unique: u8,
     hot_reload_code_ref: ?*anyopaque,
     hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+    hot_reload_copy: ?builtins.rc_callback_abi.RcIncrefFn,
 ) callconv(.c) [*]u8 {
     const erased = builtins.erased_callable;
-    const old = reuse orelse return roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop);
+    const old = reuse orelse return roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop, hot_reload_copy);
     const record_desc = captureRecordDesc(record);
     const prefix = hotReloadPrefix(hot_reload_drop);
     const old_capture = erased.capturePtr(old) + prefix;
@@ -239,10 +246,10 @@ pub fn roc_desc_closure_reuse(
     if (record_desc.size <= capacity and (unique != 0 or builtins.utils.isUnique(old, ops()))) {
         const payload = erased.payloadPtr(old);
         if (payload.on_drop) |old_drop| old_drop(erased.capturePtr(old), ops());
-        writeClosure(old, callable_fn, record, record_desc, capacity, hot_reload_code_ref, hot_reload_drop);
+        writeClosure(old, callable_fn, record, record_desc, capacity, hot_reload_code_ref, hot_reload_drop, hot_reload_copy);
         return old;
     }
-    const fresh = roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop);
+    const fresh = roc_desc_closure(callable_fn, record, hot_reload_code_ref, hot_reload_drop, hot_reload_copy);
     erased.decref(old, ops());
     return fresh;
 }
@@ -270,17 +277,21 @@ fn writeClosure(
     capacity: usize,
     hot_reload_code_ref: ?*anyopaque,
     hot_reload_drop: ?builtins.erased_callable.OnDropFn,
+    hot_reload_copy: ?builtins.rc_callback_abi.RcIncrefFn,
 ) void {
     const erased = builtins.erased_callable;
     erased.payloadPtr(data).* = .{
         .callable_fn_ptr = callable_fn,
         .on_drop = hot_reload_drop orelse &roc_desc_capture_drop,
+        .on_copy = hot_reload_copy orelse &roc_desc_capture_copy,
+        .capture_size = hotReloadPrefix(hot_reload_drop) + capacity,
     };
     const capture = erased.capturePtr(data);
     if (hot_reload_drop != null) {
         @as(*erased.HotReloadCaptureHeader, @ptrCast(@alignCast(capture))).* = .{
             .code_ref = hot_reload_code_ref,
             .original_on_drop = &roc_desc_capture_drop,
+            .original_on_copy = &roc_desc_capture_copy,
         };
     }
     const prefix = hotReloadPrefix(hot_reload_drop);

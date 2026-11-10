@@ -59,7 +59,10 @@ pub fn constPlanOf(program: *Program, ty: TypeId) Allocator.Error!LirProgram.Con
         .empty_record => .{ .record = try allocator.alloc(LirProgram.ConstPlanId, 0) },
         .list => |elem| .{ .list = try constPlanOf(program, elem) },
         // A box of a function is the function's erased callable.
-        .box => |payload| if (store.get(payload) == .function) .boxy_fn else .{ .box = try constPlanOf(program, payload) },
+        .box => |payload| if (store.get(payload) == .function) .boxy_fn else if (store.isSequence(payload)) .{ .boxed_sequence = .{
+            .payload = try constPlanOf(program, payload),
+            .view_layout = try program.layouts.layoutOf(try program.layouts.converter.backing(payload)),
+        } } else .{ .box = try constPlanOf(program, payload) },
         .tuple => |items_span| blk: {
             const items = try allocator.dupe(TypeId, store.span(items_span));
             defer allocator.free(items);
