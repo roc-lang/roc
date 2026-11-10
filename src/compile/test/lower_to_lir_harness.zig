@@ -13,6 +13,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 const postcheck = @import("postcheck");
 const roc_target = @import("roc_target");
+const static_data_exports = @import("static_data");
 
 const Coordinator = @import("../coordinator.zig").Coordinator;
 const CoreCtx = @import("ctx").CoreCtx;
@@ -115,6 +116,7 @@ fn sharedBuiltinModules() eval.BuiltinModules.InitError!*eval.BuiltinModules {
 /// Error set shared by LIR-lowering harness helpers and focused inspectors.
 pub const LowerToLirHarnessError = std.mem.Allocator.Error ||
     lir.CheckedPipeline.LowerResourceError ||
+    static_data_exports.MaterializationError ||
     std.Io.Dir.CreateDirPathError ||
     std.Io.Dir.RealPathFileAllocError ||
     std.Io.Dir.WriteFileError ||
@@ -1202,6 +1204,7 @@ fn lowerAppPathToLir(
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = opts.specialization_strategy;
 
     try coord.start();
     try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
@@ -1328,6 +1331,12 @@ fn lowerAppPathToLir(
     }
     var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(gpa, lower_modules, lower_roots, lower_target);
     defer lowered.deinit();
+    const exports = try static_data_exports.buildStaticDataForWidth(gpa, .{
+        .root = lower_modules.root,
+        .imports = lower_modules.imports,
+    }, &lowered, opts.target_usize, .{});
+    if (lowered.frozen_static_data) |*frozen| frozen.deinit();
+    lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
     if (opts.timing_out) |timing_out| timing_out.* = timing.snapshot();
 
     if (dump) |writer| {

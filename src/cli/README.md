@@ -14,6 +14,17 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.
 
+## ELF PIE host links
+
+Roc hosts must support relocatable code and data. Native executables always
+enable PIE/ASLR, without a platform declaration or opt-out. Static Linux
+platforms must supply self-relocating startup; macOS and Windows use their OS
+loaders. Shared-library exports remain separate from executable relocation.
+
+`zig build run-test-zig -Dtest-filter="ELF PIE"` exercises prelink, patching
+and startup with Zig on `PATH`. Linux runs its native architecture; an x86_64
+host also runs AArch64 startup when `qemu-aarch64` is on `PATH`.
+
 ## Multiline strings in the REPL
 
 The terminal REPL keeps consecutive multiline string lines in one statement.

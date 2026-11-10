@@ -6,6 +6,11 @@ metadata. A glue script such as `src/glue/src/ZigGlue.roc`,
 compiler-emitted type table and writes host-language source files for platform
 authors.
 
+Compiled glue plugins carry their frozen constant graphs, including backing
+allocations and callable pointers. They must remain self-contained when installed
+and loaded by another process, rather than borrowing the compiler's addresses or
+assuming a platform link will supply their data.
+
 ## Why Glue Code Generates the Interface
 
 The Roc platform ABI is not just a collection of structs that can be copied by

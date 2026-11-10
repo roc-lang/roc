@@ -20,6 +20,7 @@ pub const float_math_f32 = @import("float_math/f32.zig");
 pub const float_math_f64 = @import("float_math/f64.zig");
 pub const hash = @import("hash.zig");
 pub const list = @import("list.zig");
+pub const linux_static_pie = @import("linux_static_pie.zig");
 pub const num = @import("num.zig");
 pub const numeric_conversions = @import("numeric_conversions.zig");
 pub const rc_callback_abi = @import("rc_callback_abi.zig");

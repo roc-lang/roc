@@ -38,6 +38,7 @@ const layout = @import("layout");
 const lir = @import("lir");
 const GuardedList = lir.LirStore.GuardedList;
 const llvm_compile = @import("llvm_compile");
+const backend = @import("backend");
 
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
@@ -294,7 +295,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
     if (result_buf.len > 0) @memset(result_buf, 0);
 
-    switch (args.opt) {
+    var plugin_image = switch (args.opt) {
         .dev, .size, .speed => try runGlueSpecPlugin(
             gpa,
             stderr,
@@ -308,7 +309,9 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             args,
             std_io,
         ),
-    }
+    };
+    // Results can borrow strings and lists from the plugin's readonly image.
+    defer plugin_image.deinit();
     try writeHostEvents(stderr, &runtime_env);
 
     const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
@@ -454,6 +457,17 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
+    if (lowered.frozen_static_data == null) {
+        const exports = compile.static_data_exports.buildStaticData(gpa, .{
+            .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+            .imports = imported_artifacts,
+        }, &lowered, RocTarget.detectNative(), .{}) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return error.CompilationFailed,
+        };
+        lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+    }
+
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
@@ -586,14 +600,14 @@ fn runGlueSpecPlugin(
     executable_identity: [32]u8,
     args: GlueArgs,
     std_io: std.Io,
-) GlueError!void {
+) GlueError!eval_mod.object_image.Image {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
     const plugin = try getOrBuildGluePlugin(gpa, lowered, glue_proc, arg_layouts, stamp, args, std_io);
     defer plugin.deinit(gpa);
     var lib = try loadVerifiedGluePlugin(gpa, stderr, plugin, &stamp, true);
-    defer lib.deinit();
+    errdefer lib.deinit();
 
     const GlueEntryFn = *const fn ([*]u8, ?*anyopaque) callconv(.c) void;
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
@@ -618,7 +632,7 @@ fn runGlueSpecPlugin(
     _ = try crash_boundary.run(GlueCall, &glue_call, GlueCall.call);
 
     switch (runtime_env.crashState()) {
-        .did_not_crash => {},
+        .did_not_crash => return lib,
         .crashed => |message| {
             stderr.print("Error running glue spec: crashed with message: {s}\n", .{message}) catch {};
             return error.CompilationFailed;
@@ -667,6 +681,15 @@ fn buildGluePlugin(
     var bitcode = generate: {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
+        const exports = if (lowered.frozen_static_data) |frozen| frozen.exports else &.{};
+        const static_procs = try backend.collectReferencedProcs(gpa, exports);
+        defer gpa.free(static_procs);
+        const static_helpers = try backend.collectRequiredRcHelpers(gpa, exports);
+        defer gpa.free(static_helpers);
+        codegen.static_data_procs = static_procs;
+        codegen.static_data_rc_helpers = static_helpers;
+        codegen.embed_static_data_exports = true;
+        try codegen.setStaticDataExports(exports);
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;

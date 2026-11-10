@@ -1079,7 +1079,7 @@ pub const RootRequest = struct {
     order: u32,
     /// Producer-selected root withheld until the platform has its app bindings.
     requires_pairing: bool = false,
-    /// This session borrows a previously evaluated root from its platform.
+    /// This session borrows both strategies' completed root from its platform.
     evaluation_complete: bool = false,
     /// Full same-module evaluation order, including withheld roots.
     evaluation_order: ?u32 = null,
@@ -22619,6 +22619,7 @@ pub const PlatformPairing = struct {
         lowering_visibility: LoweringVisibility.Serialized,
         entry_wrappers: EntryWrapperTable.Serialized,
         intrinsic_wrappers: IntrinsicWrapperTable.Serialized,
+        callable_eval_templates: CallableEvalTemplateTable.Serialized,
         compile_time_roots: CompileTimeRootTable.Serialized,
         const_templates: ConstTemplateTable.Serialized,
         const_store: ConstStore.Serialized,
@@ -22655,7 +22656,6 @@ pub const PlatformPairing = struct {
                 "static_dispatch_plans",
                 "nested_proc_sites",
                 "top_level_procedure_bindings",
-                "callable_eval_templates",
                 "hosted_procs",
                 "hosted_bindings",
                 "platform_required_declarations",
@@ -22707,6 +22707,7 @@ pub const PlatformPairing = struct {
             try self.lowering_visibility.serialize(&artifact.lowering_visibility, gpa, writer);
             try self.entry_wrappers.serialize(&artifact.entry_wrappers, gpa, writer);
             try self.intrinsic_wrappers.serialize(&artifact.intrinsic_wrappers, gpa, writer);
+            try self.callable_eval_templates.serialize(&artifact.callable_eval_templates, gpa, writer);
             const compile_time_roots_empty: CompileTimeRootTable = .{};
             try self.compile_time_roots.serialize(if (self.has_dependent_evaluation) &artifact.compile_time_roots else &compile_time_roots_empty, gpa, writer);
             const const_templates_empty: ConstTemplateTable = .{};
@@ -22767,6 +22768,7 @@ pub const PlatformPairing = struct {
             result.lowering_visibility = self.lowering_visibility.deserialize(address);
             result.entry_wrappers = self.entry_wrappers.deserialize(address);
             result.intrinsic_wrappers = self.intrinsic_wrappers.deserialize(address);
+            result.callable_eval_templates = self.callable_eval_templates.deserialize(address);
             if (self.has_dependent_evaluation) result.compile_time_roots = self.compile_time_roots.deserialize(address);
             if (self.has_dependent_evaluation) result.const_templates = self.const_templates.deserialize(address);
             if (self.has_dependent_evaluation) result.const_store = self.const_store.deserialize(address, allocator);
@@ -22929,6 +22931,21 @@ pub fn pairCheckedPlatform(
         inline .procedure, .data => |*value| value.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, value.checked_type, &type_memo),
         .checked_error => {},
     };
+    // Binding required procedures can turn a platform's callable bindings
+    // into exact aliases. Publish that forwarding in the pairing rather than
+    // making runtime lowering rediscover it from the bound lookup.
+    result.callable_eval_templates = try copyPairingColumns(CallableEvalTemplateTable, platform.callable_eval_templates, session);
+    publishCallableEvalForwarding(
+        &result.callable_eval_templates,
+        result.bodies(),
+        &result.resolved_value_refs,
+        &result.compile_time_roots,
+        result.key,
+        &result.top_level_procedure_bindings,
+        &.{},
+        available_artifacts,
+        &relations,
+    );
     var roots = std.ArrayList(RootRequest).empty;
     for (platform.root_requests.requests) |request| {
         // Once a required procedure is bound, an exact callable alias uses the
@@ -22941,7 +22958,10 @@ pub fn pairCheckedPlatform(
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = request.abi == .compile_time and !request.requires_pairing;
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) complete: {
+            const root = result.compile_time_roots.root(request.compile_time_root.?);
+            break :complete !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+        } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
     }
@@ -22962,12 +22982,10 @@ pub fn pairCheckedPlatform(
     result.root_requests.runtime_requests = try collectRuntimeRootRequests(session, result.root_requests.requests);
     var schedule = std.ArrayList(RootRequest).empty;
     for (result.root_requests.requests) |request| {
-        if (request.evaluation_order == null) continue;
         // A paired platform may inherit a semantically completed value but
         // still need the other strategy's function representation. Keep its
         // declared request so that strategy can run the producer later.
-        const root = result.compile_time_roots.root(request.compile_time_root.?);
-        if (!request.evaluation_complete or root.needsEvaluation(.lss) or root.needsEvaluation(.boxy)) try schedule.append(session, request);
+        if (request.evaluation_order != null and !request.evaluation_complete) try schedule.append(session, request);
     }
     std.mem.sort(RootRequest, schedule.items, {}, struct {
         fn lessThan(_: void, a: RootRequest, b: RootRequest) bool {

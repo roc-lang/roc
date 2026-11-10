@@ -355,7 +355,6 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     try expectStaticDataPtr(ptr, "boxed_static_label");
 
     const payload = builtins.erased_callable.payloadPtr(ptr);
-    const on_drop = payload.on_drop orelse return fail("expected boxed_static_label on_drop helper");
 
     var args = I64Arg{ .arg0 = 0 };
     var result: RocStr = undefined;
@@ -370,9 +369,10 @@ fn expectBoxedStaticLabel(boxed: ?[*]u8, roc_ops: *RocOps) error{StaticDataHostC
     );
     try expectStr(result, expected, roc_ops, "boxed_static_label call");
 
-    // Exercise the explicitly relocated helper as well as the callable proc.
-    // Its captured string is static, so final-drop preserves the backing.
-    on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
+    // A lowering can embed the immutable label directly instead of capturing
+    // it. When a capture remains, exercise its relocated final-drop helper;
+    // either representation must preserve the static string backing.
+    if (payload.on_drop) |on_drop| on_drop(builtins.erased_callable.capturePtr(ptr), roc_ops);
     try expectStr(result, expected, roc_ops, "boxed_static_label on_drop");
 }
 

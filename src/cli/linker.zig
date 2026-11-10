@@ -187,6 +187,11 @@ pub const LinkConfig = struct {
     /// Kind of artifact to produce (executable or shared library)
     output_kind: OutputKind = .exe,
 
+    /// Defaults to PIE for ELF executables. An explicit value is for
+    /// internal artifact construction/tests; platforms cannot disable PIE.
+    /// Static links require platform-owned self-relocating startup.
+    elf_pie: ?bool = null,
+
     /// Link platform archives lazily (no whole-archive wrapping). Symbol-ABI
     /// links resolve host code by symbol reference, so only reachable archive
     /// members are included and section GC can strip unused host code. Links
@@ -552,7 +557,7 @@ fn windowsLinkAbi(config: LinkConfig) LinkError!TargetAbi {
 
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
-fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
+pub fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Managed([]const u8) {
     // Use arena allocator for all temporary allocations
     // Pre-allocate capacity to avoid reallocations (typical command has 20-40 args)
     var args = std.array_list.Managed([]const u8).initCapacity(ctx.arena, 64) catch return LinkError.OutOfMemory;
@@ -562,6 +567,14 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
     const target_os = config.target_os orelse builtin.target.os.tag;
     const target_arch = config.target_arch orelse builtin.target.cpu.arch;
     const is_shared_lib = config.output_kind == .shared_lib;
+    const elf_pie = config.elf_pie orelse switch (target_os) {
+        .linux, .freebsd, .openbsd, .netbsd => !is_shared_lib,
+        else => false,
+    };
+    std.debug.assert(!elf_pie or (!is_shared_lib and switch (target_os) {
+        .linux, .freebsd, .openbsd, .netbsd => true,
+        else => false,
+    }));
 
     switch (target_os) {
         .macos => {
@@ -570,6 +583,8 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             if (is_shared_lib) {
                 try args.append("-dylib");
+            } else {
+                try args.append("-pie");
             }
 
             // Add output argument
@@ -663,6 +678,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             // Stamp a build id so stripped copies of the binary can be
             // matched back to their debug info.
             try args.append("--build-id");
+            if (elf_pie) {
+                std.debug.assert(!is_shared_lib);
+                try args.append("-pie");
+                try args.append("-z");
+                try args.append("text");
+            }
             // Start every loadable segment of an x86-64 executable on its own
             // page, in the file and in memory. Without this, lld places a
             // zero-fill segment (e.g. `.bss` in a program with no `.data`)
@@ -722,6 +743,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
         .windows => {
             // Add linker name for Windows COFF
             try args.append("lld-link");
+
+            // Keep both ASLR and the loader's base-relocation table explicit.
+            try args.append("/dynamicbase");
+            try args.append("/fixed:no");
+            if (target_arch == .x86_64 or target_arch == .aarch64) {
+                try args.append("/highentropyva");
+            }
 
             const target_abi = try windowsLinkAbi(config);
 
@@ -814,6 +842,12 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
             try args.append("relro");
             try args.append("-z");
             try args.append("now");
+            if (elf_pie) {
+                std.debug.assert(!is_shared_lib);
+                try args.append("-pie");
+                try args.append("-z");
+                try args.append("text");
+            }
             // Suppress linker warnings
             if (suppress_linker_warnings) {
                 try args.append("-w");
@@ -1414,6 +1448,72 @@ test "force undefined symbols use target linker spelling" {
     };
     const linux_args = try buildLinkArgs(&ctx, linux_config);
     _ = findArg(linux_args.items, "--undefined=roc__answer") orelse return error.MissingForceUndefined;
+}
+
+test "Linux executable links default to PIE without changing shared libraries" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+    for ([_]std.Target.Cpu.Arch{ .x86_64, .aarch64, .arm }) |arch| {
+        for ([_]TargetAbi{ .musl, .gnu }) |abi| {
+            var config = LinkConfig{
+                .target_format = .elf,
+                .target_os = .linux,
+                .target_arch = arch,
+                .target_abi = abi,
+                .output_path = "program",
+                .object_files = &.{"app.o"},
+            };
+            const executable = try buildLinkArgs(&ctx, config);
+            try std.testing.expect(findArg(executable.items, "-pie") != null);
+            try std.testing.expect(findArg(executable.items, "text") != null);
+            try std.testing.expectEqual(abi == .musl, findArg(executable.items, "-static") != null);
+            try std.testing.expectEqual(abi == .gnu, findArg(executable.items, "-dynamic-linker") != null);
+            config.output_kind = .shared_lib;
+            const shared = try buildLinkArgs(&ctx, config);
+            try std.testing.expect(findArg(shared.items, "-shared") != null);
+            try std.testing.expect(findArg(shared.items, "-pie") == null);
+        }
+    }
+}
+
+test "macOS and Windows links explicitly enable address randomization" {
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena.deinit();
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+    for ([_]std.Target.Cpu.Arch{ .x86_64, .aarch64 }) |arch| {
+        for ([_]OutputKind{ .exe, .shared_lib }) |kind| {
+            const mac = try buildLinkArgs(&ctx, .{
+                .target_format = .macho,
+                .target_os = .macos,
+                .target_arch = arch,
+                .output_kind = kind,
+                .output_path = "program",
+                .object_files = &.{"app.o"},
+            });
+            try std.testing.expectEqual(kind == .exe, findArg(mac.items, "-pie") != null);
+            for ([_]TargetAbi{ .msvc, .mingw }) |abi| {
+                const windows = try buildLinkArgs(&ctx, .{
+                    .target_format = .coff,
+                    .target_os = .windows,
+                    .target_arch = arch,
+                    .target_abi = abi,
+                    .output_kind = kind,
+                    .output_path = "program.exe",
+                    .object_files = &.{"app.obj"},
+                });
+                try std.testing.expect(findArg(windows.items, "/dynamicbase") != null);
+                try std.testing.expect(findArg(windows.items, "/highentropyva") != null);
+                try std.testing.expect(findArg(windows.items, "/fixed:no") != null);
+            }
+        }
+    }
 }
 
 test "Windows runtime ABI is carried from RocTarget into the linker" {

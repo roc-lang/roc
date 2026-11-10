@@ -1229,6 +1229,34 @@ fn createTestPlatformHostLib(
     return lib;
 }
 
+/// Test platforms own their startup inputs. Build musl's self-relocating
+/// entrypoint from the pinned Zig toolchain rather than vendoring another
+/// architecture-specific binary beside the ordinary crt1 objects.
+fn muslStaticPieStartup(b: *std.Build, target: ResolvedTarget) std.Build.LazyPath {
+    const arch = @tagName(target.result.cpu.arch);
+    const obj = b.addObject(.{
+        .name = b.fmt("rcrt1_{s}", .{arch}),
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = .small,
+            .pic = true,
+            .link_libc = true,
+            .stack_protector = false,
+        }),
+    });
+    obj.root_module.addCSourceFile(.{
+        .file = std.Build.LazyPath.zig_lib.path(b, "libc/musl/crt/rcrt1.c"),
+        .flags = &.{ "-std=c99", "-D_GNU_SOURCE", "-ffreestanding", "-fno-builtin", "-fvisibility=hidden" },
+    });
+    for ([_][]const u8{
+        b.fmt("libc/musl/arch/{s}", .{arch}),
+        "libc/musl/arch/generic",
+        "libc/musl/src/internal",
+        "libc/musl/src/include",
+    }) |path| obj.root_module.addIncludePath(std.Build.LazyPath.zig_lib.path(b, path));
+    return obj.getEmittedBin();
+}
+
 /// Builds a test platform host library and sets up a step to copy it to the target-specific directory.
 /// Returns the final step for dependency wiring.
 fn buildAndCopyTestPlatformHostLib(
@@ -1299,6 +1327,13 @@ fn buildAndCopyTestPlatformHostLib(
     else
         FixArchivePaddingStep.create(b, lib.getEmittedBin());
     test_fixtures.copy(copy_step, host_archive, archive_path);
+    if (target.result.os.tag == .linux and target.result.abi.isMusl()) {
+        const startup = muslStaticPieStartup(b, target);
+        test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", target_name, "rcrt1.o" }));
+        if (baseline_target_name) |name| {
+            test_fixtures.copy(copy_step, startup, b.pathJoin(&.{ "test", platform_dir, "platform/targets", name, "rcrt1.o" }));
+        }
+    }
     if (baseline_archive_path) |path| {
         const baseline_archive = if (target.result.os.tag == .windows)
             baseline_lib.?.getEmittedBin()
@@ -6337,6 +6372,9 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_runtime_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
             default_platform_runtime_obj.root_module.addOptions("default_platform_options", default_platform_runtime_options);
@@ -6412,6 +6450,9 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
             default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
+            default_platform_executable_obj.root_module.addImport("linux_static_pie", b.createModule(.{
+                .root_source_file = b.path("src/builtins/linux_static_pie.zig"),
+            }));
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
             default_platform_executable_obj.root_module.addOptions("default_platform_options", default_platform_executable_options);

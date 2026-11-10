@@ -7761,6 +7761,7 @@ const ModuleCheckingFacts = struct {
     interfaces_built: u32,
     work: compile_package.CheckingWork,
     checking_digest: ?[32]u8,
+    typing_storage_key: ?CheckedArtifact.CheckedModuleArtifactKey,
 };
 
 fn lessThanBytes(_: void, a: [32]u8, b: [32]u8) bool {
@@ -7902,6 +7903,7 @@ fn compileAppFactsWithWorkers(
                 .interfaces_built = mod.checking_interfaces_built,
                 .work = mod.checking_work,
                 .checking_digest = if (mod.moduleEnv()) |env| if (env.checking_dependency.published) env.checking_dependency.digest else null else null,
+                .typing_storage_key = mod.typing_storage_key,
             });
         }
     }
@@ -10344,8 +10346,10 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.artifact_keys) |key| {
-        const in_both = for (unlifted.artifact_keys) |other| {
+    for (lifted.checking) |facts| {
+        const key = (facts.typing_storage_key orelse continue).bytes;
+        const in_both = for (unlifted.checking) |other_facts| {
+            const other = (other_facts.typing_storage_key orelse continue).bytes;
             if (std.mem.eql(u8, &key, &other)) break true;
         } else false;
         if (!in_both) continue;
@@ -13200,7 +13204,7 @@ test "post-check publication store OOM drains accepted writers before returning"
 /// Exercise the real coordinator queues with both workers occupied. Only the
 /// wake queue uses the failing allocator, armed after all fixture setup, so
 /// failure deterministically occurs at notification growth, without sleeps.
-fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (Allocator.Error || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+fn testPostCheckPublicationOOM(comptime stores: bool, before_first: bool) (CoordinatorError || std.Thread.SpawnError || channel.ChannelError || error{ SkipZigTest, TestUnexpectedResult, TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
     if (comptime !threads_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const previous_lanes = thread_lanes;

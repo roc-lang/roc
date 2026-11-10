@@ -85,6 +85,7 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
     );
     defer coord.deinit();
     coord.enable_hosted_transform = true;
+    coord.specialization_strategy = .boxy;
     var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     try coord.start();
@@ -137,6 +138,9 @@ test "linked Boxy CTFE roots omit unrelated workers while both producer modes ex
         .{ .compile_time = false, .exports_unrelated = true },
         .{ .compile_time = false, .stored_functions = true, .function_unit = @splat(17), .exports_unrelated = true },
     }) |case| {
+        // Runtime producers consume completed values, unlike the CTFE root
+        // program above, which deliberately starts with its root pending.
+        if (!case.compile_time and library.evaluation_state != .finalized) try coord.finishCheckedProgram(.executable_artifacts);
         var output = try boxy.run(allocator, .{
             .modules = .{ .root = check.CheckedArtifact.loweringView(library), .imports = imports },
             .roots = .{ .requests = if (case.compile_time) roots else &.{} },
