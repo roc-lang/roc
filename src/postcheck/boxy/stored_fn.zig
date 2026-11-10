@@ -1826,9 +1826,16 @@ test "function unit metadata validates the integer list template tag, its single
     try std.testing.expectError(error.InvalidMetadata, invalid.worker());
 }
 
+/// One declaration entry as `paddedRecordEntry` writes it: a named field by
+/// its label text, or an unnamed field by its position in the padding.
+const EncodedDeclaredEntry = union(enum) {
+    named: []const u8,
+    padding: u32,
+};
+
 /// The table entry of `Pad({ a : U64 })` for `Pad(r) := { z : U64, _ : U8, ..r }`,
 /// with its declaration entries written by `entries`.
-fn paddedRecordEntry(out: *std.ArrayList(u8), entries: []const types.DeclaredEntry, names: []const []const u8) Allocator.Error!void {
+fn paddedRecordEntry(out: *std.ArrayList(u8), entries: []const EncodedDeclaredEntry) Allocator.Error!void {
     const allocator = std.testing.allocator;
     const Write = struct {
         fn word(bytes: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1855,39 +1862,38 @@ fn paddedRecordEntry(out: *std.ArrayList(u8), entries: []const types.DeclaredEnt
     try Write.word(out, 1); // one unnamed field
     try Write.word(out, 0);
     try Write.word(out, @intCast(entries.len));
-    var named: usize = 0;
-    for (entries) |entry| {
-        try out.append(allocator, @backingInt(std.meta.activeTag(entry)));
-        switch (entry) {
-            .named => {
-                try Write.name(out, names[named]);
-                named += 1;
-            },
-            .padding => |ordinal| try Write.word(out, ordinal),
-        }
-    }
+    const EntryTag = std.meta.Tag(types.DeclaredEntry);
+    for (entries) |entry| switch (entry) {
+        .named => |label| {
+            try out.append(allocator, @backingInt(EntryTag.named));
+            try Write.name(out, label);
+        },
+        .padding => |ordinal| {
+            try out.append(allocator, @backingInt(EntryTag.padding));
+            try Write.word(out, ordinal);
+        },
+    };
 }
 
 test "function unit metadata validates a padded record's declaration entries" {
     const allocator = std.testing.allocator;
-    const Case = struct { entries: []const types.DeclaredEntry, names: []const []const u8, valid: bool };
-    const placeholder: types.NameId = @fromBackingInt(0);
+    const Case = struct { entries: []const EncodedDeclaredEntry, valid: bool };
     const cases = [_]Case{
-        .{ .entries = &.{ .{ .named = placeholder }, .{ .padding = 0 } }, .names = &.{"z"}, .valid = true },
-        .{ .entries = &.{ .{ .named = placeholder }, .{ .padding = 0 }, .{ .named = placeholder } }, .names = &.{ "z", "a" }, .valid = true },
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 } }, .valid = true },
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 }, .{ .named = "a" } }, .valid = true },
         // A label the record does not have.
-        .{ .entries = &.{ .{ .named = placeholder }, .{ .padding = 0 } }, .names = &.{"y"}, .valid = false },
+        .{ .entries = &.{ .{ .named = "y" }, .{ .padding = 0 } }, .valid = false },
         // A padding position past the unnamed fields.
-        .{ .entries = &.{ .{ .named = placeholder }, .{ .padding = 1 } }, .names = &.{"z"}, .valid = false },
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 1 } }, .valid = false },
         // A field named twice.
-        .{ .entries = &.{ .{ .named = placeholder }, .{ .padding = 0 }, .{ .named = placeholder } }, .names = &.{ "z", "z" }, .valid = false },
+        .{ .entries = &.{ .{ .named = "z" }, .{ .padding = 0 }, .{ .named = "z" } }, .valid = false },
         // An unnamed field with no entry.
-        .{ .entries = &.{.{ .named = placeholder }}, .names = &.{"z"}, .valid = false },
+        .{ .entries = &.{.{ .named = "z" }}, .valid = false },
     };
     for (cases) |case| {
         var bytes: std.ArrayList(u8) = .empty;
         defer bytes.deinit(allocator);
-        try paddedRecordEntry(&bytes, case.entries, case.names);
+        try paddedRecordEntry(&bytes, case.entries);
         var reader = MetadataReader{ .bytes = bytes.items, .types = 1 };
         if (case.valid) {
             try reader.typeEntry();
