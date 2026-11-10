@@ -87,12 +87,9 @@ pub fn forEachStaticDispatchTypeRoot(module_env: *const ModuleEnv, expr_idx: CIR
     }
 }
 
-/// The roots of recorded codec requirements, scheme uses, platform invocations,
-/// and generated codec derivations.
+/// The roots of the module's recorded codec requirements, scheme-use
+/// substitutions, and generated codec derivations.
 pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) Allocator.Error!void {
-    for (module_env.platform_requirement_solutions.items.items) |solution| {
-        try forEachPlatformRequirementTypeRoot(solution.solved_var, module_env.platformRequirementIdentityVars(solution), visitor);
-    }
     for (module_env.binding_scheme_codec_requirements.items.items) |requirement| {
         const constraint = module_env.types.getStaticDispatchConstraintAt(requirement.constraint_index);
         try visitor.visit(@fromBackingInt(@intCast(requirement.receiver_var)));
@@ -136,13 +133,6 @@ pub fn forEachRecordedTypeRoot(module_env: *const ModuleEnv, visitor: anytype) A
     }
 }
 
-/// A platform invocation owns its solved type even when an empty substitution
-/// and empty evidence vector need no scheme-use record.
-pub fn forEachPlatformRequirementTypeRoot(solved: Var, identities: []const Var, visitor: anytype) Allocator.Error!void {
-    try visitor.visit(solved);
-    for (identities) |identity| try visitor.visit(identity);
-}
-
 /// The roots of every recorded scheme use: the instance a dispatch target,
 /// where-method use, or stored nested function names, and each fresh var of
 /// the use's substitution.
@@ -151,7 +141,6 @@ pub fn forEachSchemeUseTypeRoot(module_env: *const ModuleEnv, visitor: anytype) 
         if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) or
             record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.recursive_dispatch_target) or
             record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
-            record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.platform_requirement) or
             record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.nested_function_use))
         {
             try visitor.visit(@fromBackingInt(@intCast(record.slot_data)));

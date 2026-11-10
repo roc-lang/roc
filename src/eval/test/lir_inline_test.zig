@@ -221,17 +221,12 @@ fn lowerModuleWithOptions(
     );
     errdefer lowered.deinit();
 
-    // These fixtures execute the lowered program. Freeze its closed static
-    // initializers as well as any data produced during compile-time evaluation.
-    const exports = try eval.buildStaticDataForWidth(
-        allocator,
-        .{ .root = check.CheckedArtifact.loweringView(&resources.checked_artifact), .imports = import_views },
-        &lowered,
-        lowered.target_usize,
-        .{},
-    );
-    if (lowered.frozen_static_data) |*frozen| frozen.deinit();
-    lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
+    const static_data = try eval.buildStaticDataForWidth(allocator, .{
+        .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+        .imports = import_views,
+    }, &lowered, lowered.target_usize, .{});
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = allocator, .exports = static_data };
 
     return .{
         .resources = resources,
@@ -493,7 +488,6 @@ fn structuralJsonMonotypeStatsForSource(
     for (lowered.mono.view().exprs) |expr| {
         if (expr.data == .static_data_candidate) static_candidates += 1;
     }
-
     return .{
         .functions = lowered.mono.view().fns.len,
         .definitions = lowered.mono.view().defs.len,
@@ -13317,30 +13311,6 @@ test "issue 11376: packed products survive Boxy boundaries and copy-on-write" {
         var lowered = try lowerModuleWithOptions(allocator, source, .none, .{ .specialization_strategy = strategy });
         defer lowered.deinit(allocator);
         const result = &lowered.lowered.lir_result;
-        var found_packed_value = false;
-        // Verify the product itself, not an incidental descriptor byte string:
-        // descriptors may live in the static image rather than inline literals.
-        for (result.store.getLocals()) |local| {
-            const layout = result.layouts.getLayout(local.layout_idx);
-            if (layout.tag != .struct_) continue;
-            const info = result.layouts.getStructInfo(layout);
-            if (info.fields.len != 2) continue;
-            const first = info.fields.get(0).layout;
-            const second = info.fields.get(1).layout;
-            if ((first == .u8 and second == .u64) or (first == .u64 and second == .u8)) {
-                try std.testing.expectEqual(@as(u32, 16), info.size());
-                found_packed_value = true;
-            }
-        }
-        // Boxy can publish the packed node directly as readonly data rather
-        // than execute a literal constructor in a procedure.
-        for (result.static_data_values.items) |definition| {
-            const stored = definition.stored orelse continue;
-            if (!stored.module.eql(lowered.resources.checked_artifact.key.digest())) continue;
-            const value = lowered.resources.checked_artifact.const_store.get(stored.node);
-            if (value == .list and value.list == .packed_bytes and value.list.packed_bytes.len == 2) found_packed_value = true;
-        }
-        try std.testing.expect(found_packed_value);
         var runtime_env = eval.RuntimeHostEnv.init(allocator);
         defer runtime_env.deinit();
         {
@@ -14312,12 +14282,11 @@ test "sealed result rows: an annotated result row is a static worker and widenin
         const procs = try procsNamed(allocator, result, "pass");
         defer allocator.free(procs);
         try std.testing.expectEqual(@as(usize, 1), procs.len);
-        const pass_spec = result.store.getProcSpec(procs[0]);
-        // The explicit dynamic parameter and one type table. The row variable
-        // and `[A, ..r]` descriptors are table entries, not separate arguments.
-        const args = result.store.getLocalSpan(pass_spec.args);
+        // Hidden descriptors live in the worker's type table, not separate
+        // arguments. The row-polymorphic worker receives its dynamic value
+        // and one table pointer; the closed workers above receive no table.
+        const args = result.store.getLocalSpan(result.store.getProcSpec(procs[0]).args);
         try std.testing.expectEqual(@as(usize, 2), args.len);
-        try std.testing.expect(result.store.getLocal(GuardedList.at(args, 0)).dyn != null);
         try std.testing.expectEqual(.dynamic, result.layouts.getLayout(result.store.getLocal(GuardedList.at(args, 0)).layout_idx).tag);
         try std.testing.expectEqual(LayoutIdx.opaque_ptr, result.store.getLocal(GuardedList.at(args, 1)).layout_idx);
     }

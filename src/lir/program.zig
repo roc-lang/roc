@@ -381,10 +381,7 @@ pub const StaticDataParts = struct {
         /// One sequence record child, with its committed step byte offset.
         boxed_sequence: u32,
         tag: u32,
-        callable: struct {
-            proc: LIR.LirProcSpecId,
-            on_drop: LIR.ErasedCallableOnDrop = .none,
-        },
+        callable: LIR.LirProcSpecId,
     },
     children: []LIR.StaticDataId,
 };

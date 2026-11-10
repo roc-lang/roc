@@ -83,11 +83,6 @@ flex_var_names_map: collections_mod.DenseMap(Var, FlexVarNameRange),
 flex_var_names: std.array_list.Managed(u8),
 static_dispatch_constraints: std.array_list.Managed(ConstraintWithDispatcher),
 static_dispatch_constraints_tmp: std.array_list.Managed(StaticDispatchTmp),
-/// A receiver contributes its complete requirement list once per rendering,
-/// even when every method signature refers back to that receiver.
-collected_dispatchers: collections_mod.DenseMap(Var, void),
-constraint_keys: std.HashMapUnmanaged(u64, void, ConstraintKeyContext, 80) = .empty,
-constraint_texts: std.StringHashMapUnmanaged(void) = .empty,
 buf_tmp: std.array_list.Managed(u8),
 name_tmp: std.array_list.Managed(u8),
 scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
@@ -116,14 +111,6 @@ omit_literal_conversion_constraints: bool = false,
 /// while writing one of its method types, whose conflict with another of its
 /// requirements is what is being shown.
 omitted_dispatcher: ?Var = null,
-/// Diagnostic captures retain the naming scope in which they were taken.
-/// Identifiers introduced afterward must not rename their anonymous variables.
-visible_identifier_count: ?u32 = null,
-/// Cumulative duplicate-constraint comparisons, for deterministic work bounds
-/// in checker regression tests. Absent from production writers.
-test_constraint_comparisons: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
-/// Rendering and occurrence-counting visits, including requirement collection.
-test_work: if (@import("builtin").is_test) usize else void = if (@import("builtin").is_test) 0 else {},
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
 
@@ -177,19 +164,6 @@ const StaticDispatchTmp = struct {
 const ConstraintWithDispatcher = struct {
     dispatcher_var: Var,
     constraint: types_mod.StaticDispatchConstraint,
-};
-
-const ConstraintKeyContext = struct {
-    writer: *TypeWriter,
-
-    pub fn hash(_: @This(), key: u64) u64 {
-        return std.hash.Wyhash.hash(0, std.mem.asBytes(&key));
-    }
-
-    pub fn eql(ctx: @This(), a: u64, b: u64) bool {
-        if (@import("builtin").is_test) ctx.writer.test_constraint_comparisons += 1;
-        return a == b;
-    }
 };
 
 /// The tail a record row ends on, once every field its extension chain
@@ -324,7 +298,6 @@ pub fn initFromParts(
         .flex_var_names = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .static_dispatch_constraints = try std.array_list.Managed(ConstraintWithDispatcher).initCapacity(gpa, 32),
         .static_dispatch_constraints_tmp = try std.array_list.Managed(StaticDispatchTmp).initCapacity(gpa, 32),
-        .collected_dispatchers = .init(gpa),
         .buf_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .name_tmp = try std.array_list.Managed(u8).initCapacity(gpa, 32),
         .scratch_record_fields = try std.array_list.Managed(types_mod.RecordField).initCapacity(gpa, 32),
@@ -353,9 +326,6 @@ pub fn deinit(self: *TypeWriter) void {
     self.flex_var_names.deinit();
     self.static_dispatch_constraints.deinit();
     self.static_dispatch_constraints_tmp.deinit();
-    self.collected_dispatchers.deinit();
-    self.constraint_keys.deinit(self.gpa);
-    self.constraint_texts.deinit(self.gpa);
     self.buf_tmp.deinit();
     self.name_tmp.deinit();
     self.scratch_record_fields.deinit();
@@ -387,9 +357,6 @@ pub fn reset(self: *TypeWriter) void {
     self.flex_var_names.clearRetainingCapacity();
     self.static_dispatch_constraints.clearRetainingCapacity();
     self.static_dispatch_constraints_tmp.clearRetainingCapacity();
-    self.collected_dispatchers.clearRetainingCapacity();
-    self.constraint_keys.clearRetainingCapacity();
-    self.constraint_texts.clearRetainingCapacity();
     self.buf_tmp.clearRetainingCapacity();
     self.name_tmp.clearRetainingCapacity();
     self.scratch_record_fields.clearRetainingCapacity();
@@ -582,7 +549,10 @@ fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_le
     var kept: usize = 0;
     for (self.static_dispatch_constraints_tmp.items) |constraint| {
         const text = self.buf_tmp.items[constraint.start..][0..constraint.len];
-        if ((try self.constraint_texts.getOrPut(self.gpa, text)).found_existing) {
+        const repeated = for (self.static_dispatch_constraints_tmp.items[0..kept]) |earlier| {
+            if (std.mem.eql(u8, text, self.buf_tmp.items[earlier.start..][0..earlier.len])) break true;
+        } else false;
+        if (repeated) {
             total_constraint_len -= constraint.len;
             continue;
         }
@@ -686,7 +656,6 @@ fn driveFrames(self: *TypeWriter, writer: *ByteWrite, frames_base: usize, root_v
 /// either finish it outright (returning true) or push the frame that will
 /// render its children (returning false).
 fn requestVar(self: *TypeWriter, writer: *ByteWrite, var_: Var, context: TypeContext, root_var: Var) error{ OutOfMemory, WriteFailed }!bool {
-    if (@import("builtin").is_test) self.test_work += 1;
     if (@backingInt(var_) >= self.types.len()) {
         // Variable is out of bounds - this can happen with corrupted type data
         try writer.writeAll("Error");
@@ -742,7 +711,9 @@ fn writeContentHead(
                 try self.writeFlexVarName(writer, var_, context, root_var);
             }
 
-            try self.collectDispatchConstraints(var_, resolved_var, constraints);
+            for (constraints) |constraint| {
+                try self.appendStaticDispatchConstraint(var_, constraint);
+            }
             return false;
         },
         .rigid => |rigid| {
@@ -751,7 +722,9 @@ fn writeContentHead(
             // Useful in debugging to see if a var is rigid or not
             // _ = try writer.print("[r-{}]", .{var_});
 
-            try self.collectDispatchConstraints(var_, resolved_var, self.types.sliceStaticDispatchConstraints(rigid.constraints));
+            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                try self.appendStaticDispatchConstraint(var_, constraint);
+            }
             return false;
         },
         .alias => |alias| return try self.startAlias(writer, alias),
@@ -1106,7 +1079,9 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
 
                         // Since don't recurse above, we must capture the static dispatch
                         // constraints directly
-                        try self.collectDispatchConstraints(flex.var_, flex.var_, self.types.sliceStaticDispatchConstraints(flex.payload.constraints));
+                        for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                            try self.appendStaticDispatchConstraint(flex.var_, constraint);
+                        }
                     },
                     .rigid => |rigid| {
                         if (frame.fields_count > 0) try writer.writeAll(", ");
@@ -1119,7 +1094,9 @@ fn stepRecord(self: *TypeWriter, writer: *ByteWrite, frame: *RecordFrame, root_v
 
                         // Since don't recurse above, we must capture the static dispatch
                         // constraints directly
-                        try self.collectDispatchConstraints(frame.ext_var, self.types.resolveVar(frame.ext_var).var_, self.types.sliceStaticDispatchConstraints(rigid.constraints));
+                        for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                            try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                        }
                     },
                     .invalid, .empty_record => {},
                 }
@@ -1198,7 +1175,9 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                         }
 
                         if (display != .hidden) {
-                            try self.collectDispatchConstraints(flex.var_, flex.var_, self.types.sliceStaticDispatchConstraints(flex.payload.constraints));
+                            for (self.types.sliceStaticDispatchConstraints(flex.payload.constraints)) |constraint| {
+                                try self.appendStaticDispatchConstraint(flex.var_, constraint);
+                            }
                         }
                     },
                     .rigid => |rigid| {
@@ -1214,7 +1193,9 @@ fn stepTagUnion(self: *TypeWriter, writer: *ByteWrite, frame: *TagUnionFrame, ro
                             try writer.writeAll("..");
                             if (name.len > 0 and name[0] != '#') try writer.writeAll(name);
 
-                            try self.collectDispatchConstraints(frame.ext_var, self.types.resolveVar(frame.ext_var).var_, self.types.sliceStaticDispatchConstraints(rigid.constraints));
+                            for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                try self.appendStaticDispatchConstraint(frame.ext_var, constraint);
+                            }
                         }
                     },
                     .empty_tag_union, .err, .invalid => {},
@@ -1389,20 +1370,16 @@ pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) error{ OutOfMemor
 }
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
-fn collectDispatchConstraints(self: *TypeWriter, dispatcher_var: Var, root: Var, constraints: []const types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
-    if (constraints.len == 0 or self.omitted_dispatcher == root) return;
-    if ((try self.collected_dispatchers.getOrPut(root)).found_existing) return;
-    for (constraints) |constraint| try self.appendStaticDispatchConstraint(dispatcher_var, constraint);
-}
-
 fn appendStaticDispatchConstraint(self: *TypeWriter, dispatcher_var: Var, constraint_to_add: types_mod.StaticDispatchConstraint) error{ OutOfMemory, WriteFailed }!void {
-    if (@import("builtin").is_test) self.test_work += 1;
     if (self.omit_literal_conversion_constraints and constraint_to_add.origin == .from_literal) return;
     if (self.omitted_dispatcher) |omitted| {
         if (self.types.resolveVar(dispatcher_var).var_ == omitted) return;
     }
-    const key = (@as(u64, @as(u32, @bitCast(constraint_to_add.fn_name))) << 32) | @backingInt(constraint_to_add.fn_var);
-    if ((try self.constraint_keys.getOrPutContext(self.gpa, key, .{ .writer = self })).found_existing) return;
+    for (self.static_dispatch_constraints.items) |item| {
+        if (item.constraint.fn_name == constraint_to_add.fn_name and item.constraint.fn_var == constraint_to_add.fn_var) {
+            return;
+        }
+    }
     try self.static_dispatch_constraints.append(.{
         .dispatcher_var = dispatcher_var,
         .constraint = constraint_to_add,
@@ -1524,7 +1501,6 @@ fn countVarOccurrencesOutsideOwnConstraints(self: *TypeWriter, search_var: Var, 
 /// outright (returning true) or push the frame that will visit its children
 /// (returning false).
 fn countRequest(self: *TypeWriter, current_var: Var) std.mem.Allocator.Error!bool {
-    if (@import("builtin").is_test) self.test_work += 1;
     if (@backingInt(current_var) >= self.types.len()) return true;
 
     const resolved = self.types.resolveVar(current_var);
@@ -1699,7 +1675,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
     var found = false;
 
     // We need at most as many attempts as there are existing identifiers
-    const max_attempts = self.visible_identifier_count orelse self.idents.interner.entry_count;
+    const max_attempts = self.idents.interner.entry_count;
     var attempts: usize = 0;
     while (!found and attempts < max_attempts) : (attempts += 1) {
         const candidate_name = if (counter == 0)
@@ -1713,7 +1689,7 @@ fn generateContextualName(self: *TypeWriter, writer: *ByteWrite, context: TypeCo
         };
 
         // Check if this name already exists in the identifier store
-        const exists = self.nameAlreadyExists(candidate_name);
+        const exists = self.idents.interner.contains(candidate_name);
 
         if (!exists) {
             // This name is available, write it to the buffer
@@ -1738,7 +1714,7 @@ fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, W
     // Generate name: a, b, ..., z, aa, ab, ..., az, ba, ...
     // Skip any names that already exist in the identifier store
     // We need at most one more name than the number of existing identifiers
-    const max_attempts = (self.visible_identifier_count orelse self.idents.interner.entry_count) + 1;
+    const max_attempts = self.idents.interner.entry_count + 1;
     var attempts: usize = 0;
     while (attempts < max_attempts) : (attempts += 1) {
         var n = self.next_name_index;
@@ -1759,7 +1735,7 @@ fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, W
 
         // Check if this name already exists in the identifier store
         const candidate_name = self.name_tmp.items;
-        const exists = self.nameAlreadyExists(candidate_name);
+        const exists = self.idents.interner.contains(candidate_name);
 
         if (!exists) {
             // This name is available, use it
@@ -1774,11 +1750,6 @@ fn generateNextName(self: *TypeWriter, writer: *ByteWrite) error{ OutOfMemory, W
         try writer.writeAll("var");
         try writer.print("{}", .{self.next_name_index});
     }
-}
-
-fn nameAlreadyExists(self: *const TypeWriter, name: []const u8) bool {
-    const id = self.idents.interner.lookup(name) orelse return false;
-    return @backingInt(id) <= (self.visible_identifier_count orelse self.idents.interner.entry_count);
 }
 
 const testing = std.testing;

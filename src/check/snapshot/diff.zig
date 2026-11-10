@@ -639,8 +639,7 @@ fn gatherTagsFromUnion(
 
     // Add immediate tags
     const union_tags = snap_store.sliceTags(union_.tags);
-    for (union_tags.items(.name), union_tags.items(.args), 0..) |name, args, i| {
-        const formatted = try @constCast(snap_store).formatTag(@fromBackingInt(@backingInt(union_.tags.start) + @as(u32, @intCast(i))));
+    for (union_tags.items(.name), union_tags.items(.args), union_tags.items(.formatted)) |name, args, formatted| {
         _ = try tags.append(gpa, .{ .name = name, .args = args, .formatted = formatted });
     }
 
@@ -655,8 +654,7 @@ fn gatherTagsFromUnion(
                 .tag_union => |ext_union| {
                     const ext_tags = snap_store.sliceTags(ext_union.tags);
                     const outer_end = tags.len();
-                    for (ext_tags.items(.name), ext_tags.items(.args), 0..) |name, args, i| {
-                        const formatted = try @constCast(snap_store).formatTag(@fromBackingInt(@backingInt(ext_union.tags.start) + @as(u32, @intCast(i))));
+                    for (ext_tags.items(.name), ext_tags.items(.args), ext_tags.items(.formatted)) |name, args, formatted| {
                         try snapshot.appendRowLabel(snapshot.SnapshotTag, tags, gpa, start, outer_end, .{ .name = name, .args = args, .formatted = formatted });
                     }
                     ext_idx = ext_union.ext;

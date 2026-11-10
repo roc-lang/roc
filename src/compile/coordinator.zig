@@ -10616,21 +10616,18 @@ test "issue 12059: a checked module's cache entry does not depend on how an impo
     // key in both builds, and its entry holds the same bytes whichever app
     // was compiled: only the app module itself differs.
     var shared_entries: usize = 0;
-    for (lifted.checking) |facts| {
-        const artifact_key = facts.artifact_key orelse continue;
-        const peer = for (unlifted.checking) |other| {
-            if (other.artifact_key) |other_key| {
-                if (std.mem.eql(u8, &artifact_key, &other_key)) break other;
+    for (lifted.checking) |module| {
+        const key = module.artifact_key orelse continue;
+        const other = for (unlifted.checking) |candidate| {
+            if (candidate.artifact_key) |other_key| {
+                if (std.mem.eql(u8, &key, &other_key)) break candidate;
             }
         } else continue;
-        // Storage is indexed by the typing input, not the published artifact's
-        // identity. Shared artifacts must still have identical input keys and
-        // bytes regardless of the importing app.
-        try std.testing.expectEqual(facts.storage_key, peer.storage_key);
-        const key = facts.storage_key orelse continue;
-        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, key)) orelse continue;
+        // Checking inputs name storage; the completed artifact key names
+        // the result, not its filename.
+        const from_lifted = (try readCheckedModuleCacheEntry(allocator, lifted_cache, module.storage_key orelse continue)) orelse continue;
         defer allocator.free(from_lifted);
-        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, peer.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
+        const from_unlifted = (try readCheckedModuleCacheEntry(allocator, unlifted_cache, other.storage_key orelse return error.TestUnexpectedResult)) orelse return error.TestUnexpectedResult;
         defer allocator.free(from_unlifted);
         try std.testing.expectEqualSlices(u8, from_unlifted, from_lifted);
         shared_entries += 1;

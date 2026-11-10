@@ -122,12 +122,6 @@ pub fn appendStored(
         var regions = base.Region.List{};
         defer regions.deinit(gpa);
         try stored.instantiateRendering(gpa, &snapshots, &regions);
-        snapshots.format_context = .{
-            .idents = env.getIdentStoreConst(),
-            .import_mapping = import_mapping,
-            .default_source = ModuleEnv.typeWriterDefaultSource,
-            .default_source_ctx = env,
-        };
         var builder = try report.ReportBuilder.init(
             gpa,
             env,

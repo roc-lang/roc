@@ -12887,23 +12887,17 @@ const Builder = struct {
             .pending => Common.invariant("pending ConstStore node reached static data selection"),
             .zst,
             .scalar,
-            // Strings already have literal lowering, including
-            // readonly backing for long literals. A separate datum obscures
-            // constants and changes code between evaluation and restoration.
-            .str,
             .crash,
             .checked_error,
             => return false,
+            .str => |str| return constStringBackingLength(view, str) != 0,
             .fn_value => return true,
             .list => return true,
             .box => return true,
             .tuple,
             .record,
+            .tag,
             => return true,
-            // Nullary tags, including Bool, carry only a known discriminant.
-            // Keep the discriminant in Monotype rather than hiding it behind a
-            // static-data read that defeats branch folding and range proofs.
-            .tag => |tag| return tag.payloads.len != 0,
             .nominal => |nominal| {
                 value = view.const_store.get(nominal.backing);
             },

@@ -1141,8 +1141,6 @@ pub const RootRequestTable = struct {
         hoisted_constants: *const HoistedConstTable,
         const_templates: *const ConstTemplateTable,
         template_root_evidence: []const ?artifact_serialize.Span,
-        platform_solutions: []const ModuleEnv.PlatformRequirementSolution,
-        platform_root_evidence: []const artifact_serialize.Span,
         explicit_roots: []const ExplicitRootRequestInput,
         validation: can.Can.Validation,
     ) Allocator.Error!RootRequestTable {
@@ -1234,23 +1232,6 @@ pub const RootRequestTable = struct {
             checkedArtifactInvariant("template root evidence and procedure template tables had different lengths", .{});
         }
         for (requests.items) |*request| {
-            if (request.root_evidence != null) continue;
-            // A direct app entry invokes the checked platform instance. A
-            // compile-time wrapper constructs the value instead; it retains
-            // its own callable type and construction evidence.
-            if (request.compile_time_root == null) for (platform_solutions, platform_root_evidence) |solution, evidence| {
-                if (!solution.is_function or solution.outcome != .success) continue;
-                const matches = switch (request.source) {
-                    .def => |def| def == solution.def,
-                    .expr => |expr| expr == module.def(solution.def).expr.idx,
-                    .statement, .required_binding, .hoisted, .literal => false,
-                };
-                if (!matches) continue;
-                request.checked_type = checked_types.rootForSourceVar(module, solution.solved_var) orelse
-                    checkedArtifactInvariant("platform invocation root type was not published", .{});
-                request.root_evidence = .{ .checked_module = artifact_key.digest(), .span = evidence };
-                break;
-            };
             if (request.root_evidence != null) continue;
             const template_ref = request.procedure_template orelse
                 aliasRootWrapperTemplate(request.*, top_level_procedure_bindings, callable_eval_templates, entry_wrappers) orelse
@@ -2170,9 +2151,8 @@ fn compileTimeRootHasRootRequest(
     return false;
 }
 
-/// A checked lookup that may become an exact procedure alias once its target
-/// binding is known. Root scheduling consumes the proved forwarding recipe,
-/// not this candidate classification.
+/// A checked procedure lookup is a forwarding candidate. Publication still
+/// proves that its target is directly callable rather than a computed value.
 fn compileTimeCallableRootIsProcedureReference(
     bodies: CheckedBodies,
     resolved_value_refs: *const ResolvedValueRefTable,
@@ -13055,7 +13035,7 @@ fn sealCheckedProcedureTemplateRefs(
                     @fromBackingInt(@intCast(record.scheme_root)),
                     {},
                 ),
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use, .platform_requirement => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
             }
         }
 
@@ -13849,19 +13829,11 @@ const EvidencePass = struct {
             }
             if (!solution.is_function) continue;
 
-            if (solution.scheme_use) |record| {
-                self.current_chain = &.{};
-                const spans = (try self.evidenceRefsForRecord(record, .root_default)) orelse
-                    checkedArtifactInvariant("platform invocation evidence remained unresolved after checking", .{});
-                out.* = spans.refs;
-                continue;
-            }
             params.clearRetainingCapacity();
-            // A use without a record has no substitution and no evidence.
+            // The app definition owns the complete scheme, including captured
+            // codec requirements absent from the platform's copied type root.
             try self.enumerateParams(ModuleEnv.varFrom(solution.def), &params);
-            if (params.items.len != 0) {
-                checkedArtifactInvariant("platform invocation omitted its scheme-use evidence record", .{});
-            }
+            out.* = try self.rootEvidenceRefs(params.items);
         }
 
         // Explicit shared-var use sites no template chain fully bound resolve
@@ -14295,7 +14267,7 @@ const EvidencePass = struct {
                     const root_entry = try self.where_method_use_by_fn_root.getOrPut(root);
                     if (!root_entry.found_existing) root_entry.value_ptr.* = @intCast(i);
                 },
-                .nested_function_use, .recursive_reference, .recursive_value_reference, .platform_requirement => {},
+                .nested_function_use, .recursive_reference, .recursive_value_reference => {},
             }
         }
         // A relation checking folded into a retained same-name relation
@@ -14569,17 +14541,6 @@ const EvidencePass = struct {
         try dispatch_evidence.enumerateEvidenceParamsWithRequirements(self.allocator, self.types, root, explicit.items, &self.enum_scratch, &params);
         const arena = self.enumerated_path_arena.allocator();
         for (params.items) |*param| {
-            // An attached codec parameter has a variable receiver, not a
-            // checked concrete codec. A literal default alone cannot supply
-            // its derivation. Only a real use may instantiate this contract.
-            // Explicit composite requirements retain the checker's private
-            // validation-instance verdict instead.
-            if (param.source != .scheme_requirement and
-                (param.constraint.fn_name.eql(env.idents.encoder_for) or
-                    param.constraint.fn_name.eql(env.idents.parser_for)))
-            {
-                param.requires_instantiation = true;
-            }
             param.callable_contracts = try arena.dupe(types.StaticDispatchConstraint, param.callable_contracts);
         }
         const identity_vars = try self.identity_writer.identityVarsFromScheme(root, relation_roots.items);
@@ -16001,8 +15962,6 @@ const EvidencePass = struct {
         defer_resolution,
         /// Commit it by the unpinned-dispatch rule.
         commit,
-        /// A source-free platform invocation uses the root literal defaults.
-        root_default,
         /// The record places a function into a value as data. A containing
         /// record, tuple, list, tag, or nominal can cross a module boundary
         /// before that function is requested at a concrete type, so an
@@ -16044,7 +16003,6 @@ const EvidencePass = struct {
             const evidence = switch (unpinned) {
                 .defer_resolution => (try self.evidenceForRecordParam(pairs, param, .defer_resolution)) orelse return null,
                 .commit => (try self.evidenceForRecordParam(pairs, param, .commit)).?,
-                .root_default => (try self.evidenceForRecordParam(pairs, param, .root_default)).?,
                 .from_callable => try self.storedFunctionEvidenceForRecordParam(pairs, param),
             };
             entries.appendAssumeCapacity(evidence);
@@ -16501,7 +16459,6 @@ const EvidencePass = struct {
             .shared_value_use => .defer_resolution,
             .nested_function_use => .from_callable,
             .value_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference => .commit,
-            .platform_requirement => unreachable, // platform solutions publish their source-free root edge, never expression-site evidence
             .where_method_use => unreachable, // rejected above
         };
         const spans = (try self.evidenceRefsForRecord(record_idx, unpinned)) orelse {
@@ -22748,7 +22705,7 @@ pub const PlatformPairing = struct {
     /// versioning folds it into the platform-pairing cache entry's admission hash.
     // Bump the version for changes to the borrowed-column mask interpretation as
     // well as other semantics not visible in the serialized layout fingerprint.
-    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 5);
+    pub const SERIALIZED_VERSION_HASH: [32]u8 = artifact_serialize.rootLayoutVersionHash(Serialized, 4);
 
     pub const Serialized = extern struct {
         relation: [32]u8,
@@ -23008,7 +22965,6 @@ pub fn pairCheckedPlatform(
         result.pairing_types = .{ .images = try images.toOwnedSlice(session) };
     }
 
-
     // A requirement lookup whose binding the app rejected produces no value,
     // and a call of a requirement the binding classifies may become direct.
     {
@@ -23027,7 +22983,8 @@ pub fn pairCheckedPlatform(
             const call_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(raw));
             const data = env.store.getExpr(call_expr);
             if (data != .e_call) continue;
-            if (platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) == null) continue;
+            const ref_id = platform.resolved_value_refs.lookupIdByExpr(data.e_call.func) orelse continue;
+            if (platform.resolved_value_refs.records[@backingInt(ref_id)].ref != .platform_required_declaration) continue;
             // The binding supplies the procedure kind that an unpaired
             // requirement cannot classify. Publish the same direct-call
             // decision as a resolved module.
@@ -23108,9 +23065,9 @@ pub fn pairCheckedPlatform(
         try roots.append(session, selected);
     }
     for (roots.items) |*request| {
-        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) blk: {
+        request.evaluation_complete = if (request.abi == .compile_time and !request.requires_pairing) complete: {
             const root = result.compile_time_roots.root(request.compile_time_root.?);
-            break :blk !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
+            break :complete !root.needsEvaluation(.lss) and !root.needsEvaluation(.boxy);
         } else false;
         request.requires_pairing = false;
         request.checked_type = try substitutions.specializeRootWithMemo(session, &result.checked_types, request.checked_type, &type_memo);
@@ -24997,19 +24954,6 @@ fn publishSealedSlots(allocator: Allocator, checked_types: CheckedTypeStoreView,
     templates.sealed_slots_pool = try slots.toOwnedSlice(allocator);
 }
 
-/// Hidden callable interfaces can exchange rows absent from the nominal's
-/// visible type arguments, so argument occurrences prevent result sealing.
-fn nominalHidesCallableInterface(nominal: CheckedNominalType) bool {
-    return switch (nominal.representation) {
-        .local_box_payload_capability, .imported_box_payload_capability => true,
-        // A parser spec's callback uses the invocation's error row, although
-        // the nominal exposes only its value shape. Sealing that row changes
-        // the callback's argument and result ABI.
-        .builtin => |kind| builtinRuntimeEncoding(kind) == .parse_tag_union_spec,
-        .local_declaration, .imported_declaration, .opaque_without_backing => false,
-    };
-}
-
 /// Compute every sealed scheme-variable slot of one template together. A type
 /// can occur on both a coercible result path and an externally involved path;
 /// the visited key therefore includes the traversal mode.
@@ -25084,7 +25028,10 @@ const SealedSchemeSlots = struct {
             switch (step.mode) {
                 .argument, .ordinary => {
                     if (step.mode == .argument) switch (payload) {
-                        .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return,
+                        .nominal => |nominal| switch (nominal.representation) {
+                            .local_box_payload_capability, .imported_box_payload_capability => return,
+                            .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                        },
                         .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
                     };
                     try self.pushChildren(payload, step.mode);
@@ -25229,7 +25176,10 @@ pub const SealedSchemeVarWalk = if (builtin.is_test) struct {
             if ((try self.seen.getOrPut(allocator, ty)).found_existing) continue;
             const payload = self.types.payload(ty);
             switch (payload) {
-                .nominal => |nominal| if (nominalHidesCallableInterface(nominal)) return true,
+                .nominal => |nominal| switch (nominal.representation) {
+                    .local_box_payload_capability, .imported_box_payload_capability => return true,
+                    .builtin, .local_declaration, .imported_declaration, .opaque_without_backing => {},
+                },
                 .alias, .record, .tuple, .tag_union, .function, .pending, .field_kind, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
             }
             try self.pushChildren(payload);
@@ -34687,8 +34637,6 @@ pub fn publishFromTypedModule(
         &hoisted_constants,
         &const_templates,
         static_dispatch_plans.template_root_evidence,
-        requirement_solutions,
-        platform_requirement_root_evidence,
         inputs.explicit_roots,
         inputs.validation,
     );
@@ -37691,7 +37639,6 @@ test "sealed slot batching restricts hidden callable veto to arguments" {
     const representations = [_]CheckedNominalRepresentationRef{
         .{ .local_box_payload_capability = .{ .capability = undefined } },
         .{ .imported_box_payload_capability = .{ .artifact = testCheckedModuleKey(2).digest(), .capability = undefined } },
-        .{ .builtin = .parse_tag_union_spec },
     };
     for (representations) |representation| {
         const hidden = try f.nominal(representation, &.{});
