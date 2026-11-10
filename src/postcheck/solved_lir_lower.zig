@@ -2539,7 +2539,7 @@ const Lowerer = struct {
                     for (0..fields.len) |index| {
                         const field = GuardedList.at(fields, index);
                         try self.add(.{ .ty = field.ty });
-                        if (field.value_ty) |value_ty| try self.add(.{ .ty = value_ty });
+                        if (field.value_ty.get()) |value_ty| try self.add(.{ .ty = value_ty });
                     }
                 },
                 .capture_record => |span| {
@@ -2550,7 +2550,7 @@ const Lowerer = struct {
                         try self.add(.{ .ty = field.storage_ty });
                     }
                 },
-                .named => |named| if (named.backing) |backing| {
+                .named => |named| if (named.backing.get()) |backing| {
                     try self.add(.{ .ty = backing.ty });
                 },
                 .tag_union => |span| {
@@ -2621,7 +2621,7 @@ const Lowerer = struct {
                 },
                 .nominal => |inner| try self.add(.{ .pattern = inner }),
                 .str_pattern => |pattern| for (view.strPatternStepSpan(pattern.steps)) |step| {
-                    if (step.capture) |capture| try self.add(.{ .pattern = capture });
+                    if (step.capture.get()) |capture| try self.add(.{ .pattern = capture });
                 },
                 .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
             }
@@ -3683,7 +3683,7 @@ const Lowerer = struct {
                 try task.fields.append(self.allocator, .{
                     .name = field.name,
                     .ty = task.field_ty,
-                    .value_ty = input.?.ty,
+                    .value_ty = .some(input.?.ty),
                     .default = field.default,
                 });
                 frame.index += 1;
@@ -3703,11 +3703,11 @@ const Lowerer = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = task.args,
-                    .backing = if (named.backing) |backing| .{
+                    .backing = .of(if (named.backing.get()) |backing| .{
                         .ty = task.backing,
                         .use = backing.use,
                         .authority = backing.authority,
-                    } else null,
+                    } else null),
                     .declared_order = input.?.span,
                 } });
             },
@@ -3722,7 +3722,7 @@ const Lowerer = struct {
             .list, .box, .tuple, .named => try task.tys.append(self.allocator, lowered),
             .record => |fields| {
                 const field = self.solved_types.fieldSpan(fields)[frame.index];
-                if (field.value_ty != null) {
+                if (field.value_ty.get() != null) {
                     task.field_ty = lowered;
                     frame.cursor = TypeVarCursor.field_value;
                     return;
@@ -3730,7 +3730,7 @@ const Lowerer = struct {
                 try task.fields.append(self.allocator, .{
                     .name = field.name,
                     .ty = lowered,
-                    .value_ty = null,
+                    .value_ty = .none,
                     .default = field.default,
                 });
                 frame.index += 1;
@@ -3778,7 +3778,7 @@ const Lowerer = struct {
         const content = self.solved.types.get(task.root);
         if (frame.cursor == TypeVarCursor.field_value) {
             const field = self.solved_types.fieldSpan(content.record)[frame.index];
-            return typeVarStep(field.value_ty.?);
+            return typeVarStep(field.value_ty.get().?);
         }
         switch (content) {
             .list => |elem| {
@@ -3823,7 +3823,7 @@ const Lowerer = struct {
                 const args = self.solved_types.span(named.args);
                 if (task.tys.items.len < args.len) return typeVarStep(args[task.tys.items.len]);
                 task.args = try self.types.addSpan(task.tys.items);
-                if (named.backing) |backing| {
+                if (named.backing.get()) |backing| {
                     frame.cursor = TypeVarCursor.named_backing;
                     return typeVarStep(backing.ty);
                 }
@@ -4202,10 +4202,10 @@ const Lowerer = struct {
             switch (types.get(ty)) {
                 .primitive, .zst, .hole, .erased_capture_ptr => return .leaf,
                 .named => |named| {
-                    if (named.builtin_owner) |owner| {
+                    if (named.builtin_owner.get()) |owner| {
                         if (builtinOwnerLayout(owner) != null) return .leaf;
                     }
-                    const backing = named.backing orelse Common.invariant("named type without runtime backing reached a host boundary");
+                    const backing = named.backing.get() orelse Common.invariant("named type without runtime backing reached a host boundary");
                     return .{ .transparent = backing.ty };
                 },
                 .record => |fields| {
@@ -4449,8 +4449,8 @@ const Lowerer = struct {
                 for (declared_args, 0..) |declared_arg, index| {
                     try children.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
                 }
-                const backing = named.backing orelse return false;
-                const declared_backing = declared.named.backing orelse return false;
+                const backing = named.backing.get() orelse return false;
+                const declared_backing = declared.named.backing.get() orelse return false;
                 try children.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
                 return false;
             },
@@ -4578,8 +4578,8 @@ const Lowerer = struct {
                 for (declared_args, 0..) |declared_arg, index| {
                     try walk.frame_pairs.append(allocator, .{ .program = self.types.typeAt(named.args, index), .declared = declared_arg });
                 }
-                if (named.backing) |backing| {
-                    const declared_backing = declared_named.backing orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
+                if (named.backing.get()) |backing| {
+                    const declared_backing = declared_named.backing.get() orelse Common.invariant("a compile-time root's named type has a backing its declaration lacks");
                     try walk.frame_pairs.append(allocator, .{ .program = backing.ty, .declared = declared_backing.ty });
                 }
             },
@@ -4637,7 +4637,11 @@ const Lowerer = struct {
                 const copy = frame.copy orelse Common.invariant("a narrowed named type had no copy");
                 var narrowed = named;
                 narrowed.args = try self.types.addSpan(results[0..named.args.len]);
-                if (narrowed.backing) |*backing| backing.ty = results[named.args.len];
+                if (narrowed.backing.get()) |backing| {
+                    var retargeted = backing;
+                    retargeted.ty = results[named.args.len];
+                    narrowed.backing = .some(retargeted);
+                }
                 try self.types.set(copy, .{ .named = narrowed });
                 return copy;
             },
@@ -4998,7 +5002,7 @@ const Lowerer = struct {
             if (content == .named and content.named.kind == .alias) {
                 // Aliases are transparent values. Reuse the backing plan so
                 // ConstStore never records an alias as a nominal wrapper.
-                const backing = content.named.backing orelse Common.invariant("alias without backing reached ConstStore plan output");
+                const backing = content.named.backing.get() orelse Common.invariant("alias without backing reached ConstStore plan output");
                 return .{ .call = .{ .plan = .{ .ty = backing.ty } } };
             }
 
@@ -5107,7 +5111,7 @@ const Lowerer = struct {
                 break :blk .{ .tag_union = variants };
             },
             .named => |named| blk: {
-                const backing = named.backing orelse Common.invariant("named type without backing reached ConstStore plan output");
+                const backing = named.backing.get() orelse Common.invariant("named type without backing reached ConstStore plan output");
                 const backing_plan = input orelse return .{ .call = .{ .plan = .{ .ty = backing.ty } } };
                 break :blk .{ .named = .{
                     .named_type = .{ .module = named.named_type.module },
@@ -5210,12 +5214,12 @@ const Lowerer = struct {
                     .record => |fields| {
                         const field = self.types.fieldAt(fields, task.index);
                         task.fields.items[task.index].ty = component;
-                        if (field.value_ty) |value_ty| {
+                        if (field.value_ty.get()) |value_ty| {
                             task.cursor = ConstTypeCursor.field_value;
                             return constTypeStep(value_ty);
                         }
-                        task.fields.items[task.index].value_ty = null;
-                        task.fields.items[task.index].default = try self.constFieldDefault(field.default);
+                        task.fields.items[task.index].value_ty = .none;
+                        task.fields.items[task.index].default = .of(try self.constFieldDefault(field.default.get()));
                         task.index += 1;
                     },
                     .named => |named| {
@@ -5232,25 +5236,25 @@ const Lowerer = struct {
             },
             ConstTypeCursor.field_value => {
                 const field = self.types.fieldAt(content.record, task.index);
-                task.fields.items[task.index].value_ty = input.?.get(.ty);
-                task.fields.items[task.index].default = try self.constFieldDefault(field.default);
+                task.fields.items[task.index].value_ty = .some(input.?.get(.ty));
+                task.fields.items[task.index].default = .of(try self.constFieldDefault(field.default.get()));
                 task.index += 1;
                 task.cursor = ConstTypeCursor.components;
             },
             ConstTypeCursor.named_backing => {
                 const named = content.named;
-                const backing = named.backing.?;
+                const backing = named.backing.get().?;
                 return try self.finishConstType(task, .{ .named = .{
                     .named_type = .{ .module = named.named_type.module },
                     .def = task.def,
                     .kind = constNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
                     .args = task.args_span,
-                    .backing = .{
+                    .backing = .some(.{
                         .ty = input.?.get(.ty),
                         .use = constBackingUse(backing.use),
                         .authority = constBackingAuthority(backing.authority),
-                    },
+                    }),
                     .declared_order = try self.result.const_types.appendDeclaredFieldSpan(task.declared.items),
                 } });
             },
@@ -5275,8 +5279,8 @@ const Lowerer = struct {
                     try task.fields.append(allocator, .{
                         .name = try self.constRecordFieldName(field.name),
                         .ty = undefined,
-                        .value_ty = null,
-                        .default = null,
+                        .value_ty = .none,
+                        .default = .none,
                     });
                     return constTypeStep(field.ty);
                 }
@@ -5312,7 +5316,7 @@ const Lowerer = struct {
                 }
                 task.def = try self.constTypeDef(named.def);
                 task.args_span = try self.result.const_types.appendTypeSpan(task.args.items);
-                if (named.backing) |backing| {
+                if (named.backing.get()) |backing| {
                     task.cursor = ConstTypeCursor.named_backing;
                     return constTypeStep(backing.ty);
                 }
@@ -5322,7 +5326,7 @@ const Lowerer = struct {
                     .kind = constNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
                     .args = task.args_span,
-                    .backing = null,
+                    .backing = .none,
                     .declared_order = try self.result.const_types.appendDeclaredFieldSpan(task.declared.items),
                 } });
             },
@@ -5588,7 +5592,7 @@ const Lowerer = struct {
                     for (0..fields.len) |index| {
                         const field = GuardedList.at(fields, index);
                         try stack.append(self.allocator, field.ty);
-                        if (field.value_ty) |value_ty| try stack.append(self.allocator, value_ty);
+                        if (field.value_ty.get()) |value_ty| try stack.append(self.allocator, value_ty);
                     }
                 },
                 .capture_record => |span| {
@@ -5609,7 +5613,7 @@ const Lowerer = struct {
                 },
                 .named => |named| {
                     try self.appendTypeSpan(&stack, named.args);
-                    if (named.backing) |backing| try stack.append(self.allocator, backing.ty);
+                    if (named.backing.get()) |backing| try stack.append(self.allocator, backing.ty);
                 },
             }
         }
@@ -5741,11 +5745,11 @@ const Lowerer = struct {
                         .kind = constNamedKind(named.kind),
                         .builtin_owner = named.builtin_owner,
                         .args = try self.result.const_types.appendTypeSpan(ids.items),
-                        .backing = if (named.backing) |backing| .{
+                        .backing = .of(if (named.backing.get()) |backing| .{
                             .ty = try self.reserveConstMonoType(backing.ty, &pending),
                             .use = constBackingUse(backing.use),
                             .authority = constBackingAuthority(backing.authority),
-                        } else null,
+                        } else null),
                         .declared_order = try self.result.const_types.appendDeclaredFieldSpan(declared.items),
                     } };
                 },
@@ -5755,8 +5759,8 @@ const Lowerer = struct {
                         try fields.append(self.allocator, .{
                             .name = try self.constRecordFieldName(field.name),
                             .ty = try self.reserveConstMonoType(field.ty, &pending),
-                            .value_ty = if (field.value_ty.get()) |value_ty| try self.reserveConstMonoType(value_ty, &pending) else null,
-                            .default = try self.constFieldDefault(field.default),
+                            .value_ty = .of(if (field.value_ty.get()) |value_ty| try self.reserveConstMonoType(value_ty, &pending) else null),
+                            .default = .of(try self.constFieldDefault(field.default.get())),
                         });
                     }
                     break :blk .{ .record = try self.result.const_types.appendFieldSpan(fields.items) };
@@ -5818,7 +5822,7 @@ const Lowerer = struct {
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
-            .iterator_topology = if (def.iterator_topology) |topology| .{
+            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
                 .len_field = try self.constRecordFieldName(topology.len_field),
                 .step_field = try self.constRecordFieldName(topology.step_field),
                 .ok_tag = try self.constTagName(topology.ok_tag),
@@ -5829,7 +5833,7 @@ const Lowerer = struct {
                 .skip_tag = try self.constTagName(topology.skip_tag),
                 .item_field = try self.constRecordFieldName(topology.item_field),
                 .rest_field = try self.constRecordFieldName(topology.rest_field),
-            } else null,
+            } else null),
         };
     }
 
@@ -5878,7 +5882,7 @@ const Lowerer = struct {
             Common.invariant("runtime schema request named type identity changed before LIR lowering");
         }
 
-        const backing = named.backing orelse Common.invariant("runtime schema request referenced a named type without runtime backing");
+        const backing = named.backing.get() orelse Common.invariant("runtime schema request referenced a named type without runtime backing");
         if (backing.use != .inspectable) {
             Common.invariant("runtime schema request referenced a named type whose backing is not inspectable");
         }
@@ -5903,7 +5907,7 @@ const Lowerer = struct {
             if (content == .record) return .record;
             if (content == .tag_union) return .tag_union;
             if (content != .named) Common.invariant("runtime schema request backing was not a record or tag union");
-            const backing = content.named.backing orelse Common.invariant("runtime schema request crossed a named type without backing");
+            const backing = content.named.backing.get() orelse Common.invariant("runtime schema request crossed a named type without backing");
             if (backing.use != .inspectable) {
                 Common.invariant("runtime schema request crossed a non-inspectable named backing");
             }
@@ -9871,7 +9875,7 @@ const Lowerer = struct {
 
     fn nominalBackingType(self: *Lowerer, nominal_ty: Type.TypeId, backing: Lifted.ExprId) Common.LowerError!Type.TypeId {
         const content = self.types.get(nominal_ty);
-        if (content == .named) return (content.named.backing orelse Common.invariant("nominal expression target had no runtime backing")).ty;
+        if (content == .named) return (content.named.backing.get() orelse Common.invariant("nominal expression target had no runtime backing")).ty;
         if (content == .box) return content.box;
         return try self.lowerExprTy(backing);
     }
@@ -10151,7 +10155,7 @@ const Lowerer = struct {
             } else switch (self.types.get(child_ty)) {
                 .erased_fn => .single_slot,
                 .primitive, .callable, .erased_capture_ptr, .zst, .hole => .none,
-                .named => |named| if (named.backing) |backing| {
+                .named => |named| if (named.backing.get()) |backing| {
                     try frames.append(frame_allocator, .{ .ty = child_ty, .remaining = child_remaining, .exhaustions_before = exhaustions });
                     child_ty = backing.ty;
                     child_remaining -= 1;
@@ -10509,7 +10513,7 @@ const Lowerer = struct {
                 // Hashing a zero-sized value contributes nothing.
                 .zst => .nothing,
                 .hole => Common.invariant("structural hashing reached a demand hole"),
-                .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named hash reached direct LIR without runtime backing")).ty },
+                .named => |named| .{ .retarget = (named.backing.get() orelse Common.invariant("named hash reached direct LIR without runtime backing")).ty },
                 .record,
                 .tuple,
                 .tag_union,
@@ -10723,7 +10727,7 @@ const Lowerer = struct {
                 .str_pattern => |str| {
                     const steps = self.solved.lifted.strPatternStepSpan(str.steps);
                     for (0..steps.len) |i| {
-                        if (GuardedList.at(steps, i).capture) |capture| try pending.append(self.allocator, .{ .pattern = capture });
+                        if (GuardedList.at(steps, i).capture.get()) |capture| try pending.append(self.allocator, .{ .pattern = capture });
                     }
                 },
                 .as => |as| {
@@ -10922,7 +10926,7 @@ const Lowerer = struct {
                     return labels;
                 }
                 if (content != .named) return null;
-                ty = (content.named.backing orelse return null).ty;
+                ty = (content.named.backing.get() orelse return null).ty;
             }
         }
 
@@ -11041,7 +11045,7 @@ const Lowerer = struct {
                 const content = self.l.types.get(current);
                 if (content == .primitive) return content.primitive;
                 if (content != .named) return null;
-                current = (content.named.backing orelse return null).ty;
+                current = (content.named.backing.get() orelse return null).ty;
             }
         }
 
@@ -11092,7 +11096,7 @@ const Lowerer = struct {
 
         pub fn strCapturePat(self: MatchTreeCtx, pat_id: Lifted.PatId, i: u32) ?Lifted.PatId {
             const str = self.l.pat(pat_id).data.str_pattern;
-            return GuardedList.at(self.l.solved.lifted.strPatternStepSpan(str.steps), i).capture;
+            return GuardedList.at(self.l.solved.lifted.strPatternStepSpan(str.steps), i).capture.get();
         }
 
         pub fn stmtCount(self: MatchTreeCtx) usize {
@@ -11259,7 +11263,7 @@ const Lowerer = struct {
             const steps = self.l.solved.lifted.strPatternStepSpan(str.steps);
             const locals = try self.arena.alloc(?LIR.LocalId, steps.len);
             for (locals, 0..) |*out, i| {
-                out.* = if (GuardedList.at(steps, i).capture) |capture| try self.l.addTemp(try self.l.lowerPatTy(capture)) else null;
+                out.* = if (GuardedList.at(steps, i).capture.get()) |capture| try self.l.addTemp(try self.l.lowerPatTy(capture)) else null;
             }
             return locals;
         }
@@ -11881,7 +11885,7 @@ const Lowerer = struct {
         inner: Lifted.PatId,
     ) Common.LowerError!Type.TypeId {
         const content = self.types.get(nominal_ty);
-        if (content == .named) return (content.named.backing orelse Common.invariant("nominal pattern target had no runtime backing")).ty;
+        if (content == .named) return (content.named.backing.get() orelse Common.invariant("nominal pattern target had no runtime backing")).ty;
         if (content == .box) return content.box;
         return try self.lowerPatTy(inner);
     }
@@ -11956,7 +11960,7 @@ const Lowerer = struct {
             const input_step = GuardedList.at(input_steps, index);
             const lir_step = &lir_steps[index];
             lir_step.* = .{
-                .capture = if (input_step.capture) |capture|
+                .capture = if (input_step.capture.get()) |capture|
                     .{ .view = try self.addTemp(try self.lowerPatTy(capture)) }
                 else
                     .discard,
@@ -11968,7 +11972,7 @@ const Lowerer = struct {
         var index = input_steps.len;
         while (index > 0) {
             index -= 1;
-            if (GuardedList.at(input_steps, index).capture) |capture| {
+            if (GuardedList.at(input_steps, index).capture.get()) |capture| {
                 const capture_local = switch (lir_steps[index].capture) {
                     .view => |local| local,
                     .discard => Common.invariant("string-pattern capture step lowered without a capture local"),
@@ -12049,7 +12053,7 @@ const Lowerer = struct {
                 .primitive => |primitive| .{ .done = try l.lowerPrimitiveEqLocalsInto(ctx.where, request.target, request.lhs, request.rhs, primitive, request.negated, request.next) },
                 .zst => .always_equal,
                 .hole => Common.invariant("structural equality reached a demand hole"),
-                .named => |named| .{ .retarget = (named.backing orelse Common.invariant("named equality reached direct LIR without runtime backing")).ty },
+                .named => |named| .{ .retarget = (named.backing.get() orelse Common.invariant("named equality reached direct LIR without runtime backing")).ty },
                 .record => |fields| .{ .components = try ctx.fieldComponents(l.types.fieldSpan(fields)) },
                 .capture_record => |fields| .{ .components = try ctx.fieldComponents(l.types.captureFieldSpan(fields)) },
                 .tuple => |items| blk: {
@@ -12671,7 +12675,7 @@ const Lowerer = struct {
         for (0..self.types.typeCount()) |_| {
             const content = self.types.get(current);
             if (content != .named or content.named.kind != .alias) return current;
-            current = (content.named.backing orelse Common.invariant("a transparent alias has no backing")).ty;
+            current = (content.named.backing.get() orelse Common.invariant("a transparent alias has no backing")).ty;
         }
         Common.invariant("a transparent alias chain is cyclic");
     }
@@ -12680,7 +12684,7 @@ const Lowerer = struct {
         const current = self.unaliasedType(ty);
         const content = self.types.get(current);
         if (content != .named) return null;
-        const owner = content.named.builtin_owner orelse return null;
+        const owner = content.named.builtin_owner.get() orelse return null;
         return if (owner == .iter or owner == .stream) current else null;
     }
 
@@ -13012,9 +13016,9 @@ const Lowerer = struct {
                 return .{ .call = .{ .typed = .{ .target = task.target, .target_ty = task.target_ty, .source = frame.first, .source_ty = task.source_ty, .next = task.next } } };
             },
             .equivalent_named => |task| {
-                const target_backing = self.types.get(task.target_ty).named.backing orelse
+                const target_backing = self.types.get(task.target_ty).named.backing.get() orelse
                     Common.invariant("equivalent named boundary target had no runtime backing");
-                const source_backing = self.types.get(task.source_ty).named.backing orelse
+                const source_backing = self.types.get(task.source_ty).named.backing.get() orelse
                     Common.invariant("equivalent named boundary source had no runtime backing");
                 switch (frame.cursor) {
                     0 => {
@@ -14036,15 +14040,15 @@ const Lowerer = struct {
         named: std.meta.fieldInfo(Type.Content, .named).type,
     ) NamedRepresentationKey {
         const compares_backing_metadata = named.kind != .alias and
-            (named.builtin_owner == null or !generatedEvidenceOwnerUsesBacking(named.builtin_owner.?));
-        const backing = named.backing;
+            (named.builtin_owner.get() == null or !generatedEvidenceOwnerUsesBacking(named.builtin_owner.get().?));
+        const backing = named.backing.get();
         return .{
             .kind = named.kind,
             .named_type_module = named.named_type.module.bytes,
             .def_module = named.def.module,
-            .source_decl = named.def.source_decl,
-            .type_name_if_undeclared = if (named.def.source_decl == null) named.def.type_name else null,
-            .builtin_owner = named.builtin_owner,
+            .source_decl = named.def.source_decl.get(),
+            .type_name_if_undeclared = if (named.def.source_decl.get() == null) named.def.type_name else null,
+            .builtin_owner = named.builtin_owner.get(),
             .args_len = named.args.len,
             .has_backing = backing != null,
             .backing_use = if (compares_backing_metadata and backing != null) backing.?.use else null,
@@ -14098,9 +14102,9 @@ const Lowerer = struct {
             const content = self.solved.types.get(root);
             if (content == .box) return true;
             if (content != .named) return false;
-            const backing = content.named.backing orelse return false;
+            const backing = content.named.backing.get() orelse return false;
             if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
+                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
                 backing.authority != .generated_private and
                 self.solved.types.rootContent(backing.ty) == .record and
                 try self.solvedTypeContainsCallable(backing.ty))
@@ -14130,9 +14134,9 @@ const Lowerer = struct {
             const content = self.types.get(current);
             if (content == .box) return true;
             if (content != .named) return false;
-            const backing = content.named.backing orelse return false;
+            const backing = content.named.backing.get() orelse return false;
             if (content.named.kind == .@"opaque" and
-                content.named.builtin_owner != .iter and content.named.builtin_owner != .stream and
+                content.named.builtin_owner.get() != .iter and content.named.builtin_owner.get() != .stream and
                 backing.authority != .generated_private and
                 self.types.get(backing.ty) == .record and
                 try self.typeContainsCallable(backing.ty))
@@ -14278,7 +14282,7 @@ const Lowerer = struct {
             .erased_fn => |erased| try self.appendVariantCaptureTypes(children, erased.members),
             .named => |named| {
                 try self.appendTypeSpan(children, named.args);
-                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
+                if (named.backing.get()) |backing| try children.append(self.allocator, backing.ty);
             },
         }
     }
@@ -14326,7 +14330,7 @@ const Lowerer = struct {
                 std.hash.autoHash(&hasher, named.def.source_decl);
                 std.hash.autoHash(&hasher, named.builtin_owner);
                 std.hash.autoHash(&hasher, named.args.len);
-                std.hash.autoHash(&hasher, named.backing != null);
+                std.hash.autoHash(&hasher, named.backing.get() != null);
             },
         }
         for (children) |child| {
@@ -14536,7 +14540,7 @@ const Lowerer = struct {
                 if (!std.mem.eql(u8, lhs.named_type.module.bytes[0..], rhs.named_type.module.bytes[0..])) return false;
                 if (!std.mem.eql(u8, names.moduleIdentityBytes(lhs.def.module), names.moduleIdentityBytes(rhs.def.module))) return false;
                 if (lhs.def.source_decl != rhs.def.source_decl) return false;
-                if (lhs.def.source_decl == null and
+                if (lhs.def.source_decl.get() == null and
                     !std.mem.eql(u8, names.typeNameText(lhs.def.type_name), names.typeNameText(rhs.def.type_name)))
                 {
                     return false;
@@ -14545,19 +14549,19 @@ const Lowerer = struct {
                 if (!try scan.addSpanPairs(items, lhs.args, rhs.args)) return false;
 
                 const compares_backing = lhs.kind == .alias or
-                    (if (lhs.builtin_owner) |owner| generatedEvidenceOwnerUsesBacking(owner) else false) or
+                    (if (lhs.builtin_owner.get()) |owner| generatedEvidenceOwnerUsesBacking(owner) else false) or
                     mode != .public;
                 if (!compares_backing) return true;
-                const lhs_backing = lhs.backing orelse {
-                    try items.add(.{ .decided = rhs.backing == null });
+                const lhs_backing = lhs.backing.get() orelse {
+                    try items.add(.{ .decided = rhs.backing.get() == null });
                     return true;
                 };
-                const rhs_backing = rhs.backing orelse {
+                const rhs_backing = rhs.backing.get() orelse {
                     try items.add(.{ .decided = false });
                     return true;
                 };
                 if (lhs.kind != .alias and
-                    !(if (lhs.builtin_owner) |owner| generatedEvidenceOwnerUsesBacking(owner) else false) and
+                    !(if (lhs.builtin_owner.get()) |owner| generatedEvidenceOwnerUsesBacking(owner) else false) and
                     (lhs_backing.use != rhs_backing.use or lhs_backing.authority != rhs_backing.authority))
                 {
                     try items.add(.{ .decided = false });
@@ -14602,7 +14606,7 @@ const Lowerer = struct {
                     const tag_span = self.types.tagSpan(tags);
                     for (0..tag_span.len) |index| try self.appendTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
                 },
-                .named => |named| if (named.backing) |backing| try pending.append(self.allocator, backing.ty),
+                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
             }
             std.mem.reverse(Type.TypeId, pending.items[children_start..]);
         }
@@ -14642,7 +14646,7 @@ const Lowerer = struct {
                     const tag_span = self.solved_types.tagSpan(tags);
                     for (0..tag_span.len) |index| try self.appendSolvedTypeSpan(&pending, GuardedList.at(tag_span, index).payloads);
                 },
-                .named => |named| if (named.backing) |backing| try pending.append(self.allocator, backing.ty),
+                .named => |named| if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty),
             }
             std.mem.reverse(SolvedType.TypeVarId, pending.items[children_start..]);
         }
@@ -14831,7 +14835,7 @@ const Lowerer = struct {
                 .zst => return .{ .input = layout.committedGraphInput(.zst) },
                 .hole => return .{ .input = layout.committedGraphInput(try lowerer.result.layouts.insertLayout(layout.Layout.hole())) },
                 .erased_capture_ptr => return .{ .input = layout.committedGraphInput(.opaque_ptr) },
-                .named => |named| if (named.builtin_owner) |owner| {
+                .named => |named| if (named.builtin_owner.get()) |owner| {
                     if (builtinOwnerLayout(owner)) |layout_idx| return .{ .input = layout.committedGraphInput(layout_idx) };
                 },
                 .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_fn => {},
@@ -14853,9 +14857,9 @@ const Lowerer = struct {
             }
 
             switch (lowerer.types.get(ty)) {
-                .named => |named| if (named.backing) |backing| {
+                .named => |named| if (named.backing.get()) |backing| {
                     if (named.kind == .@"opaque" and
-                        named.builtin_owner != .iter and named.builtin_owner != .stream and
+                        named.builtin_owner.get() != .iter and named.builtin_owner.get() != .stream and
                         // Generated-private backing is the checked producer's
                         // explicit runtime representation, not source opacity.
                         backing.authority != .generated_private and
@@ -14964,7 +14968,7 @@ const Lowerer = struct {
             const types = &self.lowerer.types;
             switch (types.get(ty)) {
                 .primitive, .zst, .hole, .erased_capture_ptr => unreachable, // beginInput answers primitive, zst, hole, and erased_capture_ptr types without reserving a node
-                .named => |named| return .{ .child = (named.backing orelse Common.invariant("named type without runtime backing reached layout selection")).ty },
+                .named => |named| return .{ .child = (named.backing.get() orelse Common.invariant("named type without runtime backing reached layout selection")).ty },
                 .record => |fields| {
                     const field_span = types.fieldSpan(fields);
                     const frame = try self.fieldsFrame(field_span.len);
@@ -15065,7 +15069,7 @@ const Lowerer = struct {
                     .erased_fn => return true,
                     .named => |named| {
                         if (named.kind != .alias) return false;
-                        const backing = named.backing orelse Common.invariant("transparent alias reached layout lowering without a backing type");
+                        const backing = named.backing.get() orelse Common.invariant("transparent alias reached layout lowering without a backing type");
                         current = backing.ty;
                     },
                     .primitive, .record, .capture_record, .tuple, .tag_union, .callable, .list, .box, .erased_capture_ptr, .zst, .hole => return false,
@@ -15238,7 +15242,7 @@ const Lowerer = struct {
             const content = self.types.get(current);
             if (content == .tag_union) return self.types.tagSpan(content.tag_union);
             if (content != .named) Common.invariant("tag operation expected tag-union type");
-            const backing = content.named.backing orelse Common.invariant("named tag has no backing");
+            const backing = content.named.backing.get() orelse Common.invariant("named tag has no backing");
             current = backing.ty;
         }
     }
@@ -15249,7 +15253,7 @@ const Lowerer = struct {
             const content = self.types.get(current);
             if (content == .tuple) return self.types.span(content.tuple);
             if (content != .named) Common.invariant("tuple operation expected tuple type");
-            const backing = content.named.backing orelse Common.invariant("named tuple has no backing");
+            const backing = content.named.backing.get() orelse Common.invariant("named tuple has no backing");
             current = backing.ty;
         }
     }
@@ -15260,7 +15264,7 @@ const Lowerer = struct {
             const content = self.types.get(current);
             if (content == .list) return content.list;
             if (content != .named) Common.invariant("list operation expected list type");
-            const backing = content.named.backing orelse Common.invariant("named list has no backing");
+            const backing = content.named.backing.get() orelse Common.invariant("named list has no backing");
             current = backing.ty;
         }
     }
@@ -15280,7 +15284,7 @@ const Lowerer = struct {
 
     fn runtimeBackingType(self: *Lowerer, ty: Type.TypeId) Type.TypeId {
         const content = self.types.get(ty);
-        return if (content == .named and content.named.backing != null) content.named.backing.?.ty else ty;
+        return if (content == .named and content.named.backing.get() != null) content.named.backing.get().?.ty else ty;
     }
 
     fn recordFields(self: *Lowerer, ty: Type.TypeId) Type.StoreSpanBorrow(Type.Field, "fields") {
@@ -15289,7 +15293,7 @@ const Lowerer = struct {
             const content = self.types.get(current);
             if (content == .record) return self.types.fieldSpan(content.record);
             if (content != .named) Common.invariant("record operation expected record type");
-            const backing = content.named.backing orelse Common.invariant("named record has no backing");
+            const backing = content.named.backing.get() orelse Common.invariant("named record has no backing");
             current = backing.ty;
         }
     }
@@ -15731,7 +15735,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
             .def = .{ .module = module_identity, .type_name = alias_name },
             .kind = .alias,
             .args = .empty(),
-            .backing = .{ .ty = u32_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = u32_ty, .use = .inspectable }),
         },
     });
 
@@ -15750,7 +15754,7 @@ test "layout lowering accepts tag payload alias backed by primitive" {
             .def = .{ .module = module_identity, .type_name = repro_name },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = tag_union_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = tag_union_ty, .use = .inspectable }),
         },
     });
 
@@ -15783,8 +15787,8 @@ test "layout lowering sorts a padding-free nominal record structurally" {
     // The backing row is lexicographic, as every stage stores it: `first` is
     // original field index 0 and `second` is original field index 1.
     const backing_fields = try lowerer.types.addFields(&.{
-        .{ .name = first_name, .ty = f32_ty, .default = null },
-        .{ .name = second_name, .ty = f32_ty, .default = null },
+        .{ .name = first_name, .ty = f32_ty, .default = .none },
+        .{ .name = second_name, .ty = f32_ty, .default = .none },
     });
     const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
     // `State := { second : F32, first : F32 }`: declared in reverse
@@ -15800,7 +15804,7 @@ test "layout lowering sorts a padding-free nominal record structurally" {
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
@@ -15838,8 +15842,8 @@ test "layout lowering keeps opted-in nominal record declaration order" {
     const f32_ty = try lowerer.types.add(.{ .primitive = .f32 });
     const padding_ty = try lowerer.types.add(.zst);
     const backing_fields = try lowerer.types.addFields(&.{
-        .{ .name = first_name, .ty = f32_ty, .default = null },
-        .{ .name = second_name, .ty = f32_ty, .default = null },
+        .{ .name = first_name, .ty = f32_ty, .default = .none },
+        .{ .name = second_name, .ty = f32_ty, .default = .none },
     });
     const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
     const declared_order = try lowerer.types.addDeclaredFields(&.{
@@ -15853,7 +15857,7 @@ test "layout lowering keeps opted-in nominal record declaration order" {
             .def = .{ .module = module_identity, .type_name = state_name },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
@@ -15879,8 +15883,8 @@ test "a record row keeps its structural layout when a padded nominal backs onto 
     const u32_ty = try solved.types.add(.{ .primitive = .u32 });
     const padding_ty = try solved.types.add(.{ .primitive = .u32 });
     const backing_fields = try solved.types.addFields(&.{
-        .{ .name = a_name, .ty = u32_ty, .default = null },
-        .{ .name = z_name, .ty = u32_ty, .default = null },
+        .{ .name = a_name, .ty = u32_ty, .default = .none },
+        .{ .name = z_name, .ty = u32_ty, .default = .none },
     });
     const backing = try solved.types.add(.{ .record = backing_fields });
     const declared_order = try solved.types.addDeclaredFields(&.{
@@ -15894,7 +15898,7 @@ test "a record row keeps its structural layout when a padded nominal backs onto 
             .def = .{ .module = module_identity, .type_name = padded_name },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing, .use = .inspectable },
+            .backing = .some(.{ .ty = backing, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
@@ -15933,7 +15937,7 @@ test "sparse local layout nodes commit in type id order" {
     const value_ty = try lowerer.types.add(.{ .primitive = .u32 });
     const padding_ty = try lowerer.types.add(.zst);
     const backing_fields = try lowerer.types.addFields(&.{
-        .{ .name = value_name, .ty = value_ty, .default = null },
+        .{ .name = value_name, .ty = value_ty, .default = .none },
     });
     const backing_ty = try lowerer.types.add(.{ .record = backing_fields });
     const declared_order = try lowerer.types.addDeclaredFields(&.{
@@ -15943,20 +15947,20 @@ test "sparse local layout nodes commit in type id order" {
     const first_ty = try lowerer.types.add(.{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
     const second_ty = try lowerer.types.add(.{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = second_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = second_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
@@ -15975,10 +15979,10 @@ test "sparse local layout nodes commit in type id order" {
     const probe_ty = try lowerer.types.add(.{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = probe_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = probe_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = backing_ty, .use = .inspectable },
+            .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
             .declared_order = declared_order,
         },
     });
@@ -16010,10 +16014,10 @@ test "named layout index reuses only representation-equivalent instantiations" {
     const first_ty = try lowerer.types.add(.{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = first_args,
-            .backing = .{ .ty = first_u8, .use = .inspectable },
+            .backing = .some(.{ .ty = first_u8, .use = .inspectable }),
         },
     });
     const equivalent_ty = try lowerer.types.add(.{
@@ -16021,19 +16025,19 @@ test "named layout index reuses only representation-equivalent instantiations" {
             .named_type = .{ .module = .{} },
             // A source declaration identifies the type, so display-name text is
             // intentionally absent from the shallow representation key.
-            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = equivalent_args,
-            .backing = .{ .ty = equivalent_u8, .use = .inspectable },
+            .backing = .some(.{ .ty = equivalent_u8, .use = .inspectable }),
         },
     });
     const different_ty = try lowerer.types.add(.{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = different_name, .source_decl = 42 },
+            .def = .{ .module = module_identity, .type_name = different_name, .source_decl = .some(42) },
             .kind = .nominal,
             .args = different_args,
-            .backing = .{ .ty = different_u64, .use = .inspectable },
+            .backing = .some(.{ .ty = different_u64, .use = .inspectable }),
         },
     });
 
@@ -16071,10 +16075,10 @@ test "named layout index reuses structurally equivalent recursive types" {
     const first_box = try lowerer.types.add(.{ .box = first_ty });
     const equivalent_box = try lowerer.types.add(.{ .box = equivalent_ty });
     const first_fields = try lowerer.types.addFields(&.{
-        .{ .name = next_name, .ty = first_box, .default = null },
+        .{ .name = next_name, .ty = first_box, .default = .none },
     });
     const equivalent_fields = try lowerer.types.addFields(&.{
-        .{ .name = next_name, .ty = equivalent_box, .default = null },
+        .{ .name = next_name, .ty = equivalent_box, .default = .none },
     });
     const first_backing = try lowerer.types.add(.{ .record = first_fields });
     const equivalent_backing = try lowerer.types.add(.{ .record = equivalent_fields });
@@ -16082,19 +16086,19 @@ test "named layout index reuses structurally equivalent recursive types" {
     try lowerer.types.set(first_ty, .{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = 43 },
+            .def = .{ .module = module_identity, .type_name = first_name, .source_decl = .some(43) },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = first_backing, .use = .inspectable },
+            .backing = .some(.{ .ty = first_backing, .use = .inspectable }),
         },
     });
     try lowerer.types.set(equivalent_ty, .{
         .named = .{
             .named_type = .{ .module = .{} },
-            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = 43 },
+            .def = .{ .module = module_identity, .type_name = equivalent_name, .source_decl = .some(43) },
             .kind = .nominal,
             .args = .empty(),
-            .backing = .{ .ty = equivalent_backing, .use = .inspectable },
+            .backing = .some(.{ .ty = equivalent_backing, .use = .inspectable }),
         },
     });
 
@@ -16139,29 +16143,29 @@ test "named layout index applies backing metadata by named type policy" {
         const lhs_ty = try lowerer.types.add(.{
             .named = .{
                 .named_type = .{ .module = .{} },
-                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = .some(source_decl) },
                 .kind = case.kind,
-                .builtin_owner = case.owner,
+                .builtin_owner = .of(case.owner),
                 .args = .empty(),
-                .backing = .{
+                .backing = .some(.{
                     .ty = backing_ty,
                     .use = .inspectable,
                     .authority = .checked_public,
-                },
+                }),
             },
         });
         const rhs_ty = try lowerer.types.add(.{
             .named = .{
                 .named_type = .{ .module = .{} },
-                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = source_decl },
+                .def = .{ .module = module_identity, .type_name = type_name, .source_decl = .some(source_decl) },
                 .kind = case.kind,
-                .builtin_owner = case.owner,
+                .builtin_owner = .of(case.owner),
                 .args = .empty(),
-                .backing = .{
+                .backing = .some(.{
                     .ty = backing_ty,
                     .use = .runtime_layout_only,
                     .authority = .generated_private,
-                },
+                }),
             },
         });
 
@@ -16279,8 +16283,8 @@ test "layout lowering preserves recursive slots across cached children (issue 11
         });
         const union_ty = try lowerer.types.add(.{ .tag_union = tags });
         const fields = try lowerer.types.addFields(&.{
-            .{ .name = first, .ty = union_ty, .default = null },
-            .{ .name = second, .ty = union_ty, .default = null },
+            .{ .name = first, .ty = union_ty, .default = .none },
+            .{ .name = second, .ty = union_ty, .default = .none },
         });
         try lowerer.types.set(record, .{ .record = fields });
         const unrolled = try lowerer.types.add(.{ .record = fields });

@@ -1654,7 +1654,7 @@ pub const StrPattern = struct {
 
 /// Delimited capture step inside a Monotype string interpolation pattern.
 pub const StrPatternStep = struct {
-    capture: ?PatId,
+    capture: collections.OptionalId(PatId),
     delimiter: StringLiteralId,
 };
 
@@ -1715,6 +1715,7 @@ comptime {
     std.debug.assert(@sizeOf(Pat) == 32);
     std.debug.assert(@sizeOf(Stmt) == 20);
     std.debug.assert(@sizeOf(Branch) == 20);
+    std.debug.assert(@sizeOf(StrPatternStep) == 8);
 }
 
 /// Match branch.

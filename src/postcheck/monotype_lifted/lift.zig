@@ -2518,7 +2518,7 @@ fn shapeContent(types: *const MonoType.Store, ty: MonoType.TypeId) MonoType.Cont
     while (true) {
         const content = types.get(current);
         if (content == .named) {
-            if (content.named.backing) |backing| {
+            if (content.named.backing.get()) |backing| {
                 current = backing.ty;
                 continue;
             } else {

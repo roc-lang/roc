@@ -300,9 +300,9 @@ const Engine = struct {
                 for (field_slice) |field| {
                     try self.putBytes(renderer.names.recordFieldLabelText(field.name));
                     var default_hasher = TypeDigestHasher.init();
-                    MonoType.writeFieldDefaultDigest(renderer.names, &default_hasher, field.default);
+                    MonoType.writeFieldDefaultDigest(renderer.names, &default_hasher, field.default.get());
                     try self.putBytes(&default_hasher.finalResult());
-                    if (field.value_ty) |value_ty| {
+                    if (field.value_ty.get()) |value_ty| {
                         try self.putBytes("field-optional-value");
                         try self.putChild(value_ty);
                     } else {
@@ -330,7 +330,7 @@ const Engine = struct {
                     try self.putBytes(&named.named_type.module.bytes);
                     try self.putBytes(renderer.names.moduleIdentityBytes(named.def.module));
                 }
-                if (named.def.source_decl) |decl| {
+                if (named.def.source_decl.get()) |decl| {
                     try self.putBytes("source-decl");
                     try self.putU32(decl);
                 } else {
@@ -338,7 +338,7 @@ const Engine = struct {
                 }
                 try self.putBytes(renderer.names.typeNameText(named.def.type_name));
                 try self.putBytes(@tagName(named.kind));
-                if (named.builtin_owner) |owner| {
+                if (named.builtin_owner.get()) |owner| {
                     try self.putBytes("builtin");
                     try self.putBytes(@tagName(owner));
                 } else {
@@ -349,7 +349,7 @@ const Engine = struct {
                 // backing can hold lambda sets the arguments never mention,
                 // so the same name at the same arguments can still be two
                 // different procedures' worth of code.
-                if (named.backing) |backing| {
+                if (named.backing.get()) |backing| {
                     try self.putBytes("backing");
                     try self.putChild(backing.ty);
                 } else {
@@ -364,7 +364,7 @@ const Engine = struct {
 
 fn transparentAliasBacking(content: SolvedType.Content) ?SolvedType.TypeVarId {
     if (std.meta.activeTag(content) != .named or content.named.kind != .alias) return null;
-    return (content.named.backing orelse Common.invariant("transparent alias reached procedure identity rendering without a backing type")).ty;
+    return (content.named.backing.get() orelse Common.invariant("transparent alias reached procedure identity rendering without a backing type")).ty;
 }
 
 const writeBytes = recursive_digest.writeBytes;

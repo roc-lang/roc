@@ -245,7 +245,8 @@ const CommittedGraphTypes = struct {
         var committed = source;
         committed.module = try relocation.relocateModuleIdentity(self.source_names, source.module);
         committed.type_name = try relocation.relocateTypeName(self.source_names, source.type_name);
-        if (committed.iterator_topology) |*topology| {
+        if (committed.iterator_topology.get()) |present_topology| {
+            var topology = present_topology;
             topology.len_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.len_field);
             topology.step_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.step_field);
             topology.ok_tag = try relocation.relocateTagLabel(self.source_names, topology.ok_tag);
@@ -256,6 +257,7 @@ const CommittedGraphTypes = struct {
             topology.skip_tag = try relocation.relocateTagLabel(self.source_names, topology.skip_tag);
             topology.item_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.item_field);
             topology.rest_field = try relocation.relocateRecordFieldLabel(self.source_names, topology.rest_field);
+            committed.iterator_topology = .some(topology);
         }
         return committed;
     }
@@ -4431,7 +4433,7 @@ fn shapeContent(types: *const Type.Store, ty: Type.TypeId) Type.Content {
     var current = ty;
     while (true) {
         switch (types.get(current)) {
-            .named => |named| if (named.backing) |backing| {
+            .named => |named| if (named.backing.get()) |backing| {
                 current = backing.ty;
                 continue;
             } else {
@@ -4520,7 +4522,7 @@ fn tagPayloadSpan(types: *const Type.Store, name_store: *const names.NameStore, 
 /// The backing of `ty`'s outermost named layer, whatever its kind.
 fn namedBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeId {
     return switch (types.get(ty)) {
-        .named => |named| if (named.backing) |backing| backing.ty else null,
+        .named => |named| if (named.backing.get()) |backing| backing.ty else null,
         .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
 }
@@ -4531,7 +4533,7 @@ fn nominalExprBackingType(types: *const Type.Store, ty: Type.TypeId) ?Type.TypeI
     return switch (types.get(ty)) {
         .named => |named| switch (named.kind) {
             .alias => null,
-            .nominal, .@"opaque" => if (named.backing) |backing| backing.ty else null,
+            .nominal, .@"opaque" => if (named.backing.get()) |backing| backing.ty else null,
         },
         .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
     };
@@ -4556,7 +4558,7 @@ fn nominalConstructionLayer(types: *const Type.Store, ty: Type.TypeId) ?NominalC
     while (true) {
         switch (types.get(current)) {
             .named => |named| {
-                const backing = named.backing orelse return null;
+                const backing = named.backing.get() orelse return null;
                 switch (named.kind) {
                     .alias => current = backing.ty,
                     .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
@@ -4598,7 +4600,7 @@ fn typeDef(
     return .{
         .module = try dest.internModuleIdentity(module_bytes),
         .type_name = try dest.internTypeName(view.names.typeNameText(type_name)),
-        .source_decl = source_decl,
+        .source_decl = .of(source_decl),
         .site = if (app_module_identity) |app| std.mem.eql(u8, &app, module_bytes) else false,
     };
 }
@@ -7971,7 +7973,7 @@ const Builder = struct {
                     for (0..GuardedList.borrowLen(args)) |index| {
                         try pending.append(self.allocator, .{ .ty = GuardedList.at(args, index) });
                     }
-                    if (named.backing) |backing| {
+                    if (named.backing.get()) |backing| {
                         if (backing.use == .inspectable and self.runtimeSchemaBackedByRecordOrTagUnion(backing.ty)) {
                             try pending.append(self.allocator, .{ .request = .{ .def = named.def, .ty = ty } });
                         }
@@ -8026,7 +8028,7 @@ const Builder = struct {
             .tag_union,
             => return true,
             .named => |named| {
-                const backing = named.backing orelse return false;
+                const backing = named.backing.get() orelse return false;
                 if (backing.use != .inspectable) return false;
                 current = backing.ty;
             },
@@ -9314,7 +9316,7 @@ const Builder = struct {
             .primitive, .zst, .hole, .erased, .func, .box => {},
             .named => |named| {
                 try children.appendSlice(self.allocator, types.span(named.args));
-                if (named.backing) |backing| try children.append(self.allocator, backing.ty);
+                if (named.backing.get()) |backing| try children.append(self.allocator, backing.ty);
             },
             .record => |span| for (types.fieldSpan(span)) |field| try children.append(self.allocator, field.ty),
             .tuple => |span| try children.appendSlice(self.allocator, types.span(span)),
@@ -9767,11 +9769,11 @@ const Builder = struct {
                     // An alias is transparent: its backing carries its reach.
                     if (named.kind != .alias) flags = flags.merge(demand.nominalFlags(
                         self.program.names.moduleIdentityBytes(named.def.module),
-                        named.def.source_decl orelse Common.invariant("nominal type had no source declaration"),
+                        named.def.source_decl.get() orelse Common.invariant("nominal type had no source declaration"),
                     ));
-                    if (named.builtin_owner != null) flags = flags.merge(demand.builtinFlags());
+                    if (named.builtin_owner != .none) flags = flags.merge(demand.builtinFlags());
                     for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                    if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty);
                 },
                 .record => |fields| for (types.fieldSpan(fields)) |field| try pending.append(self.allocator, field.ty),
                 .tuple => |elems| for (types.span(elems)) |elem| try pending.append(self.allocator, elem),
@@ -11664,7 +11666,7 @@ const Builder = struct {
                                 .err => Common.invariant("poisoned checked field kind reached direct record-row lowering"),
                             },
                             .value_ty = .of(if (field.kind.tag == .optional) value_ty else null),
-                            .default = try self.monoFieldDefault(frame.view, field),
+                            .default = .of(try self.monoFieldDefault(frame.view, field)),
                         });
                     },
                     .tag => |tag| {
@@ -11895,14 +11897,14 @@ const Builder = struct {
                     .named_type = .{ .module = self.declaredModuleForNominal(view, nominal) },
                     .def = def,
                     .kind = if (nominal.is_opaque) .@"opaque" else .nominal,
-                    .builtin_owner = builtinOwner(nominal.builtin),
+                    .builtin_owner = .of(builtinOwner(nominal.builtin)),
                     .args = try self.activeTypeStore().addSpan(args),
                     .backing = switch (nominal.representation) {
-                        .opaque_without_backing => null,
-                        .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => .{
+                        .opaque_without_backing => .none,
+                        .builtin, .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability => .some(.{
                             .ty = try self.lowerNominalBackingType(view, nominal, args),
                             .use = backing_use,
-                        },
+                        }),
                     },
                 };
                 const ops = try self.declaredOrderOps(view, nominal);
@@ -12036,7 +12038,7 @@ const Builder = struct {
                     if (named.kind != .alias and (!sameTypeDef(named.def, owner_def) or !self.sameNominalArgs(named.args, mono_args))) {
                         return current;
                     }
-                    const next = named.backing orelse return current;
+                    const next = named.backing.get() orelse return current;
                     current = next.ty;
                 },
                 .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => return current,
@@ -17394,9 +17396,13 @@ const DraftStrPattern = struct {
 };
 
 const DraftStrPatternStep = struct {
-    capture: ?DraftPatId,
+    capture: collections.OptionalId(DraftPatId),
     delimiter: DraftStringLiteralId,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(DraftStrPatternStep) == 8);
+}
 
 const DraftRecordDestruct = struct {
     name: names.RecordFieldNameId,
@@ -20828,7 +20834,7 @@ const BodyDraftStore = struct {
         for (self.str_pattern_steps.items, 0..) |step, index| {
             if (!ids.retained(.str_pattern_steps, index)) continue;
             program.str_pattern_steps.appendAssumeCapacity(.{
-                .capture = if (step.capture) |capture| ids.pat(capture) else null,
+                .capture = .of(if (step.capture.get()) |capture| ids.pat(capture) else null),
                 .delimiter = ids.stringLiteral(step.delimiter),
             });
         }
@@ -23762,7 +23768,7 @@ const BodyContext = struct {
                 try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child)),
             .nominal => |child| try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child)),
             .str_pattern => |str_pattern| for (self.strPatternStepSpan(str_pattern.steps)) |step|
-                if (step.capture) |child| try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child)),
+                if (step.capture.get()) |child| try proofs.append(self.allocator, self.patternSuccessImpossibilityProof(child)),
             .bind, .wildcard, .int_lit, .dec_lit, .frac_f32_lit, .frac_f64_lit, .str_lit => {},
         }
         return try self.anyImpossibilityProof(proofs.items);
@@ -25253,13 +25259,13 @@ const BodyContext = struct {
         return switch (self.typeStore().get(shape_ty)) {
             .primitive => |primitive| .{ .primitive = primitive },
             .named => |named| blk: {
-                if (named.builtin_owner == .list) {
+                if (named.builtin_owner.get() == .list) {
                     const args = self.typeStore().span(named.args);
                     if (args.len != 1) Common.invariant("List type reached Monotype inspect lowering without one type argument");
                     break :blk .{ .list = GuardedList.at(args, 0) };
                 }
                 if (try self.hasInspectOverride(shape_ty)) break :blk .{ .nominal = .{ .override = {}, .backing = null } };
-                const backing = named.backing orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
+                const backing = named.backing.get() orelse Common.invariant("Str.inspect reached opaque named type without checked inspect authority");
                 break :blk .{ .nominal = .{
                     .override = null,
                     .backing = if (backing.use == .inspectable) backing.ty else null,
@@ -26617,7 +26623,7 @@ const BodyContext = struct {
                     .tag => |tag| for (ctx.patSpan(tag.payloads)) |payload| try visits.append(ctx.allocator, .{ .pat = payload }),
                     .nominal => |backing| try visits.append(ctx.allocator, .{ .pat = backing }),
                     .str_pattern => |str| for (ctx.strPatternStepSpan(str.steps)) |str_step| {
-                        if (str_step.capture) |capture| try visits.append(ctx.allocator, .{ .pat = capture });
+                        if (str_step.capture.get()) |capture| try visits.append(ctx.allocator, .{ .pat = capture });
                     },
                 }
                 std.mem.reverse(Visit, visits.items[start..]);
@@ -26894,7 +26900,7 @@ const BodyContext = struct {
     fn monoAliasBacking(types: *const Type.Store, mono_ty: Type.TypeId) ?Type.TypeId {
         return switch (types.get(mono_ty)) {
             .named => |named| if (named.kind == .alias) blk: {
-                const backing = named.backing orelse break :blk null;
+                const backing = named.backing.get() orelse break :blk null;
                 break :blk backing.ty;
             } else null,
             .primitive, .record, .tuple, .tag_union, .list, .box, .func, .erased, .zst, .hole => null,
@@ -27660,19 +27666,19 @@ const BodyContext = struct {
         const name = try recordFieldName(self.nameStoreMut(), self.view, field.name);
         const default = try self.builder.monoFieldDefault(self.view, field);
         return switch (field.kind.tag) {
-            .required => .{ .name = name, .ty = value_node, .kind = .required, .default = null },
+            .required => .{ .name = name, .ty = value_node, .kind = .required, .default = .none },
             .defaulted => .{
                 .name = name,
                 .ty = value_node,
                 .kind = .{ .defaulted = default orelse Common.invariant("defaulted checked field carried no default identity") },
-                .default = default,
+                .default = .of(default),
             },
             .optional => .{
                 .name = name,
                 .ty = try self.optionalSlotNode(value_node),
                 .value_ty = .of(value_node),
                 .kind = .optional,
-                .default = null,
+                .default = .none,
             },
             .undetermined => blk: {
                 const checked_kind = self.scopedCheckedType(field.kind.undeterminedVariable() orelse
@@ -27684,7 +27690,7 @@ const BodyContext = struct {
                         .ty = existing.slot,
                         .value_ty = .of(existing.value),
                         .kind = .{ .undetermined = existing.id },
-                        .default = null,
+                        .default = .none,
                     };
                 }
                 const slot_node = try self.graph.newNode(.{ .unresolved = InstVariable.placeholder() });
@@ -27701,7 +27707,7 @@ const BodyContext = struct {
                     .ty = instantiated.slot,
                     .value_ty = .of(instantiated.value),
                     .kind = .{ .undetermined = instantiated.id },
-                    .default = null,
+                    .default = .none,
                 };
             },
             .err => Common.invariant("poisoned checked field kind reached Monotype instantiation"),
@@ -39965,8 +39971,8 @@ const BodyContext = struct {
         for (0..GuardedList.borrowLen(left_args)) |index| {
             if (!self.sameType(GuardedList.at(left_args, index), GuardedList.at(right_args, index))) return false;
         }
-        const left_backing = left.backing orelse return false;
-        const right_backing = right.backing orelse return false;
+        const left_backing = left.backing.get() orelse return false;
+        const right_backing = right.backing.get() orelse return false;
         return self.sameType(left_backing.ty, right_backing.ty) and
             (left_backing.authority == .generated_private) != (right_backing.authority == .generated_private);
     }
@@ -40526,7 +40532,7 @@ const BodyContext = struct {
             def.iterator_kind = ctx.kind;
             def.iterator_depth = ctx.mint_depth;
             const topology = try ctx.body.iteratorRepresentationNames(iteratorOwnerOfNamed(ctx.public_source.builtin_owner));
-            def.iterator_topology = topology;
+            def.iterator_topology = .some(topology);
             return try ctx.body.graph.namedContent(.{
                 .named_type = ctx.public_source.named_type,
                 .def = def,
@@ -43471,9 +43477,9 @@ const BodyContext = struct {
         const init_cursor_name = try self.nameStoreMut().internRecordFieldLabel("cursor");
         const init_remaining_name = try self.nameStoreMut().internRecordFieldLabel("remaining");
         const init_field_tys = [_]Type.Field{
-            .{ .name = init_counted_name, .ty = bool_ty, .default = null },
-            .{ .name = init_cursor_name, .ty = state_ty, .default = null },
-            .{ .name = init_remaining_name, .ty = u64_ty, .default = null },
+            .{ .name = init_counted_name, .ty = bool_ty, .default = .none },
+            .{ .name = init_cursor_name, .ty = state_ty, .default = .none },
+            .{ .name = init_remaining_name, .ty = u64_ty, .default = .none },
         };
         const init_ty = try self.recordType(&init_field_tys);
 
@@ -44551,8 +44557,8 @@ const BodyContext = struct {
         const rest_name = try self.nameStoreMut().internRecordFieldLabel("rest");
         const value_name = try self.nameStoreMut().internRecordFieldLabel("value");
         const fields = [_]Type.Field{
-            .{ .name = rest_name, .ty = rest_ty, .default = null },
-            .{ .name = value_name, .ty = value_ty, .default = null },
+            .{ .name = rest_name, .ty = rest_ty, .default = .none },
+            .{ .name = value_name, .ty = value_ty, .default = .none },
         };
         const ty = try self.recordType(&fields);
         try self.draft.parse_result_ok_types.put(address, ty);
@@ -44614,8 +44620,8 @@ const BodyContext = struct {
         const u64_ty = try self.primitiveType(.u64);
 
         const counted_fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty, .default = null },
-            .{ .name = rest_name, .ty = state_ty, .default = null },
+            .{ .name = len_name, .ty = u64_ty, .default = .none },
+            .{ .name = rest_name, .ty = state_ty, .default = .none },
         };
         const counted_payload_ty = try self.recordType(&counted_fields);
 
@@ -48727,7 +48733,7 @@ const BodyContext = struct {
         };
         try frames.append(gpa, .{ .ty = ty, .slot = slot, .ops_start = ops_start, .next = ops_start, .results_start = results_start });
         if (slot == null) {
-            const backing = stored.named.backing orelse
+            const backing = stored.named.backing.get() orelse
                 Common.invariant("stored transparent alias had no backing type");
             try ops.append(gpa, .{ .child = backing.ty });
             return null;
@@ -48743,8 +48749,8 @@ const BodyContext = struct {
             .record => |fields| for (type_store.fieldSpan(fields)) |field| {
                 try ops.append(gpa, .{ .field_name = field.name });
                 try ops.append(gpa, .{ .child = field.ty });
-                if (field.value_ty) |value_ty| try ops.append(gpa, .{ .child = value_ty });
-                try ops.append(gpa, .{ .field_default = field.default });
+                if (field.value_ty.get()) |value_ty| try ops.append(gpa, .{ .child = value_ty });
+                try ops.append(gpa, .{ .field_default = field.default.get() });
             },
             .tag_union => |tags| for (type_store.tagSpan(tags)) |tag| {
                 for (type_store.typeSpan(tag.payloads)) |payload| try ops.append(gpa, .{ .child = payload });
@@ -48759,7 +48765,7 @@ const BodyContext = struct {
                 };
                 try ops.append(gpa, .{ .named_def = named.def });
                 try ops.append(gpa, .{ .args_span = type_store.typeSpan(named.args).len });
-                if (named.backing) |backing| try ops.append(gpa, .{ .child = backing.ty });
+                if (named.backing.get()) |backing| try ops.append(gpa, .{ .child = backing.ty });
             },
         }
         return null;
@@ -48799,14 +48805,14 @@ const BodyContext = struct {
                     const name = results[cursor].field_name;
                     const field_ty = results[cursor + 1].ty;
                     cursor += 2;
-                    const value_ty: ?Type.TypeId = if (field.value_ty != null) value_blk: {
+                    const value_ty: ?Type.TypeId = if (field.value_ty != .none) value_blk: {
                         const lowered = results[cursor].ty;
                         cursor += 1;
                         break :value_blk lowered;
                     } else null;
                     const default = results[cursor].field_default;
                     cursor += 1;
-                    slot_out.* = .{ .name = name, .ty = field_ty, .value_ty = .of(value_ty), .default = default };
+                    slot_out.* = .{ .name = name, .ty = field_ty, .value_ty = .of(value_ty), .default = .of(default) };
                 }
                 break :blk .{ .record = try self.typeStore().addRecordFields(self.nameStore(), out) };
             },
@@ -48850,11 +48856,11 @@ const BodyContext = struct {
                     .kind = monotypeNamedKind(named.kind),
                     .builtin_owner = named.builtin_owner,
                     .args = args_span,
-                    .backing = if (named.backing) |backing| .{
+                    .backing = .of(if (named.backing.get()) |backing| .{
                         .ty = results[cursor].ty,
                         .use = monotypeBackingUse(backing.use),
                         .authority = monotypeBackingAuthority(backing.authority),
-                    } else null,
+                    } else null),
                     .declared_order = try self.typeStore().addDeclaredFields(out_declared),
                 } };
             },
@@ -48915,7 +48921,7 @@ const BodyContext = struct {
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
-            .iterator_topology = if (def.iterator_topology) |topology| .{
+            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
                 .len_field = try self.constRecordFieldName(store_view, topology.len_field),
                 .step_field = try self.constRecordFieldName(store_view, topology.step_field),
                 .ok_tag = try self.constTagName(store_view, topology.ok_tag),
@@ -48926,7 +48932,7 @@ const BodyContext = struct {
                 .skip_tag = try self.constTagName(store_view, topology.skip_tag),
                 .item_field = try self.constRecordFieldName(store_view, topology.item_field),
                 .rest_field = try self.constRecordFieldName(store_view, topology.rest_field),
-            } else null,
+            } else null),
         };
     }
 
@@ -50077,13 +50083,13 @@ const BodyContext = struct {
                     if (!std.mem.eql(u8, expected.named_type.module.bytes[0..], actual.named_type.module.bytes[0..])) return false;
                     if (expected.def.module != actual.def.module) return false;
                     if (expected.def.source_decl != actual.def.source_decl) return false;
-                    if (expected.def.source_decl == null and expected.def.type_name != actual.def.type_name) return false;
+                    if (expected.def.source_decl.get() == null and expected.def.type_name != actual.def.type_name) return false;
                     if (expected.kind != actual.kind) return false;
                     if (expected.builtin_owner != actual.builtin_owner) return false;
                     if (!try self.addSpanPairs(items, expected.args, actual.args)) return false;
-                    if ((expected.backing == null) != (actual.backing == null)) return false;
-                    if (expected.backing) |expected_backing| {
-                        const actual_backing = actual.backing.?;
+                    if ((expected.backing.get() == null) != (actual.backing.get() == null)) return false;
+                    if (expected.backing.get()) |expected_backing| {
+                        const actual_backing = actual.backing.get().?;
                         if (expected_backing.use != actual_backing.use) return false;
                         if (expected_backing.authority != actual_backing.authority) return false;
                         try addPair(items, expected_backing.ty, actual_backing.ty);
@@ -50290,7 +50296,7 @@ const BodyContext = struct {
         const fields = self.typeStore().fieldSpan(span);
         for (0..GuardedList.borrowLen(fields)) |index| {
             const field = GuardedList.at(fields, index);
-            if (field.name == field_name) return field.default;
+            if (field.name == field_name) return field.default.get();
         }
         return null;
     }
@@ -50301,17 +50307,17 @@ const BodyContext = struct {
             Common.invariant("provisional field kind reached sealed record construction");
         }
         if (field.value_ty != .none) {
-            if (field.default != null) Common.invariant("optional Monotype field carried a default identity");
+            if (field.default.get() != null) Common.invariant("optional Monotype field carried a default identity");
             return .optional;
         }
-        return if (field.default != null) .defaulted else .required;
+        return if (field.default.get() != null) .defaulted else .required;
     }
 
     fn sealedDefaultedFieldIdentity(field: Type.Field) Type.FieldDefault {
         if (field.kind_state != .resolved or field.value_ty != .none) {
             Common.invariant("sealed defaulted field did not have a resolved inline slot");
         }
-        return field.default orelse
+        return field.default.get() orelse
             Common.invariant("sealed defaulted field carried no Monotype default identity");
     }
 
@@ -55903,7 +55909,7 @@ const BodyContext = struct {
                 if (named.builtin_owner) |owner| return .{ .builtin = owner };
                 if (named.kind != .alias) return .{ .nominal = .{
                     .module = named.def.module,
-                    .source_decl = named.def.source_decl orelse
+                    .source_decl = named.def.source_decl.get() orelse
                         Common.invariant("nominal method owner type had no source declaration"),
                 } };
                 current = (named.backing orelse return null).node;
@@ -58635,7 +58641,7 @@ const BodyContext = struct {
             template_ty,
             args,
             backing_ty,
-            template.backing.?.authority,
+            template.backing.get().?.authority,
         );
     }
 
@@ -58666,7 +58672,7 @@ const BodyContext = struct {
             .kind = template.kind,
             .builtin_owner = template.builtin_owner,
             .args = try self.typeStore().addSpan(args),
-            .backing = .{ .ty = backing_ty, .use = template.backing.?.use, .authority = authority },
+            .backing = .some(.{ .ty = backing_ty, .use = template.backing.get().?.use, .authority = authority }),
             .declared_order = try self.typeStore().addDeclaredFields(declared_order),
         } });
     }
@@ -58989,7 +58995,7 @@ const BodyContext = struct {
         var current = ty;
         while (true) switch (self.typeStore().get(current)) {
             .named => |named| {
-                const backing = named.backing orelse return false;
+                const backing = named.backing.get() orelse return false;
                 if (backing.use != .inspectable) return false;
                 current = backing.ty;
             },
@@ -60620,7 +60626,7 @@ const BodyContext = struct {
                 try label_fields.append(self.allocator, .{
                     .name = field.name,
                     .ty = str_node,
-                    .default = null,
+                    .default = .none,
                 });
             }
         }
@@ -60687,12 +60693,12 @@ const BodyContext = struct {
         const name_label = try self.nameStoreMut().internRecordFieldLabel("name");
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_payload = try self.graphClosedRecord(&.{
-            .{ .name = field_label, .ty = field_handle_node, .default = null },
-            .{ .name = rest_name, .ty = state_node, .default = null },
+            .{ .name = field_label, .ty = field_handle_node, .default = .none },
+            .{ .name = rest_name, .ty = state_node, .default = .none },
         });
         const try_field_payload = try self.graphClosedRecord(&.{
-            .{ .name = name_label, .ty = str_node, .default = null },
-            .{ .name = rest_name, .ty = state_node, .default = null },
+            .{ .name = name_label, .ty = str_node, .default = .none },
+            .{ .name = rest_name, .ty = state_node, .default = .none },
         });
         const tag_texts = [_][]const u8{ "Continue", "Done", "Field", "TryField", "TryFieldCaseless" };
         const payloads = [_]NodeId{ state_node, state_node, field_payload, try_field_payload, try_field_payload };
@@ -60777,9 +60783,9 @@ const BodyContext = struct {
         const u64_node = try self.graph.newNode(.{ .primitive = .u64 });
         const str_node = try self.graph.newNode(.{ .primitive = .str });
         const field_handle_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("index"), .ty = u64_node, .default = null },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("name"), .ty = str_node, .default = null },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("name_len"), .ty = u64_node, .default = null },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("index"), .ty = u64_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("name"), .ty = str_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("name_len"), .ty = u64_node, .default = .none },
         });
         const field_handle = try self.cloneGraphNamedWithGeneratedBacking(
             field_handle_template,
@@ -60797,14 +60803,14 @@ const BodyContext = struct {
             field.* = .{
                 .name = try self.generatedFieldNamesItemFieldName(index),
                 .ty = field_handle,
-                .default = null,
+                .default = .none,
             };
         }
         const items = try self.graphClosedRecord(item_fields);
         const fields_backing = try self.graphClosedRecord(&.{
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("items"), .ty = items, .default = null },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("shortest_name"), .ty = u64_node, .default = null },
-            .{ .name = try self.nameStoreMut().internRecordFieldLabel("longest_name"), .ty = u64_node, .default = null },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("items"), .ty = items, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("shortest_name"), .ty = u64_node, .default = .none },
+            .{ .name = try self.nameStoreMut().internRecordFieldLabel("longest_name"), .ty = u64_node, .default = .none },
         });
         const fields_node = try self.cloneGraphNamedWithGeneratedBacking(
             target.args[1],
@@ -61885,7 +61891,7 @@ const BodyContext = struct {
                 }
                 for (fields) |field| {
                     if (kind == .parser) {
-                        if (field.default) |default| {
+                        if (field.default.get()) |default| {
                             added = try self.prepareDefaultedFieldValue(boundary_expr, default, field.ty) or added;
                         }
                     }
@@ -62529,7 +62535,7 @@ const BodyContext = struct {
     fn structurallyExpands(shape: Type.Content) bool {
         return switch (shape) {
             .record, .tuple, .tag_union => true,
-            .named => |named| named.backing != null,
+            .named => |named| named.backing.get() != null,
             .primitive, .list, .box, .func, .erased, .zst, .hole => false,
         };
     }
@@ -62854,7 +62860,7 @@ const BodyContext = struct {
                     .record => |fields| .{ .aggregate = .{ .operand = operand, .fields = fields } },
                     .tuple => |items| .{ .aggregate = .{ .operand = operand, .items = items } },
                     .tag_union => |tags| .{ .tag_union = .{ .ty = ty, .tags_span = tags, .operand = operand } },
-                    .named => |named| if (named.backing) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
+                    .named => |named| if (named.backing.get()) |backing| try self.derivationNamedTask(D, ty, backing.ty, operand) else null,
                     .primitive, .zst, .func, .erased, .box => null,
                     .hole => Common.invariant("structural derivation reached a demand hole"),
                 };
@@ -64027,8 +64033,8 @@ const BodyContext = struct {
         const len_name = try self.nameStoreMut().internRecordFieldLabel("len");
         const start_name = try self.nameStoreMut().internRecordFieldLabel("start");
         const fields = [_]Type.Field{
-            .{ .name = len_name, .ty = u64_ty, .default = null },
-            .{ .name = start_name, .ty = u64_ty, .default = null },
+            .{ .name = len_name, .ty = u64_ty, .default = .none },
+            .{ .name = start_name, .ty = u64_ty, .default = .none },
         };
         const ty = try self.typeStore().internRecord(self.nameStore(), &fields);
         const exprs = [_]DraftFieldExpr{
@@ -67887,7 +67893,7 @@ const BodyContext = struct {
         for (steps, 0..) |*lowered_step, i| {
             const step = self.view.bodies.strPatternStep(str.steps, @intCast(i));
             lowered_step.* = .{
-                .capture = if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null,
+                .capture = .of(if (step.capture) |capture| try self.lowerPatternAtType(capture, ty) else null),
                 .delimiter = try self.lowerStringLiteral(step.delimiter),
             };
         }
@@ -68662,7 +68668,7 @@ test "sealed record omission takes its default identity from the monotype field"
     const field: Type.Field = .{
         .name = @fromBackingInt(@intCast(5)),
         .ty = @fromBackingInt(@intCast(11)),
-        .default = expected,
+        .default = .some(expected),
     };
 
     try std.testing.expectEqual(expected, BodyContext.sealedDefaultedFieldIdentity(field));
@@ -68986,7 +68992,7 @@ test "runtime demand guards exempt only frozen impossible constructor branches" 
     const item = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, .empty_tag_union) });
     const item_name = try name_store.internRecordFieldLabel("item");
     const payload_fields = try graph.arena().alloc(InstField, 1);
-    payload_fields[0] = .{ .name = item_name, .ty = item, .default = null };
+    payload_fields[0] = .{ .name = item_name, .ty = item, .default = .none };
     const one_payload = try graph.newNode(.{ .record = .{
         .fields = payload_fields,
         .ext = try graph.newNode(.empty_record),
@@ -69214,7 +69220,7 @@ test "shape queries cross alias layers for every aggregate a constant restores a
     const box = try types.add(.{ .box = elem });
     const field = try name_store.internRecordFieldLabel("value");
     const record = try types.add(.{ .record = try types.addRecordFields(&name_store, &.{
-        .{ .name = field, .ty = elem, .default = null },
+        .{ .name = field, .ty = elem, .default = .none },
     }) });
     const tuple = try types.add(.{ .tuple = try types.addSpan(&.{ elem, elem }) });
     const alias_name = try name_store.internTypeName("Alias");
@@ -69286,14 +69292,14 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
-        .backing = .{ .ty = i64_ty, .use = .inspectable },
+        .backing = .some(.{ .ty = i64_ty, .use = .inspectable }),
     } });
     const alias_str = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
-        .backing = .{ .ty = str_ty, .use = .inspectable },
+        .backing = .some(.{ .ty = str_ty, .use = .inspectable }),
     } });
 
     var builder: Builder = undefined;
@@ -69384,11 +69390,11 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     const field_name = try name_store.internRecordFieldLabel("value");
     const first_str = try type_store.add(.{ .primitive = .str });
     const first_shape = try type_store.add(.{ .record = try type_store.addRecordFields(&name_store, &.{
-        .{ .name = field_name, .ty = first_str, .default = null },
+        .{ .name = field_name, .ty = first_str, .default = .none },
     }) });
     const second_str = try type_store.add(.{ .primitive = .str });
     const second_shape = try type_store.add(.{ .record = try type_store.addRecordFields(&name_store, &.{
-        .{ .name = field_name, .ty = second_str, .default = null },
+        .{ .name = field_name, .ty = second_str, .default = .none },
     }) });
     try std.testing.expect(first_shape != second_shape);
     try std.testing.expect(try type_store.typeEql(&name_store, first_shape, second_shape));
@@ -70805,7 +70811,7 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
         .builtin => |owner| .{ .builtin = owner },
         .named_type => |def| .{ .nominal = .{
             .module = def.module,
-            .source_decl = def.source_decl orelse
+            .source_decl = def.source_decl.get() orelse
                 Common.invariant("nominal method owner type had no source declaration"),
         } },
     };
@@ -71227,7 +71233,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
                 .def = def,
                 .kind = .nominal,
                 .args = try p.types.addSpan(&.{ ok_ty, err_ty }),
-                .backing = .{ .ty = backing, .use = .inspectable },
+                .backing = .some(.{ .ty = backing, .use = .inspectable }),
             } });
         }
     };
@@ -71870,7 +71876,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     const branch_span = try draft.addBranchSpan(&.{.{ .pat = pat, .body = expr }});
     const if_branch_span = try draft.addIfBranchSpan(&.{.{ .cond = expr, .body = expr }});
     const literal = try draft.addStringLiteral("literal");
-    const str_step_span = try draft.addStrPatternStepSpan(&.{.{ .capture = pat, .delimiter = literal }});
+    const str_step_span = try draft.addStrPatternStepSpan(&.{.{ .capture = .some(pat), .delimiter = literal }});
     const declared_field_span = try draft.addDeclaredFieldSpan(&.{
         .{ .named = field_name },
         .{ .padding = ty },
@@ -71977,7 +71983,7 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(field_name, program.fieldAccessSegmentAt(existing_access_segments, 0).field);
     try std.testing.expectEqual(field_name, program.getRecordDestructAt(0).name);
     try std.testing.expectEqual(sealed_pat, program.getRecordDestructAt(0).pattern);
-    try std.testing.expectEqual(@as(?Ast.PatId, sealed_pat), program.getStrPatternStepAt(0).capture);
+    try std.testing.expectEqual(@as(?Ast.PatId, sealed_pat), program.getStrPatternStepAt(0).capture.get());
     try std.testing.expectEqual(sealed_literal, program.getStrPatternStepAt(0).delimiter);
     try std.testing.expectEqual(sealed_pat, program.getBranchAt(0).pat);
     try std.testing.expectEqual(sealed_expr, program.getBranchAt(0).body);
@@ -72100,7 +72106,7 @@ test "specialization workspace retains bidirectional type relocation across seri
     const program_bool = try program.types.internPrimitive(&program.names, .bool);
     const program_field = try program.names.internRecordFieldLabel("program_value");
     const program_record = try program.types.internRecord(&program.names, &.{
-        .{ .name = program_field, .ty = program_bool, .default = null },
+        .{ .name = program_field, .ty = program_bool, .default = .none },
     });
     var committed_list: Type.TypeId = undefined;
     var committed_record: Type.TypeId = undefined;
@@ -72137,7 +72143,7 @@ test "specialization workspace retains bidirectional type relocation across seri
             const program_field_count_before_private_name = program.names.recordFieldLabelCount();
             const workspace_field = try workspace.name_store.internRecordFieldLabel("workspace_value");
             const workspace_owned_record = try workspace.types.internRecord(&workspace.name_store, &.{
-                .{ .name = workspace_field, .ty = workspace_list, .default = null },
+                .{ .name = workspace_field, .ty = workspace_list, .default = .none },
             });
             try std.testing.expectEqual(
                 program_field_count_before_private_name,
@@ -72255,7 +72261,7 @@ test "specialization store epochs are read in place while the workspace grows" {
     const field_name = try workspace.name_store.internRecordFieldLabel("epoch_value");
     const primitive = try workspace.types.internPrimitive(&workspace.name_store, .u64);
     const private_record = try workspace.types.internRecord(&workspace.name_store, &.{
-        .{ .name = field_name, .ty = primitive, .default = null },
+        .{ .name = field_name, .ty = primitive, .default = .none },
     });
     const first_epoch = try workspace.captureStoreEpoch(first);
     workspace.finishEpoch(first);
@@ -73846,7 +73852,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     const opaque_ty = try builder.lowerType(view, nominal_alias);
     try std.testing.expectEqual(opaque_ty, try builder.lowerType(view, nominals[0]));
     try std.testing.expectEqual(Type.NamedKind.@"opaque", program.types.get(opaque_ty).named.kind);
-    try std.testing.expectEqual(null, program.types.get(opaque_ty).named.backing);
+    try std.testing.expectEqual(null, program.types.get(opaque_ty).named.backing.get());
     for (nominals[1..]) |nominal| {
         const other = try builder.lowerType(view, nominal);
         try std.testing.expect(!try program.types.typeEql(&program.names, opaque_ty, other));
@@ -73887,7 +73893,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .@"opaque",
         .args = .{},
-        .backing = .{ .ty = str, .use = .runtime_layout_only },
+        .backing = .some(.{ .ty = str, .use = .runtime_layout_only }),
     } });
     var alias = nominal;
     for (0..32) |_| {
@@ -73896,7 +73902,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
             .def = .{ .module = origin, .type_name = type_name },
             .kind = .alias,
             .args = .{},
-            .backing = .{ .ty = alias, .use = .inspectable },
+            .backing = .some(.{ .ty = alias, .use = .inspectable }),
         } });
     }
     const recursive = try stored_types.reserve();
@@ -73905,7 +73911,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
-        .backing = .{ .ty = recursive, .use = .inspectable },
+        .backing = .some(.{ .ty = recursive, .use = .inspectable }),
     } });
     try stored_types.fill(recursive, .{ .tuple = try stored_types.appendTypeSpan(&.{recursive_alias}) });
     const root = try stored_types.append(.{ .tuple = try stored_types.appendTypeSpan(&.{ alias, nominal, str, recursive_alias }) });
@@ -73948,9 +73954,9 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const named = program.types.get(restored_nominal).named;
     try std.testing.expectEqual(Type.NamedKind.@"opaque", named.kind);
     try std.testing.expectEqualSlices(u8, &module_key.bytes, &named.named_type.module.bytes);
-    try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.?.use);
-    try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.?.ty);
-    try std.testing.expect(restored_nominal != named.backing.?.ty);
+    try std.testing.expectEqual(Type.BackingUse.runtime_layout_only, named.backing.get().?.use);
+    try std.testing.expectEqual(GuardedList.at(items, 2), named.backing.get().?.ty);
+    try std.testing.expect(restored_nominal != named.backing.get().?.ty);
     const restored_recursive = GuardedList.at(items, 3);
     const recursive_items = program.types.span(program.types.get(restored_recursive).tuple);
     try std.testing.expectEqual(restored_recursive, GuardedList.at(recursive_items, 0));

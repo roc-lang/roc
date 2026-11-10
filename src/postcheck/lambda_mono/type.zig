@@ -51,8 +51,8 @@ pub const Span = extern struct {
 pub const Field = struct {
     name: names.RecordFieldNameId,
     ty: TypeId,
-    value_ty: ?TypeId = null,
-    default: ?MonoType.FieldDefault,
+    value_ty: collections.OptionalId(TypeId) = .none,
+    default: MonoType.OptionalFieldDefault,
 };
 
 /// Capture record field entry.
@@ -97,13 +97,9 @@ pub const Content = union(enum) {
         named_type: MonoType.NamedType,
         def: MonoType.TypeDef,
         kind: MonoType.NamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        builtin_owner: collections.OptionalEnum(static_dispatch.BuiltinOwner) = .none,
         args: Span,
-        backing: ?struct {
-            ty: TypeId,
-            use: MonoType.BackingUse,
-            authority: MonoType.BackingAuthority = .checked_public,
-        } = null,
+        backing: OptionalNamedBacking = .none,
         /// Declared fields for a nominal/opaque record backing; empty otherwise.
         declared_order: Span = Span.empty(),
     },
@@ -128,6 +124,21 @@ pub const Content = union(enum) {
 
 /// Payload stored by `Content.named`.
 pub const NamedContent = std.meta.fieldInfo(Content, .named).type;
+
+/// The backing of a named type: its type and how far later stages may read it.
+pub const NamedBacking = struct {
+    ty: TypeId,
+    use: MonoType.BackingUse,
+    authority: MonoType.BackingAuthority = .checked_public,
+};
+
+/// An optional `NamedBacking` at its own size.
+pub const OptionalNamedBacking = collections.OptionalStruct(NamedBacking, "ty");
+
+comptime {
+    std.debug.assert(@sizeOf(NamedContent) == 152);
+    std.debug.assert(@sizeOf(Field) == 20);
+}
 
 /// Payload stored by `Content.erased_fn`.
 pub const ErasedFnContent = std.meta.fieldInfo(Content, .erased_fn).type;
@@ -436,15 +447,15 @@ pub const Store = struct {
                 writeBytes(hasher, "named");
                 hasher.update(&named.named_type.module.bytes);
                 writeBytes(hasher, name_store.moduleIdentityBytes(named.def.module));
-                writeOptionalU32(hasher, named.def.source_decl);
+                writeOptionalU32(hasher, named.def.source_decl.get());
                 writeBytes(hasher, name_store.typeNameText(named.def.type_name));
                 writeOptionalDigest(hasher, named.def.generated);
                 writeBytes(hasher, @tagName(named.def.iterator_representation));
                 writeBytes(hasher, @tagName(named.def.iterator_kind));
                 writeU32(hasher, named.def.iterator_depth);
-                writeIteratorTopology(hasher, name_store, named.def.iterator_topology);
+                writeIteratorTopology(hasher, name_store, named.def.iterator_topology.get());
                 writeBytes(hasher, @tagName(named.kind));
-                if (named.builtin_owner) |owner| {
+                if (named.builtin_owner.get()) |owner| {
                     writeBytes(hasher, "builtin");
                     writeBytes(hasher, @tagName(owner));
                 } else {
@@ -459,8 +470,8 @@ pub const Store = struct {
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
                     writeBytes(hasher, name_store.recordFieldLabelText(field.name));
-                    MonoType.writeFieldDefaultDigest(name_store, hasher, field.default);
-                    if (field.value_ty) |value_ty| {
+                    MonoType.writeFieldDefaultDigest(name_store, hasher, field.default.get());
+                    if (field.value_ty.get()) |value_ty| {
                         writeBytes(hasher, "field-optional-value");
                         try scratch.child(hasher, value_ty);
                     } else {
@@ -687,7 +698,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
         try store.set(record, .{ .record = try store.addFields(&.{.{
             .name = field_name,
             .ty = callable,
-            .default = null,
+            .default = .none,
         }}) });
         try store.set(callable, .{
             .erased_fn = .{
@@ -924,7 +935,7 @@ test "lambda mono empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = null }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = .none }});
     const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @fromBackingInt(@intCast(2)), .binder = null, .ty = unit, .storage_ty = unit }});
     const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(3)), .checked_name = @fromBackingInt(@intCast(3)), .payloads = nonempty_span }});
     const nonempty_variants = try store.addFnVariants(&.{.{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(4)), .target = @fromBackingInt(@intCast(40)), .capture_ty = unit }});

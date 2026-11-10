@@ -122,15 +122,18 @@ pub const TypeDef = struct {
     type_name: names.TypeNameId,
     /// Declaring statement: within-module discriminator for same-named
     /// block-local declarations.
-    source_decl: ?u32 = null,
+    source_decl: collections.OptionalU32 = .none,
     /// Compiler-generated specialization identity for internal nominals minted
     /// after checking while preserving the public declaration identity.
     generated: ?names.TypeDigest = null,
     iterator_representation: IteratorRepresentation = .none,
     iterator_kind: IteratorKind = .none,
     iterator_depth: u8 = 0,
-    iterator_topology: ?IteratorTopology = null,
+    iterator_topology: OptionalIteratorTopology = .none,
 };
+
+/// An optional `IteratorTopology` at its own size.
+pub const OptionalIteratorTopology = collections.OptionalStruct(IteratorTopology, "len_field");
 
 /// Target-independent Monotype iterator tier preserved across constant storage.
 pub const IteratorRepresentation = enum(u8) {
@@ -161,6 +164,9 @@ pub const TypeBacking = struct {
     authority: TypeBackingAuthority = .checked_public,
 };
 
+/// An optional `TypeBacking` at its own size.
+pub const OptionalTypeBacking = collections.OptionalStruct(TypeBacking, "ty");
+
 /// Kind of stored named type.
 pub const TypeNamedKind = enum {
     nominal,
@@ -177,12 +183,15 @@ pub const TypeFieldDefault = struct {
     expr_node: u32,
 };
 
+/// An optional `TypeFieldDefault` at its own size.
+pub const OptionalTypeFieldDefault = collections.OptionalStruct(TypeFieldDefault, "expr_node");
+
 /// Record field entry for stored monomorphic type evidence.
 pub const TypeField = struct {
     name: names.RecordFieldNameId,
     ty: ConstTypeId,
-    value_ty: ?ConstTypeId = null,
-    default: ?TypeFieldDefault,
+    value_ty: collections.OptionalId(ConstTypeId) = .none,
+    default: OptionalTypeFieldDefault,
 };
 
 /// Tag-union variant entry for stored monomorphic type evidence.
@@ -205,9 +214,9 @@ pub const ConstType = union(enum) {
         named_type: NamedType,
         def: TypeDef,
         kind: TypeNamedKind,
-        builtin_owner: ?static_dispatch.BuiltinOwner = null,
+        builtin_owner: collections.OptionalEnum(static_dispatch.BuiltinOwner) = .none,
         args: ConstRange,
-        backing: ?TypeBacking = null,
+        backing: OptionalTypeBacking = .none,
         declared_order: ConstRange = .{},
     },
     record: ConstRange,
@@ -726,6 +735,12 @@ pub const StoredConstType = union(enum) {
 /// Payload of a `named` const type node.
 pub const ConstNamedType = @FieldType(ConstType, "named");
 
+comptime {
+    std.debug.assert(@sizeOf(TypeDef) == 88);
+    std.debug.assert(@sizeOf(ConstNamedType) == 148);
+    std.debug.assert(@sizeOf(TypeField) == 20);
+}
+
 /// Store of monomorphic type evidence attached to compile-time constants.
 pub const ConstTypeStore = struct {
     allocator: Allocator,
@@ -968,8 +983,8 @@ pub const ConstTypeStore = struct {
             .record => |span| for (source.fieldSpan(span)) |field| {
                 try ops.append(self.allocator, .{ .field_name = field.name });
                 try ops.append(self.allocator, .{ .child = field.ty });
-                if (field.value_ty) |value_ty| try ops.append(self.allocator, .{ .child = value_ty });
-                try ops.append(self.allocator, .{ .default = field.default });
+                if (field.value_ty.get()) |value_ty| try ops.append(self.allocator, .{ .child = value_ty });
+                try ops.append(self.allocator, .{ .default = field.default.get() });
             },
             .tag_union => |span| {
                 var cloned: u32 = 0;
@@ -991,7 +1006,7 @@ pub const ConstTypeStore = struct {
                 };
                 try ops.append(self.allocator, .{ .def = named.def });
                 try ops.append(self.allocator, .{ .span = .{ .start = 0, .len = @intCast(args.len) } });
-                if (named.backing) |backing| try ops.append(self.allocator, .{ .child = backing.ty });
+                if (named.backing.get()) |backing| try ops.append(self.allocator, .{ .child = backing.ty });
             },
         }
         try frames.append(self.allocator, frame);
@@ -1016,15 +1031,15 @@ pub const ConstTypeStore = struct {
                 for (fields, 0..) |field, i| {
                     const field_ty = types[type_cursor];
                     type_cursor += 1;
-                    const value_ty: ?ConstTypeId = if (field.value_ty != null) value: {
+                    const value_ty: ?ConstTypeId = if (field.value_ty.get() != null) value: {
                         defer type_cursor += 1;
                         break :value types[type_cursor];
                     } else null;
                     cloned_fields[i] = .{
                         .name = frame.field_names.items[i],
                         .ty = field_ty,
-                        .value_ty = value_ty,
-                        .default = frame.defaults.items[i],
+                        .value_ty = .of(value_ty),
+                        .default = .of(frame.defaults.items[i]),
                     };
                 }
                 break :blk .{ .record = try self.appendFieldSpan(cloned_fields) };
@@ -1065,11 +1080,11 @@ pub const ConstTypeStore = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = frame.spans.items[0],
-                    .backing = if (named.backing) |backing| .{
+                    .backing = .of(if (named.backing.get()) |backing| .{
                         .ty = types[type_cursor],
                         .use = backing.use,
                         .authority = backing.authority,
-                    } else null,
+                    } else null),
                     .declared_order = try self.appendDeclaredFieldSpan(cloned_declared),
                 } };
             },
@@ -1106,7 +1121,7 @@ pub const ConstTypeStore = struct {
             .iterator_representation = def.iterator_representation,
             .iterator_kind = def.iterator_kind,
             .iterator_depth = def.iterator_depth,
-            .iterator_topology = if (def.iterator_topology) |topology| .{
+            .iterator_topology = .of(if (def.iterator_topology.get()) |topology| .{
                 .len_field = try translateRecordFieldName(name_translation, topology.len_field),
                 .step_field = try translateRecordFieldName(name_translation, topology.step_field),
                 .ok_tag = try translateTagName(name_translation, topology.ok_tag),
@@ -1117,7 +1132,7 @@ pub const ConstTypeStore = struct {
                 .skip_tag = try translateTagName(name_translation, topology.skip_tag),
                 .item_field = try translateRecordFieldName(name_translation, topology.item_field),
                 .rest_field = try translateRecordFieldName(name_translation, topology.rest_field),
-            } else null,
+            } else null),
         };
     }
 
@@ -1956,11 +1971,11 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
         .def = .{ .module = @fromBackingInt(@intCast(9)), .type_name = @fromBackingInt(@intCast(10)) },
         .kind = .@"opaque",
         .args = .{},
-        .backing = .{
+        .backing = .some(.{
             .ty = private_backing_ty,
             .use = .runtime_layout_only,
             .authority = .generated_private,
-        },
+        }),
     } });
     var recursive_module: names.CheckedModuleDigest = .{};
     recursive_module.bytes[0] = 0x5A;
@@ -2065,7 +2080,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     try std.testing.expectEqual(@as(usize, 2), loaded_fn.captures.len);
     try std.testing.expectEqual(capture_ty, loaded_fn.captures[0].ty);
     try std.testing.expectEqual(ConstType{ .primitive = .u64 }, loaded.type_store.get(loaded_fn.captures[0].ty));
-    try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.?.authority);
+    try std.testing.expectEqual(TypeBackingAuthority.generated_private, loaded.type_store.get(private_named_ty).named.backing.get().?.authority);
     try std.testing.expectEqual(a, loaded_fn.captures[0].value);
     try std.testing.expectEqual(a, loaded_fn.captures[1].value);
     try std.testing.expect(loaded_fn.captures[0].kind.eql(.lexical));

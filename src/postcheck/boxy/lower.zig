@@ -1090,14 +1090,14 @@ pub const Program = struct {
                     hasher.update(&try self.typeContent(field.ty));
                     hasher.update(&[_]u8{@backingInt(field.kind)});
                     hashWord(&hasher, field.slot_variable);
-                    hasher.update(&[_]u8{@intFromBool(field.default != null)});
-                    if (field.default) |default| {
+                    hasher.update(&[_]u8{@intFromBool(field.default.get() != null)});
+                    if (field.default.get()) |default| {
                         hasher.update(&self.modules.get(default.module).view.module_identity.stable_hash);
                         hashWord(&hasher, default.expr_node);
                     }
                 }
-                try self.hashOptionalType(&hasher, record.ext);
-                if (record.declared) |declared| {
+                try self.hashOptionalType(&hasher, record.ext.get());
+                if (record.declared.get()) |declared| {
                     hasher.update(&[_]u8{1});
                     try self.hashTypes(&hasher, store.span(declared.padding));
                     const slots = store.declaredSlots(declared);
@@ -1201,7 +1201,7 @@ pub const Program = struct {
             .list, .box => |elem| try out.append(allocator, elem),
             .tuple => |items| try out.appendSlice(allocator, store.span(items)),
             .record => |record| {
-                if (record.ext) |ext| try out.append(allocator, ext);
+                if (record.ext.get()) |ext| try out.append(allocator, ext);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
                 try out.appendSlice(allocator, storage);
@@ -1807,14 +1807,14 @@ pub const Program = struct {
                         }
                         if (!named) try residual.append(allocator, candidate);
                     }
-                    if (record.ext) |ext| {
-                        const remainder = if (residual.items.len == 0 and other.record.ext == null)
+                    if (record.ext.get()) |ext| {
+                        const remainder = if (residual.items.len == 0 and other.record.ext == .none)
                             try store.emptyRecord()
                         else
-                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext } });
+                            try store.intern(.{ .record = .{ .fields = residual.items, .ext = other.record.ext.get() } });
                         try pending.append(allocator, .{ ext, remainder });
                     }
-                    if (record.declared != null and other.record.declared != null) {
+                    if (record.declared.get() != null and other.record.declared.get() != null) {
                         for (store.paddingTypes(record), store.paddingTypes(other.record)) |a, b| try pending.append(allocator, .{ a, b });
                     }
                 },
@@ -1874,7 +1874,7 @@ pub const Program = struct {
                         }
                         try pending.append(self.allocator, field.ty);
                     }
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, self.store.span(items)),
@@ -2014,7 +2014,7 @@ pub const Program = struct {
                 switch (node) {
                     .record => |record| {
                         for (self.store.fieldSpan(record.fields)) |field| try stack.append(allocator, .{ .ty = field.ty, .expanded = false });
-                        if (record.ext) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
+                        if (record.ext.get()) |ext| try stack.append(allocator, .{ .ty = ext, .expanded = false });
                         for (self.store.paddingTypes(record)) |padding| try stack.append(allocator, .{ .ty = padding, .expanded = false });
                     },
                     .tuple => |items| for (self.store.span(items)) |item| try stack.append(allocator, .{ .ty = item, .expanded = false }),
@@ -2072,19 +2072,19 @@ pub const Program = struct {
                             try fields.append(allocator, substituted);
                         }
                     }
-                    var ext: ?TypeId = if (record.ext) |ext| done.get(ext).? else null;
+                    var ext: ?TypeId = if (record.ext.get()) |ext| done.get(ext).? else null;
                     if (ext) |ext_ty| switch (self.store.get(ext_ty)) {
                         .empty_record => ext = null,
                         .record => |ext_record| {
                             try fields.appendSlice(allocator, self.store.fieldSpan(ext_record.fields));
-                            ext = ext_record.ext;
+                            ext = ext_record.ext.get();
                         },
                         .variable => {},
                         .primitive, .tuple, .tag_union, .list, .box, .nominal, .function => invariant("a record row's remainder substituted to a non-record type"),
                     };
                     // A declared order's slots index its row, which no
                     // substitution of its closed remainder extends.
-                    if (record.declared) |declared| {
+                    if (record.declared.get()) |declared| {
                         const padding = try allocator.alloc(TypeId, declared.padding.len);
                         defer allocator.free(padding);
                         for (self.store.span(declared.padding), padding) |ty, *slot| slot.* = done.get(ty).?;
@@ -2288,7 +2288,7 @@ pub const Program = struct {
                 .primitive, .empty_record, .variable, .function => {},
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
@@ -2561,7 +2561,7 @@ pub const Program = struct {
                 .primitive, .empty_record => {},
                 .record => |record| {
                     for (self.store.fieldSpan(record.fields)) |field| try stack.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try stack.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try stack.append(self.allocator, ext);
                     try stack.appendSlice(self.allocator, self.store.paddingTypes(record));
                 },
                 .tuple => |items| try stack.appendSlice(self.allocator, self.store.span(items)),
@@ -3254,7 +3254,7 @@ pub const Program = struct {
                 .record => |record| {
                     // A closed record widened with omitted optional fields
                     // needs their presence slots even when field order agrees.
-                    if (!store.sameRecordOrder(record, to.record) or (record.ext == null and to.record.ext == null and record.fields.len != to.record.fields.len)) switch (pair.place) {
+                    if (!store.sameRecordOrder(record, to.record) or (record.ext == .none and to.record.ext == .none and record.fields.len != to.record.fields.len)) switch (pair.place) {
                         .data => result = .record_order,
                         .root_function, .signature_data => return .function,
                         .nested_function => invariant(nested_function_storage),
@@ -3268,7 +3268,7 @@ pub const Program = struct {
                             try pending.append(self.allocator, .{ .from = from_field.ty, .to = to_field.ty, .place = inner });
                         }
                     }
-                    if (record.ext != null and to.record.ext != null) try pending.append(self.allocator, .{ .from = record.ext.?, .to = to.record.ext.?, .place = inner });
+                    if (record.ext != .none and to.record.ext != .none) try pending.append(self.allocator, .{ .from = record.ext.get().?, .to = to.record.ext.get().?, .place = inner });
                 },
                 .tuple => |items| for (store.span(items), store.span(to.tuple)) |a, b| try pending.append(self.allocator, .{ .from = a, .to = b, .place = inner }),
                 .tag_union => |tag_union| {
@@ -3310,8 +3310,8 @@ pub const Program = struct {
     /// Whether one of two nodes is the backing of a padded nominal of no named
     /// fields and the other the empty record, which has no storage.
     pub fn paddedAgainstEmpty(a: types.Node, b: types.Node) bool {
-        return a == .empty_record and b == .record and b.record.declared != null or
-            b == .empty_record and a == .record and a.record.declared != null;
+        return a == .empty_record and b == .record and b.record.declared.get() != null or
+            b == .empty_record and a == .record and a.record.declared.get() != null;
     }
 
     /// Whether `ty` is a tag union, through the backing of a nominal.
@@ -3994,7 +3994,7 @@ const HostBoundaryGraph = struct {
                 try edges.append(allocator, .{ .node = item, .position = @intCast(index) });
             },
             .record => |record| {
-                if (record.ext != null) invariant("an open record reached a host boundary");
+                if (record.ext != .none) invariant("an open record reached a host boundary");
                 // Storage interning can grow the store under its own spans.
                 const fields = try allocator.dupe(types.Field, program.store.fieldSpan(record.fields));
                 defer allocator.free(fields);
@@ -4120,7 +4120,7 @@ test "Boxy field default identity survives substitution and stable type digests"
         const number = try store.primitive(.u8);
         var fields = [_]types.Field{.{ .name = name, .ty = variable, .kind = .inline_slot }};
         for (0..3) |variant| {
-            fields[0].default = if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) };
+            fields[0].default = .of(if (variant == 0) null else .{ .module = @fromBackingInt(@intCast(round)), .expr_node = @intCast(variant * 10) });
             const generic = try store.intern(.{ .record = .{ .fields = &fields, .ext = null } });
             const concrete = try program.substitute(allocator, generic, &.{number});
             const field = store.fieldSpan(store.get(concrete).record.fields)[0];
