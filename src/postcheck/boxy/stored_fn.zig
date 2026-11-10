@@ -736,9 +736,15 @@ const MetadataReader = struct {
     }
     fn worker(self: *MetadataReader) error{InvalidMetadata}!void {
         while (true) switch (try self.tag(Tag)) {
-            .template, .template_list_u8, .default => {
+            .template, .default => {
                 try self.module();
                 _ = try self.word();
+                return;
+            },
+            .template_list_int => {
+                try self.module();
+                _ = try self.word();
+                _ = try self.tag(lower.ListIntItem);
                 return;
             },
             .lambda => {
@@ -988,8 +994,10 @@ const Tag = enum(u8) {
     crash_dictionary,
     codec,
     callable_eval_entry,
-    /// A template's `List(U8)` worker (`lower.TemplateBinding.list_u8`).
-    template_list_u8,
+    /// A template's integer list worker (`lower.TemplateBinding.list_int`):
+    /// the module and template, then one byte naming the item type
+    /// (`lower.ListIntItem`).
+    template_list_int,
 };
 
 fn appendWord(allocator: Allocator, list: *std.ArrayList(u8), value: u32) Allocator.Error!void {
@@ -1200,9 +1208,14 @@ const Encoder = struct {
         const kind: Tag = @fromBackingInt(@intCast(input.byte()));
         try self.tag(kind);
         switch (kind) {
-            .template, .template_list_u8, .default => {
+            .template, .default => {
                 try self.module(input.module());
                 try self.word(input.word());
+            },
+            .template_list_int => {
+                try self.module(input.module());
+                try self.word(input.word());
+                try self.bytes.append(self.allocator, input.byte());
             },
             .lambda => {
                 try self.word(input.word());
@@ -1275,10 +1288,14 @@ const Encoder = struct {
             .template => |key| {
                 try self.tag(switch (key.binding) {
                     .generic => .template,
-                    .list_u8 => .template_list_u8,
+                    .list_int => .template_list_int,
                 });
                 try self.module(key.module);
                 try self.word(@backingInt(key.template));
+                switch (key.binding) {
+                    .generic => {},
+                    .list_int => |item| try self.bytes.append(self.allocator, @backingInt(item)),
+                }
             },
             .lambda => |key| {
                 try self.tag(.lambda);
@@ -1508,9 +1525,11 @@ const Decoder = struct {
                 const module_index = self.module();
                 return try program.templateWorker(module_index, @fromBackingInt(self.word()));
             },
-            .template_list_u8 => {
+            .template_list_int => {
                 const module_index = self.module();
-                return try program.listU8TemplateWorker(module_index, @fromBackingInt(self.word()));
+                const template = self.word();
+                const item: lower.ListIntItem = @fromBackingInt(self.byte());
+                return try program.listIntTemplateWorker(module_index, @fromBackingInt(template), item);
             },
             .lambda => {
                 const expr: ExprId = @fromBackingInt(self.word());
@@ -1722,19 +1741,27 @@ test "stored type metadata preserves field defaults across module reindexing" {
     try std.testing.expectEqual(@as(u32, 10), restored_default.expr_node);
 }
 
-test "function unit metadata validates List U8 template tag and its single module reference" {
+test "function unit metadata validates the integer list template tag, its single module reference, and its item type" {
     try std.testing.expectEqual(@as(u8, 11), @backingInt(Tag.callable_eval_entry));
-    try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_u8));
-    // A List(U8) template recipe has one module and a template ordinal.
-    // Unlike the callable-entry recipe, it has no second module reference.
-    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0 };
-    var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
-    try reader.worker();
-    try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    try std.testing.expectEqual(@as(u8, 12), @backingInt(Tag.template_list_int));
+    // An integer list template recipe has one module, a template ordinal,
+    // and an item type byte. Unlike the callable-entry recipe, it has no
+    // second module reference.
+    var bytes = [_]u8{ 12, 0, 0, 0, 0, 23, 0, 0, 0, @backingInt(lower.ListIntItem.u32) };
+    for (std.enums.values(lower.ListIntItem)) |item| {
+        bytes[9] = @backingInt(item);
+        var reader = MetadataReader{ .bytes = &bytes, .modules = 1 };
+        try reader.worker();
+        try std.testing.expectEqual(@as(usize, 0), reader.remaining());
+    }
     for (0..bytes.len) |len| {
         var truncated = MetadataReader{ .bytes = bytes[0..len], .modules = 1 };
         try std.testing.expectError(error.InvalidMetadata, truncated.worker());
     }
+    bytes[9] = @intCast(@typeInfo(lower.ListIntItem).@"enum".field_values.len);
+    var invalid_item = MetadataReader{ .bytes = &bytes, .modules = 1 };
+    try std.testing.expectError(error.InvalidMetadata, invalid_item.worker());
+    bytes[9] = @backingInt(lower.ListIntItem.u32);
     bytes[1] = 1;
     var invalid = MetadataReader{ .bytes = &bytes, .modules = 1 };
     try std.testing.expectError(error.InvalidMetadata, invalid.worker());

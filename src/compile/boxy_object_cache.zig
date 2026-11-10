@@ -21,7 +21,7 @@ const build_options = @import("build_options");
 const Allocator = std.mem.Allocator;
 
 /// The entry format: bumped whenever `encode`'s layout changes.
-pub const format_version: u32 = 18;
+pub const format_version: u32 = 19;
 
 const magic = "RBXO";
 
@@ -130,6 +130,32 @@ pub const ExportRecord = struct {
     table_needs: []const u8 = &.{},
 };
 
+/// The digest of `records` in identity order, whatever order they are
+/// listed in: the part of a module's export interface its own object
+/// solved (`boxy_interface.Digests.recordExportsDigest` folds in its imports').
+pub fn exportRecordsDigest(allocator: Allocator, records: []const ExportRecord) Allocator.Error![32]u8 {
+    const sorted = try allocator.dupe(ExportRecord, records);
+    defer allocator.free(sorted);
+    std.mem.sort(ExportRecord, sorted, {}, struct {
+        fn lessThan(_: void, a: ExportRecord, b: ExportRecord) bool {
+            return std.mem.order(u8, &a.identity, &b.identity) == .lt;
+        }
+    }.lessThan);
+    var hasher = base.Sha256.init(.{});
+    hasher.update("roc.boxy.export_records.v1");
+    for (sorted) |record| {
+        hasher.update(&record.identity);
+        inline for (.{ record.rc_borrowed_params, record.rc_ret_lenders, record.rc_read_only_params, record.rc_ret_unique_fields }) |word| hasher.update(std.mem.asBytes(&word));
+        hasher.update(&[_]u8{ @intFromBool(record.rc_ret_borrowed), @intFromBool(record.rc_ret_unique), @intFromBool(record.may_leave_pending) });
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.rc_ret_conditions.len))));
+        hasher.update(std.mem.sliceAsBytes(record.rc_ret_conditions));
+        // An importer fills the worker's tables from its needs.
+        hasher.update(std.mem.asBytes(&@as(u32, @intCast(record.table_needs.len))));
+        hasher.update(record.table_needs);
+    }
+    return hasher.finalResult();
+}
+
 /// One inline `expect` a test unit counts, at the unit-local site id that
 /// is its index in `Entry.expect_sites`. The module is named by its
 /// content-derived lowering identity, never a workspace name or path.
@@ -152,6 +178,10 @@ pub const TestRootRecord = struct {
 /// code locations: its code is its wasm unit image (`WasmUnitImage`).
 pub const Entry = struct {
     exports: []const ExportRecord,
+    /// `exportRecordsDigest(exports)`, filed so a restored object's
+    /// importers are keyed without hashing its records again. This is a
+    /// semantic interface digest, not a checksum of the entry payload.
+    exports_digest: [32]u8,
     /// The hosted function symbols the object references.
     hosted_symbols: []const []const u8,
     /// For the root program's object: the static data symbols the link
@@ -192,6 +222,7 @@ pub fn encode(allocator: Allocator, entry: Entry) Allocator.Error![]u8 {
     // Completeness admission reads this length from the already-loaded bytes.
     const length_at = bytes.items.len;
     try appendU64(&bytes, allocator, 0);
+    try bytes.appendSlice(allocator, &entry.exports_digest);
     try appendU32(&bytes, allocator, @intCast(entry.exports.len));
     for (entry.exports) |record| {
         try bytes.appendSlice(allocator, &record.identity);
@@ -296,6 +327,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     if (!std.mem.eql(u8, found_magic, magic)) return error.InvalidEntry;
     if (try reader.word32() != format_version) return error.InvalidEntry;
     if (try reader.word64() != bytes.len) return error.InvalidEntry;
+    const exports_digest = (try reader.take(32))[0..32].*;
     const export_count = try reader.word32();
     if (export_count > (bytes.len - reader.at) / min_export_record_size) return error.InvalidEntry;
     const exports = try allocator.alloc(ExportRecord, export_count);
@@ -374,6 +406,7 @@ pub fn decodeView(allocator: Allocator, bytes: []const u8) DecodeError!Entry {
     if (reader.at != bytes.len) return error.InvalidEntry;
     return .{
         .exports = exports,
+        .exports_digest = exports_digest,
         .hosted_symbols = hosted_symbols,
         .link_root_symbols = link_root_symbols,
         .app_export_symbols = app_export_symbols,
@@ -540,11 +573,12 @@ test "a Boxy object key is a function of exactly its declared inputs" {
 test "a Boxy object entry round-trips through its bytes" {
     const allocator = std.testing.allocator;
     const conditions = [_]u32{ 3, 9 };
-    const entry: Entry = .{
+    var entry: Entry = .{
         .exports = &.{
             .{ .identity = @splat(1), .rc_borrowed_params = 5, .rc_ret_lenders = 1, .rc_read_only_params = 4, .rc_ret_unique_fields = 0, .rc_ret_borrowed = true, .rc_ret_unique = false, .may_leave_pending = true, .rc_ret_conditions = &conditions },
             .{ .identity = @splat(2), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 2, .rc_ret_borrowed = false, .rc_ret_unique = true, .may_leave_pending = false, .rc_ret_conditions = &.{} },
         },
+        .exports_digest = undefined,
         .hosted_symbols = &.{ "roc_fx_stdout_line", "roc_fx_stdin_line" },
         .link_root_symbols = &.{"roc__d3"},
         .app_export_symbols = &.{ "roc__main_for_host", "roc__d3" },
@@ -556,11 +590,13 @@ test "a Boxy object entry round-trips through its bytes" {
         .code_locations = "where the code came from",
         .image = "an image",
     };
+    entry.exports_digest = try exportRecordsDigest(allocator, entry.exports);
     const bytes = try encode(allocator, entry);
     defer allocator.free(bytes);
     const decoded = try decode(allocator, bytes);
     defer deinitEntry(allocator, decoded);
     try std.testing.expectEqualDeep(entry.exports, decoded.exports);
+    try std.testing.expectEqual(entry.exports_digest, decoded.exports_digest);
     try std.testing.expectEqualDeep(entry.hosted_symbols, decoded.hosted_symbols);
     try std.testing.expectEqualDeep(entry.link_root_symbols, decoded.link_root_symbols);
     try std.testing.expectEqualDeep(entry.app_export_symbols, decoded.app_export_symbols);
@@ -573,16 +609,21 @@ test "a Boxy object entry round-trips through its bytes" {
     try std.testing.expectEqualStrings(entry.image, decoded.image);
     try std.testing.expectEqual(@as(usize, 0), (bytes.len - entry.image.len) % image_alignment);
 
-    // A truncated or altered file is no entry.
+    // Truncation, wrong magic, and the old layout are not entries.
     try std.testing.expectError(error.InvalidEntry, decode(allocator, bytes[0 .. bytes.len - 1]));
     var altered = try allocator.dupe(u8, bytes);
     defer allocator.free(altered);
     altered[0] = 'X';
     try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
+    altered[0] = magic[0];
+    std.mem.writeInt(u32, altered[4..8], format_version - 1, .little);
+    try std.testing.expectError(error.InvalidEntry, decode(allocator, altered));
 
     // Needs lists round-trip with the rest of their export record.
+    const needs_records: []const ExportRecord = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }};
     const needs_entry: Entry = .{
-        .exports = &.{.{ .identity = @splat(3), .rc_borrowed_params = 0, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{}, .table_needs = "a needs list" }},
+        .exports = needs_records,
+        .exports_digest = try exportRecordsDigest(allocator, needs_records),
         .hosted_symbols = &.{},
         .pieces = "",
     };
@@ -595,6 +636,35 @@ test "a Boxy object entry round-trips through its bytes" {
     // A size mismatch is rejected without reading or hashing the payload.
     std.mem.writeInt(u64, needs_bytes[8..16], @intCast(needs_bytes.len + 1), .little);
     try std.testing.expectError(error.InvalidEntry, decode(allocator, needs_bytes));
+}
+
+test "an export records digest is a function of the records in identity order" {
+    const allocator = std.testing.allocator;
+    const first: ExportRecord = .{ .identity = @splat(1), .rc_borrowed_params = 1, .rc_ret_lenders = 0, .rc_read_only_params = 0, .rc_ret_unique_fields = 0, .rc_ret_borrowed = false, .rc_ret_unique = false, .may_leave_pending = false, .rc_ret_conditions = &.{} };
+    var second = first;
+    second.identity = @splat(2);
+    const baseline = try exportRecordsDigest(allocator, &.{ first, second });
+    try std.testing.expectEqual(baseline, try exportRecordsDigest(allocator, &.{ second, first }));
+    inline for (.{ "rc_borrowed_params", "rc_ret_lenders", "rc_read_only_params", "rc_ret_unique_fields" }) |field| {
+        var changed = second;
+        @field(changed, field) ^= 1;
+        try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    }
+    inline for (.{ "rc_ret_borrowed", "rc_ret_unique", "may_leave_pending" }) |field| {
+        var changed = second;
+        @field(changed, field) = !@field(changed, field);
+        try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    }
+    var changed = second;
+    changed.identity = @splat(3);
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    changed = second;
+    changed.rc_ret_conditions = &.{1};
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    changed = second;
+    changed.table_needs = "needs";
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{ first, changed })));
+    try std.testing.expect(!std.mem.eql(u8, &baseline, &try exportRecordsDigest(allocator, &.{first})));
 }
 
 test "a hosted bindings digest is a function of the bindings in order" {
@@ -615,9 +685,9 @@ test "a hosted bindings digest is a function of the bindings in order" {
 
 test "a count larger than the bytes behind it is a miss, not an allocation" {
     const gpa = std.testing.allocator;
-    const encoded = try encode(gpa, .{ .exports = &.{}, .hosted_symbols = &.{}, .pieces = "pieces" });
+    const encoded = try encode(gpa, .{ .exports = &.{}, .exports_digest = try exportRecordsDigest(gpa, &.{}), .hosted_symbols = &.{}, .pieces = "pieces" });
     defer gpa.free(encoded);
-    const count_offset = magic.len + @sizeOf(u32) + @sizeOf(u64);
+    const count_offset = magic.len + @sizeOf(u32) + @sizeOf(u64) + 32;
     for ([_]usize{ count_offset, count_offset + @sizeOf(u32) }) |offset| {
         const damaged = try gpa.dupe(u8, encoded);
         defer gpa.free(damaged);
@@ -632,4 +702,45 @@ test "function unit variants preserve content addressing and separate ordinary o
     try std.testing.expectEqual(functionUnitKey(first), functionUnitKey(first));
     try std.testing.expect(!std.mem.eql(u8, &first.bytes, &functionUnitKey(first).bytes));
     try std.testing.expect(!std.mem.eql(u8, &functionUnitKey(first).bytes, &functionUnitKey(second).bytes));
+}
+
+test "a Boxy object export digest is persisted independently of its code payload" {
+    const allocator = std.testing.allocator;
+    const digest = try exportRecordsDigest(allocator, &.{});
+    for ([_][]const u8{ "first code payload", "different code payload" }) |payload| {
+        const bytes = try encode(allocator, .{ .exports = &.{}, .exports_digest = digest, .hosted_symbols = &.{}, .pieces = payload });
+        defer allocator.free(bytes);
+        const entry = try decodeView(allocator, bytes);
+        defer deinitEntryView(allocator, entry);
+        try std.testing.expectEqual(digest, entry.exports_digest);
+        try std.testing.expectEqualStrings(payload, entry.pieces);
+    }
+}
+
+test "a Boxy object export digest round-trip releases every failed allocation" {
+    const Scenario = struct {
+        fn run(allocator: Allocator) (DecodeError || error{TestExpectedEqual})!void {
+            const records: []const ExportRecord = &.{.{
+                .identity = @splat(1),
+                .rc_borrowed_params = 1,
+                .rc_ret_lenders = 2,
+                .rc_read_only_params = 3,
+                .rc_ret_unique_fields = 4,
+                .rc_ret_borrowed = true,
+                .rc_ret_unique = false,
+                .may_leave_pending = true,
+                .rc_ret_conditions = &.{ 3, 9 },
+                .table_needs = "table needs",
+            }};
+            const digest = try exportRecordsDigest(allocator, records);
+            const bytes = try encode(allocator, .{ .exports = records, .exports_digest = digest, .hosted_symbols = &.{"hosted"}, .pieces = "pieces" });
+            defer allocator.free(bytes);
+            const entry = try decode(allocator, bytes);
+            defer deinitEntry(allocator, entry);
+            try std.testing.expectEqual(digest, entry.exports_digest);
+            try std.testing.expectEqualDeep(records, entry.exports);
+        }
+    };
+    var deterministic = @import("collections").DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Scenario.run, .{});
 }

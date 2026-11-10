@@ -44,10 +44,11 @@ pub const module_env_layout: [32]u8 = check.rootLayoutVersionHash(can.ModuleEnv.
 const checked_reports_layout: [32]u8 = check.rootLayoutVersionHash(check.CheckedReports.Serialized, 1);
 
 /// Version of the checked-module envelope and opaque body encodings not
-/// reflected in layout fingerprints. Version 18 combines reproducible reports
-/// with field-default identities in Boxy stored-function types, invalidating
-/// both independent version 17 formats. Platform-pairing entries share it.
-const checked_envelope_version: u32 = 18;
+/// reflected in layout fingerprints. Version 19 combines reproducible reports
+/// with Boxy integer list worker item-type bindings and stored-function
+/// field-default identities. It rejects both independent version 18 formats.
+/// Platform-pairing entries share it.
+const checked_envelope_version: u32 = 19;
 
 /// Version of the canonicalized-module envelope: its magic, header layout, and
 /// body order.
