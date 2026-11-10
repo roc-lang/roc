@@ -153,6 +153,8 @@ pub const specs = [_]integration_spec.Spec{
     .{ .name = "hover shows documentation for method call via static dispatch", .run = hoverShowsDocumentationForMethodCallViaStaticDispatch },
     .{ .name = "hover on record field does not use same-name method documentation", .run = hoverOnRecordFieldDoesNotUseSameNameMethodDocumentation },
     .{ .name = "hover without documentation shows only type", .run = hoverWithoutDocumentationShowsOnlyType },
+    .{ .name = "hover inside an operator or method call shows the hovered node's type", .run = hoverInsideOperatorOrMethodCallShowsHoveredNodeType },
+    .{ .name = "hover on an operator or method name still shows its own docs", .run = hoverOnOperatorOrMethodNameShowsItsDocs },
     .{ .name = "hover renders zero-argument function types", .run = hoverRendersZeroArgumentFunctionTypes },
 };
 
@@ -848,6 +850,123 @@ pub fn completionIncludesDocCommentsFromSource() integration_spec.SpecError!void
     }
 }
 // Hover Documentation Tests
+
+const hover_lookup_source =
+    \\app [main] {{ pf: platform "{s}" }}
+    \\
+    \\Letter :: U8.{{
+    \\    is_eq : Letter, Letter -> Bool
+    \\    is_eq = |Letter.(a), Letter.(b)| a == b
+    \\}}
+    \\
+    \\pair : U8, U8 -> U8
+    \\pair = |first, second| first + second
+    \\
+    \\same_letter : Bool
+    \\same_letter = Letter.('a') == Letter.('b')
+    \\
+    \\is_c : U8 -> Bool
+    \\is_c = |x| x == 'c'
+    \\
+    \\plus_d : U8 -> U8
+    \\plus_d = |x| x + 'd'
+    \\
+    \\above_e : U8 -> Bool
+    \\above_e = |x| 'e' < x
+    \\
+    \\tuple_eq : U8 -> Bool
+    \\tuple_eq = |x| (x, 'f') == (x, x)
+    \\
+    \\with_g : List(U8)
+    \\with_g = [1.U8].append('g')
+    \\
+    \\with_pair : List(U8)
+    \\with_pair = [1.U8].append(pair('h', 'i'))
+    \\
+    \\mapped : List(U8)
+    \\mapped = [1.U8].map(|item| item)
+    \\
+    \\main = same_letter
+    \\
+;
+
+/// Hover text at the start of the first occurrence of `needle` in `source`.
+fn hoverAtNeedle(h: *TestHarness, source: []const u8, needle: []const u8) integration_spec.SpecError![]const u8 {
+    const offset = std.mem.find(u8, source, needle) orelse {
+        std.debug.print("\n`{s}` is not in the source\n", .{needle});
+        return error.TestUnexpectedResult;
+    };
+    const line_start = if (std.mem.findLast(u8, source[0..offset], "\n")) |newline| newline + 1 else 0;
+    const line: u32 = @intCast(std.mem.count(u8, source[0..offset], "\n"));
+    const character: u32 = @intCast(offset - line_start);
+    return try h.getHover(source, line, character) orelse {
+        std.debug.print("\nhover returned null for `{s}`\n", .{needle});
+        return error.TestUnexpectedResult;
+    };
+}
+
+/// An enclosing operator or method call must not lend its type or docs to a
+/// narrower node under the cursor.
+pub fn hoverInsideOperatorOrMethodCallShowsHoveredNodeType() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const source = try h.formatSource(hover_lookup_source);
+    defer h.allocator.free(source);
+
+    try h.writeFile("hover_lookup.roc", source);
+    try h.check(source);
+
+    const cases = [_]struct { needle: []const u8, expected: []const u8 }{
+        .{ .needle = "a')", .expected = "```roc\nU8\n```" },
+        .{ .needle = "Letter.('a')", .expected = "```roc\nLetter\n```" },
+        .{ .needle = "c'", .expected = "```roc\nU8\n```" },
+        .{ .needle = "d'", .expected = "```roc\nU8\n```" },
+        .{ .needle = "e'", .expected = "```roc\nU8\n```" },
+        .{ .needle = "f'", .expected = "```roc\nU8\n```" },
+        .{ .needle = "g'", .expected = "```roc\nU8\n```" },
+        .{ .needle = "h'", .expected = "```roc\nU8\n```" },
+        // The gap between the arguments of a plain call belongs to its callee.
+        .{ .needle = " 'i'", .expected = "```roc\nU8, U8 -> U8\n```" },
+        .{ .needle = "item|", .expected = "```roc\nU8\n```" },
+    };
+    for (cases) |case| {
+        const text = try hoverAtNeedle(&h, source, case.needle);
+        defer h.allocator.free(text);
+        if (!std.mem.eql(u8, text, case.expected)) {
+            std.debug.print("\nhover on `{s}` was:\n{s}\nexpected:\n{s}\n", .{ case.needle, text, case.expected });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+/// The name of an operator or method is the node under the cursor, so hovering
+/// it keeps reporting that lookup.
+pub fn hoverOnOperatorOrMethodNameShowsItsDocs() integration_spec.SpecError!void {
+    var h = try TestHarness.init();
+    defer h.deinit();
+
+    const source = try h.formatSource(hover_lookup_source);
+    defer h.allocator.free(source);
+
+    try h.writeFile("hover_lookup_names.roc", source);
+    try h.check(source);
+
+    const cases = [_]struct { needle: []const u8, expected: []const u8 }{
+        .{ .needle = "== Letter", .expected = "Bool" },
+        .{ .needle = "+ 'd'", .expected = "Add two [U8] values." },
+        .{ .needle = "< x", .expected = "is less than the second" },
+        .{ .needle = "append('g')", .expected = "Add a single item to the end of a list." },
+    };
+    for (cases) |case| {
+        const text = try hoverAtNeedle(&h, source, case.needle);
+        defer h.allocator.free(text);
+        if (std.mem.find(u8, text, case.expected) == null) {
+            std.debug.print("\nhover on `{s}` was:\n{s}\nexpected it to contain `{s}`\n", .{ case.needle, text, case.expected });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
 
 /// Verifies hovering a function definition includes documentation and type text.
 pub fn hoverShowsDocumentationForFunctionDefinition() integration_spec.SpecError!void {
