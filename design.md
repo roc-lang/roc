@@ -14813,7 +14813,11 @@ callable, since the descriptor holding it lives for the program's lifetime.
 Two descriptors of the same type may be distinct static data (one without
 override scope, one carrying a body's overrides); no consumer compares
 descriptors by identity, and equality, hashing, and inspection are defined on
-values through descriptors, never on descriptors.
+values through descriptors, never on descriptors. An override capturing such a
+descriptor is likewise distinct static data for one method: two override scopes
+merged into one descriptor agree on a nominal type when each of its methods
+enters the same procedure, and the merged scope keeps the first scope's
+callables.
 
 #### Type Tables
 

@@ -577,7 +577,7 @@ pub const Evaluation = struct {
             .desc => return,
             .callable, .table, .node, .zero, .int => invariant("a type table's descriptor word is not a descriptor"),
         };
-        for (self.program.static_descs.scopeEntries(scope)) |entry| try mergeEntry(self.allocator, entries, entry);
+        for (self.program.static_descs.scopeEntries(scope)) |entry| try mergeEntry(self.allocator, &self.program.static_descs, entries, entry);
     }
 
     /// The descriptor word of the type `ty` over the worker's variables at
@@ -601,7 +601,7 @@ pub const Evaluation = struct {
         for (scoped) |override| {
             var methods: [3]?StaticDescs.CaptureWord = .{ null, null, null };
             for (&methods, override.methods) |*method, maybe| method.* = if (maybe) |operand| self.operandWord(operand) else null;
-            try mergeEntry(self.allocator, &entries, .{ .nominal = if (substitute_inputs) try program.substituteRepresentation(self.allocator, override.nominal, bound) else override.nominal, .methods = methods });
+            try mergeEntry(self.allocator, &program.static_descs, &entries, .{ .nominal = if (substitute_inputs) try program.substituteRepresentation(self.allocator, override.nominal, bound) else override.nominal, .methods = methods });
         }
         const scope = try program.static_descs.restrictScope(try program.static_descs.internScope(entries.items), closed);
         if (scope == .none) return .{ .desc = closed };
@@ -642,7 +642,7 @@ pub const Evaluation = struct {
             return;
         }
         for (order) |member| switch (self.source.get(member)) {
-            .callable => |callable| self.words.items[@backingInt(member)] = .{ .callable = try static_descs.reserveCallable(@intCast(callable.captures.len)) },
+            .callable => |callable| self.words.items[@backingInt(member)] = .{ .callable = try static_descs.reserveCallable(program.worker(callable.entry).proc, @intCast(callable.captures.len)) },
             .desc, .table => {},
             .input, .args_desc, .tag_index, .field_index, .update_plan, .adapt_plan, .names_block => invariant("only callables, descriptors, and tables lead back to themselves"),
         };
@@ -755,17 +755,31 @@ pub const Evaluation = struct {
 
 /// Add `entry` to the scope entries `entries`, which hold each nominal type
 /// once: an entry for a nominal type already there gives it the same
-/// overrides.
-fn mergeEntry(allocator: Allocator, entries: *std.ArrayList(StaticDescs.ScopedMethods), entry: StaticDescs.ScopedMethods) Allocator.Error!void {
+/// overrides. Two scopes can build one override as distinct static
+/// callables, as they can describe one type by distinct descriptors
+/// (design.md "Names Blocks"), so overrides agree when each method
+/// enters the same procedure, and the entry already there is kept.
+fn mergeEntry(allocator: Allocator, static_descs: *const StaticDescs, entries: *std.ArrayList(StaticDescs.ScopedMethods), entry: StaticDescs.ScopedMethods) Allocator.Error!void {
     for (entries.items) |existing| {
         if (existing.nominal != entry.nominal) continue;
-        for (existing.methods, entry.methods) |a, b| {
+        if (std.debug.runtime_safety) for (existing.methods, entry.methods) |a, b| {
             if ((a == null) != (b == null)) invariant("two override scopes give one nominal type different overrides");
-            if (a) |word_| if (!StaticDescs.captureWordsEqual(word_, b.?)) invariant("two override scopes give one nominal type different overrides");
-        }
+            if (a) |word_| if (!overridesAgree(static_descs, word_, b.?)) invariant("two override scopes give one nominal type different overrides");
+        };
         return;
     }
     try entries.append(allocator, entry);
+}
+
+fn overridesAgree(static_descs: *const StaticDescs, a: StaticDescs.CaptureWord, b: StaticDescs.CaptureWord) bool {
+    if (StaticDescs.captureWordsEqual(a, b)) return true;
+    return switch (a) {
+        .callable => |a_node| switch (b) {
+            .callable => |b_node| static_descs.callableProc(a_node) == static_descs.callableProc(b_node),
+            .desc, .scoped_desc, .table, .node, .zero, .int => false,
+        },
+        .desc, .scoped_desc, .table, .node, .zero, .int => false,
+    };
 }
 
 fn hashWord(hasher: *std.hash.Wyhash, value: u32) void {
