@@ -1422,8 +1422,8 @@ const Decoder = struct {
     fn module(self: *Decoder) types.ModuleIndex {
         const key = self.modules[self.word()];
         if (!self.link_names) return self.program.moduleByKey(.{ .bytes = key }).index;
-        for (self.program.modules.views.items) |view| if (std.mem.eql(u8, &view.link_name, &key)) return view.index;
-        invariant("stored-function metadata names a module outside its checked imports");
+        return self.program.modules.findLinkName(key) orelse
+            invariant("stored-function metadata names a module outside its checked imports");
     }
 
     /// The table of modules, which `module` indexes.
