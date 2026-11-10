@@ -2496,7 +2496,7 @@ const Gen = struct {
         // "Defaulted Fields").
         for (fields, slots, slot_types, names, optional) |field_info, slot, slot_ty, name_value, *missing_ok| {
             missing_ok.* = field_info.kind == .inline_slot and try missingTryOk(program_, field_info.ty) != null;
-            if (field_info.kind == .presence_slot or missing_ok.* or field_info.default != null) continue;
+            if (field_info.kind == .presence_slot or missing_ok.* or field_info.default.get() != null) continue;
             const present_hole = try self.branchTag(slot, slot_ty, layouts_mod.missing_label);
             const missing = try self.callFormat("missing_field", null, &.{ self.encoding, name_value });
             try self.failWith(missing.value, err_ty, on_err);
@@ -2510,7 +2510,7 @@ const Gen = struct {
                 value.* = slot;
                 continue;
             }
-            if (field_info.default) |field_default| {
+            if (field_info.default.get()) |field_default| {
                 const merged = try self.merge(field_info.ty);
                 const missing_hole = try self.branchTag(slot, slot_ty, layouts_mod.present_label);
                 try self.jump(merged.id, &.{merged.param}, &.{(try self.payload(slot, slot_ty, layouts_mod.present_label, 0)).value});

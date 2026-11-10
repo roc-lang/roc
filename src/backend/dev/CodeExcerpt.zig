@@ -79,8 +79,13 @@ pub const Reference = struct {
     target: u32,
     /// Offset within the target excerpt the reference resolves to.
     delta: u32,
-    veneer: ?u32 = null,
+    /// A producer-reserved in-body veneer, still repatched by final placement.
+    veneer: collections.OptionalU32 = .none,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(Reference) == 20);
+}
 
 /// A relocation against a named symbol, with its offset relative to the excerpt.
 pub const NamedRelocation = struct {
@@ -1333,7 +1338,7 @@ pub fn extractPrepared(
                 },
                 .target = target_index,
                 .delta = @intCast(target_offset - regions[target_region].start),
-                .veneer = if (codegen.codeRefVeneer(ref.site)) |offset| if (offset >= region.start and offset < region.end) @intCast(offset - region.start) else null else null,
+                .veneer = .of(if (codegen.codeRefVeneer(ref.site)) |offset| if (offset >= region.start and offset < region.end) @intCast(offset - region.start) else null else null),
             });
         }
 
@@ -1380,7 +1385,7 @@ pub fn extractPrepared(
         const excerpt_code = code_bytes: {
             const bytes = try arena_allocator.dupe(u8, code[region.start..region.end]);
             codegen.normalizeExcerptCode(region.start, bytes);
-            for (region_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
+            for (region_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer.get()) |offset| offset else null);
             for (symbolic_refs.items) |ref| CG.normalizeExcerptRefSite(bytes, ref.site, codeRefForm(ref.form), if (ref.veneer) |offset| offset else null);
             break :code_bytes bytes;
         };
@@ -2210,7 +2215,7 @@ fn appendMetadata(comptime CG: type, codegen: *CG, excerpt: Excerpt, start: usiz
     }
     for (excerpt.refs) |ref| {
         if (ref.form == .call) {
-            try codegen.registerAssembledRefVeneer(start + ref.site, if (ref.veneer) |veneer| start + veneer else null);
+            try codegen.registerAssembledRefVeneer(start + ref.site, if (ref.veneer.get()) |veneer| start + veneer else null);
         }
     }
     for (excerpt.lines) |line| {
@@ -2790,7 +2795,7 @@ test "excerpt metadata queues unresolved targets, preserves same-offset line ord
         .code = "code",
         .entry = 1,
         .frame = null,
-        .refs = &.{.{ .site = 2, .form = .call, .target = 0, .delta = 1, .veneer = 3 }},
+        .refs = &.{.{ .site = 2, .form = .call, .target = 0, .delta = 1, .veneer = .some(3) }},
         .symbolic_refs = &.{
             .{ .site = 0, .form = .call, .target = .{ .proc = lir.ProcIdentity.forTest(2) }, .veneer = 3 },
             .{ .site = 1, .form = .addr, .target = .{ .rc_helper = "unemitted" } },

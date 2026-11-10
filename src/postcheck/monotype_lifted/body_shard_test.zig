@@ -212,8 +212,8 @@ fn body(p: *Ast.Program, ids: PrefixIds, fn_id: Ast.FnId, symbol: u32, join: u32
     const segments = try p.addFieldAccessSegmentSpan(&.{.{ .field = ids.field }});
     const destructs = try p.addRecordDestructSpan(&.{.{ .name = ids.field, .pattern = bind }});
     const steps = try p.addStrPatternStepSpan(&.{
-        .{ .capture = bind, .delimiter = text },
-        .{ .capture = null, .delimiter = ids.string },
+        .{ .capture = .some(bind), .delimiter = text },
+        .{ .capture = .none, .delimiter = ids.string },
     });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .record = destructs } });
     _ = try p.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{ .prefix = text, .steps = steps, .end = .tail } } });

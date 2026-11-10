@@ -347,7 +347,7 @@ pub const StaticDescs = struct {
                 .primitive, .empty_record, .variable, .function => {},
                 .record => |record| {
                     for (store.fieldSpan(record.fields)) |field| try pending.append(self.allocator, field.ty);
-                    if (record.ext) |ext| try pending.append(self.allocator, ext);
+                    if (record.ext.get()) |ext| try pending.append(self.allocator, ext);
                     try pending.appendSlice(self.allocator, store.paddingTypes(record));
                 },
                 .tuple => |items| try pending.appendSlice(self.allocator, store.span(items)),
@@ -1114,13 +1114,13 @@ pub const StaticDescs = struct {
             },
             .record => |record| {
                 kind = .record;
-                flags.declared_order = record.declared != null;
+                flags.declared_order = record.declared.get() != null;
                 const fields = try self.allocator.dupe(types.Field, self.store.fieldSpan(record.fields));
                 defer self.allocator.free(fields);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
                 count = @intCast(storage.len);
-                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields.len, if (record.declared) |declared| self.store.declaredSlots(declared) else null);
+                try self.fillFields(item.node, &pointers, committed_layout, .{ .types = storage, .scope = scope_id }, fields.len, if (record.declared.get()) |declared| self.store.declaredSlots(declared) else null);
             },
             .tuple => |items_span| {
                 kind = .tuple;
@@ -1492,7 +1492,7 @@ pub const StaticDescs = struct {
             .record => |record| blk: {
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
-                break :blk .{ storage.len, if (record.declared) |order| self.store.declaredSlots(order) else null };
+                break :blk .{ storage.len, if (record.declared.get()) |order| self.store.declaredSlots(order) else null };
             },
             .tuple => |items| .{ self.store.span(items).len, null },
             .empty_record => .{ 0, null },
@@ -1655,7 +1655,7 @@ pub const StaticDescs = struct {
                 defer self.allocator.free(names);
                 const storage = try self.layouts.recordStorage(record);
                 defer self.allocator.free(storage);
-                break :blk .{ .record = try self.fieldShapes(committed_layout, storage, scope_id, names, if (record.declared) |declared| self.store.declaredSlots(declared) else null) };
+                break :blk .{ .record = try self.fieldShapes(committed_layout, storage, scope_id, names, if (record.declared.get()) |declared| self.store.declaredSlots(declared) else null) };
             },
             .tuple => |items_span| blk: {
                 const items = try self.allocator.dupe(TypeId, self.store.span(items_span));

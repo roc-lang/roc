@@ -806,19 +806,19 @@ test "monotype spec builder shares equal nominal requests" {
     const name = try name_store.internTypeName("Value");
     const first = try types.add(.{ .named = .{
         .named_type = .{ .module = .{} },
-        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .def = .{ .module = module, .type_name = name, .source_decl = .some(7) },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const second = try types.add(.{ .named = .{
         .named_type = .{ .module = .{} },
-        .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+        .def = .{ .module = module, .type_name = name, .source_decl = .some(7) },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
     const distinct = try types.add(.{ .named = .{
         .named_type = .{ .module = .{} },
-        .def = .{ .module = module, .type_name = name, .source_decl = 8 },
+        .def = .{ .module = module, .type_name = name, .source_decl = .some(8) },
         .kind = .nominal,
         .args = Type.Span.empty(),
     } });
@@ -1030,14 +1030,14 @@ test "monotype spec builder uses exact type equality after digest match" {
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Type.Span.empty(),
-        .backing = null,
+        .backing = .none,
     } });
     const second_ty = try type_store.add(.{ .named = .{
         .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Type.Span.empty(),
-        .backing = null,
+        .backing = .none,
     } });
 
     const forced_digest = digestWithFirstByte(9);

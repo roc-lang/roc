@@ -3517,8 +3517,8 @@ pub const StoredTypeVariable = struct {
     /// Interner serial id, or `.none` if the variable is unnamed.
     name: OptionalVarNameId = .none,
     constraints: CheckedTypeRange = .{},
-    numeric_default_phase: ?NumericDefaultPhase = null,
-    row_default: ?RowDefault = null,
+    numeric_default_phase: collections.OptionalEnum(NumericDefaultPhase) = .none,
+    row_default: collections.OptionalEnum(RowDefault) = .none,
     row_default_discharges_constraints: bool = false,
     bounded_row_ext: bool = false,
 };
@@ -3587,6 +3587,11 @@ pub const StoredCheckedTypePayload = union(enum) {
     field_kind: CheckedCommittedKind,
 };
 
+comptime {
+    std.debug.assert(@sizeOf(StoredTypeVariable) == 16);
+    std.debug.assert(@sizeOf(StoredCheckedTypePayload) == 20);
+}
+
 /// A row of a type store's `alias_row_pool`. Alias and nominal payloads are
 /// far larger than the others, so they are held out of line and a stored
 /// payload names their row.
@@ -3624,6 +3629,8 @@ fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype
         return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
     } else if (comptime Stored == OptionalVarNameId) {
         return pool_owner.varName(stored.*);
+    } else if (comptime collections.CompactOptionalPayload(Stored) != null) {
+        return stored.get();
     } else if (comptime Stored == StoredAliasId) {
         return reconstructTypeData(Live, pool_owner, &storePool(pool_owner, StoredAlias)[@backingInt(stored.*)]);
     } else if (comptime Stored == StoredNominalId) {
@@ -4872,6 +4879,8 @@ pub const CheckedTypeStore = struct {
             return self.appendPool(allocator, @typeInfo(Build).pointer.child, build);
         } else if (comptime Stored == OptionalVarNameId) {
             return self.internVarName(allocator, build);
+        } else if (comptime collections.CompactOptionalPayload(Stored) != null) {
+            return .of(build);
         } else if (comptime Stored == StoredAliasId or Stored == StoredNominalId) {
             const Row = if (Stored == StoredAliasId) StoredAlias else StoredNominal;
             const column: BorrowedColumn = if (Stored == StoredAliasId) .alias_row_pool else .nominal_row_pool;
@@ -36623,8 +36632,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x0A, 0xBC, 0x4C, 0x9F, 0xDF, 0x6E, 0xB2, 0x5A, 0xC0, 0x12, 0xD5, 0xFB, 0x22, 0x0B, 0x65, 0x47,
-        0xDB, 0xAA, 0x5E, 0x4F, 0x19, 0x9B, 0xD2, 0x13, 0x38, 0xEE, 0x5B, 0x59, 0x95, 0x60, 0x80, 0x55,
+        0xAF, 0xEE, 0xF5, 0x8F, 0x46, 0xB5, 0x3B, 0x22, 0x37, 0x16, 0xEB, 0x13, 0xA1, 0x2D, 0x3F, 0xF5,
+        0xD0, 0xE7, 0x6C, 0xC5, 0x72, 0xFE, 0x41, 0x91, 0x7B, 0x8E, 0x32, 0x73, 0xE4, 0x56, 0x7E, 0xE1,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

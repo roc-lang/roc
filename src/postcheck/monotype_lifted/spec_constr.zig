@@ -280,8 +280,8 @@ fn isExactGeneratedIteratorType(program: *const Ast.Program, ty: Type.TypeId) bo
     const type_ = program.types.get(ty);
     if (type_ != .named) return false;
     const named = type_.named;
-    if (named.def.iterator_topology == null) return false;
-    const backing = named.backing orelse return false;
+    if (named.def.iterator_topology.get() == null) return false;
+    const backing = named.backing.get() orelse return false;
     return backing.authority == .generated_private;
 }
 
@@ -3373,10 +3373,10 @@ const Pass = struct {
         const iterator_type = self.program.types.get(iterator_ty);
         if (iterator_type != .named) return false;
         const named = iterator_type.named;
-        const topology = named.def.iterator_topology orelse return false;
+        const topology = named.def.iterator_topology.get() orelse return false;
         if (access.segments.len != 1) return false;
         if (self.program.fieldAccessSegmentAt(access.segments, 0).field != topology.step_field) return false;
-        const backing = named.backing orelse return false;
+        const backing = named.backing.get() orelse return false;
         if (backing.authority != .generated_private) return false;
         const backing_type = self.program.types.get(backing.ty);
         if (backing_type != .record) return false;
@@ -3709,8 +3709,8 @@ const Pass = struct {
         if (base_type != .named) return null;
         const base_named = base_type.named;
         if (base_named.def.iterator_representation != .minted) return null;
-        const topology = base_named.def.iterator_topology orelse return null;
-        const backing = base_named.backing orelse return null;
+        const topology = base_named.def.iterator_topology.get() orelse return null;
+        const backing = base_named.backing.get() orelse return null;
         if (backing.authority != .generated_private) return null;
         const backing_type = self.program.types.get(backing.ty);
         if (backing_type != .record) return null;
@@ -13720,7 +13720,7 @@ const Cloner = struct {
                     .str_pattern => |str| {
                         const steps = walk.program.strPatternStepSpan(str.steps);
                         for (0..steps.len) |index| {
-                            if (GuardedList.at(steps, index).capture) |capture| try walk.stack.append(walk.allocator, .{ .pat = capture });
+                            if (GuardedList.at(steps, index).capture.get()) |capture| try walk.stack.append(walk.allocator, .{ .pat = capture });
                         }
                         std.mem.reverse(PatBinderItem, walk.stack.items[mark..]);
                         return .sequence;
@@ -14604,7 +14604,7 @@ const Cloner = struct {
                     const steps = self.pass.program.strPatternStepSpan(str.steps);
                     var captured: usize = 0;
                     for (0..steps.len) |index| {
-                        const capture = GuardedList.at(steps, index).capture orelse continue;
+                        const capture = GuardedList.at(steps, index).capture.get() orelse continue;
                         if (captured == done) break :blk capture;
                         captured += 1;
                     }
@@ -14661,10 +14661,10 @@ const Cloner = struct {
                     for (output_steps, 0..) |*output_step, index| {
                         const input_step = GuardedList.at(input_steps, index);
                         output_step.* = .{
-                            .capture = if (input_step.capture != null) cap: {
+                            .capture = if (input_step.capture != .none) cap: {
                                 captured += 1;
-                                break :cap children[captured - 1];
-                            } else null,
+                                break :cap .some(children[captured - 1]);
+                            } else .none,
                             .delimiter = input_step.delimiter,
                         };
                     }
@@ -14828,7 +14828,7 @@ const Cloner = struct {
                 .nominal => |nominal| {
                     const content = program.types.get(step.dest);
                     if (content != .named) Common.invariant("a row widen related a nominal value to a non-nominal type");
-                    const backing = content.named.backing orelse
+                    const backing = content.named.backing.get() orelse
                         Common.invariant("a row widen reached a nominal type without an explicit backing");
                     try steps.append(gpa, expanded);
                     try steps.append(gpa, .{ .value = nominal.backing.*, .dest = backing.ty });
@@ -16427,7 +16427,7 @@ fn assertStructuralConstructionType(program: *const Ast.Program, ty: Type.TypeId
         const content = program.types.get(current);
         if (content != .named) return;
         const named = content.named;
-        const backing = named.backing orelse return;
+        const backing = named.backing.get() orelse return;
         switch (named.kind) {
             .alias => current = backing.ty,
             .nominal, .@"opaque" => Common.invariant("structural constructor value was typed at a nominal type without its nominal wrapper"),
@@ -16446,7 +16446,7 @@ fn nominalConstructionLayer(program: *const Ast.Program, ty: Type.TypeId) ?Nomin
         const content = program.types.get(current);
         if (content != .named) return null;
         const named = content.named;
-        const backing = named.backing orelse return null;
+        const backing = named.backing.get() orelse return null;
         switch (named.kind) {
             .alias => current = backing.ty,
             .nominal, .@"opaque" => return .{ .named = current, .backing = backing.ty },
@@ -16460,7 +16460,7 @@ fn recordUpdateBackingType(program: *const Ast.Program, ty: Type.TypeId) Type.Ty
         const content = program.types.get(current);
         if (content == .record) return current;
         if (content != .named) Common.invariant("record update had a non-record backing type");
-        const backing = content.named.backing orelse
+        const backing = content.named.backing.get() orelse
             Common.invariant("record update had a named type without an explicit backing");
         current = backing.ty;
     }
@@ -16874,8 +16874,8 @@ fn isGeneratedIteratorStepField(
     const receiver_type = program.types.get(receiver_ty);
     if (receiver_type != .named) return false;
     const named = receiver_type.named;
-    const topology = named.def.iterator_topology orelse return false;
-    const backing = named.backing orelse return false;
+    const topology = named.def.iterator_topology.get() orelse return false;
+    const backing = named.backing.get() orelse return false;
     return backing.authority == .generated_private and
         field == topology.step_field;
 }
@@ -17417,8 +17417,8 @@ test "SpecConstr preserves record update ordering while exposing its final shape
     const a = try program.names.internRecordFieldLabel("a");
     const b = try program.names.internRecordFieldLabel("b");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = a, .ty = u8_ty, .default = null },
-        .{ .name = b, .ty = u8_ty, .default = null },
+        .{ .name = a, .ty = u8_ty, .default = .none },
+        .{ .name = b, .ty = u8_ty, .default = .none },
     }) });
     const base_local = try program.addLocal(@fromBackingInt(@intCast(1)), record_ty);
     const update_local = try program.addLocal(@fromBackingInt(@intCast(2)), u8_ty);
@@ -17467,12 +17467,12 @@ test "SpecConstr record update permits an updated field representation to change
     const a = try program.names.internRecordFieldLabel("a");
     const b = try program.names.internRecordFieldLabel("b");
     const base_record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = a, .ty = u8_ty, .default = null },
-        .{ .name = b, .ty = u8_ty, .default = null },
+        .{ .name = a, .ty = u8_ty, .default = .none },
+        .{ .name = b, .ty = u8_ty, .default = .none },
     }) });
     const result_record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = a, .ty = u8_ty, .default = null },
-        .{ .name = b, .ty = u16_ty, .default = null },
+        .{ .name = a, .ty = u8_ty, .default = .none },
+        .{ .name = b, .ty = u16_ty, .default = .none },
     }) });
     const base_local = try program.addLocal(@fromBackingInt(@intCast(1)), base_record_ty);
     const update_local = try program.addLocal(@fromBackingInt(@intCast(2)), u16_ty);
@@ -17514,7 +17514,7 @@ test "SpecConstr keeps a transparent recursive anchor and its initializer bindin
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
     const field = try program.names.internRecordFieldLabel("field");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = field, .ty = u8_ty, .default = null },
+        .{ .name = field, .ty = u8_ty, .default = .none },
     }) });
     const source_local = try program.addLocal(@fromBackingInt(@intCast(1)), record_ty);
     const source_pat = try program.addPat(.{ .ty = record_ty, .data = .{ .bind = source_local } });
@@ -17766,7 +17766,7 @@ test "SpecConstr accepts a transparent alias record update base" {
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
     const field = try program.names.internRecordFieldLabel("field");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = field, .ty = u8_ty, .default = null },
+        .{ .name = field, .ty = u8_ty, .default = .none },
     }) });
     const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("RecordAlias");
@@ -17775,7 +17775,7 @@ test "SpecConstr accepts a transparent alias record update base" {
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .alias,
         .args = Type.Span.empty(),
-        .backing = .{ .ty = record_ty, .use = .inspectable },
+        .backing = .some(.{ .ty = record_ty, .use = .inspectable }),
     } });
     const base_local = try program.addLocal(@fromBackingInt(@intCast(1)), record_ty);
     const update_local = try program.addLocal(@fromBackingInt(@intCast(2)), u8_ty);
@@ -17808,10 +17808,10 @@ test "SpecConstr compares separately stored named types by representation" {
         fn add(p: *Ast.Program, module: names.ModuleIdentityId, name: names.TypeNameId, backing: Type.TypeId) Allocator.Error!Type.TypeId {
             return p.types.add(.{ .named = .{
                 .named_type = .{ .module = .{} },
-                .def = .{ .module = module, .type_name = name, .source_decl = 7 },
+                .def = .{ .module = module, .type_name = name, .source_decl = .some(7) },
                 .kind = .nominal,
                 .args = Type.Span.empty(),
-                .backing = .{ .ty = backing, .use = .inspectable },
+                .backing = .some(.{ .ty = backing, .use = .inspectable }),
             } });
         }
     };
@@ -19146,7 +19146,7 @@ test "issue 12505 SpecConstr charges wide record update expansion to inline grow
         field.* = .{
             .name = try program.names.internRecordFieldLabel(name),
             .ty = u64_ty,
-            .default = null,
+            .default = .none,
         };
     }
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &fields) });
@@ -19480,13 +19480,13 @@ test "field access folding preserves shared residual suffix spans" {
 
     const leaf_ty = try program.types.add(.{ .primitive = .u8 });
     const inner_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = leaf_name, .ty = leaf_ty, .default = null },
+        .{ .name = leaf_name, .ty = leaf_ty, .default = .none },
     }) });
     const middle_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = middle_name, .ty = inner_ty, .default = null },
+        .{ .name = middle_name, .ty = inner_ty, .default = .none },
     }) });
     const outer_ty = try program.types.add(.{ .record = try program.types.addFields(&.{
-        .{ .name = outer_name, .ty = middle_ty, .default = null },
+        .{ .name = outer_name, .ty = middle_ty, .default = .none },
     }) });
 
     const leaf_local = try program.addLocal(@fromBackingInt(@intCast(1)), leaf_ty);
@@ -19945,14 +19945,14 @@ fn substituteNamedForTest(
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
-        .backing = .{ .ty = first_backing, .use = .inspectable },
+        .backing = .some(.{ .ty = first_backing, .use = .inspectable }),
     } });
     const second_ty = try program.types.add(.{ .named = .{
         .named_type = .{ .module = .{} },
         .def = def,
         .kind = .nominal,
         .args = Type.Span.empty(),
-        .backing = .{ .ty = second_backing, .use = .inspectable },
+        .backing = .some(.{ .ty = second_backing, .use = .inspectable }),
     } });
     const binder: check.CheckedBodies.BinderId = @fromBackingInt(@intCast(1));
     const first = try program.addLocalWithBinder(@fromBackingInt(@intCast(1)), first_ty, binder);
@@ -20048,7 +20048,7 @@ test "known match fold preserves absurd elimination of a structural product" {
     const empty_union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
     const field_name = try program.names.internRecordFieldLabel("impossible");
     const record_ty = try program.types.add(.{ .record = try program.types.addRecordFields(&program.names, &.{
-        .{ .name = field_name, .ty = empty_union_ty, .default = null },
+        .{ .name = field_name, .ty = empty_union_ty, .default = .none },
     }) });
     const impossible_local = try program.addLocal(@fromBackingInt(@intCast(1)), empty_union_ty);
     const impossible_expr = try program.addExpr(.{ .ty = empty_union_ty, .data = .{ .local = impossible_local } });

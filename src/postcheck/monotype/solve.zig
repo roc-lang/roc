@@ -125,8 +125,12 @@ pub const InstField = struct {
     /// on checked optional and undetermined fields; absent means `ty` itself.
     value_ty: MaybeNodeId = .none,
     kind: InstFieldKind = .sealed,
-    default: ?Type.FieldDefault,
+    default: Type.OptionalFieldDefault,
 };
+
+comptime {
+    std.debug.assert(@sizeOf(InstField) == 32);
+}
 
 /// Source of an unresolved instantiation-graph node. Sealing may default a
 /// checked variable, but a compiler-owned placeholder that survives to sealing
@@ -1075,10 +1079,10 @@ pub const InterfaceConstraints = struct {
                         }
                     },
                     .named => |named| {
-                        if (named.builtin_owner) |owner| if (static_dispatch.isIteratorOwner(owner)) return true;
+                        if (named.builtin_owner.get()) |owner| if (static_dispatch.isIteratorOwner(owner)) return true;
                         const args = self.types.span(named.args);
                         for (0..GuardedList.borrowLen(args)) |index| try pending.append(self.allocator, GuardedList.at(args, index));
-                        if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                        if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty);
                         const declared_fields = self.types.declaredFieldSpan(named.declared_order);
                         for (0..GuardedList.borrowLen(declared_fields)) |index| switch (GuardedList.at(declared_fields, index)) {
                             .named => {},
@@ -1179,6 +1183,7 @@ pub const InterfaceConstraints = struct {
             if (T == MaybeNodeId) return self.write(?NodeId, value.get());
             if (T == Type.MaybeTypeId) return self.write(?Type.TypeId, value.get());
             if (T == MaybeRelatedGroup) return self.write(?u32, value.get());
+            if (comptime collections.CompactOptionalPayload(T)) |Payload| return self.write(?Payload, value.get());
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
                     try self.write(field_type, @field(value, field_name));
@@ -1508,6 +1513,7 @@ pub const InterfaceConstraints = struct {
                 return;
             }
             if (T == MaybeNodeId) return collectCaptureRefs(allocator, ?NodeId, value.get(), out);
+            if (comptime collections.CompactOptionalPayload(T)) |Payload| return collectCaptureRefs(allocator, ?Payload, value.get(), out);
             switch (@typeInfo(T)) {
                 .@"struct" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| try collectCaptureRefs(allocator, field_type, @field(value, field_name), out),
                 .@"union" => |info| inline for (info.field_names, info.field_types) |field_name, field_type| {
@@ -1650,6 +1656,7 @@ pub const InterfaceConstraints = struct {
         ) Allocator.Error!void {
             if (T == NodeId) return try items.add(.{ .node = value });
             if (T == MaybeNodeId) return addScanLeaves(items, ?NodeId, value.get(), kinds);
+            if (comptime collections.CompactOptionalPayload(T)) |Payload| return addScanLeaves(items, ?Payload, value.get(), kinds);
             if (T == InstFieldKind) return switch (kinds) {
                 .neutral => {},
                 // Even a resolved field-kind cell still carries relation
@@ -1840,6 +1847,7 @@ pub const InterfaceConstraints = struct {
         if (T == MaybeNodeId) return .of(try mapValue(context, ?NodeId, value.get()));
         if (T == Type.MaybeTypeId) return .of(try mapValue(context, ?Type.TypeId, value.get()));
         if (T == MaybeRelatedGroup) return .of(try mapValue(context, ?u32, value.get()));
+        if (comptime collections.CompactOptionalPayload(T)) |Payload| return .of(try mapValue(context, ?Payload, value.get()));
         return switch (@typeInfo(T)) {
             .@"struct" => |info| blk: {
                 var result: T = undefined;
@@ -2067,7 +2075,7 @@ const GeneratedIteratorKey = struct {
             .named_kind = named.kind,
             .module = named.def.module,
             .type_name = named.def.type_name,
-            .source_decl = named.def.source_decl,
+            .source_decl = named.def.source_decl.get(),
             .callable_evidence = provenance.callable_evidence,
             .args = named.args,
         };
@@ -3028,10 +3036,10 @@ pub const InstGraph = struct {
     /// presence slot, while its codec operates on the explicit `value_ty`.
     pub fn codecFieldValueNode(self: *InstGraph, field: InstField) NodeId {
         switch (field.kind) {
-            .required, .optional, .undetermined => if (field.default != null) {
+            .required, .optional, .undetermined => if (field.default.get() != null) {
                 Common.invariant("non-defaulted codec field carried a default identity");
             },
-            .defaulted => |default| if (field.default == null or !std.meta.eql(field.default.?, default)) {
+            .defaulted => |default| if (field.default.get() == null or !std.meta.eql(field.default.get().?, default)) {
                 Common.invariant("defaulted codec field metadata disagreed with its field kind");
             },
             .sealed => Common.invariant("sealed record field reached graph-native codec planning"),
@@ -3119,7 +3127,7 @@ pub const InstGraph = struct {
         right: InstField,
     ) void {
         self.requireRelationProduction();
-        _ = self.unifyFieldKinds(left.kind, left.default, right.kind, right.default);
+        _ = self.unifyFieldKinds(left.kind, left.default.get(), right.kind, right.default.get());
     }
 
     pub fn registerRequestSourceInterface(
@@ -3179,7 +3187,7 @@ pub const InstGraph = struct {
                 .named_kind = public_named.kind,
                 .module = public_named.def.module,
                 .type_name = public_named.def.type_name,
-                .source_decl = public_named.def.source_decl,
+                .source_decl = public_named.def.source_decl.get(),
                 .callable_evidence = callable_evidence,
                 .args = &.{},
             },
@@ -3518,7 +3526,7 @@ pub const InstGraph = struct {
         if (source_named.args.len == 0) {
             Common.invariant("forced-dynamic iterator rewrite had no item argument");
         }
-        const topology = source_named.def.iterator_topology orelse
+        const topology = source_named.def.iterator_topology.get() orelse
             Common.invariant("forced-dynamic iterator rewrite lacked producer topology");
         const item_node = source_named.args[0];
         const dynamic_args = try self.arena().alloc(NodeId, 1);
@@ -3528,7 +3536,7 @@ pub const InstGraph = struct {
         def.iterator_representation = .forced_dynamic;
         def.iterator_kind = .forced_dynamic;
         def.iterator_depth = 0;
-        def.iterator_topology = topology;
+        def.iterator_topology = .some(topology);
         try self.setContent(node, try self.namedContent(.{
             .named_type = provenance.public_source.named_type,
             .def = def,
@@ -3837,7 +3845,7 @@ pub const InstGraph = struct {
             if (node != .named) return current;
             const named = node.named;
             if (named.kind != .alias) return current;
-            const backing = named.backing orelse return current;
+            const backing = named.backing.get() orelse return current;
             current = backing.ty;
         }
     }
@@ -3953,7 +3961,7 @@ pub const InstGraph = struct {
             switch (self.types.get(ty)) {
                 .tag_union => |tags| return GuardedList.borrowLen(self.types.tagSpan(tags)) == 0,
                 .named => |named| {
-                    const backing = named.backing orelse return false;
+                    const backing = named.backing.get() orelse return false;
                     if (backing.use != .inspectable) return false;
                     ty = backing.ty;
                 },
@@ -5993,9 +6001,9 @@ pub const InstGraph = struct {
                 .record => {
                     _ = self.unifyFieldKinds(
                         public_entry.kind,
-                        public_entry.default,
+                        public_entry.default.get(),
                         private_entry.kind,
-                        private_entry.default,
+                        private_entry.default.get(),
                     );
                     try self.relateOpaqueChild(
                         public_entry.value_ty.get() orelse public_entry.ty,
@@ -6711,7 +6719,7 @@ pub const InstGraph = struct {
     /// read through any named backing its receiver specializes to.
     pub fn optionalRecordFieldNodes(self: *InstGraph, raw_record: NodeId, name: names.RecordFieldNameId) Allocator.Error!OptionalFieldAccessNodes {
         const field = try self.recordFieldWithAccess(raw_record, name, .runtime_layout, "optional record field access");
-        _ = self.unifyFieldKinds(field.kind, field.default, .optional, null);
+        _ = self.unifyFieldKinds(field.kind, field.default.get(), .optional, null);
         return .{
             .slot = self.find(field.ty),
             .value = self.find(field.value_ty.get() orelse
@@ -6762,7 +6770,7 @@ pub const InstGraph = struct {
     pub fn recordOmittedFieldKindOf(self: *InstGraph, field: InstField) ResolvedFieldKind {
         if (self.resolvedFieldKind(field.kind)) |resolved| return resolved;
         return switch (field.kind) {
-            .sealed => if (field.default) |default|
+            .sealed => if (field.default.get()) |default|
                 .{ .defaulted = default }
             else if (field.value_ty != .none)
                 .optional
@@ -7344,7 +7352,7 @@ pub const InstGraph = struct {
         return switch (node_content) {
             .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
             .leaf => |leaf| switch (self.types.get(leaf.ty)) {
-                .named => |named| if (named.backing) |backing| backing.authority == .generated_private else false,
+                .named => |named| if (named.backing.get()) |backing| backing.authority == .generated_private else false,
                 .primitive, .zst, .hole, .erased, .func, .record, .tuple, .tag_union, .list, .box => false,
             },
             .redirect, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst, .hole => false,
@@ -8426,22 +8434,22 @@ pub const InstGraph = struct {
                 const right_field = flat_right.fields[right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
-                    left_field.default,
+                    left_field.default.get(),
                     right_field.kind,
-                    right_field.default,
+                    right_field.default.get(),
                 );
                 try pushPair(pending, self.allocator, left_field.value_ty.get() orelse left_field.ty, right_field.value_ty.get() orelse right_field.ty, row_width);
                 try pushPair(pending, self.allocator, left_field.ty, right_field.ty, row_width);
                 const resolved_default = if (self.resolvedFieldKind(merged_kind)) |resolved|
                     resolved.defaultIdentity()
                 else
-                    left_field.default orelse right_field.default;
+                    left_field.default.get() orelse right_field.default.get();
                 try merged.append(row_allocator, .{
                     .name = left_field.name,
                     .ty = left_field.ty,
                     .value_ty = .of(left_field.value_ty.get() orelse right_field.value_ty.get()),
                     .kind = merged_kind,
-                    .default = resolved_default,
+                    .default = .of(resolved_default),
                 });
                 shared = true;
             }
@@ -8587,7 +8595,7 @@ pub const InstGraph = struct {
             },
             .named => |named| {
                 try appendGuardedTypes(allocator, out, types.span(named.args));
-                if (named.backing) |backing| try out.append(allocator, .{ .ty = backing.ty, .owned_backing = true });
+                if (named.backing.get()) |backing| try out.append(allocator, .{ .ty = backing.ty, .owned_backing = true });
                 const declared = types.declaredFieldSpan(named.declared_order);
                 for (0..declared.len) |index| switch (GuardedList.at(declared, index)) {
                     .named => {},
@@ -8659,7 +8667,7 @@ pub const InstGraph = struct {
                         .value_ty = .of(value_ty),
                         .kind = if (value_ty != null)
                             .optional
-                        else if (field.default) |default|
+                        else if (field.default.get()) |default|
                             .{ .defaulted = default }
                         else
                             .required,
@@ -8673,7 +8681,7 @@ pub const InstGraph = struct {
             },
             .named => |named| blk: {
                 const args = try take.slice(self, nodes, &next, types.span(named.args).len);
-                const backing: ?InstBacking = if (named.backing) |backing| backing_blk: {
+                const backing: ?InstBacking = if (named.backing.get()) |backing| backing_blk: {
                     next += 1;
                     break :backing_blk .{
                         .node = nodes[next - 1],
@@ -8699,7 +8707,7 @@ pub const InstGraph = struct {
                     .named_type = named.named_type,
                     .def = named.def,
                     .kind = named.kind,
-                    .builtin_owner = named.builtin_owner,
+                    .builtin_owner = named.builtin_owner.get(),
                     .args = args,
                     .backing = backing,
                     .declared_order = declared_order,
@@ -8881,7 +8889,7 @@ pub const InstGraph = struct {
                 },
                 .named => |named| {
                     try self.appendTypeSpan(&pending, named.args);
-                    if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
+                    if (named.backing.get()) |backing| try pending.append(self.allocator, backing.ty);
                     const declared_fields = self.types.declaredFieldSpan(named.declared_order);
                     for (0..declared_fields.len) |index| switch (GuardedList.at(declared_fields, index)) {
                         .named => {},
@@ -9062,7 +9070,7 @@ const TypeUninhabitedScan = struct {
         const types = self.graph.types;
         const expansion: Eval.Expansion = switch (types.get(ty)) {
             .named => |named| blk: {
-                const backing = named.backing orelse break :blk .{ .value = self.policy == .may };
+                const backing = named.backing.get() orelse break :blk .{ .value = self.policy == .may };
                 if (self.policy == .inspectable_only and backing.use != .inspectable) break :blk .{ .value = false };
                 try items.add(backing.ty);
                 break :blk .{ .group = .any };
@@ -9663,7 +9671,7 @@ pub const GraphTypeFinals = struct {
             },
             .named => |named| {
                 try self.addTypeSpanParts(build, &start, named.args);
-                if (named.backing) |backing| try self.addSealPart(build, .{ .ty = backing.ty });
+                if (named.backing.get()) |backing| try self.addSealPart(build, .{ .ty = backing.ty });
                 const declared = self.graph.types.declaredFieldSpan(named.declared_order);
                 for (0..GuardedList.borrowLen(declared)) |index| switch (GuardedList.at(declared, index)) {
                     .named => {},
@@ -9743,9 +9751,9 @@ pub const GraphTypeFinals = struct {
                     .named_type = named.named_type,
                     .def = named.def,
                     .kind = named.kind,
-                    .builtin_owner = named.builtin_owner,
+                    .builtin_owner = .of(named.builtin_owner),
                     .args = args,
-                    .backing = backing,
+                    .backing = .of(backing),
                     .declared_order = try self.finishDeclaredFields(named.declared_order, reader),
                 } };
             },
@@ -9788,14 +9796,14 @@ pub const GraphTypeFinals = struct {
                         .ty = source_ty,
                         .value_ty = .of(source_ty),
                         .kind_state = .undetermined,
-                        .default = null,
+                        .default = .none,
                     },
                     .specialization_snapshot => .{
                         .name = field.name,
                         .ty = source_ty,
                         .value_ty = .none,
                         .kind_state = .resolved,
-                        .default = null,
+                        .default = .none,
                     },
                     .final, .settled_interface, .active_snapshot => Common.invariant("unresolved record field kind reached Monotype sealing"),
                 };
@@ -9849,7 +9857,7 @@ pub const GraphTypeFinals = struct {
             },
             .named => |named| blk: {
                 const args = reader.nextSpan();
-                const backing: ?Type.NamedBacking = if (named.backing) |backing| .{
+                const backing: ?Type.NamedBacking = if (named.backing.get()) |backing| .{
                     .ty = reader.next(),
                     .use = backing.use,
                     .authority = backing.authority,
@@ -9869,7 +9877,7 @@ pub const GraphTypeFinals = struct {
                     .kind = named.kind,
                     .builtin_owner = named.builtin_owner,
                     .args = args,
-                    .backing = backing,
+                    .backing = .of(backing),
                     .declared_order = declared_order,
                 } };
             },
@@ -10222,15 +10230,15 @@ const OpenFunctionInterfaceShapeWriter = struct {
 
     fn writeTypeDef(self: *OpenFunctionInterfaceShapeWriter, def: Type.TypeDef) Allocator.Error!void {
         try self.writeBytes(self.graph.name_store.moduleIdentityBytes(def.module));
-        try self.writeOptionalU32(def.source_decl);
-        if (def.source_decl == null) {
+        try self.writeOptionalU32(def.source_decl.get());
+        if (def.source_decl.get() == null) {
             try self.writeBytes(self.graph.name_store.typeNameText(def.type_name));
         }
         try self.writeOptionalDigest(def.generated);
         try self.writeBytes(@tagName(def.iterator_representation));
         try self.writeBytes(@tagName(def.iterator_kind));
         try self.writeU8(def.iterator_depth);
-        try self.writeOptionalIteratorTopology(def.iterator_topology);
+        try self.writeOptionalIteratorTopology(def.iterator_topology.get());
     }
 
     fn writeOptionalIteratorTopology(
@@ -10406,7 +10414,7 @@ fn instFieldSliceEql(left: []const InstField, right: []const InstField) bool {
     for (left, right) |left_field, right_field| {
         if (left_field.name != right_field.name or left_field.ty != right_field.ty or
             left_field.value_ty != right_field.value_ty or !std.meta.eql(left_field.kind, right_field.kind)) return false;
-        if (!instFieldDefaultEql(left_field.default, right_field.default)) return false;
+        if (!instFieldDefaultEql(left_field.default.get(), right_field.default.get())) return false;
     }
     return true;
 }
@@ -11191,7 +11199,7 @@ test "provisional Monotype view preserves an undetermined record field" {
         .ty = slot,
         .value_ty = .of(value_ty),
         .kind = .{ .undetermined = kind },
-        .default = null,
+        .default = .none,
     };
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
@@ -11220,7 +11228,7 @@ test "provisional Monotype views share resolved argument subtrees" {
         .fields = try graph.arena().dupe(InstField, &.{.{
             .name = try name_store.internRecordFieldLabel("value"),
             .ty = value,
-            .default = null,
+            .default = .none,
         }}),
         .ext = try graph.newNode(.empty_record),
     } });
@@ -11256,7 +11264,7 @@ test "retained provisional view preserves content across later graph refinement"
             .ty = slot,
             .value_ty = .of(value),
             .kind = .{ .undetermined = kind },
-            .default = null,
+            .default = .none,
         }}),
         .ext = try graph.newNode(.empty_record),
     } });
@@ -11301,7 +11309,7 @@ test "issue 11303: reading a field value preserves its undetermined storage unti
             .ty = slot,
             .value_ty = .of(value),
             .kind = .{ .undetermined = kind },
-            .default = null,
+            .default = .none,
         }}),
         .ext = try graph.newNode(.empty_record),
     } });
@@ -11359,7 +11367,7 @@ test "issue 11303: field value reads preserve optional tagged storage and sealed
                 .ty = field_slot,
                 .value_ty = .of(if (case.optional) value else null),
                 .kind = case.kind,
-                .default = null,
+                .default = .none,
             }}),
             .ext = try graph.newNode(.empty_record),
         } });
@@ -11399,7 +11407,7 @@ test "record field node carries contextual row evidence into receiver" {
     } });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = field_fn, .default = null };
+    fields[0] = .{ .name = field_name, .ty = field_fn, .default = .none };
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -11454,7 +11462,7 @@ test "graph-native child reads retain live relations until final sealing" {
 
     const field_name = try name_store.internRecordFieldLabel("run");
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = function, .default = null };
+    fields[0] = .{ .name = field_name, .ty = function, .default = .none };
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -11522,7 +11530,7 @@ test "record field graph access distinguishes inspection from runtime constructi
     const field_name = try name_store.internRecordFieldLabel("private");
     const field_ty = try graph.newNode(.{ .primitive = .u8 });
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = field_ty, .default = null };
+    fields[0] = .{ .name = field_name, .ty = field_ty, .default = .none };
     const backing = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -11627,7 +11635,7 @@ test "alias unification does not make the alias its own backing" {
     const alias_content = type_store.get(alias_ty);
     if (alias_content != .named) return error.TestExpectedEqual;
     const named = alias_content.named;
-    const named_backing = named.backing orelse return error.TestExpectedEqual;
+    const named_backing = named.backing.get() orelse return error.TestExpectedEqual;
     try std.testing.expect(named_backing.ty != alias_ty);
 }
 
@@ -11647,7 +11655,7 @@ test "final sealing does not mutate an earlier active snapshot" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = .none };
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -11693,7 +11701,7 @@ test "final sealing follows active snapshots stored only in field value types" {
             .ty = slot_ty,
             .value_ty = .of(value_snapshot),
             .kind_state = .resolved,
-            .default = null,
+            .default = .none,
         },
     }) });
 
@@ -11756,7 +11764,7 @@ test "final graph function recursively replaces active snapshots" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = .none };
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -11801,7 +11809,7 @@ test "final sealed graph node does not allocate an active snapshot" {
     const a_ty = try graph.newNode(.{ .primitive = .u64 });
 
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = a_name, .ty = a_ty, .default = null };
+    fields[0] = .{ .name = a_name, .ty = a_ty, .default = .none };
     const ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) });
     const row = try graph.newNode(.{ .record = .{
         .fields = fields,
@@ -12098,7 +12106,7 @@ test "generated-private containment follows optional field value types" {
         .ty = slot,
         .value_ty = .of(private_value),
         .kind = .optional,
-        .default = null,
+        .default = .none,
     }});
     const record = try graph.newNode(.{ .record = .{
         .fields = fields,
@@ -12192,7 +12200,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                 2 => try self.graph.newNode(.{ .box = leaf }),
                 3 => try self.graph.newNode(.{ .tuple = try self.graph.arena().dupe(NodeId, &.{ u64_node, leaf }) }),
                 4 => blk: {
-                    const fields = try self.graph.arena().dupe(InstField, &.{.{ .name = self.field_name, .ty = leaf, .default = null }});
+                    const fields = try self.graph.arena().dupe(InstField, &.{.{ .name = self.field_name, .ty = leaf, .default = .none }});
                     break :blk try self.graph.newNode(.{ .record = .{
                         .fields = fields,
                         .ext = try self.graph.newNode(.empty_record),
@@ -12240,7 +12248,7 @@ test "iterator-interface containment agrees between Monotype and graph" {
                         .ty = u64_node,
                         .value_ty = .of(leaf),
                         .kind = .optional,
-                        .default = null,
+                        .default = .none,
                     }});
                     break :blk try self.graph.newNode(.{ .record = .{
                         .fields = fields,
@@ -12344,7 +12352,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
             .name = a,
             .ty = u64_node,
             .kind = .required,
-            .default = null,
+            .default = .none,
         }}),
         .ext = left_ext,
     } });
@@ -12353,7 +12361,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
         .ty = u64_node,
         .value_ty = .of(u64_node),
         .kind = .optional,
-        .default = null,
+        .default = .none,
     }};
     const right = try graph.newNode(.{ .record = .{
         .fields = try graph.arena().dupe(InstField, &.{
@@ -12361,7 +12369,7 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
                 .name = a,
                 .ty = u64_node,
                 .kind = .required,
-                .default = null,
+                .default = .none,
             },
             right_only[0],
         }),
@@ -12378,14 +12386,14 @@ test "construction row relation absorbs only explicit optional or defaulted fiel
         .name = b,
         .ty = u64_node,
         .kind = .{ .defaulted = default_identity },
-        .default = default_identity,
+        .default = .some(default_identity),
     }};
     try std.testing.expect(graph.closedRecordAbsorbsFields(left_ext, &defaulted_only, .construction));
     const required_only = [_]InstField{.{
         .name = b,
         .ty = u64_node,
         .kind = .required,
-        .default = null,
+        .default = .none,
     }};
     try std.testing.expect(!graph.closedRecordAbsorbsFields(left_ext, &required_only, .construction));
 
@@ -12477,7 +12485,7 @@ test "independent closed record-row imports have distinct solver nodes" {
     const requested_fields = try type_store.addRecordFields(&name_store, &.{.{
         .name = value,
         .ty = u64_ty,
-        .default = null,
+        .default = .none,
     }});
     const requested = try type_store.add(.{ .record = requested_fields });
 
@@ -12492,7 +12500,7 @@ test "independent closed record-row imports have distinct solver nodes" {
     const additional_fields = [_]InstField{.{
         .name = extra,
         .ty = try graph.newNode(.{ .primitive = .u64 }),
-        .default = null,
+        .default = .none,
     }};
     try std.testing.expect(graph.rowAdditionConflicts(imported.ext, additional_fields.len, .record));
     try std.testing.expectEqual(InstNode.empty_record, (try graph.content(imported.ext)));
@@ -12663,7 +12671,7 @@ test "opaque interface relation preserves distinct public and generated-private 
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const fields = try graph.arena().alloc(InstField, 1);
-    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = null };
+    fields[0] = .{ .name = field_name, .ty = try graph.newNode(.{ .unresolved = InstVariable.checkedVariable(null, null) }), .default = .none };
     const structural_record = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.{ .unresolved = InstVariable.row(.empty_record) }),
@@ -12723,14 +12731,14 @@ test "construction selection preserves private evidence while absorbing optional
                 .name = evidence_field,
                 .ty = public_evidence,
                 .kind = .required,
-                .default = null,
+                .default = .none,
             },
             .{
                 .name = optional_field,
                 .ty = optional_ty,
                 .value_ty = .of(optional_ty),
                 .kind = .optional,
-                .default = null,
+                .default = .none,
             },
         }),
         .ext = try graph.newNode(.empty_record),
@@ -12740,7 +12748,7 @@ test "construction selection preserves private evidence while absorbing optional
             .name = evidence_field,
             .ty = private_evidence,
             .kind = .required,
-            .default = null,
+            .default = .none,
         }}),
         .ext = try graph.newNode(.empty_record),
     } });
@@ -12770,7 +12778,7 @@ test "named type relation to its own backing preserves the backing edge" {
     const type_name = try name_store.internTypeName("State");
     const field_name = try name_store.internRecordFieldLabel("value");
     const field_ty = try graph.newNode(.{ .primitive = .u64 });
-    const fields = try graph.arena().dupe(InstField, &.{.{ .name = field_name, .ty = field_ty, .default = null }});
+    const fields = try graph.arena().dupe(InstField, &.{.{ .name = field_name, .ty = field_ty, .default = .none }});
     const backing = try graph.newNode(.{ .record = .{
         .fields = fields,
         .ext = try graph.newNode(.empty_record),
@@ -12813,8 +12821,8 @@ test "record row follows an inspectable nominal record extension" {
     const f32_node = try graph.newNode(.{ .primitive = .f32 });
     const empty = try graph.newNode(.empty_record);
     const backing_fields = try graph.arena().dupe(InstField, &.{
-        .{ .name = x, .ty = f32_node, .default = null },
-        .{ .name = y, .ty = f32_node, .default = null },
+        .{ .name = x, .ty = f32_node, .default = .none },
+        .{ .name = y, .ty = f32_node, .default = .none },
     });
     const backing = try graph.newNode(.{ .record = .{ .fields = backing_fields, .ext = empty } });
     const nominal = try graph.newNode(try graph.namedContent(.{
@@ -12825,7 +12833,7 @@ test "record row follows an inspectable nominal record extension" {
         .args = try graph.arena().alloc(NodeId, 0),
         .backing = .{ .node = backing, .use = .inspectable },
     }));
-    const outer_fields = try graph.arena().dupe(InstField, &.{.{ .name = z, .ty = f32_node, .default = null }});
+    const outer_fields = try graph.arena().dupe(InstField, &.{.{ .name = z, .ty = f32_node, .default = .none }});
     const outer = try graph.newNode(.{ .record = .{ .fields = outer_fields, .ext = nominal } });
 
     const flattened = try graph.flattenRecordRow(outer);
@@ -13331,9 +13339,9 @@ test "generated iterator identity uses current graph content rather than an impo
         .named_type = .{ .module = .{} },
         .def = .{ .module = module, .type_name = type_name, .iterator_representation = .minted, .iterator_kind = .list, .iterator_depth = 1 },
         .kind = .@"opaque",
-        .builtin_owner = .iter,
+        .builtin_owner = .some(.iter),
         .args = try type_store.addSpan(&.{item_ty}),
-        .backing = .{ .ty = backing_ty, .use = .runtime_layout_only, .authority = .generated_private },
+        .backing = .some(.{ .ty = backing_ty, .use = .runtime_layout_only, .authority = .generated_private }),
     } });
     var identities: [3]names.TypeDigest = undefined;
     for (&identities, 0..) |*identity, index| {
@@ -13399,7 +13407,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
     const public_def: Type.TypeDef = .{
         .module = module_identity,
         .type_name = type_name,
-        .iterator_topology = .{
+        .iterator_topology = .some(.{
             .len_field = try name_store.internRecordFieldLabel("len"),
             .step_field = try name_store.internRecordFieldLabel("step"),
             .ok_tag = try name_store.internTagLabel("Ok"),
@@ -13410,7 +13418,7 @@ test "recursive join keeps graph-owned iterator provenance over a finished Monot
             .skip_tag = try name_store.internTagLabel("Skip"),
             .item_field = try name_store.internRecordFieldLabel("item"),
             .rest_field = try name_store.internRecordFieldLabel("rest"),
-        },
+        }),
     };
     const item = try graph.newNode(.{ .primitive = .u64 });
     const public_backing = try graph.newNode(.empty_record);
@@ -14126,9 +14134,9 @@ test "issue 11767: an imported nominal owns its backing apart from an equal stru
         .named_type = .{ .module = .{} },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
-        .builtin_owner = null,
+        .builtin_owner = .none,
         .args = try type_store.addSpan(&.{str_ty}),
-        .backing = .{ .ty = backing_ty, .use = .inspectable },
+        .backing = .some(.{ .ty = backing_ty, .use = .inspectable }),
     } });
 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
@@ -14235,7 +14243,7 @@ fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUne
         .def = .{
             .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
             .type_name = try name_store.internTypeName("Iter"),
-            .source_decl = 1,
+            .source_decl = .some(1),
         },
         .kind = .@"opaque",
         .builtin_owner = .iter,
@@ -14453,7 +14461,7 @@ test "generated iterator index preserves evidence, argument classes, unions and 
             generated.generated_iterator = try graph.generatedIterator(.{ .callable_evidence = evidence, .public_source = generated.generated_iterator.?.public_source });
             const with_evidence = try graph.newNode(try graph.namedContent(generated));
             try std.testing.expectEqual(with_evidence, (try graph.findGeneratedIterator(public, .list, &.{component}, evidence)).?);
-            generated.def.source_decl = 17;
+            generated.def.source_decl = .some(17);
             const other_decl = try graph.newNode(try graph.namedContent(generated));
             try std.testing.expectEqual(other_decl, (try graph.findGeneratedIterator(other_decl, .list, &.{component}, evidence)).?);
             try std.testing.expectEqual(with_evidence, (try graph.findGeneratedIterator(public, .list, &.{component}, evidence)).?);
@@ -14752,7 +14760,7 @@ test "interface constraints preserve recursive and field-presence topology" {
     const row = try graph.newNode(.{ .unresolved = InstVariable.placeholder() });
     const field = try name_store.internRecordFieldLabel("value");
     try graph.setContent(row, .{ .record = .{
-        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = slot, .value_ty = .of(value), .kind = .{ .undetermined = kind }, .default = null }}),
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = slot, .value_ty = .of(value), .kind = .{ .undetermined = kind }, .default = .none }}),
         .ext = try graph.newNode(.empty_record),
     } });
     try graph.setContent(value, .{ .list = row });
@@ -14871,7 +14879,7 @@ test "interface constraints distinguish variable sharing defaults and field-kind
     graph.registerUndeterminedFieldKindCells(kind, str, str);
     graph.constrainUndeterminedFieldKind(kind, .required);
     const row = try graph.newNode(.{ .record = .{
-        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = str, .value_ty = .of(str), .kind = .{ .undetermined = kind }, .default = null }}),
+        .fields = try graph.arena().dupe(InstField, &.{.{ .name = field, .ty = str, .value_ty = .of(str), .kind = .{ .undetermined = kind }, .default = .none }}),
         .ext = try graph.newNode(.empty_record),
     } });
     const required = try InterfaceConstraints.capture(graph, graph.arena(), &.{row});

@@ -2618,7 +2618,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 .erased, .func => return true,
                 .named => |named| {
                     try stack.appendSlice(allocator, types.span(named.args));
-                    if (named.backing) |backing| try stack.append(allocator, backing.ty);
+                    if (named.backing.get()) |backing| try stack.append(allocator, backing.ty);
                 },
                 .record => |span| for (types.fieldSpan(span)) |field| try stack.append(allocator, field.ty),
                 .tuple => |span| try stack.appendSlice(allocator, types.span(span)),
@@ -2689,7 +2689,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                 },
                 .named => |named| {
                     try stack.appendSlice(allocator, types.span(named.args));
-                    if (named.backing) |backing| try stack.append(allocator, backing.ty);
+                    if (named.backing.get()) |backing| try stack.append(allocator, backing.ty);
                 },
                 .record => |span| for (types.fieldSpan(span)) |field| try stack.append(allocator, field.ty),
                 .tuple => |span| try stack.appendSlice(allocator, types.span(span)),
@@ -2724,7 +2724,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
             },
             .named => |named| {
                 try w.print("{s}#{x}", .{ mono.names.typeNameText(named.def.type_name), mono.names.moduleIdentityBytes(named.def.module)[0..3] });
-                if (named.def.source_decl) |decl| try w.print("@{d}", .{decl});
+                if (named.def.source_decl.get()) |decl| try w.print("@{d}", .{decl});
                 try w.print("/{s}", .{@tagName(named.kind)});
                 const args = types.span(named.args);
                 if (args.len != 0) {
@@ -2735,7 +2735,7 @@ const SpecCensus = if (!base.dev_diagnostics.available) struct {
                     }
                     try w.writeAll(">");
                 }
-                if (named.backing) |backing| {
+                if (named.backing.get()) |backing| {
                     try w.writeAll("{");
                     try renderType(w, allocator, mono, types, backing.ty, depth + 1);
                     try w.writeAll("}");

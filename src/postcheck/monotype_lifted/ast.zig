@@ -2041,7 +2041,7 @@ pub fn forEachBoundLocal(allocator: std.mem.Allocator, program: *const Program, 
                 .str_pattern => |str| {
                     const steps = program.strPatternStepSpan(str.steps);
                     for (0..steps.len) |index| {
-                        if (GuardedList.at(steps, index).capture) |capture| {
+                        if (GuardedList.at(steps, index).capture.get()) |capture| {
                             try work.append(allocator, .{ .pat = capture });
                         }
                     }

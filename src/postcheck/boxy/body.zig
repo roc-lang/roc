@@ -749,7 +749,7 @@ pub const Builder = struct {
         if (self.product_shapes.get(ty)) |shape| return shape;
         const structural = try self.structuralType(ty);
         switch (self.program.store.get(structural)) {
-            .record => |record| if (record.ext != null) return .none,
+            .record => |record| if (record.ext != .none) return .none,
             .tuple => {},
             .primitive, .empty_record, .tag_union, .list, .box, .nominal, .function, .variable => return .none,
         }
@@ -1853,7 +1853,7 @@ pub const Builder = struct {
                 .nominal => try children.append(self.allocator, try self.program.converter().backing(frame.ty)),
                 .tuple => |items| try children.appendSlice(self.allocator, store.span(items)),
                 .record => |record| {
-                    if (record.ext != null) invariant("a hosted declaration's record row is closed, as checking requires");
+                    if (record.ext != .none) invariant("a hosted declaration's record row is closed, as checking requires");
                     const storage = try self.program.layouts.recordStorage(record);
                     defer self.allocator.free(storage);
                     try children.appendSlice(self.allocator, storage);
@@ -1886,7 +1886,7 @@ pub const Builder = struct {
                 .record => |record| blk: {
                     const fields = try self.allocator.alloc(layout.StructField, child_layouts.len);
                     defer self.allocator.free(fields);
-                    const declared = record.declared orelse {
+                    const declared = record.declared.get() orelse {
                         for (fields, child_layouts, 0..) |*field, child_layout, index| field.* = .{ .index = @intCast(index), .layout = child_layout };
                         break :blk try layouts.putStructFields(fields);
                     };
@@ -7551,7 +7551,7 @@ pub const Builder = struct {
                 .tuple => |range| try stack.appendSlice(self.allocator, const_types.typeSpan(range)),
                 .record => |range| for (const_types.fieldSpan(range)) |field| {
                     try stack.append(self.allocator, field.ty);
-                    if (field.value_ty) |value_ty| try stack.append(self.allocator, value_ty);
+                    if (field.value_ty.get()) |value_ty| try stack.append(self.allocator, value_ty);
                 },
                 .tag_union => |range| for (const_types.tagSpan(range)) |tag| try stack.appendSlice(self.allocator, const_types.typeSpan(tag.payloads)),
                 .func => |func| {
@@ -7586,7 +7586,7 @@ pub const Builder = struct {
                     .tuple => |range| for (const_types.typeSpan(range)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false }),
                     .record => |range| for (const_types.fieldSpan(range)) |field| {
                         try stack.append(self.allocator, .{ .id = field.ty, .expanded = false });
-                        if (field.value_ty) |value_ty| try stack.append(self.allocator, .{ .id = value_ty, .expanded = false });
+                        if (field.value_ty.get()) |value_ty| try stack.append(self.allocator, .{ .id = value_ty, .expanded = false });
                     },
                     .tag_union => |range| for (const_types.tagSpan(range)) |tag| {
                         for (const_types.typeSpan(tag.payloads)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
@@ -7599,7 +7599,7 @@ pub const Builder = struct {
                         for (const_types.typeSpan(named.args)) |child| try stack.append(self.allocator, .{ .id = child, .expanded = false });
                         // A stored alias is its backing.
                         if (named.kind == .alias) {
-                            const backing = named.backing orelse invariant("a stored alias has no backing type");
+                            const backing = named.backing.get() orelse invariant("a stored alias has no backing type");
                             try stack.append(self.allocator, .{ .id = backing.ty, .expanded = false });
                         }
                     },
@@ -7625,7 +7625,7 @@ pub const Builder = struct {
                         // An optional field is stored as its presence slot
                         // over the value type; a defaulted field is stored
                         // inline like a required one.
-                        out.* = if (field.value_ty) |value_ty|
+                        out.* = if (field.value_ty.get()) |value_ty|
                             .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(value_ty).?, .kind = .presence_slot }
                         else
                             .{ .name = try store.internName(names.recordFieldLabelText(field.name)), .ty = done.get(field.ty).?, .kind = .inline_slot };
@@ -7671,12 +7671,12 @@ pub const Builder = struct {
                 // store of another module: the program a value was evaluated
                 // in need not be the one restoring it.
                 .named => |named| blk: {
-                    if (named.kind == .alias) break :blk done.get(named.backing.?.ty).?;
+                    if (named.kind == .alias) break :blk done.get(named.backing.get().?.ty).?;
                     if (named.def.generated != null) invariant("a stored type names a generated nominal, which only specialization mints");
                     const identity = names.moduleIdentityBytes(named.def.module).*;
                     const declaring = self.program.modules.by_identity.get(identity) orelse
                         invariant("a stored type's declaring module is not in this lowering");
-                    const source_decl = named.def.source_decl orelse invariant("a stored nominal type names no declaring statement");
+                    const source_decl = named.def.source_decl.get() orelse invariant("a stored nominal type names no declaring statement");
                     const view = self.program.module(declaring);
                     const declaration_id = try self.program.store.declarationBySourceDecl(view, source_decl) orelse
                         invariant("a stored type names a declaration its module does not make");
@@ -8107,7 +8107,7 @@ pub const Builder = struct {
                     try writer.print("{s}#{s}: ", .{ store.nameText(field.name), @tagName(field.kind) });
                     try self.debugTypeText(field.ty, writer, depth + 1);
                 }
-                if (record.ext) |ext| {
+                if (record.ext.get()) |ext| {
                     try writer.writeAll(" | ");
                     try self.debugTypeText(ext, writer, depth + 1);
                 }
@@ -9000,7 +9000,7 @@ pub const Builder = struct {
         if (update_base) |base_value| {
             // A record of an open row takes the fields its update names and
             // the rest of its base's, which only its descriptor lists.
-            if (record_ty.ext != null) {
+            if (record_ty.ext != .none) {
                 var names: std.ArrayList(types.NameId) = .empty;
                 defer names.deinit(self.allocator);
                 var updated: std.ArrayList(LocalId) = .empty;
@@ -9042,7 +9042,7 @@ pub const Builder = struct {
                 if (base_index) |index| {
                     slot.* = .some(try self.readField(base_ty, base_value, @intCast(index), storage));
                 } else {
-                    if (base_record.ext == null) invariant("a record update's field is absent from its base");
+                    if (base_record.ext == .none) invariant("a record update's field is absent from its base");
                     const local = try self.localOf(storage, .view);
                     try self.emitDyn(local, .{ .field_addr = .{ .base = base_value, .desc = try self.descOf(base_ty), .field_index = try self.fieldIndex(base_ty, field.name) } });
                     slot.* = .some(local);
@@ -9516,7 +9516,7 @@ pub const Builder = struct {
                         } else {
                             // A field of an open row's remainder: only the
                             // record's descriptor knows where it is.
-                            if (record.ext == null) invariant("a record pattern's field is absent from its type");
+                            if (record.ext == .none) invariant("a record pattern's field is absent from its type");
                             const field_ty = try self.patternType(sub);
                             const local = try self.localOf(field_ty, .view);
                             try self.emitDyn(local, .{ .field_addr = .{ .base = item.value, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
@@ -9750,7 +9750,7 @@ pub const Builder = struct {
                 .optional => try self.program.layouts.presenceSlot(field_ty),
             };
             var stored: LocalId = undefined;
-            if (record.ext != null and position == null) {
+            if (record.ext != .none and position == null) {
                 // A field of an open row's remainder: only the record's
                 // descriptor knows where it is.
                 stored = try self.localOf(slot_ty, .view);
@@ -9854,7 +9854,7 @@ pub const Builder = struct {
         // A field of an open row ranks among the remainder's fields too, so
         // its position is the instantiation's.
         switch (self.program.store.get(try self.structuralType(ty))) {
-            .record => |record| if (record.ext != null) {
+            .record => |record| if (record.ext != .none) {
                 const name = self.program.store.fieldSpan(record.fields)[field_index].name;
                 return try self.emitDyn(target, .{ .field_addr = .{ .base = base_local, .desc = try self.descOf(ty), .field_index = try self.fieldIndex(ty, name) } });
             },

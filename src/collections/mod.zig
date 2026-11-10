@@ -70,6 +70,14 @@ pub const OptionalIndexColumn = @import("OptionalIndexColumn.zig").OptionalIndex
 pub const OptionalId = @import("optional_id.zig").OptionalId;
 /// Compact optional values for a private one-based ID domain.
 pub const ZeroSentinelId = @import("optional_id.zig").ZeroSentinelId;
+/// An optional raw `u32` in four bytes.
+pub const OptionalU32 = @import("optional_id.zig").OptionalU32;
+/// An optional small enum in one byte.
+pub const OptionalEnum = @import("optional_id.zig").OptionalEnum;
+/// An optional struct at the struct's own size, keyed by one biased field.
+pub const OptionalStruct = @import("optional_id.zig").OptionalStruct;
+/// The payload a compact optional form stores, for reflective walkers.
+pub const CompactOptionalPayload = @import("optional_id.zig").CompactOptionalPayload;
 /// Optional physical indices for stores that leave slot zero unused.
 pub const ZeroSentinelIndexColumn = @import("OptionalIndexColumn.zig").ZeroSentinelIndexColumn;
 /// Reset-many scratch keyed by epoch stamps.
