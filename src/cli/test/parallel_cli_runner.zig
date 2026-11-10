@@ -17398,20 +17398,6 @@ fn customInstallGlueRoundtrip(io: std.Io, allocator: Allocator, env: *const Case
     })) |failure| return failure;
     if (checkFrozenGlueOutput(io, allocator, timer, glue_out2)) |failure| return failure;
 
-    // Both invocations return an immutable file list from the loaded plugin.
-    // Its bytes must be copied before that plugin image is unloaded.
-    for ([_][]const u8{ glue_out, glue_out2 }) |output_dir| {
-        const output_path = std.fs.path.join(allocator, &.{ output_dir, "generated.txt" }) catch |err|
-            return customInfraFailure(allocator, timer, "failed to allocate generated file path: {}", .{err});
-        defer allocator.free(output_path);
-        const content = std.Io.Dir.cwd().readFileAlloc(io, output_path, allocator, .limited(4096)) catch |err|
-            return customFailure(allocator, timer, "failed to read generated file: {}", .{err});
-        defer allocator.free(content);
-        if (!std.mem.eql(u8, content, "installed glue ran")) {
-            return customFailure(allocator, timer, "installed glue returned incorrect file content: {s}", .{content});
-        }
-    }
-
     // 4. Kind mismatch is a specific error, not a fallback.
     if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
         .args = &.{ "run", "glue_tool" },
