@@ -5415,6 +5415,37 @@ Builtin :: [].{
 			Err(NotFound)
 		}
 
+		## Find the partition point of a list partitioned according to `predicate`.
+		##
+		## This function performs binary search to find the partition point, assuming `list`
+		## is partitioned under `predicate`. This means that all the elements satisfying the
+		## predicate must be at the start of the list.
+		##
+		## ```roc
+		## expect [1, 2, 3, 4].partition_point(|x| x < 3) == 2
+		## expect [1, 2, 3, 4].partition_point(|x| x < 0) == 0
+		## expect [1, 2, 3, 4].partition_point(|x| x < 5) == 4
+		## expect [].partition_point(|x| x < 3) == 0
+		## ```
+		partition_point : List(a), (a -> Bool) -> U64
+		partition_point = |list, predicate| {
+			partition_point_helper : List(a), (a -> Bool), U64 -> U64
+			partition_point_helper = |lst, pred, offset| {
+				if lst.is_empty() {
+					return offset
+				}
+				mid_idx = lst.len() / 2
+				mid = list_get_unsafe(lst, mid_idx)
+				if predicate(mid) {
+					partition_point_helper(lst.drop_first(mid_idx + 1), pred, offset + mid_idx + 1)
+				} else {
+					partition_point_helper(lst.take_first(mid_idx), pred, offset)
+				}
+			}
+
+			partition_point_helper(list, predicate, 0)
+		}
+
 		# Split a list into two parts at a specified index, returning the part before the index and the part from the index onward.
 		## ```
 		## expect [0, 1, 2, 3, 4].split_at(2) == { before: [0, 1], others: [2, 3, 4] }
@@ -5644,7 +5675,6 @@ Builtin :: [].{
 			Item : item
 			Fmt.decode_list(format, source, |s, f| Item.decode(s, f))
 		}
-
 	}
 
 	Bool := [False, True].{
