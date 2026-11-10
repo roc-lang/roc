@@ -2157,9 +2157,9 @@ pub const tests = [_]TestCase{
         \\            None => default
         \\        }
         \\
-        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str)]))
         \\        where [
-        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str)])),
         \\            encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
         \\        ]
         \\    parser_for = |encoding| {
@@ -2173,7 +2173,6 @@ pub const tests = [_]TestCase{
         \\                    match parse_elem(state) {
         \\                        Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
         \\                        Err(InvalidJson(e)) => Err(InvalidJson(e))
-        \\                        Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
         \\                    }
         \\            }
         \\    }
@@ -2188,7 +2187,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(Outer, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"thing\":{\"label\":\"x\",\"flag\":null}}")
         \\    match decoded {
         \\        Ok(m) => Opt.with_default(Opt.map(m.thing, describe), "none")
@@ -2208,9 +2207,9 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrap(a) := [W(a)].{
-        \\    parser_for : encoding -> (state -> Try({ value : Wrap(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\    parser_for : encoding -> (state -> Try({ value : Wrap(a), rest : state }, [InvalidJson(Str)]))
         \\        where [
-        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str)])),
         \\        ]
         \\    parser_for = |encoding| {
         \\        Elem : a
@@ -2219,7 +2218,6 @@ pub const tests = [_]TestCase{
         \\            match parse_elem(state) {
         \\                Ok(parsed) => Ok({ value: W(parsed.value), rest: parsed.rest })
         \\                Err(InvalidJson(e)) => Err(InvalidJson(e))
-        \\                Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
         \\            }
         \\    }
         \\}
@@ -3105,7 +3103,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
         \\    match decoded {
         \\        Ok(api) => {
@@ -3179,7 +3177,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(ExtensionApi, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(ExtensionApi, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"utility_functions\":[{\"arguments\":[{\"name\":\"angle_rad\",\"type\":\"float\"}]}],\"singletons\":[{\"name\":\"Engine\",\"type\":\"EngineType\"}]}")
         \\    match decoded {
         \\        Ok(api) => {
@@ -3205,7 +3203,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ c : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ c : Plain }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"}}")
         \\    match decoded {
         \\        Ok({ c: Plain.({ name }) }) => name
@@ -3225,7 +3223,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ c : Counted, k : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ c : Counted, k : Str }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"c\":{\"name\":\"n\"},\"k\":\"v\"}")
         \\    match decoded {
         \\        Ok({ c: Counted.({ name, count }), k }) => "${name} ${count.to_str()} ${k}"
@@ -3245,7 +3243,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ items : List({ b : Plain }) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ items : List({ b : Plain }) }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"items\":[{\"b\":{\"name\":\"x\"}},{\"b\":{\"name\":\"y\"}}]}")
         \\    match decoded {
         \\        Ok({ items }) => Str.join_with(List.map(items, |{ b: Plain.({ name }) }| name), ",")
@@ -3274,7 +3272,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ t : Choice, inner : Inner }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ t : Choice, inner : Inner }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"t\":\"A\",\"inner\":{\"t\":{\"B\":\"x\"}}}")
         \\    match decoded {
         \\        Ok({ t, inner: Inner.({ t: inner_t }) }) => "${describe(t)}/${describe(inner_t)}"
@@ -3350,7 +3348,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ c : Plain, d : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ c : Plain, d : Plain }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"c\":{\"name\":\"a\"},\"d\":{\"name\":\"b\"}}")
         \\    match decoded {
         \\        Ok({ c: Plain.({ name: n1 }), d: Plain.({ name: n2 }) }) => "${n1}${n2}"
@@ -3390,7 +3388,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ c : P, d : P }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ c : P, d : P }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"c\":\"A\",\"d\":{\"B\":\"x\"}}")
         \\    match decoded {
         \\        Ok({ c, d }) => "${describe(c)}${describe(d)}"
@@ -3413,7 +3411,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ c : List(Plain), d : Plain }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ c : List(Plain), d : Plain }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"c\":[{\"name\":\"a\"},{\"name\":\"b\"}],\"d\":{\"name\":\"c\"}}")
         \\    match decoded {
         \\        Ok({ c, d }) => Str.concat(Str.join_with(List.map(c, name_of), ""), name_of(d))
@@ -3438,7 +3436,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(Node, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(Node, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"name\":\"a\",\"kids\":[{\"name\":\"b\",\"kids\":[{\"name\":\"c\",\"kids\":[]}]},{\"name\":\"d\",\"kids\":[]}]}")
         \\    match decoded {
         \\        Ok(node) => names(node)
@@ -3467,7 +3465,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(Outer, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"Wrap\":[{\"Leaf\":\"a\"},\"Stop\",{\"Leaf\":\"b\"}]}")
         \\    match decoded {
         \\        Ok(Wrap(items)) => Str.join_with(List.map(items, describe), "")
@@ -3494,7 +3492,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try(Outer, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(Outer, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"Wrap\":[{\"Leaf\":{\"x\":\"a\"}},\"Stop\"]}")
         \\    match decoded {
         \\        Ok(Wrap(items)) => Str.join_with(List.map(items, describe), "")
@@ -3517,7 +3515,7 @@ pub const tests = [_]TestCase{
         \\main : Str
         \\main = {
         \\    encoded = Json.to_str(Tree.Node([Tree.Leaf("a"), Tree.Node([Tree.Leaf("b")]), Tree.Node([])]))
-        \\    decoded : Try(Tree, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try(Tree, [InvalidJson(Str)])
         \\    decoded = Json.parse(encoded)
         \\    match decoded {
         \\        Ok(tree) => Str.concat(encoded, if Json.to_str(tree) == encoded "=" else "!=")
@@ -3566,9 +3564,9 @@ pub const tests = [_]TestCase{
         \\            None => default
         \\        }
         \\
-        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str), MissingRequiredField(Str), ..]))
+        \\    parser_for : encoding -> (state -> Try({ value : Opt(a), rest : state }, [InvalidJson(Str)]))
         \\        where [
-        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str), MissingRequiredField(Str)])),
+        \\            a.parser_for : encoding -> (state -> Try({ value : a, rest : state }, [InvalidJson(Str)])),
         \\            encoding.parse_null : encoding, state -> Try(state, [InvalidJson(Str)]),
         \\        ]
         \\    parser_for = |encoding| {
@@ -3582,7 +3580,6 @@ pub const tests = [_]TestCase{
         \\                    match parse_elem(state) {
         \\                        Ok(parsed) => Ok({ value: Has(parsed.value), rest: parsed.rest })
         \\                        Err(InvalidJson(e)) => Err(InvalidJson(e))
-        \\                        Err(MissingRequiredField(f)) => Err(MissingRequiredField(f))
         \\                    }
         \\            }
         \\    }
@@ -3593,7 +3590,7 @@ pub const tests = [_]TestCase{
         \\
         \\main : Str
         \\main = {
-        \\    decoded : Try({ a : Opt(Str), b : Opt(Str) }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    decoded : Try({ a : Opt(Str), b : Opt(Str) }, [InvalidJson(Str)])
         \\    decoded = Json.parse("{\"a\":\"x\",\"b\":null}")
         \\    match decoded {
         \\        Ok({ a, b }) => "${show(a)}/${show(b)}"

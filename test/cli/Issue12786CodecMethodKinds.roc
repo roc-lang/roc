@@ -1,6 +1,9 @@
 Issue12786CodecMethodKinds :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -42,6 +45,7 @@ Format := [Default].{
 State := [Present(Str), Done]
 
 Token := { raw ?: Str }.{
+	parser_for : Format -> (State -> Try({ value : Token, rest : State }, [FormatError]))
 	parser_for = |format| |state| {
 		parsed = Format.parse_str(format, state)?
 		Ok({ value: { raw: "custom-token" }, rest: parsed.rest })
@@ -55,9 +59,9 @@ Token := { raw ?: Str }.{
 		}
 }
 
-parse : State -> Try(a, [FormatError, ..errs])
+parse : State -> Try(a, [FormatError])
 	where [
-		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError, ..errs])),
+		a.parser_for : Format -> (State -> Try({ value : a, rest : State }, [FormatError])),
 	]
 parse = |input| {
 	Shape : a
@@ -67,7 +71,7 @@ parse = |input| {
 }
 
 expect {
-	result : Try({ token : Token }, [FormatError, MissingRequiredField(Str)])
+	result : Try({ token : Token }, [FormatError])
 	result = parse(State.Present("wire-token"))
 
 	match result {

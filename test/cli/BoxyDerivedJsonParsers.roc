@@ -19,31 +19,31 @@ expect {
 }
 
 expect {
-	v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ a : Str, b : Str }, [InvalidJson(Str)])
 	v = Json.parse("{\"b\":\"y\",\"a\":\"x\",\"skipped\":[1,{\"c\":null}]}")
 	v == Ok({ a: "x", b: "y" })
 }
 
 expect {
-	v : Try({ a : Str, b ?: Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ a : Str, b ?: Str }, [InvalidJson(Str)])
 	v = Json.parse("{\"a\":\"x\"}")
 	v == Ok({ a: "x" })
 }
 
 expect {
-	v : Try({ a : Str, b ?: Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ a : Str, b ?: Str }, [InvalidJson(Str)])
 	v = Json.parse("{\"a\":\"x\",\"b\":\"y\"}")
 	v == Ok({ a: "x", b: "y" })
 }
 
 expect {
-	v : Try(Counted, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try(Counted, [InvalidJson(Str)])
 	v = Json.parse("{\"name\":\"n\"}")
 	v == Ok({ name: "n", count: 10 })
 }
 
 expect {
-	v : Try(Counted, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try(Counted, [InvalidJson(Str)])
 	v = Json.parse("{\"count\":3,\"name\":\"n\"}")
 	v == Ok({ name: "n", count: 3 })
 }
@@ -85,7 +85,7 @@ expect {
 }
 
 expect {
-	v : Try({ p : Pair, i : Inner, xs : List(Inner) }, [InvalidJson(Str), MissingRequiredField(Str)])
+	v : Try({ p : Pair, i : Inner, xs : List(Inner) }, [InvalidJson(Str)])
 	v = Json.parse("{\"p\":[\"a\",\"b\"],\"i\":{\"k\":\"x\"},\"xs\":[{\"k\":\"y\"}]}")
 	v == Ok({ p: ("a", "b"), i: { k: "x" }, xs: [{ k: "y" }] })
 }

@@ -101,9 +101,9 @@ round_trip = |value| {
 			(e-block
 				(s-type-var-alias (alias "Item") (type-var "a")
 					(ty-rigid-var (name "a")))
-				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 23) (constraint-fn-var 267)
+				(e-type-dispatch-call (method "from_str") (type-dispatch-stmt 23) (constraint-fn-var 270)
 					(args
-						(e-dispatch-call (method "to_str") (constraint-fn-var 263)
+						(e-dispatch-call (method "to_str") (constraint-fn-var 266)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "value"))))
