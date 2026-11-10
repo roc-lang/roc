@@ -33,7 +33,8 @@ const RuntimeValueAddress = struct {
 
 /// Runtime erased-callable identity decoded into the LIR proc and capture data.
 pub const ErasedCallableResolution = struct {
-    proc: lir.LIR.LirProcSpecId,
+    proc: lir.LIR.LirProcSpecId = undefined,
+    external: ?struct { owner: [32]u8, identity: lir.LIR.ProcIdentity } = null,
     capture_ptr: [*]u8,
 };
 
@@ -43,7 +44,6 @@ pub const BoxyFunctions = struct {
     retained: *lir.CheckedPipeline.BoxyStoredFunctions,
     /// The program's result, which reading a value extends.
     result: *LirProgram.Result,
-    composition: *@import("boxy_runtime").compiled.InProcessState,
 };
 
 /// Resolves erased-callable runtime data for the active evaluator.
@@ -116,9 +116,9 @@ pub const Writer = struct {
         self.boxy_functions = functions;
     }
 
-    /// Whether a value of plan `id` holds a function value a `.boxy`
-    /// compile-time program stores anywhere.
-    pub fn planHoldsBoxyFunction(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!bool {
+    /// The producer representation of functions in this plan, including
+    /// nested aggregates. One program's plans use one callable representation.
+    pub fn planFunctionStrategy(self: *Writer, id: LirProgram.ConstPlanId) Allocator.Error!?base.SpecializationStrategy {
         var seen = collections.DenseMap(LirProgram.ConstPlanId, void).init(self.allocator);
         defer seen.deinit();
         var pending = std.ArrayList(LirProgram.ConstPlanId).empty;
@@ -128,22 +128,29 @@ pub const Writer = struct {
             if (seen.contains(plan_id)) continue;
             try seen.put(plan_id, {});
             switch (self.constPlan(plan_id)) {
-                .boxy_fn => return true,
-                .pending, .layout_only, .zst, .scalar, .str, .fn_value, .erased_fn => {},
+                .boxy_fn => return .boxy,
+                .fn_value, .erased_fn => return .lss,
+                .pending, .layout_only, .zst, .scalar, .str => {},
                 .list, .box => |child| try pending.append(self.allocator, child),
+                .boxed_sequence => |sequence| try pending.append(self.allocator, sequence.payload),
                 .tuple, .record => |children| try pending.appendSlice(self.allocator, children),
                 .tag_union => |variants| for (variants) |variant| try pending.appendSlice(self.allocator, variant.payloads),
                 .named => |named| try pending.append(self.allocator, named.backing),
             }
         }
-        return false;
+        return null;
     }
 
     fn pushBoxyFn(self: *Writer, node: checked.ConstNodeId, value: Value) Error!void {
         const functions = self.boxy_functions orelse writerInvariant("a function value reached a program that stores none");
         const data_ptr = self.readErasedCallablePointer(value);
         const resolved = try self.erased_callable_resolver.resolve(self.erased_callable_resolver.context, data_ptr);
-        const described = try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr, functions.composition);
+        const described = if (resolved.external) |external|
+            try functions.retained.describeImported(self.allocator, functions.result, external.owner, external.identity, resolved.capture_ptr)
+        else
+            try functions.retained.describe(self.allocator, functions.result, resolved.proc, resolved.capture_ptr);
+        // The frame owns the recipe only after pushStoreFrame succeeds.
+        errdefer self.allocator.free(described.recipe);
         defer self.allocator.free(described.captures);
         const requests_start = self.store_requests.items.len;
         for (described.captures) |capture| {
@@ -153,6 +160,7 @@ pub const Writer = struct {
     }
 
     pub fn deinit(self: *Writer) void {
+        self.clearStoreStacks();
         self.store_capture_types.deinit(self.allocator);
         self.store_nodes.deinit(self.allocator);
         self.store_requests.deinit(self.allocator);
@@ -188,6 +196,7 @@ pub const Writer = struct {
                 .str,
                 .list,
                 .box,
+                .boxed_sequence,
                 .tuple,
                 .record,
                 .tag_union,
@@ -321,6 +330,12 @@ pub const Writer = struct {
     }
 
     fn clearStoreStacks(self: *Writer) void {
+        // A popped frame transfers its recipe to finishStore, which frees it
+        // even on failure. Only frames still pending belong to this stack.
+        for (self.store_frames.items) |frame| switch (frame.finish) {
+            .boxy_fn => |function| self.allocator.free(function.recipe),
+            .list, .box, .tuple, .record, .nominal, .tag, .fn_value => {},
+        };
         self.store_frames.clearRetainingCapacity();
         self.store_requests.clearRetainingCapacity();
         self.store_nodes.clearRetainingCapacity();
@@ -404,6 +419,15 @@ pub const Writer = struct {
             },
             .box => |elem_plan| blk: {
                 try self.appendBoxRequest(children, elem_plan, layout_idx, value);
+                break :blk .{ .box = node };
+            },
+            .boxed_sequence => |sequence| blk: {
+                const handle = self.readBoxDataPointer(value) orelse writerInvariant("boxed sequence had a null handle");
+                try children.append(self.allocator, .{
+                    .plan = sequence.payload,
+                    .layout_idx = sequence.view_layout,
+                    .value = .{ .ptr = builtins.boxed_sequence.recordPtr(handle) },
+                });
                 break :blk .{ .box = node };
             },
             .tuple => |items| blk: {
@@ -807,7 +831,7 @@ pub const Writer = struct {
             .named => |*named| (&named.backing)[0..1],
             .record, .tuple => |children| children,
             .pending, .layout_only => writerInvariant("product eligibility reached an unfinished const plan"),
-            .str, .list, .box, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
+            .str, .list, .box, .boxed_sequence, .tag_union, .fn_value, .erased_fn, .boxy_fn => return false,
         };
         try frames.append(self.allocator, .{ .id = id, .children = children });
         return null;
@@ -860,6 +884,7 @@ pub const Writer = struct {
             .str,
             .list,
             .box,
+            .boxed_sequence,
             .tuple,
             .record,
             .tag_union,
@@ -1180,6 +1205,42 @@ test "const store writer declarations are referenced" {
     std.testing.refAllDecls(@This());
 }
 
+test "strategy root readiness classifies nested producer plans with allocation failure" {
+    const allocator = std.testing.allocator;
+    var program = try LirProgram.Result.init(allocator, .native);
+    defer program.deinit();
+    const leaf: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .scalar);
+    const recursive: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .pending);
+    const aggregate: LirProgram.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    const children = try allocator.dupe(LirProgram.ConstPlanId, &.{ leaf, recursive, leaf });
+    program.const_plans.append(allocator, .{ .record = children }) catch |err| {
+        allocator.free(children);
+        return err;
+    };
+    program.const_plans.items[@backingInt(recursive)] = .{ .list = aggregate };
+    // The classification consumes plan tags/edges, never callable-set ids.
+    // The integration test exercises actual callable sets produced by LSS.
+    for ([_]struct { plan: LirProgram.ConstPlan, strategy: ?base.SpecializationStrategy }{
+        .{ .plan = .{ .fn_value = undefined }, .strategy = .lss },
+        .{ .plan = .{ .erased_fn = undefined }, .strategy = .lss },
+        .{ .plan = .boxy_fn, .strategy = .boxy },
+        .{ .plan = .scalar, .strategy = null },
+    }) |case| {
+        program.const_plans.items[@backingInt(leaf)] = case.plan;
+        try std.testing.checkAllAllocationFailures(allocator, expectPlanFunctionStrategy, .{ &program, aggregate, case.strategy });
+    }
+}
+
+fn expectPlanFunctionStrategy(allocator: Allocator, program: *const LirProgram.Result, root: LirProgram.ConstPlanId, expected: ?base.SpecializationStrategy) (Allocator.Error || error{TestExpectedEqual})!void {
+    var store = const_store.ConstStore.init(std.testing.allocator);
+    defer store.deinit();
+    var writer = Writer.initStore(allocator, &store, null, program);
+    defer writer.deinit();
+    try std.testing.expectEqual(expected, try writer.planFunctionStrategy(root));
+}
+
 fn initTestArtifact(allocator: Allocator, module_env: *can.ModuleEnv) Allocator.Error!checked.CheckedModuleArtifact {
     var names = check.CanonicalNames.CanonicalNameStore.init(allocator);
     const module_name = try names.internModuleName("Test");
@@ -1449,4 +1510,94 @@ test "const store writer stores 20KB scalar lists as shared blob" {
     const stored_empty_list = try writer.storeRoot(testConstRoot(list_plan, u8_list_layout), .{ .ptr = @ptrCast(&roc_empty_list) });
     try testing.expectEqual(@as(u64, bytes.len), artifact.const_store.get(stored_empty_list.const_node).list.empty);
     try testing.expectEqual(str_value.str, u16_scalar_bytes.bytes);
+}
+
+/// Publish a real pending frame with an independently owned recipe, without
+/// needing a lowered callable to exercise the writer's ownership lifecycle.
+fn pushTestBoxyRecipe(writer: *Writer, node: checked.ConstNodeId, bytes: []const u8) Allocator.Error!void {
+    const recipe = try writer.allocator.dupe(u8, bytes);
+    errdefer writer.allocator.free(recipe);
+    try writer.pushStoreFrame(.{ .boxy_fn = .{ .node = node, .recipe = recipe } }, writer.store_requests.items.len, &.{});
+}
+
+test "const store writer boxy recipe ownership clears pending frames and deinitializes" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var store = const_store.ConstStore.init(a);
+    defer store.deinit();
+    const node = try store.reserve();
+    for ([_]bool{ false, true }) |explicit_clear| {
+        var tracking = std.testing.FailingAllocator.init(a, .{});
+        {
+            var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+            defer writer.deinit();
+            try pushTestBoxyRecipe(&writer, node, "parent");
+            try writer.pushStoreFrame(.{ .record = node }, 0, &.{});
+            try pushTestBoxyRecipe(&writer, node, "child");
+            if (explicit_clear) {
+                const freed = tracking.freed_bytes;
+                writer.clearStoreStacks();
+                try std.testing.expectEqual(@as(usize, 0), writer.store_frames.items.len);
+                try std.testing.expectEqual(freed + "parent".len + "child".len, tracking.freed_bytes);
+                writer.clearStoreStacks();
+                try std.testing.expectEqual(freed + "parent".len + "child".len, tracking.freed_bytes);
+            }
+        }
+        try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+    }
+}
+
+test "const store writer boxy recipe ownership survives successful frame completion" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var store = const_store.ConstStore.init(a);
+    defer store.deinit();
+    const node = try store.reserve();
+    var tracking = std.testing.FailingAllocator.init(a, .{});
+    {
+        var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+        defer writer.deinit();
+        try pushTestBoxyRecipe(&writer, node, "owned recipe");
+        const freed = tracking.freed_bytes;
+        _ = try writer.drainStore();
+        try std.testing.expectEqual(@as(usize, 0), writer.store_frames.items.len);
+        try std.testing.expectEqualStrings("owned recipe", store.blobData(store.get(node).boxy_fn.recipe));
+        try std.testing.expectEqual(freed + "owned recipe".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "owned recipe".len, tracking.freed_bytes);
+    }
+    try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
+}
+
+test "const store writer boxy recipe ownership frees a failed popped frame only once" {
+    const a = std.testing.allocator;
+    var program = try LirProgram.Result.init(a, .u64);
+    defer program.deinit();
+    var failing_store = std.testing.FailingAllocator.init(a, .{});
+    var store = const_store.ConstStore.init(failing_store.allocator());
+    defer store.deinit();
+    const parent = try store.reserve();
+    const child = try store.reserve();
+    var tracking = std.testing.FailingAllocator.init(a, .{});
+    {
+        var writer = Writer.initStore(tracking.allocator(), &store, null, &program);
+        defer writer.deinit();
+        try pushTestBoxyRecipe(&writer, parent, "parent");
+        try pushTestBoxyRecipe(&writer, child, "child");
+        const freed = tracking.freed_bytes;
+        // The child has no remaining requests: drainStore pops it before
+        // finishStore tries to intern its recipe into the empty blob index.
+        failing_store.fail_index = failing_store.alloc_index;
+        failing_store.resize_fail_index = failing_store.resize_index;
+        try std.testing.expectError(error.OutOfMemory, writer.drainStore());
+        try std.testing.expectEqual(@as(usize, 1), writer.store_frames.items.len);
+        try std.testing.expectEqual(freed + "child".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
+        writer.clearStoreStacks();
+        try std.testing.expectEqual(freed + "child".len + "parent".len, tracking.freed_bytes);
+    }
+    try std.testing.expectEqual(tracking.allocated_bytes, tracking.freed_bytes);
 }

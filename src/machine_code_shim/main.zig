@@ -414,7 +414,7 @@ fn applyComposedRelocations(view: *const RunImage.ProgramView) LoadDevProgramErr
 fn composedField(view: *const RunImage.ProgramView, offset: u64, width: usize) RunImage.ImageError![]u8 {
     if (offset > std.math.maxInt(usize)) return error.InvalidDevRunImage;
     const address = @intFromPtr(view.code.ptr) +% @as(usize, @intCast(offset));
-    for ([_][]u8{ view.executable, view.mutable_data }) |region| {
+    for ([_][]u8{ view.executable, view.writable_data }) |region| {
         const start = @intFromPtr(region.ptr);
         if (address >= start and address - start <= region.len and width <= region.len - (address - start)) {
             return region[address - start ..][0..width];
@@ -494,14 +494,14 @@ fn validateDirectImageLayout(view: *const RunImage.ProgramView) RunImage.ImageEr
     if (!rangeContains(view.executable, view.function_table)) return error.InvalidDevRunImage;
     if (view.function_table.len != 0 and @intFromPtr(view.function_table.ptr) < @intFromPtr(view.code.ptr)) return error.InvalidDevRunImage;
     if (view.data.len > 0 and @intFromPtr(view.data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
-    if (view.mutable_data.len != 0) {
-        if (@intFromPtr(view.mutable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
+    if (view.writable_data.len != 0) {
+        if (@intFromPtr(view.writable_data.ptr) % view.page_size != 0) return error.InvalidDevRunImage;
         for ([_][]const u8{ view.executable, view.data }) |readonly| {
             if (readonly.len == 0) continue;
-            const mutable_start = @intFromPtr(view.mutable_data.ptr);
+            const writable_start = @intFromPtr(view.writable_data.ptr);
             const readonly_start = @intFromPtr(readonly.ptr);
-            if (mutable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
-                readonly_start < mutable_start + std.mem.alignForward(usize, view.mutable_data.len, view.page_size)) return error.InvalidDevRunImage;
+            if (writable_start < readonly_start + std.mem.alignForward(usize, readonly.len, view.page_size) and
+                readonly_start < writable_start + std.mem.alignForward(usize, view.writable_data.len, view.page_size)) return error.InvalidDevRunImage;
         }
     }
     for (view.code_symbols) |symbol| {
@@ -523,8 +523,8 @@ fn rangeContains(outer: []const u8, inner: []const u8) bool {
 fn prepareDirectImageForRelocation(view: *const RunImage.ProgramView) ipc.platform.MemoryProtectError!void {
     try ipc.platform.protectMappedMemory(view.executable.ptr, view.executable.len, .read_write);
     try protectDataPages(view, .read_write);
-    if (view.mutable_data.len != 0) {
-        try ipc.platform.protectMappedMemory(view.mutable_data.ptr, std.mem.alignForward(usize, view.mutable_data.len, view.page_size), .read_write);
+    if (view.writable_data.len != 0) {
+        try ipc.platform.protectMappedMemory(view.writable_data.ptr, std.mem.alignForward(usize, view.writable_data.len, view.page_size), .read_write);
     }
 }
 
@@ -1012,6 +1012,12 @@ pub fn roc_hot_reload_retain_current(return_address: usize) ?*anyopaque {
 pub fn roc_hot_reload_release_retained(code_ref: ?*anyopaque) void {
     const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
     releaseDevProgramRef(program);
+}
+
+/// Retain the same code image when its closure's private captures are copied.
+pub fn roc_hot_reload_retain_existing(code_ref: ?*anyopaque) void {
+    const program: *DevProgram = @ptrCast(@alignCast(code_ref orelse return));
+    acquireDevProgramRef(program);
 }
 
 comptime {

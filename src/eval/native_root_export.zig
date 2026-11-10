@@ -212,7 +212,12 @@ const Builder = struct {
                 }
                 invariant("native callable did not match an explicit finite variant");
             },
-            .erased_fn => |set_id| try self.erased(job, set_id),
+            .erased_fn => |set_id| try self.erased(job, set_id, null),
+            .boxed_sequence => |sequence| {
+                const step = self.graph.program.const_plans.items[@backingInt(sequence.recordPlans(self.graph.program.const_plans.items)[1])];
+                if (step != .erased_fn) invariant("boxed sequence export has no erased step plan");
+                try self.erased(job, step.erased_fn, sequence);
+            },
         }
     }
 
@@ -243,15 +248,7 @@ const Builder = struct {
         const list_value = job.source.read(builtins.list.RocList);
         try self.graph.writeWord(job.dest.offsetBy(word_size), list_value.len());
         try self.graph.writeWord(job.dest.offsetBy(2 * word_size), builtins.list.RocList.encodeCapacity(list_value.len()));
-        if (list_value.len() == 0) {
-            // The descriptor cannot carry the capacity the value was
-            // evaluated with; keep it on the root so the runtime can
-            // construct the list as the `with_capacity` it came from.
-            if (@backingInt(job.dest.symbol) == 0 and physical.tag == .list and list_value.getCapacity() != 0) {
-                try self.graph.nodes.items[0].empty_list_capacities.append(self.graph.allocator, .{ .offset = job.dest.offset, .capacity = list_value.getCapacity() });
-            }
-            return;
-        }
+        if (list_value.len() == 0) return;
         if (physical.tag == .list_of_zst) return;
         const ptr = list_value.bytes orelse invariant("nonempty native list had a null pointer");
         const element_layout = physical.getIdx();
@@ -316,7 +313,7 @@ const Builder = struct {
         } else invariant("native callable capture plan had non-struct multiple captures");
     }
 
-    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId) Error!void {
+    fn erased(self: *Builder, job: Job, set_id: Program.ErasedFnsId, sequence: ?Program.BoxedSequencePlan) Error!void {
         const address = job.source.read(usize);
         if (address == 0) invariant("native erased callable had a null payload");
         const resolved = try self.callables.resolve(self.callables.context, @ptrFromInt(address));
@@ -328,13 +325,15 @@ const Builder = struct {
             const prefix = self.graph.program.erased_capture_prefix;
             const capture_offset = builtins.erased_callable.capture_offset + prefix;
             const capture_size = prefix + self.graph.size(entry.capture_layout);
+            const state_offset = std.mem.alignForward(usize, builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.capture_alignment);
+            const allocation_size = if (sequence) |seq| state_offset + self.graph.size(seq.view_layout) else builtins.erased_callable.payloadSize(capture_size);
             const result = try self.graph.reserveAllocation(.{
                 .address = address,
                 .plan = job.plan,
                 .layout_idx = job.layout_idx,
                 .count = 1,
                 .kind = .erased,
-            }, builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            }, allocation_size, builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.graph.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             const proc_name = try static_data.procSymbolName(self.graph.allocator, self.graph.program.store.getProcSpec(resolved.proc).identity);
@@ -356,8 +355,27 @@ const Builder = struct {
                     .kind = .function_pointer,
                     .rc_helper = helper,
                 });
+                const copy_helper = layout.RcHelperKey{ .op = .incref, .layout_idx = helper.layout_idx };
+                try self.graph.node(result.dest).relocations.append(self.graph.allocator, .{
+                    .offset = result.dest.offset + 2 * word_size,
+                    .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.graph.allocator, &self.graph.program.layouts, copy_helper),
+                    .kind = .function_pointer,
+                    .rc_helper = copy_helper,
+                });
             }
+            try self.graph.writeWord(result.dest.offsetBy(3 * word_size), capture_size);
             try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
+            if (sequence) |seq| {
+                const layouts = &self.graph.program.layouts;
+                const record = layouts.getLayout(seq.view_layout).getStruct().idx;
+                const length_offset = layouts.getStructFieldOffsetByOriginalIndex(record, 0);
+                const step_offset = layouts.getStructFieldOffsetByOriginalIndex(record, 1);
+                const length_layout = layouts.getStructFieldLayoutByOriginalIndex(record, 0);
+                try self.enqueue(seq.recordPlans(self.graph.program.const_plans.items)[0], length_layout, .{
+                    .ptr = builtins.boxed_sequence.recordPtr(@ptrFromInt(address)) + length_offset,
+                }, result.dest.offsetBy(state_offset + length_offset), .value);
+                try self.graph.relocate(result.dest.offsetBy(state_offset + step_offset), result.dest);
+            }
             return;
         }
         invariant("native erased callable did not match an explicit entry");
@@ -399,7 +417,7 @@ fn testRoot(plan: Program.ConstPlanId, ret_layout: layout.Idx) Program.ConstRoot
     };
 }
 
-test "native root export keeps an empty list root's evaluated capacity" {
+test "native root export stores an empty list without allocation or capacity reconstruction" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, @import("base").target.TargetUsize.native);
     defer program.deinit();
@@ -418,9 +436,6 @@ test "native root export keeps an empty list root's evaluated capacity" {
     const exports = try freezeRoot(allocator, &program, slot, testRoot(list_plan, list_layout), .{ .ptr = @ptrCast(&list_value) }, .{});
     defer static_data.deinitStaticData(allocator, exports);
     try std.testing.expectEqual(@as(usize, 1), exports.len);
-    try std.testing.expectEqual(@as(usize, 1), exports[0].empty_list_capacities.len);
-    try std.testing.expectEqual(@as(u64, 0), exports[0].empty_list_capacities[0].offset);
-    try std.testing.expectEqual(@as(u64, 16), exports[0].empty_list_capacities[0].capacity);
     try std.testing.expectEqual(@as(usize, 0), exports[0].relocations.len);
 }
 
@@ -612,13 +627,14 @@ test "native root export preserves erased callable procedure and drop helper ide
     defer static_data.deinitStaticData(allocator, exports);
     const payload_pointer = exports[0].relocations[0];
     const payload_export = exports[@backingInt(payload_pointer.target.data_symbol)];
-    try std.testing.expectEqual(@as(usize, 3), payload_export.relocations.len);
+    try std.testing.expectEqual(@as(usize, 4), payload_export.relocations.len);
     try std.testing.expectEqual(proc, payload_export.relocations[0].procedure.?);
     try std.testing.expectEqual(builtins.erased_callable.capture_offset, payload_export.relocations[0].callable_capture_offset.?);
     try std.testing.expectEqual(layout.RcHelperKey{ .op = .host_drop, .layout_idx = .str }, payload_export.relocations[1].rc_helper.?);
+    try std.testing.expectEqual(layout.RcHelperKey{ .op = .incref, .layout_idx = .str }, payload_export.relocations[2].rc_helper.?);
     const copied_header = payload_export.bytes[@intCast(payload_pointer.addend)..][0 .. 2 * word_size];
     try std.testing.expectEqualSlices(u8, &(@as([2 * word_size]u8, @splat(0))), copied_header);
-    const capture_pointer = payload_export.relocations[2];
+    const capture_pointer = payload_export.relocations[3];
     try std.testing.expectEqualStrings(text, exports[@backingInt(capture_pointer.target.data_symbol)].bytes[@intCast(capture_pointer.addend)..]);
 
     const MissingRegistry = struct {

@@ -9,15 +9,15 @@ platform ""
 		requires {
 			[Model : model] for main : {
 				init : model,
-				update : model, I64 -> Model,
-				render : model -> I64
+				update : Box((model, I64 -> Model)),
+				render : Box((model -> I64))
 			}
 		}
     exposes []
     packages {}
     provides { "roc_main": main }
 
-main : { init : Model, update : Model, I64 -> Model, render : Model -> I64 }
+main : { init : Model, update : Box((Model, I64 -> Model)), render : Box((Model -> I64)) }
 main = { crash "todo" }
 ~~~
 # EXPECTED
@@ -30,14 +30,14 @@ KwPlatform,StringStart,StringPart,StringEnd,
 KwRequires,OpenCurly,
 OpenSquare,UpperIdent,OpColon,LowerIdent,CloseSquare,KwFor,LowerIdent,OpColon,OpenCurly,
 LowerIdent,OpColon,LowerIdent,Comma,
-LowerIdent,OpColon,LowerIdent,Comma,UpperIdent,OpArrow,UpperIdent,Comma,
-LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,LowerIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,CloseRound,Comma,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,LowerIdent,OpArrow,UpperIdent,CloseRound,CloseRound,
 CloseCurly,
 CloseCurly,
 KwExposes,OpenSquare,CloseSquare,
 KwPackages,OpenCurly,CloseCurly,
 KwProvides,OpenCurly,StringStart,StringPart,StringEnd,OpColon,LowerIdent,CloseCurly,
-LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,OpArrow,UpperIdent,CloseCurly,
+LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,CloseRound,Comma,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NoSpaceOpenRound,UpperIdent,OpArrow,UpperIdent,CloseRound,CloseRound,CloseCurly,
 LowerIdent,OpAssign,OpenCurly,KwCrash,StringStart,StringPart,StringEnd,CloseCurly,
 EndOfFile,
 ~~~
@@ -54,14 +54,18 @@ EndOfFile,
 					(anno-record-field (name "init")
 						(ty-var (raw "model")))
 					(anno-record-field (name "update")
-						(ty-fn
-							(ty-var (raw "model"))
-							(ty (name "I64"))
-							(ty (name "Model"))))
+						(ty-apply
+							(ty (name "Box"))
+							(ty-fn
+								(ty-var (raw "model"))
+								(ty (name "I64"))
+								(ty (name "Model")))))
 					(anno-record-field (name "render")
-						(ty-fn
-							(ty-var (raw "model"))
-							(ty (name "I64")))))))
+						(ty-apply
+							(ty (name "Box"))
+							(ty-fn
+								(ty-var (raw "model"))
+								(ty (name "I64"))))))))
 		(exposes)
 		(packages)
 		(provides
@@ -72,14 +76,18 @@ EndOfFile,
 				(anno-record-field (name "init")
 					(ty (name "Model")))
 				(anno-record-field (name "update")
-					(ty-fn
-						(ty (name "Model"))
-						(ty (name "I64"))
-						(ty (name "Model"))))
+					(ty-apply
+						(ty (name "Box"))
+						(ty-fn
+							(ty (name "Model"))
+							(ty (name "I64"))
+							(ty (name "Model")))))
 				(anno-record-field (name "render")
-					(ty-fn
-						(ty (name "Model"))
-						(ty (name "I64"))))))
+					(ty-apply
+						(ty (name "Box"))
+						(ty-fn
+							(ty (name "Model"))
+							(ty (name "I64")))))))
 		(s-decl
 			(p-ident (raw "main"))
 			(e-block
@@ -92,13 +100,13 @@ EndOfFile,
 ~~~roc
 platform ""
 	requires {
-		[Model : model] for main : { init : model, update : model, I64 -> Model, render : model -> I64 }
+		[Model : model] for main : { init : model, update : Box((model, I64 -> Model)), render : Box((model -> I64)) }
 	}
 	exposes []
 	packages {}
 	provides { "roc_main": main }
 
-main : { init : Model, update : Model, I64 -> Model, render : Model -> I64 }
+main : { init : Model, update : Box((Model, I64 -> Model)), render : Box((Model -> I64)) }
 main = {
 	crash "todo"
 }
@@ -118,20 +126,24 @@ main = {
 				(field (field "init")
 					(ty-lookup (name "Model") (local)))
 				(field (field "update")
-					(ty-fn (effectful false)
-						(ty-lookup (name "Model") (local))
-						(ty-lookup (name "I64") (builtin))
-						(ty-lookup (name "Model") (local))))
+					(ty-apply (name "Box") (builtin)
+						(ty-parens
+							(ty-fn (effectful false)
+								(ty-lookup (name "Model") (local))
+								(ty-lookup (name "I64") (builtin))
+								(ty-lookup (name "Model") (local))))))
 				(field (field "render")
-					(ty-fn (effectful false)
-						(ty-lookup (name "Model") (local))
-						(ty-lookup (name "I64") (builtin))))))))
+					(ty-apply (name "Box") (builtin)
+						(ty-parens
+							(ty-fn (effectful false)
+								(ty-lookup (name "Model") (local))
+								(ty-lookup (name "I64") (builtin))))))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "{ init: Model, render: Model -> I64, update: Model, I64 -> Model }")))
+		(patt (type "{ init: Model, render: Box(Model -> I64), update: Box(Model, I64 -> Model) }")))
 	(expressions
-		(expr (type "{ init: Model, render: Model -> I64, update: Model, I64 -> Model }"))))
+		(expr (type "{ init: Model, render: Box(Model -> I64), update: Box(Model, I64 -> Model) }"))))
 ~~~

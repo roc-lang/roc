@@ -1226,21 +1226,23 @@ pub fn cloneCallVariant(
     // binding: callers pass a closed argument to a dynamic parameter by
     // address. The non-dynamic parameters are mapped first, so a dynamic
     // parameter whose descriptor is another parameter binds the variant's
-    // own descriptor parameter.
+    // own descriptor parameter. Mapping a local may add spans, so the
+    // argument span is read again on every step.
     for (0..source_args.len) |index| {
-        const source_arg = GuardedList.at(source_args, index);
+        const source_arg = GuardedList.at(store.getLocalSpan(source_spec.args), index);
         if (store.getLocal(source_arg).dyn == null) _ = try cloner.mapLocal(source_arg);
     }
     for (0..source_args.len) |index| {
-        variant_args.appendAssumeCapacity(try cloner.mapLocal(GuardedList.at(source_args, index)));
+        const source_arg = GuardedList.at(store.getLocalSpan(source_spec.args), index);
+        variant_args.appendAssumeCapacity(try cloner.mapLocal(source_arg));
     }
 
-    try cloner.new_locals.appendSlice(store.allocator, variant_args.items);
+    try cloner.new_locals.appendSlice(store.allocator, spec.leading_args);
     try cloner.new_locals.appendSlice(store.allocator, spec.extra_frame_locals);
 
     const source_frame = store.getLocalSpan(source_spec.frame_locals);
     for (0..source_frame.len) |index| {
-        _ = try cloner.mapLocal(GuardedList.at(source_frame, index));
+        _ = try cloner.mapLocal(GuardedList.at(store.getLocalSpan(source_spec.frame_locals), index));
     }
 
     const body = try cloner.cloneStmt(source_body);
@@ -1469,6 +1471,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         rewriter: Rewriter,
         /// Only locals encountered by this clone have entries.
         local_map: collections.DenseMap(LocalId, LocalId),
+        product_map: collections.DenseMapUnmanaged(LIR.StmtRowId(LIR.ProductShape), LIR.StmtRowId(LIR.ProductShape)) = .empty,
         stmt_map: collections.DenseMap(CFStmtId, CFStmtId),
         /// Every local created by this clone, in creation order.
         new_locals: std.ArrayList(LocalId),
@@ -1654,6 +1657,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         /// `CloneScratch` it was borrowed from.
         pub fn deinit(self: *Self) void {
             self.frames.deinit(self.allocator);
+            self.product_map.deinit(self.allocator);
             if (self.scratch) |borrowed| {
                 self.local_map.clearRetainingCapacity();
                 self.stmt_map.clearRetainingCapacity();
@@ -1862,6 +1866,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                             .capture = try self.mapMaybeLocal(s.capture),
                             .capture_layout = s.capture_layout,
                             .on_drop = s.on_drop,
+                            .on_copy = s.on_copy,
+                            .frozen_capture_layout = s.frozen_capture_layout,
                             .reuse = try self.mapMaybeLocal(s.reuse),
                             .reuse_unique = s.reuse_unique,
                         }),
@@ -1957,7 +1963,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .dyn => |s| .{ .dyn = .{
                     .target = try self.mapMaybeLocal(s.target),
                     .data = try self.store.addStmtRow(LIR.DynOp, try DynOps.remapOperands(self.store, self.store.stmtRow(s.data), self, Self.mapLocal)),
-                    .composition_cache = s.composition_cache,
                     .next = s.next,
                 } },
                 .switch_stmt,
@@ -2239,7 +2244,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             const locals = try self.allocator.alloc(LocalId, old_locals.len);
             defer self.allocator.free(locals);
             for (0..old_locals.len) |index| {
-                locals[index] = try self.mapLocal(GuardedList.at(old_locals, index));
+                locals[index] = try self.mapLocal(GuardedList.at(self.store.getLocalSpan(span), index));
             }
             return try self.store.addLocalSpan(locals);
         }
@@ -2281,10 +2286,24 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             // A dynamic local's descriptor is an `opaque_ptr` local, never
             // itself dynamic, so this maps at most one more level.
             const dyn: ?LIR.DynLocal = if (old_local.dyn) |old_dyn| .{ .desc = try self.mapLocal(old_dyn.desc), .storage = old_dyn.storage } else null;
-            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx, .dyn = dyn });
+            const product = try self.mapProduct(old_local.product);
+            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx, .dyn = dyn, .product = product });
             try self.local_map.put(old, fresh);
             try self.new_locals.append(self.allocator, fresh);
             return fresh;
+        }
+
+        fn mapProduct(self: *Self, old: LIR.StmtRowId(LIR.ProductShape)) Allocator.Error!LIR.StmtRowId(LIR.ProductShape) {
+            if (old == .none) return .none;
+            if (self.product_map.get(old)) |mapped| return mapped;
+            const shape = self.store.stmtRow(old);
+            const mapped = try self.store.addStmtRow(LIR.ProductShape, .{
+                .layouts = shape.layouts,
+                .slots = shape.slots,
+                .descriptors = try self.mapLocalSpan(shape.descriptors),
+            });
+            try self.product_map.put(self.allocator, old, mapped);
+            return mapped;
         }
 
         /// Allocate a fresh local of `layout_idx` owned by the clone.
@@ -2935,4 +2954,66 @@ test "body cloning preserves committed list map output layout" {
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(source)).assign_low_level;
     try std.testing.expectEqual(@as(?layout_mod.Idx, .u64), store.stmtRowOrDefault(cloned.extra).map_output_elem);
+}
+
+test "dynamic product metadata clones descriptors and preserves shared shapes" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const shape = try store.addStmtRow(LIR.ProductShape, .{
+        .layouts = try store.addU32Span(&.{@backingInt(dynamic)}),
+        .slots = try store.addU32Span(&.{ 0, 1 }),
+        .descriptors = try store.addLocalSpan(&.{desc}),
+    });
+    const first = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param }, .product = shape });
+    const second = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .frame }, .product = shape });
+    var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
+    defer cloner.deinit();
+    const copy_first = store.getLocal(try cloner.mapLocal(first));
+    const copy_second = store.getLocal(try cloner.mapLocal(second));
+    try std.testing.expect(copy_first.dyn.?.desc != desc);
+    try std.testing.expectEqual(copy_first.dyn.?.desc, copy_second.dyn.?.desc);
+    try std.testing.expectEqual(copy_first.product, copy_second.product);
+    const copy_shape = store.stmtRow(copy_first.product);
+    try std.testing.expectEqual(copy_first.dyn.?.desc, GuardedList.at(store.getLocalSpan(copy_shape.descriptors), 0));
+}
+
+test "dynamic product metadata survives call variant cloning" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const dynamic = try layouts.dynamicLayout();
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    const desc = try store.addLocal(.{ .layout_idx = .opaque_ptr });
+    const shape = try store.addStmtRow(LIR.ProductShape, .{
+        .layouts = try store.addU32Span(&.{@backingInt(dynamic)}),
+        .slots = try store.addU32Span(&.{ 0, 1 }),
+        .descriptors = try store.addLocalSpan(&.{desc}),
+    });
+    const value = try store.addLocal(.{ .layout_idx = dynamic, .dyn = .{ .desc = desc, .storage = .param }, .product = shape });
+    const unit = try store.addLocal(.{ .layout_idx = .zst });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(1),
+        // Descriptor after its value also exercises forward references.
+        .args = try store.addLocalSpan(&.{ value, desc }),
+        .frame_locals = try store.addLocalSpan(&.{ value, desc, unit }),
+        .body = body,
+        .ret_layout = .zst,
+        .abi = .roc,
+    }, .none);
+    const variant = try cloneCallVariant(TestRetRewriter, &store, &layouts, proc, .{}, .{ .leading_args = &.{}, .ret_layout = .zst });
+    const args = store.getLocalSpan(store.getProcSpec(variant).args);
+    const copy = store.getLocal(GuardedList.at(args, 0));
+    const copy_desc = GuardedList.at(args, 1);
+    try std.testing.expect(copy_desc != desc);
+    try std.testing.expectEqual(copy_desc, copy.dyn.?.desc);
+    try std.testing.expectEqual(LIR.DynStorage.param, copy.dyn.?.storage);
+    try std.testing.expectEqual(copy_desc, GuardedList.at(store.getLocalSpan(store.stmtRow(copy.product).descriptors), 0));
 }

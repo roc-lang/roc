@@ -51,7 +51,6 @@ const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
 const eval_mod = @import("eval");
-const BoxyInProcessState = @import("boxy_runtime").compiled.InProcessState;
 
 /// Backend used to execute the glue spec.
 pub const GlueOpt = enum {
@@ -295,7 +294,7 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
     defer gpa.rawFree(result_buf, ret_alignment, @returnAddress());
     if (result_buf.len > 0) @memset(result_buf, 0);
 
-    switch (args.opt) {
+    const glue_result = switch (args.opt) {
         .dev, .size, .speed => try runGlueSpecPlugin(
             gpa,
             stderr,
@@ -304,16 +303,16 @@ fn rocGlueInner(gpa: Allocator, stderr: *std.Io.Writer, stdout: *std.Io.Writer, 
             arg_layouts,
             &types_list,
             result_buf.ptr,
+            &glue_writer,
             &runtime_env,
             root_artifact.executableIdentity(),
             args,
             std_io,
         ),
-    }
+    };
+    defer glue_result.deinit();
     try writeHostEvents(stderr, &runtime_env);
 
-    const glue_result = try extractGlueResult(gpa, &glue_writer, result_buf.ptr, proc.ret_layout);
-    defer glue_result.deinit();
     if (glue_result.err_msg) |err_msg| {
         stderr.print("Glue spec error: {s}\n", .{err_msg}) catch {};
         return error.CompilationFailed;
@@ -455,6 +454,16 @@ fn compileGlueSpec(
     };
     errdefer lowered.deinit();
 
+    const exports = compile.static_data_exports.buildStaticDataForWidth(gpa, .{
+        .root = CheckedArtifact.loweringViewWithRelations(root_artifact, relation_artifacts),
+        .imports = imported_artifacts,
+    }, &lowered, script_target_usize, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.UnsupportedTarget => return error.CompilationFailed,
+    };
+    if (lowered.frozen_static_data) |*previous| previous.deinit();
+    lowered.frozen_static_data = .{ .allocator = gpa, .exports = exports };
+
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse
         glueInvariant("glue spec produced no published make_glue platform root", .{});
 
@@ -547,7 +556,7 @@ fn buildGlueSpecPluginFileInner(
 }
 
 const glue_plugin_stamp_magic = [8]u8{ 'R', 'O', 'C', 'P', 'L', 'G', '1', 0 };
-const glue_plugin_abi_version: u32 = 1;
+const glue_plugin_abi_version: u32 = 2;
 
 const GluePluginKind = enum(u32) {
     glue = 1,
@@ -575,6 +584,8 @@ const BuiltGluePlugin = struct {
     }
 };
 
+/// Copy the returned files before unloading the plugin: Roc results can borrow
+/// immutable bytes from its image, whereas the caller owns the extracted files.
 fn runGlueSpecPlugin(
     gpa: Allocator,
     stderr: *std.Io.Writer,
@@ -583,11 +594,12 @@ fn runGlueSpecPlugin(
     arg_layouts: []const layout.Idx,
     types_list: *RocList,
     result_ptr: [*]u8,
+    writer: *const GlueRocValueWriter,
     runtime_env: *eval_mod.RuntimeHostEnv,
     executable_identity: [32]u8,
     args: GlueArgs,
     std_io: std.Io,
-) GlueError!void {
+) GlueError!GlueResultFiles {
     if (builtin.target.os.tag == .freestanding) return error.GluePluginUnavailable;
 
     const stamp = gluePluginStamp(executable_identity, args.specialization_strategy);
@@ -600,10 +612,6 @@ fn runGlueSpecPlugin(
     const entry = lib.lookup(GlueEntryFn, builtins.shim_symbols.roc_make_glue) orelse return error.GluePluginUnavailable;
 
     runtime_env.resetObservation();
-    const composition = if (lowered.lir_result.store.runtime_contract == .boxy) try BoxyInProcessState.create(gpa) else null;
-    defer if (composition) |owned| owned.destroy();
-    const composing = if (composition) |owned| owned.enter() else null;
-    defer if (composing) |entered| BoxyInProcessState.leave(entered);
     var crash_boundary = runtime_env.enterCrashBoundary();
     defer crash_boundary.deinit();
 
@@ -629,6 +637,7 @@ fn runGlueSpecPlugin(
             return error.CompilationFailed;
         },
     }
+    return try extractGlueResult(gpa, writer, result_ptr, lowered.lir_result.store.getProcSpec(glue_proc).ret_layout);
 }
 
 fn getOrBuildGluePlugin(
@@ -672,6 +681,16 @@ fn buildGluePlugin(
     var bitcode = generate: {
         var codegen = llvm_compile.MonoLlvmCodeGen.init(gpa, &lowered.lir_result.store);
         codegen.layout_store = &lowered.lir_result.layouts;
+        const static_procs = try compile.static_data_exports.collectReferencedProcs(gpa, lowered.frozen_static_data.?.exports);
+        defer gpa.free(static_procs);
+        codegen.static_data_procs = static_procs;
+        const static_helpers = try compile.static_data_exports.collectRequiredRcHelpers(gpa, lowered.frozen_static_data.?.exports);
+        defer gpa.free(static_helpers);
+        codegen.static_data_rc_helpers = static_helpers;
+        codegen.setStaticDataExports(lowered.frozen_static_data.?.exports) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.CompilationFailed, error.UnsupportedLowLevel => return error.CompilationFailed,
+        };
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
@@ -3047,9 +3066,20 @@ const TypeTable = struct {
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "List") } };
                 },
                 .box => {
-                    if (nominal.args.len >= 1) return .{ .box = .{
-                        .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect),
-                    } };
+                    if (nominal.args.len >= 1) {
+                        var payload = try self.substituteFormal(artifact, nominal.args[0]);
+                        const sequence = while (true) {
+                            switch (checkedTypePayload(payload.artifact, payload.checked_type)) {
+                                .alias => |alias| payload = try self.substituteFormal(payload.artifact, alias.backing),
+                                .nominal => |inner| break inner.builtin == .iter or inner.builtin == .stream,
+                                .pending, .field_kind, .err, .record, .tuple, .function, .empty_record, .tag_union, .empty_tag_union, .flex, .rigid => break false,
+                            }
+                        };
+                        // The host owns an erased step allocation, not a
+                        // readable iterator record or a callable public API.
+                        if (sequence) return .{ .erased_callable = .{ .signature = null } };
+                        return .{ .box = .{ .inner_id = try self.getOrInsert(artifact, nominal.args[0], .heap_indirect) } };
+                    }
                     return .{ .unknown = .{ .name = try self.gpa.dupe(u8, "Box") } };
                 },
                 .parse_tag_union_spec,
@@ -4142,6 +4172,12 @@ fn extractGlueResult(
         const file_layout = writer.listElementLayout(files_list_layout);
         const file_size = writer.sizeOf(file_layout);
         const out = try allocator.alloc(GlueResultFile, files.len());
+        errdefer allocator.free(out);
+        var initialized: usize = 0;
+        errdefer for (out[0..initialized]) |file| {
+            allocator.free(file.name);
+            allocator.free(file.content);
+        };
         const file_bytes = files.bytes.?;
         for (out, 0..) |*file, index| {
             const file_base = file_bytes + index * file_size;
@@ -4149,10 +4185,13 @@ fn extractGlueResult(
             const content_slot = writer.recordField(file_base, file_layout, "File", "content");
             const name = writer.readValue(name_slot.ptr, RocStr);
             const content = writer.readValue(content_slot.ptr, RocStr);
+            const owned_name = try copyRocStrSlice(allocator, name);
+            errdefer allocator.free(owned_name);
             file.* = .{
-                .name = try copyRocStrSlice(allocator, name),
+                .name = owned_name,
                 .content = try copyRocStrSlice(allocator, content),
             };
+            initialized += 1;
         }
         return .{ .allocator = allocator, .files = out, .err_msg = null };
     }
@@ -4164,6 +4203,56 @@ fn extractGlueResult(
     }
 
     glueInvariant("glue result Try discriminant {d} was neither Ok nor Err", .{discriminant});
+}
+
+fn testExtractOwnedGlueFiles(output_allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const expected_name = "generated_file_with_a_long_name.txt";
+    const expected_content = "runtime-allocated content longer than an inline Roc string";
+    const result = extracted: {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const allocator = arena.allocator();
+        var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
+        defer layouts.deinit();
+        var schemas = lir.CheckedPipeline.RuntimeValueSchemaStore.init(allocator);
+        // The test's schema text is borrowed; the arena owns the table storage.
+        try schemas.records.append(allocator, .{ .type_name = "File", .fields = &.{
+            .{ .name = "name", .logical_index = 0 },
+            .{ .name = "content", .logical_index = 1 },
+        } });
+        try schemas.tag_unions.append(allocator, .{ .type_name = "Builtin.Try", .tags = &.{
+            .{ .name = "Err", .discriminant = 0 },
+            .{ .name = "Ok", .discriminant = 1 },
+        } });
+        var runtime = eval_mod.RuntimeHostEnv.init(std.testing.allocator);
+        defer runtime.deinit();
+        const writer = GlueRocValueWriter{ .layouts = &layouts, .schemas = &schemas, .roc_ops = runtime.get_ops() };
+        const file_layout = try layouts.putStructFields(&.{ .{ .index = 0, .layout = .str }, .{ .index = 1, .layout = .str } });
+        const list_layout = try layouts.insertList(file_layout);
+        const result_layout = try layouts.putTagUnion(&.{ .str, list_layout });
+        const files = writer.allocateList(list_layout, 2, true);
+        for (0..2) |index| {
+            const file = files.bytes.? + index * files.elem_size;
+            writer.writeField(file, file_layout, "File", "name", RocStr, RocStr.fromSlice(expected_name, runtime.get_ops()));
+            writer.writeField(file, file_layout, "File", "content", RocStr, RocStr.fromSlice(expected_content, runtime.get_ops()));
+        }
+        const result_buf = try allocator.alloc(u8, writer.sizeOf(result_layout));
+        writer.zeroValue(result_buf.ptr, result_layout);
+        writer.writeValue(result_buf.ptr, RocList, files.list);
+        writer.writeTagDiscriminant(result_buf.ptr, result_layout, 1);
+        break :extracted try extractGlueResult(output_allocator, &writer, result_buf.ptr, result_layout);
+    };
+    defer result.deinit();
+    // The source list and strings are gone; only independent copies can work.
+    try std.testing.expectEqual(@as(usize, 2), result.files.len);
+    for (result.files) |file| {
+        try std.testing.expectEqualStrings(expected_name, file.name);
+        try std.testing.expectEqualStrings(expected_content, file.content);
+    }
+}
+
+test "glue result extraction owns files and cleans up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testExtractOwnedGlueFiles, .{});
 }
 
 fn typeTableKeysEqual(a: []const TypeTableKey, b: []const TypeTableKey) bool {

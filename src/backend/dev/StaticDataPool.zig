@@ -16,7 +16,9 @@
 //!
 //! An entry whose relocations reach a function pointer names its own image's
 //! code, so no other image can reuse it. Its image records that its static data
-//! references code, and the host shim never releases such an image.
+//! references code, and the host shim never releases such an image. An entry
+//! on an address cycle (recursive type descriptors point at one another) has
+//! no content independent of where it is placed, so it is never pooled either.
 
 const std = @import("std");
 const base = @import("base");
@@ -85,9 +87,9 @@ pub const Pool = struct {
 
 /// Where one static data export lives in an image.
 pub const Placement = union(enum) {
-    /// Written into this image's readonly or mutable section at `data_offset`. A `listed`
+    /// Written into this image's data section at `data_offset`. A `listed`
     /// entry is recorded in the image's chunk so later images can reuse it.
-    local: struct { data_offset: usize, listed: bool, mutable: bool = false },
+    local: struct { data_offset: usize, listed: bool },
     /// Reused from the pool: the mapping offset of the entry's first byte.
     pooled: usize,
 };
@@ -102,7 +104,8 @@ pub const Plan = struct {
     /// classification fields through `sorted_relocations` are empty unless
     /// `pooling`.
     hashes: []u64,
-    /// Whether each export can be pooled: its relocations reach no code.
+    /// Whether each export can be pooled: its relocations reach no code and
+    /// no address cycle.
     poolable: []bool,
     /// Address relocation target export of each relocation, flattened in
     /// export order, or `none` for a function pointer.
@@ -117,8 +120,6 @@ pub const Plan = struct {
     /// Whether any export's static data names generated code.
     static_code_references: bool,
     local_data_len: usize = 0,
-    mutable_data_len: usize = 0,
-    max_mutable_alignment: usize = 1,
     max_local_alignment: usize = 1,
     local_relocation_count: usize = 0,
     listed_count: usize = 0,
@@ -159,6 +160,7 @@ pub const Plan = struct {
         plan.hashes = try allocator.alloc(u64, exports.len);
         @memset(plan.hashes, 0);
         plan.poolable = try allocator.alloc(bool, exports.len);
+        @memset(plan.poolable, false);
         plan.target_starts = try allocator.alloc(u32, exports.len + 1);
 
         var relocation_count: usize = 0;
@@ -205,10 +207,14 @@ pub const Plan = struct {
         }
         plan.target_starts[exports.len] = cursor;
 
-        plan.order = try postOrder(allocator, exports.len, plan.targets, plan.target_starts);
+        const ordered = try componentOrder(allocator, exports.len, plan.targets, plan.target_starts);
+        defer allocator.free(ordered.cyclic);
+        plan.order = ordered.order;
 
+        // An export on an address cycle has no content hash independent of
+        // its own placement, so it and everything reaching it stay local.
         for (plan.order) |i| {
-            var poolable = !exports[i].is_mutable;
+            var poolable = !ordered.cyclic[i];
             for (plan.targets[plan.target_starts[i]..plan.target_starts[i + 1]]) |target| {
                 if (target == none or !plan.poolable[target]) poolable = false;
             }
@@ -259,8 +265,6 @@ pub const Plan = struct {
 
     fn layOutLocals(self: *Plan, exports: []const StaticDataExport) Error!void {
         self.local_data_len = 0;
-        self.mutable_data_len = 0;
-        self.max_mutable_alignment = 1;
         self.max_local_alignment = 1;
         self.local_relocation_count = 0;
         self.listed_count = 0;
@@ -269,14 +273,6 @@ pub const Plan = struct {
             if (placement.* == .pooled) continue;
             const alignment = exportAlignment(data_export);
             if (!std.math.isPowerOfTwo(alignment)) return error.InvalidStaticDataAlignment;
-            if (data_export.is_mutable) {
-                std.debug.assert(data_export.relocations.len == 0 and std.mem.allEqual(u8, data_export.bytes, 0));
-                self.max_mutable_alignment = @max(self.max_mutable_alignment, alignment);
-                const offset = std.mem.alignForward(usize, self.mutable_data_len, alignment);
-                self.mutable_data_len = offset + data_export.bytes.len;
-                placement.* = .{ .local = .{ .data_offset = offset, .listed = false, .mutable = true } };
-                continue;
-            }
             self.max_local_alignment = @max(self.max_local_alignment, alignment);
             const data_offset = std.mem.alignForward(usize, self.local_data_len, alignment);
             self.local_data_len = data_offset + data_export.bytes.len;
@@ -337,47 +333,98 @@ fn relocationOffsetLessThan(relocations: []const StaticDataRelocation, a: u32, b
     return relocations[a].offset < relocations[b].offset;
 }
 
-/// Order exports so every address target precedes the exports pointing at it.
-fn postOrder(allocator: Allocator, count: usize, targets: []const u32, target_starts: []const u32) Allocator.Error![]u32 {
+/// The order exports are classified and placed in, and which of them lie on
+/// address cycles.
+const Order = struct {
+    /// Every export, with each strongly connected component of the address
+    /// graph complete before any export pointing into it.
+    order: []u32,
+    /// Whether each export reaches itself through address relocations.
+    cyclic: []bool,
+};
+
+/// Order exports so every address target outside an export's own strongly
+/// connected component precedes it (Tarjan's algorithm, iterative). Recursive
+/// type descriptors point at one another, so the graph is cyclic; the members
+/// of a cycle are placed together and marked `cyclic`.
+fn componentOrder(allocator: Allocator, count: usize, targets: []const u32, target_starts: []const u32) Allocator.Error!Order {
     const order = try allocator.alloc(u32, count);
     errdefer allocator.free(order);
-    const state = try allocator.alloc(enum(u2) { unvisited, open, done }, count);
-    defer allocator.free(state);
-    @memset(state, .unvisited);
+    const cyclic = try allocator.alloc(bool, count);
+    errdefer allocator.free(cyclic);
+    @memset(cyclic, false);
+
+    const unindexed: u32 = none;
+    const index = try allocator.alloc(u32, count);
+    defer allocator.free(index);
+    @memset(index, unindexed);
+    const low = try allocator.alloc(u32, count);
+    defer allocator.free(low);
+    const on_component_stack = try allocator.alloc(bool, count);
+    defer allocator.free(on_component_stack);
+    @memset(on_component_stack, false);
 
     const Frame = struct { node: u32, next_target: u32 };
     var stack = std.ArrayList(Frame).empty;
     defer stack.deinit(allocator);
+    var component_stack = std.ArrayList(u32).empty;
+    defer component_stack.deinit(allocator);
 
+    var next_index: u32 = 0;
     var emitted: usize = 0;
     for (0..count) |root| {
-        if (state[root] != .unvisited) continue;
-        state[root] = .open;
+        if (index[root] != unindexed) continue;
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        on_component_stack[root] = true;
+        try component_stack.append(allocator, @intCast(root));
         try stack.append(allocator, .{ .node = @intCast(root), .next_target = target_starts[root] });
         while (stack.items.len > 0) {
             const frame = &stack.items[stack.items.len - 1];
             if (frame.next_target == target_starts[frame.node + 1]) {
-                state[frame.node] = .done;
-                order[emitted] = frame.node;
-                emitted += 1;
+                const node = frame.node;
                 _ = stack.pop();
+                if (stack.items.len > 0) {
+                    const parent = stack.items[stack.items.len - 1].node;
+                    low[parent] = @min(low[parent], low[node]);
+                }
+                if (low[node] != index[node]) continue;
+                // `node` is the root of a component: everything above it on
+                // the component stack belongs to that component.
+                const first = emitted;
+                while (true) {
+                    const member = component_stack.pop().?;
+                    on_component_stack[member] = false;
+                    order[emitted] = member;
+                    emitted += 1;
+                    if (member == node) break;
+                }
+                const members = order[first..emitted];
+                var self_loop = false;
+                for (targets[target_starts[node]..target_starts[node + 1]]) |target| self_loop = self_loop or target == node;
+                if (members.len > 1 or self_loop) for (members) |member| {
+                    cyclic[member] = true;
+                };
                 continue;
             }
             const target = targets[frame.next_target];
             frame.next_target += 1;
             if (target == none) continue;
-            switch (state[target]) {
-                .done => {},
-                .open => base.invariant("static data invariant violated: export {d} reaches itself through address relocations", .{target}),
-                .unvisited => {
-                    state[target] = .open;
-                    try stack.append(allocator, .{ .node = target, .next_target = target_starts[target] });
-                },
+            if (index[target] == unindexed) {
+                index[target] = next_index;
+                low[target] = next_index;
+                next_index += 1;
+                on_component_stack[target] = true;
+                try component_stack.append(allocator, target);
+                try stack.append(allocator, .{ .node = target, .next_target = target_starts[target] });
+            } else if (on_component_stack[target]) {
+                low[frame.node] = @min(low[frame.node], index[target]);
             }
         }
     }
     if (emitted != count) base.invariant("static data invariant violated: ordered {d} of {d} exports", .{ emitted, count });
-    return order;
+    return .{ .order = order, .cyclic = cyclic };
 }
 
 const PoolIndex = struct {
@@ -498,17 +545,4 @@ fn mappedSlice(comptime T: type, mapping: []const u8, offset: u64, count: u64) E
     if (start > mapping.len or byte_len > mapping.len - start) return error.InvalidStaticPool;
     const ptr: [*]align(1) const T = @ptrCast(mapping.ptr + start);
     return ptr[0..len];
-}
-
-test "boxy composition slots and their parents are never pooled between images" {
-    const exports = [_]StaticDataExport{
-        .{ .symbol_name = "constant", .bytes = &@as([8]u8, @splat(0)), .alignment = 8 },
-        .{ .symbol_name = "site", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .is_mutable = true },
-        .{ .symbol_name = "parent", .bytes = &@as([8]u8, @splat(0)), .alignment = 8, .relocations = &.{.{ .offset = 0, .target_symbol_name = "site", .target = .{ .data_symbol = @fromBackingInt(1) } }} },
-    };
-    var plan = try Plan.init(std.testing.allocator, &exports, true);
-    defer plan.deinit();
-    try std.testing.expectEqualSlices(bool, &.{ true, false, false }, plan.poolable);
-    try std.testing.expect(!plan.placements[1].local.listed);
-    try std.testing.expect(!plan.placements[2].local.listed);
 }

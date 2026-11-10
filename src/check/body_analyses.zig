@@ -7,7 +7,7 @@
 //! declaration statement, or defaulted-field expression) owns each reached
 //! node, and the per-binding facts lowering reads from declarations.
 //!
-//! Every other fact here is computed on first demand into a write-once slot
+//! The index and every other fact here are computed on first demand into a write-once slot
 //! owned by the module and is never serialized: each top-level unit has one
 //! slot holding its divergence, inspect-elision, state-merge and
 //! loop-mutation facts; the module has one slot for its diagnostic-error
@@ -88,6 +88,7 @@ const TopLevelDef = struct { pattern: u32, def: CIR.Def.Idx };
 
 /// The CIR-only index of a checked module's bodies.
 pub const ModuleIndex = struct {
+    has_expects: bool = false,
     /// Per node: the kind of node the bodies reach it as.
     node_kinds: []NodeKind = &.{},
     /// Per node: its declaration facts.
@@ -105,13 +106,13 @@ pub const ModuleIndex = struct {
     /// Defaulted-field default expressions, ascending.
     defaults: []u32 = &.{},
 
-    /// The index of `env`'s bodies. `promoted` lists the module's promoted
-    /// local procedures, each with its binding `pattern`.
-    pub fn build(allocator: Allocator, env: *const ModuleEnv, promoted: anytype) Allocator.Error!ModuleIndex {
+    /// The index of `env`'s bodies. `promoted_patterns` are the binding
+    /// patterns of the module's promoted local procedures.
+    pub fn build(allocator: Allocator, env: *const ModuleEnv, promoted_patterns: []const PatternId) Allocator.Error!ModuleIndex {
         var builder = try Builder.init(allocator, env);
         defer builder.deinitScratch();
         errdefer builder.deinitAll();
-        for (promoted) |entry| builder.node_flags[@backingInt(entry.pattern)].promoted_pattern = true;
+        for (promoted_patterns) |pattern| builder.node_flags[@backingInt(pattern)].promoted_pattern = true;
         try builder.walk();
         return builder.finish();
     }
@@ -222,6 +223,7 @@ pub const ModuleIndex = struct {
     };
 
     const Builder = struct {
+        has_expects: bool = false,
         allocator: Allocator,
         env: *const ModuleEnv,
         node_kinds: []NodeKind,
@@ -287,6 +289,7 @@ pub const ModuleIndex = struct {
             errdefer allocator.free(top_level_defs);
             const defaults = try self.defaults.toOwnedSlice(allocator);
             return .{
+                .has_expects = self.has_expects,
                 .node_kinds = self.node_kinds,
                 .node_flags = self.node_flags,
                 .unit_of = self.unit_of,
@@ -357,9 +360,7 @@ pub const ModuleIndex = struct {
             const node_count: u32 = @intCast(store.nodes.len());
             var raw: u32 = 0;
             while (raw < node_count) : (raw += 1) {
-                const node: CIR.Node.Idx = @fromBackingInt(@intCast(raw));
-                if (store.nodes.get(node).tag != .ty_record_field_defaulted) continue;
-                const default_raw = store.nodes.get(node).getPayload().ty_record_field_defaulted.default_value;
+                const default_raw = fieldDefault(store, raw) orelse continue;
                 try self.defaults.append(self.allocator, default_raw);
                 self.node_flags[default_raw].default = true;
                 if (self.node_kinds[default_raw] != .unreached) continue;
@@ -513,7 +514,10 @@ pub const ModuleIndex = struct {
                 .e_tuple_access => |access| try self.mark(.{ .expr = access.tuple }, id),
                 .e_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
                 .e_expect_err => |expect_err| try self.mark(.{ .expr = expect_err.expr }, id),
-                .e_expect => |expect| try self.mark(.{ .expr = expect.body }, id),
+                .e_expect => |expect| {
+                    self.has_expects = true;
+                    try self.mark(.{ .expr = expect.body }, id);
+                },
                 .e_return => |ret| {
                     try self.mark(.{ .expr = ret.expr }, id);
                     try self.mark(.{ .expr = ret.lambda }, id);
@@ -610,7 +614,10 @@ pub const ModuleIndex = struct {
                 },
                 .s_dbg => |dbg| try self.mark(.{ .expr = dbg.expr }, id),
                 .s_expr => |expr| try self.mark(.{ .expr = expr.expr }, id),
-                .s_expect => |expect| try self.mark(.{ .expr = expect.body }, id),
+                .s_expect => |expect| {
+                    self.has_expects = true;
+                    try self.mark(.{ .expr = expect.body }, id);
+                },
                 .s_for => |for_| {
                     try self.mark(.{ .pattern = for_.patt }, id);
                     try self.mark(.{ .expr = for_.expr }, id);
@@ -774,14 +781,44 @@ const SingleSourceFacts = struct {
     }
 };
 
+/// The default expression of node `raw` when it is a defaulted record field
+/// annotation.
+fn fieldDefault(store: *const can.NodeStore, raw: u32) ?u32 {
+    const id: CIR.Node.Idx = @fromBackingInt(raw);
+    if (store.nodes.fieldItem(.tag, id) != .ty_record_field_defaulted) return null;
+    return store.nodes.get(id).getPayload().ty_record_field_defaulted.default_value;
+}
+
+/// The length of `env`'s `ModuleIndex.defaults`, counted without building
+/// the index.
+pub fn defaultExprCount(allocator: Allocator, env: *const ModuleEnv) Allocator.Error!usize {
+    var defaults: std.ArrayList(u32) = .empty;
+    defer defaults.deinit(allocator);
+    const node_count: u32 = @intCast(env.store.nodes.len());
+    var raw: u32 = 0;
+    while (raw < node_count) : (raw += 1) {
+        try defaults.append(allocator, fieldDefault(&env.store, raw) orelse continue);
+    }
+    std.mem.sort(u32, defaults.items, {}, std.sort.asc(u32));
+    dedupeSorted(&defaults);
+    return defaults.items.len;
+}
+
+/// The module index and one fact slot per top-level unit it records.
+const Indexed = struct {
+    index: ModuleIndex,
+    unit_slots: []UnitSlot,
+};
+
 /// The body facts of one checked module, owned by the module. `allocator`
 /// must be safe to use from every thread that reads the module.
 pub const BodyAnalyses = struct {
     allocator: Allocator,
     io: std.Io,
     env: *const ModuleEnv,
-    index: ModuleIndex,
-    unit_slots: []UnitSlot,
+    /// The binding patterns of the module's promoted local procedures.
+    promoted_patterns: []PatternId,
+    indexed: collections.OnceSlot(*Indexed, .body_module_index) = .empty,
     dispatch_crashes: collections.OnceSlot(*NodeBits, .body_dispatch_crashes) = .empty,
     diagnostic_errors: collections.OnceSlot(*NodeBits, .body_diagnostic_errors) = .empty,
     single_source: collections.OnceSlot(*SingleSourceFacts, .body_single_source_calls) = .empty,
@@ -796,24 +833,25 @@ pub const BodyAnalyses = struct {
     ) Allocator.Error!*BodyAnalyses {
         const analyses = try allocator.create(BodyAnalyses);
         errdefer allocator.destroy(analyses);
-        var index = try ModuleIndex.build(allocator, env, promoted);
-        errdefer index.deinit(allocator);
-        const unit_slots = try allocator.alloc(UnitSlot, index.units.len);
-        @memset(unit_slots, .empty);
+        const promoted_patterns = try allocator.alloc(PatternId, promoted.len);
+        for (promoted, promoted_patterns) |entry, *pattern| pattern.* = entry.pattern;
         analyses.* = .{
             .allocator = allocator,
             .io = io,
             .env = env,
-            .index = index,
-            .unit_slots = unit_slots,
+            .promoted_patterns = promoted_patterns,
         };
         return analyses;
     }
 
     pub fn destroy(self: *BodyAnalyses) void {
         const allocator = self.allocator;
-        for (self.unit_slots) |*slot| if (slot.peek()) |facts| facts.destroy(allocator);
-        allocator.free(self.unit_slots);
+        if (self.indexed.peek()) |indexed| {
+            for (indexed.unit_slots) |*slot| if (slot.peek()) |facts| facts.destroy(allocator);
+            allocator.free(indexed.unit_slots);
+            indexed.index.deinit(allocator);
+            allocator.destroy(indexed);
+        }
         inline for (.{ "dispatch_crashes", "diagnostic_errors" }) |name| {
             if (@field(self, name).peek()) |bits| {
                 bits.deinit(allocator);
@@ -821,19 +859,48 @@ pub const BodyAnalyses = struct {
             }
         }
         if (self.single_source.peek()) |facts| facts.destroy(allocator);
-        self.index.deinit(allocator);
+        allocator.free(self.promoted_patterns);
         allocator.destroy(self);
     }
 
+    /// The module index, built on first demand.
+    pub fn demandIndex(self: *BodyAnalyses) Allocator.Error!*const ModuleIndex {
+        const indexed = try self.indexed.getOrCompute(self.io, Allocator.Error, self, computeIndexed);
+        return &indexed.index;
+    }
+
+    /// The module index, which a consumer demanded (`demandIndex`) before
+    /// reading the module's bodies.
+    pub fn index(self: *const BodyAnalyses) *const ModuleIndex {
+        return &self.demanded().index;
+    }
+
+    fn demanded(self: *const BodyAnalyses) *Indexed {
+        return self.indexed.peek() orelse invariant("the consumer must demand the module index before reading bodies");
+    }
+
+    fn computeIndexed(self: *BodyAnalyses) Allocator.Error!*Indexed {
+        const allocator = self.allocator;
+        const indexed = try allocator.create(Indexed);
+        errdefer allocator.destroy(indexed);
+        var module_index = try ModuleIndex.build(allocator, self.env, self.promoted_patterns);
+        errdefer module_index.deinit(allocator);
+        const unit_slots = try allocator.alloc(UnitSlot, module_index.units.len);
+        @memset(unit_slots, .empty);
+        indexed.* = .{ .index = module_index, .unit_slots = unit_slots };
+        return indexed;
+    }
+
     fn unitFacts(self: *BodyAnalyses, bodies: CheckedBodies, raw_node: u32) Allocator.Error!struct { *const UnitFacts, u32 } {
-        const unit_id = self.index.unitOf(raw_node);
-        const facts = try self.unit_slots[@backingInt(unit_id)].getOrCompute(
+        const indexed = self.demanded();
+        const unit_id = indexed.index.unitOf(raw_node);
+        const facts = try indexed.unit_slots[@backingInt(unit_id)].getOrCompute(
             self.io,
             Allocator.Error,
             UnitRequest{ .analyses = self, .bodies = bodies, .unit = unit_id },
             UnitRequest.compute,
         );
-        return .{ facts, self.index.position_in_unit[raw_node] };
+        return .{ facts, indexed.index.position_in_unit[raw_node] };
     }
 
     const UnitRequest = struct {
@@ -2621,4 +2688,110 @@ fn singleSourceSites(
             false;
     }
     return flags;
+}
+
+const index_test_source =
+    \\Config := { count : U8 ?? 7 }
+    \\pick = |tag| {
+    \\    var $state = {}
+    \\    match tag {
+    \\        A => {
+    \\            $state = {}
+    \\            $state
+    \\        }
+    \\        B => $state
+    \\    }
+    \\}
+    \\expect 1 == 1
+;
+
+fn expectSameIndex(expected: *const ModuleIndex, actual: *const ModuleIndex) error{TestExpectedEqual}!void {
+    try std.testing.expectEqual(expected.has_expects, actual.has_expects);
+    inline for (.{ "node_kinds", "node_flags", "units", "unit_nodes", "top_level_defs", "defaults" }) |field| {
+        try std.testing.expectEqualDeep(@field(expected, field), @field(actual, field));
+    }
+    // Ownership and position are defined only for reached nodes.
+    for (expected.node_kinds, 0..) |kind, raw| {
+        if (kind == .unreached) continue;
+        try std.testing.expectEqual(expected.unit_of[raw], actual.unit_of[raw]);
+        try std.testing.expectEqual(expected.position_in_unit[raw], actual.position_in_unit[raw]);
+    }
+}
+
+test "body index stays lazy and matches eager indexing including defaults and promoted patterns" {
+    const allocator = std.testing.allocator;
+    var fixture = try @import("test/TestEnv.zig").init("Main", index_test_source);
+    defer fixture.deinit();
+    try std.testing.expectEqual(@as(usize, 0), fixture.checker.problems.problems.items.len);
+    const env = fixture.module_env;
+    const def = env.store.getDef(env.store.sliceDefs(env.global_value_defs)[0]);
+    const promoted = [_]struct { pattern: PatternId }{.{ .pattern = def.pattern }};
+    var eager = try ModuleIndex.build(allocator, env, &.{def.pattern});
+    defer eager.deinit(allocator);
+    try std.testing.expect(eager.has_expects);
+    try std.testing.expectEqual(@as(usize, 1), eager.defaults.len);
+
+    var failing = std.testing.FailingAllocator.init(allocator, .{});
+    const analyses = try BodyAnalyses.create(failing.allocator(), std.testing.io, env, &promoted);
+    defer analyses.destroy();
+    try std.testing.expect(analyses.indexed.peek() == null);
+    try std.testing.expectEqual(eager.defaults.len, try defaultExprCount(allocator, env));
+    try std.testing.expect(analyses.indexed.peek() == null);
+    const index = try analyses.demandIndex();
+    try expectSameIndex(&eager, index);
+    try std.testing.expect(index.node_flags[@backingInt(def.pattern)].promoted_pattern);
+    for (analyses.indexed.peek().?.unit_slots) |*slot| try std.testing.expect(slot.peek() == null);
+
+    // Repeated reads and demands cannot allocate or replace the index.
+    failing.fail_index = failing.alloc_index;
+    failing.resize_fail_index = failing.resize_index;
+    try std.testing.expectEqual(index, try analyses.demandIndex());
+    try std.testing.expectEqual(index, analyses.index());
+}
+
+test "body index allocation failures leave no partial index and can be retried" {
+    var fixture = try @import("test/TestEnv.zig").init("Main", index_test_source);
+    defer fixture.deinit();
+    var eager = try ModuleIndex.build(std.testing.allocator, fixture.module_env, &.{});
+    defer eager.deinit(std.testing.allocator);
+    var deterministic = collections.DeterministicAllocator.init(std.testing.allocator);
+    var fail_at: usize = 0;
+    while (true) : (fail_at += 1) {
+        var failing = std.testing.FailingAllocator.init(deterministic.allocator(), .{});
+        {
+            const analyses = try BodyAnalyses.create(failing.allocator(), std.testing.io, fixture.module_env, &.{});
+            defer analyses.destroy();
+            const initial_bytes = failing.allocated_bytes - failing.freed_bytes;
+            failing.fail_index = failing.alloc_index + fail_at;
+            const index = analyses.demandIndex() catch |err| {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+                try std.testing.expect(analyses.indexed.peek() == null);
+                try std.testing.expectEqual(initial_bytes, failing.allocated_bytes - failing.freed_bytes);
+                failing.fail_index = std.math.maxInt(usize);
+                try expectSameIndex(&eager, try analyses.demandIndex());
+                continue;
+            };
+            try expectSameIndex(&eager, index);
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+        break;
+    }
+    try std.testing.expect(fail_at > 1);
+}
+
+test "body analyses creation and undemanded destruction release every allocation" {
+    var fixture = try @import("test/TestEnv.zig").init("Main", index_test_source);
+    defer fixture.deinit();
+    const env = fixture.module_env;
+    const def = env.store.getDef(env.store.sliceDefs(env.global_value_defs)[0]);
+    const Scenario = struct {
+        fn run(allocator: Allocator, module: *const ModuleEnv, pattern: PatternId) (Allocator.Error || error{TestUnexpectedResult})!void {
+            // Creation owns this list but does not inspect its nodes.
+            const promoted = [_]struct { pattern: PatternId }{.{ .pattern = pattern }};
+            const analyses = try BodyAnalyses.create(allocator, std.testing.io, module, &promoted);
+            defer analyses.destroy();
+            try std.testing.expect(analyses.indexed.peek() == null);
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{ env, def.pattern });
 }

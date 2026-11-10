@@ -15,6 +15,38 @@ const CheckedModules = check.TypedCIR.Modules;
 const Can = can.Can;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
+
+/// Completed frontend work, counted at its execution sites independently of clocks.
+pub const CheckingWork = struct {
+    fresh_checks: u64 = 0,
+    typing_hits: u64 = 0,
+    artifact_hits: u64 = 0,
+    publications: u64 = 0,
+    /// checkFile includes checking-interface publication and sealing.
+    fresh_check_ns: u64 = 0,
+    /// Checked-artifact publication; the coordinator subtracts local CTFE.
+    publication_ns: u64 = 0,
+
+    pub fn add(self: *CheckingWork, other: CheckingWork) void {
+        inline for (@typeInfo(CheckingWork).@"struct".field_names) |field| {
+            @field(self, field) += @field(other, field);
+        }
+    }
+};
+
+const CheckingTimer = struct {
+    const freestanding = @import("builtin").os.tag == .freestanding;
+    started: if (freestanding) void else std.Io.Timestamp,
+
+    fn start(io: std.Io) CheckingTimer {
+        return .{ .started = if (freestanding) {} else std.Io.Timestamp.now(io, .awake) };
+    }
+
+    fn read(self: CheckingTimer, io: std.Io) u64 {
+        if (comptime freestanding) return 0;
+        return @intCast(@max(0, self.started.untilNow(io, .awake).nanoseconds));
+    }
+};
 /// Deserialize BuiltinIndices from the binary data generated at build time
 /// Timing information for different phases
 pub const TimingInfo = struct {
@@ -22,6 +54,7 @@ pub const TimingInfo = struct {
     canonicalize_ns: u64 = 0,
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
+    checking_work: CheckingWork = .{},
     check_diagnostics_ns: u64 = 0,
     /// Compile-time evaluation run inside individual module checks, summed
     /// across the worker threads that ran those checks.
@@ -169,17 +202,19 @@ pub const CheckedModuleData = struct {
     checked_artifact: *const CheckedArtifact.CheckedModuleArtifact,
 };
 
+const checked_cache_entry = @import("checked_cache_entry.zig");
+
 /// Owned output from type checking before the coordinator takes publication.
 pub const TypeCheckOutput = struct {
+    checking_work: CheckingWork = .{},
+    typing_metadata: ?checked_cache_entry.Metadata = null,
+    typing_reused: bool = false,
     checker: Check,
     publication: CheckedArtifact.CheckedModuleArtifact,
     publication_owned: bool = true,
-    inference_reused: bool = false,
-    owner_bindings: u32 = 0,
-    reference_bindings: u32 = 0,
-    diagnostics_replayed: u32 = 0,
 
     pub fn deinit(self: *TypeCheckOutput) void {
+        if (self.typing_metadata) |metadata| metadata.deinit(self.publication.canonical_names.allocator);
         if (self.publication_owned) self.publication.deinit(self.publication.canonical_names.allocator);
         self.checker.deinit();
     }
@@ -498,12 +533,11 @@ pub fn typeCheckModule(
     platform_requirement_context: ?CheckedArtifact.PlatformRequirementContextKey,
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput,
     validation: Can.Validation,
-    source_pin_validation: [32]u8,
     io: std.Io,
     ctfe_options: eval.CompileTimeFinalization.Options,
     deferred_imports: can.ImportResolution.Imports,
     missing_public_types: []const []const u8,
-    inference_cache: ?@import("inference_cache.zig").Cache,
+    typing_context: ?*checked_cache_entry.Context,
 ) TypeCheckModuleError!TypeCheckOutput {
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
 
@@ -519,14 +553,14 @@ pub fn typeCheckModule(
     var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(check_alloc);
     errdefer module_envs_map.deinit();
 
-    const owner_envs = try buildCheckOwnerEnvs(
+    const owner_envs = if (typing_context) |context| context.owner_envs else try buildCheckOwnerEnvs(
         check_alloc,
         imported_envs,
         imported_artifacts,
         available_artifacts,
         platform_requirements,
     );
-    defer check_alloc.free(owner_envs);
+    defer if (typing_context == null) check_alloc.free(owner_envs);
 
     // Resolve this module's deferred references into its imports before any
     // checking reads them. The imports have completed and the checked-module
@@ -537,18 +571,7 @@ pub fn typeCheckModule(
         .missing_public_types = missing_public_types,
     });
 
-    var checking_scope = try check.CheckingInterface.makeScope(check_alloc, env, builtin_module_env, imported_envs, owner_envs);
-    defer checking_scope.deinit();
-    // The platform's complete checking surface already belongs to the scope.
-    // Select its owner parameter here; full platform implementation identity
-    // remains an input to publication below, never inference admission.
-    const requirement_owner = if (platform_requirements) |requirements|
-        checking_scope.ordinal(requirements.env.contentIdentityHash().?.*)
-    else
-        null;
-    const inference_key = CheckedArtifact.inferenceKeyFromModuleEnv(env, checking_scope.digest(), requirement_owner, explicit_roots, validation, source_pin_validation, missing_public_types);
-    const loaded = if (inference_cache) |cache| try cache.load(inference_key, env, &checking_scope) else null;
-    defer if (loaded) |capsule| capsule.deinit();
+    const restored = if (typing_context) |context| try checked_cache_entry.restoreTyping(context, env) else null;
 
     var checker = try Check.initWithOwnerModules(
         check_alloc,
@@ -569,13 +592,23 @@ pub fn typeCheckModule(
     // until after platform requirements are checked, so numeric literals can be
     // constrained by platform types (e.g., I64) before defaulting to Dec.
     // TODO: re-enable defer_numeric_defaults once ModuleEnv has the field
-    if (loaded) |capsule| {
-        try capsule.metadata.install(&checker, &checking_scope);
+    var work: CheckingWork = .{};
+    if (restored) |metadata| {
+        try metadata.install(&checker, &typing_context.?.scope);
         env.types.seal();
+        work.typing_hits += 1;
     } else {
+        const timer = CheckingTimer.start(io);
         try checker.checkFile();
-        if (inference_cache) |cache| cache.store(inference_key, env, &checker, &checking_scope);
+        work.fresh_check_ns = timer.read(io);
+        work.fresh_checks += 1;
     }
+
+    const typing_metadata = if (typing_context) |context|
+        try checked_cache_entry.captureMetadata(artifact_alloc, &checker, &context.scope)
+    else
+        null;
+    errdefer if (typing_metadata) |metadata| metadata.deinit(artifact_alloc);
 
     module_envs_map.deinit();
 
@@ -583,6 +616,7 @@ pub fn typeCheckModule(
         base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
+    const publication_timer = CheckingTimer.start(io);
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
         artifact_alloc,
         env,
@@ -601,14 +635,15 @@ pub fn typeCheckModule(
         },
     );
     errdefer checked_artifact.deinit(artifact_alloc);
+    work.publication_ns = publication_timer.read(io);
+    work.publications += 1;
 
     return .{
+        .checking_work = work,
         .checker = checker,
         .publication = checked_artifact,
-        .inference_reused = loaded != null,
-        .owner_bindings = if (loaded != null) @intCast(env.module_identities.count()) else 0,
-        .reference_bindings = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.foreign_references.len) orelse return error.OutOfMemory else 0,
-        .diagnostics_replayed = if (loaded) |capsule| std.math.cast(u32, capsule.metadata.outcome.problems.len + env.diagnosticCount()) orelse return error.OutOfMemory else 0,
+        .typing_metadata = typing_metadata,
+        .typing_reused = restored != null,
     };
 }
 

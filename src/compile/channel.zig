@@ -107,8 +107,40 @@ pub fn Channel(comptime T: type) type {
         /// Use this when the sender must remain responsive and cannot afford to
         /// block—e.g. a coordinator that also needs to drain another channel.
         pub fn sendGrowable(self: *Self, item: T) error{ Closed, OutOfMemory }!void {
+            var reservation = try self.reserveSendGrowable();
+            defer reservation.deinit();
+            reservation.commit(item);
+        }
+
+        /// One send slot protected from other producers until deinit. Once
+        /// reserved, publication cannot fail. Do not copy the reservation or
+        /// call another operation on this channel while holding it.
+        pub const SendReservation = struct {
+            channel: *Self,
+            committed: bool = false,
+
+            pub fn commit(self: *SendReservation, item: T) void {
+                std.debug.assert(!self.committed);
+                const ch = self.channel;
+                std.debug.assert(!ch.closed and ch.count < ch.buffer.len);
+                ch.buffer[ch.write_pos] = item;
+                ch.write_pos = (ch.write_pos + 1) % ch.buffer.len;
+                ch.count += 1;
+                self.committed = true;
+                ch.not_empty.signal(ch.std_io);
+            }
+
+            /// Unlock; an uncommitted reservation publishes nothing.
+            pub fn deinit(self: *SendReservation) void {
+                self.channel.mutex.unlock(self.channel.std_io);
+            }
+        };
+
+        /// Check closure and allocate room before any dependent publication.
+        /// Success retains the lock; failure leaves the queue unchanged.
+        pub fn reserveSendGrowable(self: *Self) error{ Closed, OutOfMemory }!SendReservation {
             self.mutex.lockUncancelable(self.std_io);
-            defer self.mutex.unlock(self.std_io);
+            errdefer self.mutex.unlock(self.std_io);
 
             if (self.closed) return error.Closed;
 
@@ -134,11 +166,7 @@ pub fn Channel(comptime T: type) type {
                 self.not_full.broadcast(self.std_io);
             }
 
-            self.buffer[self.write_pos] = item;
-            self.write_pos = (self.write_pos + 1) % self.buffer.len;
-            self.count += 1;
-
-            self.not_empty.signal(self.std_io);
+            return .{ .channel = self };
         }
 
         /// Receive an item from the channel, blocking if empty.
@@ -348,6 +376,51 @@ test "Channel sendGrowable with wrap-around growth" {
     try std.testing.expectEqual(@as(u32, 30), ch.recv().?);
     try std.testing.expectEqual(@as(u32, 40), ch.recv().?);
     try std.testing.expectEqual(@as(u32, 50), ch.recv().?);
+}
+
+test "post-check publication reservation preserves wrapped queue on OOM" {
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var ch = try Channel(u32).init(failing.allocator(), 2, std.testing.io);
+    defer ch.deinit();
+    try ch.send(10);
+    try ch.send(20);
+    try std.testing.expectEqual(@as(u32, 10), ch.recv().?);
+    try ch.send(30);
+
+    failing.fail_index = failing.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, ch.reserveSendGrowable());
+    try std.testing.expectEqual(@as(usize, 2), ch.len());
+    try std.testing.expectEqual(@as(usize, 2), ch.capacity());
+
+    // Retrying also proves the error released the lock. Growth must retain
+    // the original FIFO order, even though the old ring had wrapped.
+    failing.fail_index = std.math.maxInt(usize);
+    {
+        var reservation = try ch.reserveSendGrowable();
+        defer reservation.deinit();
+        reservation.commit(40);
+    }
+    try std.testing.expectEqual(@as(u32, 20), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 30), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 40), ch.recv().?);
+    try std.testing.expect(ch.isEmpty());
+}
+
+test "post-check publication reservation cancellation and closure publish nothing" {
+    var ch = try Channel(u32).init(std.testing.allocator, 1, std.testing.io);
+    defer ch.deinit();
+    try ch.send(10);
+    {
+        var reservation = try ch.reserveSendGrowable();
+        defer reservation.deinit();
+        // Abandon the reserved slot after growing the full queue.
+    }
+    try ch.sendGrowable(20);
+    try std.testing.expectEqual(@as(u32, 10), ch.recv().?);
+    try std.testing.expectEqual(@as(u32, 20), ch.recv().?);
+    ch.close();
+    try std.testing.expectError(error.Closed, ch.reserveSendGrowable());
+    try std.testing.expect(ch.isEmpty());
 }
 
 test "Channel len and capacity" {

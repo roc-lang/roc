@@ -14,10 +14,10 @@
 //! is taken, is not, so those procedures run their own pending calls.
 //!
 //! A statement hands its pending call up when nothing but reference-count
-//! statements and jumps into a join body separates it from the return of its
-//! result. Those statements are safe to run before the pending call: a pending
-//! call owns its closure and every argument, so nothing it reads is released
-//! by them.
+//! statements, ARC's residual-release projections, and jumps into a join body
+//! separates it from the return of its result. Those statements are safe to
+//! run before the pending call: a pending call owns its closure and every
+//! argument, and the cleanup projections do not read or overwrite its result.
 
 const std = @import("std");
 const core = @import("lir_core");
@@ -38,8 +38,8 @@ const DirectCall = struct {
 const Returns = enum {
     /// Something other than returning it reads the value.
     no,
-    /// Nothing but reference-count statements and jumps into a join body
-    /// separates the call from the return of its value.
+    /// Nothing but reference-count statements, residual-release projections,
+    /// and jumps into a join body separates the call from its value's return.
     unchanged,
 };
 
@@ -237,8 +237,52 @@ fn returnOf(
             .decref => |rc| current = rc.next,
             .decref_if_initialized => |rc| current = rc.next,
             .free => |rc| current = rc.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .crash => return .no,
+            .assign_ref => |assign| {
+                // Releasing a partially consumed aggregate projects its
+                // remaining fields before decrefing them. ARC already states
+                // that purpose; these reads need no completed call result.
+                const origin = store.stmtOrigin(current).kind;
+                if (origin != .arc_dismantle or
+                    origin.arc_dismantle.subject_local == value or
+                    assign.op.source == value or assign.target == value) return .no;
+                current = assign.next;
+            },
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .dyn, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .crash => return .no,
         }
+    }
+}
+
+test "tail drive permits residual-release projections independent of the pending result" {
+    const a = std.testing.allocator;
+    const Case = enum { cleanup, unmarked, reads_result, overwrites_result, dismantles_result };
+    for (std.enums.values(Case)) |case| {
+        var store = LirStore.init(a);
+        defer store.deinit();
+        var layouts = try @import("layout").Store.init(a, .u64);
+        defer layouts.deinit();
+        const aggregate_layout = try layouts.putStructFields(&.{.{ .index = 0, .layout = .str }});
+        const result = try store.addLocal(.{ .layout_idx = if (case == .reads_result) aggregate_layout else .str });
+        const aggregate = try store.addLocal(.{ .layout_idx = aggregate_layout });
+        const field = try store.addLocal(.{ .layout_idx = .str });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const release = try store.addCFStmt(.{ .decref = .{
+            .value = field,
+            .rc = try store.addRcHelperRef(.{ .concrete = .{ .op = .decref, .layout_idx = .str } }),
+            .next = ret,
+        } }, .test_fixture);
+        var origin: LIR.StmtOrigin = .test_fixture;
+        if (case != .unmarked) origin.kind = .{ .arc_dismantle = .{
+            .subject_local = if (case == .dismantles_result) result else aggregate,
+        } };
+        const projection = try store.addCFStmt(.{ .assign_ref = .{
+            .target = if (case == .overwrites_result) result else field,
+            .op = .field(if (case == .reads_result) result else aggregate, 0),
+            .next = release,
+        } }, origin);
+        try std.testing.expectEqual(
+            if (case == .cleanup) Returns.unchanged else .no,
+            returnOf(&store, &.{}, result, projection),
+        );
     }
 }
 

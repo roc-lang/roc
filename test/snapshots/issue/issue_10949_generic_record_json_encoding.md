@@ -57,7 +57,7 @@ NO CHANGE
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-call (constraint-fn-var 261)
+			(e-call (constraint-fn-var 264)
 				(e-lookup-external
 					(builtin))
 				(e-record
@@ -70,7 +70,7 @@ NO CHANGE
 								(p-assign (ident "b")))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-call (constraint-fn-var 276)
+		(e-call (constraint-fn-var 279)
 			(e-lookup-local
 				(p-assign (ident "to_json")))
 			(e-string

@@ -1,4 +1,4 @@
-//! Read-only, scoped nominal substitution for exhaustiveness analysis.
+//! Read-only, scoped nominal substitution for structural type analyses.
 //!
 //! The reader has its own ID namespace: source IDs denote actual solver roots;
 //! IDs above the source's frozen length denote (template root, environment)

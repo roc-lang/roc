@@ -4181,76 +4181,29 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DerivedParserErrorRow,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Parser Error Row Missing Tag", "", .runtime_error);
+        var report = try Report.init(self.gpa, "Parser Error Type Mismatch", "", .runtime_error);
         errdefer report.deinit();
 
-        switch (data.reason) {
-            .required_field => {
-                try D.renderSliceInto(&.{
-                    D.bytes("This parser can fail with the tag"),
-                    D.bytes("MissingRequiredField(Str)").withAnnotation(.inline_code),
-                    D.bytes("but its error row does not include it."),
-                }, self, &report, &report.headline);
-            },
-            .nested_row => {
-                try D.renderSliceInto(&.{
-                    D.bytes("This parser can fail with a tag that its error row does not include."),
-                }, self, &report, &report.headline);
-            },
-        }
+        try D.renderSliceInto(&.{
+            D.bytes("Every operation in a derived parser must use the same format-owned error type."),
+        }, self, &report, &report.headline);
 
         try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
-        switch (data.reason) {
-            .required_field => {
-                try report.document.addReflowingText("The parser is derived for the record type:");
-                try report.document.addLineBreaks(2);
-                const record_str = try report.addOwnedString(self.getFormattedString(data.record_snapshot.?));
-                try report.document.addCodeBlock(record_str);
-                try report.document.addLineBreak();
-                const fields_text = self.problems.getExtraString(data.required_fields.?);
-                if (data.required_field_count == 1) {
-                    try report.document.addReflowingText("The field ");
-                    try report.document.addAnnotated(fields_text, .inline_code);
-                    try report.document.addReflowingText(" is required, so the derived parser can fail when it is missing.");
-                } else {
-                    try report.document.addReflowingText("The fields ");
-                    try report.document.addAnnotated(fields_text, .inline_code);
-                    try report.document.addReflowingText(" are required, so the derived parser can fail when one is missing.");
-                }
-            },
-            .nested_row => {
-                try report.document.addReflowingText("The nested parser can produce the tags:");
-                try report.document.addLineBreaks(2);
-                const tags_str = try report.addOwnedString(self.getFormattedString(data.tags_snapshot.?));
-                try report.document.addCodeBlock(tags_str);
-            },
-        }
+        try report.document.addReflowingText("One operation uses the error type:");
+        try report.document.addLineBreaks(2);
+        const tags_str = try report.addOwnedString(self.getFormattedString(data.tags_snapshot));
+        try report.document.addCodeBlock(tags_str);
 
         try report.document.addLineBreaks(2);
-        try report.document.addReflowingText("But the error row is closed at:");
+        try report.document.addReflowingText("But this parser requires:");
         try report.document.addLineBreaks(2);
         const row_str = try report.addOwnedString(self.getFormattedString(data.row_snapshot));
         try report.document.addCodeBlock(row_str);
         try report.document.addLineBreak();
 
-        switch (data.reason) {
-            .required_field => {
-                try report.document.addReflowingText("Make the required field optional with ");
-                try report.document.addAnnotated("?:", .inline_code);
-                try report.document.addReflowingText(", ");
-                try report.document.addAnnotated("??", .inline_code);
-                try report.document.addReflowingText(", or ");
-                try report.document.addAnnotated("Try(_, [Missing])", .inline_code);
-                try report.document.addReflowingText(", or add ");
-                try report.document.addAnnotated("MissingRequiredField(Str)", .inline_code);
-                try report.document.addReflowingText(" to the error row.");
-            },
-            .nested_row => {
-                try report.document.addReflowingText("Add the missing tags to the error row, or widen it so it includes them.");
-            },
-        }
+        try report.document.addReflowingText("Use the format's error type in each parser operation, translating custom domain errors explicitly.");
 
         return report;
     }
@@ -5463,10 +5416,15 @@ pub const ReportBuilder = struct {
     }
 
     fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
-        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error, data.region, &.{
-            D.bytes("Wrap function types in"),
-            D.bytes("Box").withAnnotation(.inline_code),
-            D.bytes("when crossing the host boundary."),
+        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Host-visible functions, Iter, and Stream must each be directly boxed.", .runtime_error, data.region, &.{
+            D.bytes(self.problems.getExtraString(data.path)).withAnnotation(.inline_code),
+            D.bytes("contains an unboxed"),
+            D.bytes(switch (data.kind) {
+                .function => "function",
+                .iter => "Iter",
+                .stream => "Stream",
+            }).withAnnotation(.inline_code),
+            D.bytes("value. Make that value the immediate payload of its own Box. Boxing an enclosing record, tuple, list, tag, or user type does not count."),
         });
     }
 
