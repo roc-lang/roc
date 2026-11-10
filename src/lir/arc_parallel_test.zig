@@ -1,6 +1,7 @@
 //! ARC executor determinism and retained-owner cleanup across failed waves.
 
 const std = @import("std");
+const collections = @import("collections");
 const core = @import("lir_core");
 const layout = @import("layout");
 const executor = @import("base").post_check_task_executor;
@@ -895,7 +896,7 @@ fn expectSameDismantles(expected: *const arc_dismantle.Dismantles, actual: *cons
     try expectSameMap(expected.projection_aliases, actual.projection_aliases);
     try testing.expectEqualSlices(arc_sig.ParamMask, expected.owned_only_param_benefits, actual.owned_only_param_benefits);
     try testing.expectEqualSlices(bool, expected.take_bindings, actual.take_bindings);
-    try testing.expectEqualSlices(u32, expected.owned_only_binding_roots, actual.owned_only_binding_roots);
+    try testing.expectEqualSlices(collections.OptionalU32, expected.owned_only_binding_roots.items, actual.owned_only_binding_roots.items);
 }
 
 test "ARC dismantle fact ranges match inline analysis under reverse completions and drain failures" {

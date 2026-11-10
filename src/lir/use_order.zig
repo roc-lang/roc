@@ -78,8 +78,8 @@ pub const UseOrder = struct {
     topology: Topology,
     /// Component views borrow immutable CSR topology and own only compact marks.
     component: ?struct {
-        stmt_to_dense: []const u32,
-        stmt_owner: []const u32,
+        stmt_to_dense: []const collections.OptionalU32,
+        stmt_owner: []const collections.OptionalU32,
         id: u32,
         unresolved: []const u32,
     } = null,
@@ -845,8 +845,8 @@ pub const UseOrder = struct {
 
     fn markIndex(self: *const UseOrder, stmt: u32) u32 {
         if (self.component) |component| {
-            std.debug.assert(component.stmt_owner[stmt] == component.id);
-            return component.stmt_to_dense[stmt];
+            std.debug.assert(component.stmt_owner[stmt] == collections.OptionalU32.some(component.id));
+            return component.stmt_to_dense[stmt].get().?;
         }
         return self.topology.tables.stmtIndex(stmt);
     }

@@ -5528,10 +5528,8 @@ const Inserter = struct {
     fn outcomeArgumentOrigin(self: *const Inserter, local: LIR.LocalId) LIR.LocalId {
         var cursor = @backingInt(local);
         var steps: usize = 0;
-        while (cursor < self.solution.alias_source.len and
-            self.solution.alias_source[cursor] != no_arc_bit)
-        {
-            cursor = self.solution.alias_source[cursor];
+        while (cursor < self.solution.alias_source.len) {
+            cursor = self.solution.alias_source[cursor].get() orelse break;
             steps += 1;
             if (steps > self.solution.alias_source.len) {
                 arcInvariant("ARC outcome argument alias chain contained a cycle");
@@ -9559,7 +9557,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
     // only the leader and alias named by its explicit frame.
     solution.borrowed.set(@backingInt(external_member));
     solution.leader[@backingInt(external_member)] = @backingInt(leader);
-    solution.alias_source[@backingInt(external_member)] = @backingInt(leader);
+    solution.alias_source[@backingInt(external_member)] = .some(@backingInt(leader));
     try testing.expectEqual(leader, solution.leaderOf(external_member));
 
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);

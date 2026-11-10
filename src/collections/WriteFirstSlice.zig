@@ -23,6 +23,9 @@ pub fn WriteFirstSlice(comptime T: type) type {
         entries: []T,
         written: if (tracks_writes) std.DynamicBitSetUnmanaged else void,
 
+        /// A table with no entries and no storage, safe to `deinit`.
+        pub const empty: Self = .{ .entries = &.{}, .written = if (tracks_writes) .{} else {} };
+
         /// Allocate `entry_count` uninitialized entries.
         pub fn init(gpa: Allocator, entry_count: usize) Allocator.Error!Self {
             const entries = try gpa.alloc(T, entry_count);

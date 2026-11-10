@@ -109,6 +109,9 @@ pub const UniquenessOptions = struct {
 
 const no_local: u32 = std.math.maxInt(u32);
 
+const OptionalU32 = collections.OptionalU32;
+const WriteFirstSlice = collections.WriteFirstSlice;
+
 /// Presence-bit condition guarding a payload local whose storage may not be
 /// initialized on every path into a join.
 pub const MaybeUninitializedCondition = struct {
@@ -180,13 +183,14 @@ pub const Solution = struct {
     /// Owned leader anchoring each local's liveness; the local itself when
     /// the binding is owned or is a borrowed parameter.
     leader: []u32,
-    /// Source local of each pure same-value alias, or `no_local`.
-    alias_source: []u32,
+    /// Source local of each pure same-value alias, absent for any other
+    /// local.
+    alias_source: []OptionalU32,
     /// Immediate lender of each solved-borrowed local: the local whose value
     /// it borrows through (its alias source, the container of its field or
-    /// payload read, or the argument a borrowed call result borrows from), or
-    /// `no_local` for owned bindings and borrowed parameters.
-    borrow_source: []u32,
+    /// payload read, or the argument a borrowed call result borrows from),
+    /// absent for owned bindings and borrowed parameters.
+    borrow_source: []OptionalU32,
     /// Solved ownership signature per proc.
     sigs: []arc_sig.RcSig,
     /// Flat complete outcome rows referenced by `RcSig.outcomes`.
@@ -211,12 +215,13 @@ pub const Solution = struct {
     /// Join-body facts per source proc.
     join_bodies: ProcRows(JoinBody),
     /// Compact join and jump-site indices assigned by the sole structural
-    /// lift, indexed directly by ownership-neutral statement id.
-    join_index_by_stmt: []u32,
-    jump_target_join_index_by_stmt: []u32,
-    jump_site_index_by_stmt: []u32,
+    /// lift, indexed directly by ownership-neutral statement id and absent
+    /// for every other statement.
+    join_index_by_stmt: []OptionalU32,
+    jump_target_join_index_by_stmt: []OptionalU32,
+    jump_site_index_by_stmt: []OptionalU32,
     switch_count_by_proc: []u32,
-    switch_index_by_stmt: []u32,
+    switch_index_by_stmt: []OptionalU32,
     /// Bit set => the local is a join parameter. Join parameters carry one
     /// unit into the join body at every jump; their releases belong to the
     /// body, so emission must not end their lifetime from use scans alone.
@@ -225,11 +230,13 @@ pub const Solution = struct {
     /// uninitialized. These locals are released only after an explicit
     /// initialized-payload refinement.
     maybe_uninitialized_join_param: std.bit_set.DynamicBitSetUnmanaged,
-    /// Condition local for each maybe-uninitialized join parameter, or
-    /// `no_local` when the local is not maybe-uninitialized.
-    maybe_uninitialized_condition: []u32,
-    /// Presence mask for each maybe-uninitialized join parameter.
-    maybe_uninitialized_condition_mask: []u64,
+    /// Condition local for each maybe-uninitialized join parameter. Written
+    /// for exactly the locals `maybe_uninitialized_join_param` marks and read
+    /// only for them.
+    maybe_uninitialized_condition: WriteFirstSlice(u32),
+    /// Presence mask for each maybe-uninitialized join parameter, written and
+    /// read like `maybe_uninitialized_condition`.
+    maybe_uninitialized_condition_mask: WriteFirstSlice(u64),
     /// Bit set => the local may hold an allocation the host can also touch,
     /// so its RC statements need atomic count updates.
     visible: std.bit_set.DynamicBitSetUnmanaged,
@@ -295,8 +302,8 @@ pub const Solution = struct {
         self.allocator.free(self.switch_index_by_stmt);
         self.join_param.deinit(self.allocator);
         self.maybe_uninitialized_join_param.deinit(self.allocator);
-        self.allocator.free(self.maybe_uninitialized_condition);
-        self.allocator.free(self.maybe_uninitialized_condition_mask);
+        self.maybe_uninitialized_condition.deinit(self.allocator);
+        self.maybe_uninitialized_condition_mask.deinit(self.allocator);
         self.visible.deinit(self.allocator);
         self.unique.deinit(self.allocator);
         self.unique_destroyed.deinit(self.allocator);
@@ -315,11 +322,9 @@ pub const Solution = struct {
 
     pub fn maybeUninitializedCondition(self: *const Solution, local: LIR.LocalId) ?MaybeUninitializedCondition {
         const index = @backingInt(local);
-        if (index >= self.maybe_uninitialized_condition.len) return null;
+        if (index >= self.maybe_uninitialized_condition.len()) return null;
         if (!self.maybe_uninitialized_join_param.isSet(index)) return null;
-        const condition = self.maybe_uninitialized_condition[index];
-        if (condition == no_local) return null;
-        return .{ .local = @fromBackingInt(@intCast(condition)), .mask = self.maybe_uninitialized_condition_mask[index] };
+        return .{ .local = @fromBackingInt(self.maybe_uninitialized_condition.get(index)), .mask = self.maybe_uninitialized_condition_mask.get(index) };
     }
 
     pub fn isBorrowed(self: *const Solution, local: LIR.LocalId) bool {
@@ -398,10 +403,9 @@ pub const Solution = struct {
         // Every owned binding has an independent unit, even when its value
         // came from another local. Only borrowed links forward that unit.
         while (cursor < self.alias_source.len and
-            self.isBorrowed(@fromBackingInt(@intCast(cursor))) and
-            self.alias_source[cursor] != no_local)
+            self.isBorrowed(@fromBackingInt(@intCast(cursor))))
         {
-            cursor = self.alias_source[cursor];
+            cursor = self.alias_source[cursor].get() orelse break;
             steps += 1;
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
@@ -413,8 +417,8 @@ pub const Solution = struct {
     pub fn aliasRootOf(self: *const Solution, local: LIR.LocalId) LIR.LocalId {
         var cursor = @backingInt(local);
         var steps: usize = 0;
-        while (cursor < self.alias_source.len and self.alias_source[cursor] != no_local) {
-            cursor = self.alias_source[cursor];
+        while (cursor < self.alias_source.len) {
+            cursor = self.alias_source[cursor].get() orelse break;
             steps += 1;
             if (steps > self.alias_source.len) solveInvariant("ARC alias-source chain contained a cycle");
         }
@@ -430,8 +434,8 @@ pub const Solution = struct {
     pub fn borrowSourceOf(self: *const Solution, local: LIR.LocalId) ?LIR.LocalId {
         const index = @backingInt(local);
         if (index >= self.borrow_source.len) return null;
-        const source = self.borrow_source[index];
-        return if (source == no_local) null else @fromBackingInt(@intCast(source));
+        const source = self.borrow_source[index].get() orelse return null;
+        return @fromBackingInt(source);
     }
 
     /// Adopts the reads dismantle materialized as local aliases of their
@@ -454,8 +458,8 @@ pub const Solution = struct {
             const alias = @backingInt(entry.key_ptr.*);
             const representative = @backingInt(entry.value_ptr.*);
             if (!self.borrowed.isSet(alias) or self.representation_alias.isSet(alias)) continue;
-            self.borrow_source[alias] = representative;
-            self.alias_source[alias] = representative;
+            self.borrow_source[alias] = .some(representative);
+            self.alias_source[alias] = .some(representative);
             if (self.leader[alias] != self.leader[representative]) try left_groups.append(allocator, self.leader[alias]);
         }
         try self.reresolveLeftGroups(allocator, left_groups.items);
@@ -463,7 +467,7 @@ pub const Solution = struct {
             var check = aliases.constIterator();
             while (check.next()) |entry| {
                 const alias = @backingInt(entry.key_ptr.*);
-                if (self.borrow_source[alias] == no_local) continue;
+                if (self.borrow_source[alias] == .none) continue;
                 if (self.leader[alias] != self.leader[@backingInt(entry.value_ptr.*)]) {
                     solveInvariant("ARC materialized alias left its representative's liveness group");
                 }
@@ -518,7 +522,7 @@ pub const Solution = struct {
         var pending = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         defer pending.deinit(allocator);
         for (self.leader, 0..) |leader, index| {
-            if (left.isSet(leader) and self.borrow_source[index] != no_local) pending.set(index);
+            if (left.isSet(leader) and self.borrow_source[index] != .none) pending.set(index);
         }
         var chain: std.ArrayList(u32) = .empty;
         defer chain.deinit(allocator);
@@ -530,7 +534,7 @@ pub const Solution = struct {
             while (pending.isSet(cursor)) {
                 if (chain.items.len > local_count) solveInvariant("ARC borrow-source chain contained a cycle");
                 try chain.append(allocator, cursor);
-                cursor = self.borrow_source[cursor];
+                cursor = self.borrow_source[cursor].get().?;
             }
             const leader = self.leader[cursor];
             for (chain.items) |link| {
@@ -612,26 +616,20 @@ pub const Solution = struct {
 
     pub fn joinIndexOfStmt(self: *const Solution, stmt: LIR.CFStmtId) u32 {
         const index = @backingInt(stmt);
-        if (index >= self.join_index_by_stmt.len or self.join_index_by_stmt[index] == no_local) {
-            solveInvariant("ARC statement did not have a lifted join index");
-        }
-        return self.join_index_by_stmt[index];
+        if (index >= self.join_index_by_stmt.len) solveInvariant("ARC statement did not have a lifted join index");
+        return self.join_index_by_stmt[index].get() orelse solveInvariant("ARC statement did not have a lifted join index");
     }
 
     pub fn jumpSiteIndexOf(self: *const Solution, stmt: LIR.CFStmtId) u32 {
         const index = @backingInt(stmt);
-        if (index >= self.jump_site_index_by_stmt.len or self.jump_site_index_by_stmt[index] == no_local) {
-            solveInvariant("ARC jump did not have a lifted contribution index");
-        }
-        return self.jump_site_index_by_stmt[index];
+        if (index >= self.jump_site_index_by_stmt.len) solveInvariant("ARC jump did not have a lifted contribution index");
+        return self.jump_site_index_by_stmt[index].get() orelse solveInvariant("ARC jump did not have a lifted contribution index");
     }
 
     pub fn jumpTargetJoinIndexOf(self: *const Solution, stmt: LIR.CFStmtId) u32 {
         const index = @backingInt(stmt);
-        if (index >= self.jump_target_join_index_by_stmt.len or self.jump_target_join_index_by_stmt[index] == no_local) {
-            solveInvariant("ARC jump did not have a lifted target-join index");
-        }
-        return self.jump_target_join_index_by_stmt[index];
+        if (index >= self.jump_target_join_index_by_stmt.len) solveInvariant("ARC jump did not have a lifted target-join index");
+        return self.jump_target_join_index_by_stmt[index].get() orelse solveInvariant("ARC jump did not have a lifted target-join index");
     }
 
     pub fn switchCountOf(self: *const Solution, proc: LIR.LirProcSpecId) u32 {
@@ -642,10 +640,8 @@ pub const Solution = struct {
 
     pub fn switchIndexOfStmt(self: *const Solution, stmt: LIR.CFStmtId) u32 {
         const index = @backingInt(stmt);
-        if (index >= self.switch_index_by_stmt.len or self.switch_index_by_stmt[index] == no_local) {
-            solveInvariant("ARC continuation switch did not have a lifted compact index");
-        }
-        return self.switch_index_by_stmt[index];
+        if (index >= self.switch_index_by_stmt.len) solveInvariant("ARC continuation switch did not have a lifted compact index");
+        return self.switch_index_by_stmt[index].get() orelse solveInvariant("ARC continuation switch did not have a lifted compact index");
     }
 };
 
@@ -682,27 +678,30 @@ pub fn computeLocalContainsRefcounted(
 /// reverse table expands the final solution to LocalId-indexed consumer data
 /// once, after every fixed point has settled.
 const ArcLocalDomain = struct {
-    local_to_arc: []u32,
+    /// ARC index of each local, absent for a local outside the domain.
+    local_to_arc: []OptionalU32,
     arc_to_local: []u32,
 
     fn init(allocator: Allocator, rc_local: []const bool) SolveError!ArcLocalDomain {
-        const local_to_arc = try allocator.alloc(u32, rc_local.len);
-        errdefer allocator.free(local_to_arc);
-        @memset(local_to_arc, no_local);
-
         var count: usize = 0;
         for (rc_local) |is_rc| count += @intFromBool(is_rc);
         const arc_to_local = try allocator.alloc(u32, count);
         errdefer allocator.free(arc_to_local);
 
+        // One sweep writes every row, so the column needs no fill.
+        var local_to_arc = try WriteFirstSlice(OptionalU32).init(allocator, rc_local.len);
+        errdefer local_to_arc.deinit(allocator);
         var next: u32 = 0;
         for (rc_local, 0..) |is_rc, local_index| {
-            if (!is_rc) continue;
-            local_to_arc[local_index] = next;
+            if (!is_rc) {
+                local_to_arc.set(local_index, .none);
+                continue;
+            }
+            local_to_arc.set(local_index, .some(next));
             arc_to_local[next] = @intCast(local_index);
             next += 1;
         }
-        return .{ .local_to_arc = local_to_arc, .arc_to_local = arc_to_local };
+        return .{ .local_to_arc = local_to_arc.finish(allocator), .arc_to_local = arc_to_local };
     }
 
     fn deinit(self: *ArcLocalDomain, allocator: Allocator) void {
@@ -713,14 +712,12 @@ const ArcLocalDomain = struct {
     fn indexOf(self: *const ArcLocalDomain, local: LIR.LocalId) ?u32 {
         const local_index = @backingInt(local);
         if (local_index >= self.local_to_arc.len) return null;
-        const index = self.local_to_arc[local_index];
-        return if (index == no_local) null else index;
+        return self.local_to_arc[local_index].get();
     }
 
     fn indexOfRaw(self: *const ArcLocalDomain, local_index: u32) ?u32 {
         if (local_index >= self.local_to_arc.len) return null;
-        const index = self.local_to_arc[local_index];
-        return if (index == no_local) null else index;
+        return self.local_to_arc[local_index].get();
     }
 
     fn localAt(self: *const ArcLocalDomain, arc_index: u32) u32 {
@@ -890,21 +887,24 @@ const Solver = struct {
     /// results instead demand their input units so unique capacity survives.
     demand: []bool,
     /// Source local of each pure same-value alias (`.local`,
-    /// `.list_reinterpret`, `.nominal`), or `no_local`. A demand on an alias
+    /// `.list_reinterpret`, `.nominal`), absent otherwise. A demand on an alias
     /// is a demand on its source: the consuming occurrence takes the chain's
     /// single unit, so the whole chain must be owned for the unit to move
     /// through instead of paying a retain/release pair.
-    alias_source: []u32,
+    alias_source: []OptionalU32,
     /// Parameter position per local when the local is a proc parameter
     /// (positions beyond the signature mask are recorded as owned-only).
-    param_position: []u32,
-    /// Proc owning each parameter local.
-    param_proc: []u32,
+    /// Written with `param_proc` and read only where that is present.
+    param_position: WriteFirstSlice(u32),
+    /// Proc owning each parameter local, absent for any other local.
+    param_proc: []OptionalU32,
     /// Join parameters discovered during collection.
     join_param: std.bit_set.DynamicBitSetUnmanaged,
     maybe_uninitialized_join_param: std.bit_set.DynamicBitSetUnmanaged,
-    maybe_uninitialized_condition: []u32,
-    maybe_uninitialized_condition_mask: []u64,
+    /// Written for exactly the locals `maybe_uninitialized_join_param`
+    /// marks and read only for them.
+    maybe_uninitialized_condition: WriteFirstSlice(u32),
+    maybe_uninitialized_condition_mask: WriteFirstSlice(u64),
     /// Exact reverse dependencies from one callee parameter position to the
     /// caller argument locals whose ownership demand changes when that
     /// position flips from borrowed to owned.
@@ -921,11 +921,11 @@ const Solver = struct {
     proc_stmts: ProcRows(LIR.CFStmtId),
     proc_returns: ProcRows(u32),
     proc_join_bodies: ProcRows(JoinBody),
-    join_index_by_stmt: []u32,
-    jump_target_join_index_by_stmt: []u32,
-    jump_site_index_by_stmt: []u32,
+    join_index_by_stmt: []OptionalU32,
+    jump_target_join_index_by_stmt: []OptionalU32,
+    jump_site_index_by_stmt: []OptionalU32,
     switch_count_by_proc: []u32,
-    switch_index_by_stmt: []u32,
+    switch_index_by_stmt: []OptionalU32,
     pending_jumps: std.ArrayList(PendingJump),
     /// Reachable direct calls, retained for the return-mode binding update
     /// and unique-return dependency solve.
@@ -983,12 +983,12 @@ pub fn solveWithOptions(
         .defs = &.{},
         .demand = &.{},
         .alias_source = &.{},
-        .param_position = &.{},
+        .param_position = .empty,
         .param_proc = &.{},
         .join_param = .{},
         .maybe_uninitialized_join_param = .{},
-        .maybe_uninitialized_condition = &.{},
-        .maybe_uninitialized_condition_mask = &.{},
+        .maybe_uninitialized_condition = .empty,
+        .maybe_uninitialized_condition_mask = .empty,
         .param_uses = .empty,
         .binding_facts = .empty,
         .visibility_facts = .empty,
@@ -1014,12 +1014,12 @@ pub fn solveWithOptions(
         allocator.free(solver.defs);
         allocator.free(solver.demand);
         allocator.free(solver.alias_source);
-        allocator.free(solver.param_position);
+        solver.param_position.deinit(allocator);
         allocator.free(solver.param_proc);
         solver.join_param.deinit(allocator);
         solver.maybe_uninitialized_join_param.deinit(allocator);
-        allocator.free(solver.maybe_uninitialized_condition);
-        allocator.free(solver.maybe_uninitialized_condition_mask);
+        solver.maybe_uninitialized_condition.deinit(allocator);
+        solver.maybe_uninitialized_condition_mask.deinit(allocator);
         solver.param_uses.deinit(allocator);
         solver.binding_facts.deinit(allocator);
         solver.visibility_facts.deinit(allocator);
@@ -1048,31 +1048,32 @@ pub fn solveWithOptions(
     solver.scc = try allocator.alloc(u32, proc_count);
     solver.defs = try allocator.alloc(DefKind, arc_local_count);
     solver.demand = try allocator.alloc(bool, arc_local_count);
-    solver.alias_source = try allocator.alloc(u32, arc_local_count);
-    solver.param_position = try allocator.alloc(u32, arc_local_count);
-    solver.param_proc = try allocator.alloc(u32, arc_local_count);
+    solver.alias_source = try allocator.alloc(OptionalU32, arc_local_count);
+    solver.param_position = try .init(allocator, arc_local_count);
+    solver.param_proc = try allocator.alloc(OptionalU32, arc_local_count);
     solver.join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count);
     solver.maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, arc_local_count);
-    solver.maybe_uninitialized_condition = try allocator.alloc(u32, arc_local_count);
-    solver.maybe_uninitialized_condition_mask = try allocator.alloc(u64, arc_local_count);
+    solver.maybe_uninitialized_condition = try .init(allocator, arc_local_count);
+    solver.maybe_uninitialized_condition_mask = try .init(allocator, arc_local_count);
     solver.address_taken = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     try solver.proc_stmts.starts.ensureTotalCapacity(allocator, proc_count + 1);
     try solver.proc_returns.starts.ensureTotalCapacity(allocator, proc_count + 1);
     try solver.proc_join_bodies.starts.ensureTotalCapacity(allocator, proc_count + 1);
-    solver.join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
-    solver.jump_target_join_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
-    solver.jump_site_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
+    solver.join_index_by_stmt = try allocator.alloc(OptionalU32, store.cfStmtCount());
+    solver.jump_target_join_index_by_stmt = try allocator.alloc(OptionalU32, store.cfStmtCount());
+    solver.jump_site_index_by_stmt = try allocator.alloc(OptionalU32, store.cfStmtCount());
     solver.switch_count_by_proc = try allocator.alloc(u32, proc_count);
-    solver.switch_index_by_stmt = try allocator.alloc(u32, store.cfStmtCount());
-    @memset(solver.join_index_by_stmt, no_local);
-    @memset(solver.jump_target_join_index_by_stmt, no_local);
-    @memset(solver.jump_site_index_by_stmt, no_local);
+    solver.switch_index_by_stmt = try allocator.alloc(OptionalU32, store.cfStmtCount());
+    // Joins, jumps and continuation switches are spread through every
+    // procedure, so their index columns are written across most pages and
+    // are cleared up front. A parameter's position and a join parameter's
+    // condition are written exactly where their presence is recorded.
+    @memset(solver.join_index_by_stmt, .none);
+    @memset(solver.jump_target_join_index_by_stmt, .none);
+    @memset(solver.jump_site_index_by_stmt, .none);
     @memset(solver.switch_count_by_proc, 0);
-    @memset(solver.switch_index_by_stmt, no_local);
-    @memset(solver.param_position, no_local);
-    @memset(solver.param_proc, no_local);
-    @memset(solver.maybe_uninitialized_condition, no_local);
-    @memset(solver.maybe_uninitialized_condition_mask, 0);
+    @memset(solver.switch_index_by_stmt, .none);
+    @memset(solver.param_proc, .none);
 
     try liftReachableStatements(&solver);
     try resolveJumpIndices(&solver);
@@ -1111,8 +1112,8 @@ pub fn solveWithOptions(
             for (0..GuardedList.borrowLen(params)) |position| {
                 const param = GuardedList.at(params, position);
                 const param_index = domain.indexOf(param) orelse continue;
-                solver.param_position[param_index] = @intCast(position);
-                solver.param_proc[param_index] = @intCast(proc_index);
+                solver.param_position.set(param_index, @intCast(position));
+                solver.param_proc[param_index] = .some(@intCast(proc_index));
                 if (position < arc_sig.tracked_param_count) {
                     sig = sig.withBorrowedParam(position);
                 }
@@ -1131,8 +1132,8 @@ pub fn solveWithOptions(
                 if (!layouts.layoutHoldsHole(store.getLocal(param).layout_idx)) continue;
                 sig = sig.withBorrowedParam(position);
                 const param_index = domain.indexOf(param) orelse continue;
-                solver.param_position[param_index] = @intCast(position);
-                solver.param_proc[param_index] = @intCast(proc_index);
+                solver.param_position.set(param_index, @intCast(position));
+                solver.param_proc[param_index] = .some(@intCast(proc_index));
             }
         }
         solver.sigs[proc_index] = sig;
@@ -1225,28 +1226,28 @@ pub fn solveWithOptions(
         errdefer representation_alias.deinit(allocator);
         const leader = try allocator.alloc(u32, local_count);
         errdefer allocator.free(leader);
-        const alias_source = try allocator.alloc(u32, local_count);
+        // Every borrowed local with a lender and every pure alias records its
+        // source, so both columns are written across most of their pages.
+        const alias_source = try allocator.alloc(OptionalU32, local_count);
         errdefer allocator.free(alias_source);
-        const borrow_source = try allocator.alloc(u32, local_count);
+        const borrow_source = try allocator.alloc(OptionalU32, local_count);
         errdefer allocator.free(borrow_source);
-        const maybe_uninitialized_condition = try allocator.alloc(u32, local_count);
-        errdefer allocator.free(maybe_uninitialized_condition);
-        const maybe_uninitialized_condition_mask = try allocator.alloc(u64, local_count);
-        errdefer allocator.free(maybe_uninitialized_condition_mask);
+        var maybe_uninitialized_condition = try WriteFirstSlice(u32).init(allocator, local_count);
+        errdefer maybe_uninitialized_condition.deinit(allocator);
+        var maybe_uninitialized_condition_mask = try WriteFirstSlice(u64).init(allocator, local_count);
+        errdefer maybe_uninitialized_condition_mask.deinit(allocator);
         var join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         errdefer join_param.deinit(allocator);
         var maybe_uninitialized_join_param = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
         errdefer maybe_uninitialized_join_param.deinit(allocator);
         for (leader, 0..) |*entry, index| entry.* = @intCast(index);
-        @memset(alias_source, no_local);
-        @memset(borrow_source, no_local);
-        @memset(maybe_uninitialized_condition, no_local);
-        @memset(maybe_uninitialized_condition_mask, 0);
+        @memset(alias_source, .none);
+        @memset(borrow_source, .none);
         for (domain.arc_to_local, 0..) |local_index, arc_index| {
             if (binding.borrowed.isSet(arc_index)) {
                 borrowed.set(local_index);
                 switch (solver.defs[arc_index]) {
-                    .borrow_capable => |lender| borrow_source[local_index] = domain.localAt(lender),
+                    .borrow_capable => |lender| borrow_source[local_index] = .some(domain.localAt(lender)),
                     .none, .multi, .fresh => {},
                 }
             }
@@ -1255,15 +1256,14 @@ pub fn solveWithOptions(
                 representation_alias.set(local_index);
                 borrowed.set(local_index);
                 leader[local_index] = local_index;
-                borrow_source[local_index] = no_local;
+                borrow_source[local_index] = .none;
             }
-            const source = solver.alias_source[arc_index];
-            if (source != no_local) alias_source[local_index] = domain.localAt(source);
+            if (solver.alias_source[arc_index].get()) |source| alias_source[local_index] = .some(domain.localAt(source));
             if (solver.join_param.isSet(arc_index)) join_param.set(local_index);
             if (solver.maybe_uninitialized_join_param.isSet(arc_index)) {
                 maybe_uninitialized_join_param.set(local_index);
-                maybe_uninitialized_condition[local_index] = solver.maybe_uninitialized_condition[arc_index];
-                maybe_uninitialized_condition_mask[local_index] = solver.maybe_uninitialized_condition_mask[arc_index];
+                maybe_uninitialized_condition.set(local_index, solver.maybe_uninitialized_condition.get(arc_index));
+                maybe_uninitialized_condition_mask.set(local_index, solver.maybe_uninitialized_condition_mask.get(arc_index));
             }
         }
         for (solver.unique_calls.items) |call| {
@@ -1509,8 +1509,8 @@ fn outcomeLocalIsParam(
     // decision explicit to emission.
     var index = @backingInt(local);
     var steps: usize = 0;
-    while (index < solution.alias_source.len and solution.alias_source[index] != no_local) {
-        index = solution.alias_source[index];
+    while (index < solution.alias_source.len) {
+        index = solution.alias_source[index].get() orelse break;
         steps += 1;
         if (steps > solution.alias_source.len) solveInvariant("ARC outcome alias-source chain contained a cycle");
     }
@@ -1564,11 +1564,11 @@ fn computeOutcomeRestitution(
     // has already collected it; restitution performs no reachability walk.
     var statement_indices = collections.DenseMap(LIR.CFStmtId, u32).init(allocator);
     defer statement_indices.deinit();
-    var discriminant_buffer = std.ArrayList(u32).empty;
+    var discriminant_buffer = std.ArrayList(OptionalU32).empty;
     defer discriminant_buffer.deinit(allocator);
     var mask_buffer = std.ArrayList(arc_sig.ParamMask).empty;
     defer mask_buffer.deinit(allocator);
-    var bit_discriminant_buffer = std.ArrayList(u32).empty;
+    var bit_discriminant_buffer = std.ArrayList(OptionalU32).empty;
     defer bit_discriminant_buffer.deinit(allocator);
     var bit_present_buffer = std.ArrayList(bool).empty;
     defer bit_present_buffer.deinit(allocator);
@@ -1586,7 +1586,8 @@ fn computeOutcomeRestitution(
     defer seen_heads.deinit(allocator);
     var seen_states = std.ArrayList(OutcomeSeenState).empty;
     defer seen_states.deinit(allocator);
-    const ambiguous_discriminant = no_local - 1;
+    // An escape reached with different discriminants on different paths.
+    const ambiguous_discriminant: OptionalU32 = .some(no_local - 1);
 
     for (0..store.procSpecCount()) |proc_index| {
         const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
@@ -1639,7 +1640,8 @@ fn computeOutcomeRestitution(
         const escape_masks = mask_buffer.items;
         const bit_escape_discriminants = bit_discriminant_buffer.items;
         const bit_escape_present = bit_present_buffer.items;
-        @memset(escape_discriminants, no_local);
+        // Per-procedure scratch over its own statements, read by full scans.
+        @memset(escape_discriminants, .none);
         @memset(escape_masks, 0);
         if (@import("builtin").mode == .debug) outcome_scratch_entries += proc_stmts.len + escape_discriminants.len + escape_masks.len;
 
@@ -1660,7 +1662,7 @@ fn computeOutcomeRestitution(
             const param_bit = arc_sig.paramBit(param_position) orelse break;
             if ((initial & param_bit) == 0) continue;
             const active_param = GuardedList.at(params, param_position);
-            @memset(bit_escape_discriminants, no_local);
+            @memset(bit_escape_discriminants, .none);
             @memset(bit_escape_present, false);
             if (@import("builtin").mode == .debug) outcome_scratch_entries += bit_escape_discriminants.len + bit_escape_present.len;
             bit_accum.clearRetainingCapacity();
@@ -1855,10 +1857,10 @@ fn computeOutcomeRestitution(
                             const stmt_index = statement_indices.get(current) orelse
                                 solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                             const old = bit_escape_discriminants[stmt_index];
-                            if (old == no_local) {
-                                bit_escape_discriminants[stmt_index] = next_state.discriminant;
+                            if (old == .none) {
+                                bit_escape_discriminants[stmt_index] = .some(next_state.discriminant);
                                 bit_escape_present[stmt_index] = next_state.present;
-                            } else if (old == next_state.discriminant) {
+                            } else if (old == OptionalU32.some(next_state.discriminant)) {
                                 bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
                             } else {
                                 bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
@@ -1882,10 +1884,10 @@ fn computeOutcomeRestitution(
                         const stmt_index = statement_indices.get(current) orelse
                             solveInvariant("ARC outcome escape was outside its lifted procedure inventory");
                         const old = bit_escape_discriminants[stmt_index];
-                        if (old == no_local) {
-                            bit_escape_discriminants[stmt_index] = discriminant;
+                        if (old == .none) {
+                            bit_escape_discriminants[stmt_index] = .some(discriminant);
                             bit_escape_present[stmt_index] = next_state.present;
-                        } else if (old == discriminant) {
+                        } else if (old == OptionalU32.some(discriminant)) {
                             bit_escape_present[stmt_index] = bit_escape_present[stmt_index] and next_state.present;
                         } else {
                             bit_escape_discriminants[stmt_index] = ambiguous_discriminant;
@@ -1928,9 +1930,9 @@ fn computeOutcomeRestitution(
 
             if (@import("builtin").mode == .debug) outcome_scratch_entries += bit_escape_discriminants.len;
             for (bit_escape_discriminants, 0..) |discriminant, stmt_index| {
-                if (discriminant == no_local) continue;
+                if (discriminant == .none) continue;
                 const old = escape_discriminants[stmt_index];
-                if (old == no_local) {
+                if (old == .none) {
                     escape_discriminants[stmt_index] = discriminant;
                 } else if (old != discriminant) {
                     escape_discriminants[stmt_index] = ambiguous_discriminant;
@@ -1973,8 +1975,9 @@ fn computeOutcomeRestitution(
             .len = @intCast(all_outcomes.items.len - start),
         };
         if (@import("builtin").mode == .debug) outcome_scratch_entries += escape_discriminants.len;
-        for (escape_discriminants, 0..) |discriminant, stmt_index| {
-            if (discriminant == no_local or discriminant == ambiguous_discriminant) continue;
+        for (escape_discriminants, 0..) |maybe_discriminant, stmt_index| {
+            if (maybe_discriminant == ambiguous_discriminant) continue;
+            const discriminant = maybe_discriminant.get() orelse continue;
             const outcome = accum.get(@intCast(discriminant)) orelse
                 solveInvariant("ARC outcome escape named an unreturned discriminant");
             solution.restitution_params_by_stmt[@backingInt(proc_stmts[stmt_index])] = escape_masks[stmt_index] & outcome.remaining_on_all_paths;
@@ -1998,8 +2001,9 @@ fn solveRepresentationAliases(solver: *const Solver, layouts: *const layout_mod.
     defer required.deinit(allocator);
     var work = std.ArrayList(u32).empty;
     defer work.deinit(allocator);
-    for (solver.alias_source, 0..) |source, target| {
-        if (source == no_local or solver.defs[target] != .borrow_capable or solver.join_param.isSet(target)) continue;
+    for (solver.alias_source, 0..) |maybe_source, target| {
+        const source = maybe_source.get() orelse continue;
+        if (solver.defs[target] != .borrow_capable or solver.join_param.isSet(target)) continue;
         const target_layout = layouts.getLayout(solver.store.getLocal(@fromBackingInt(@intCast(domain.localAt(@intCast(target))))).layout_idx);
         const source_layout = layouts.getLayout(solver.store.getLocal(@fromBackingInt(@intCast(domain.localAt(source)))).layout_idx);
         if ((target_layout.tag == .list or target_layout.tag == .list_of_zst) and
@@ -2029,8 +2033,7 @@ fn solveRepresentationAliases(solver: *const Solver, layouts: *const layout_mod.
     }
     while (work.pop()) |target| {
         if (!aliases.isSet(target)) continue;
-        const source = solver.alias_source[target];
-        if (source != no_local) try Seed.add(solver, &required, &work, @fromBackingInt(@intCast(domain.localAt(source))));
+        if (solver.alias_source[target].get()) |source| try Seed.add(solver, &required, &work, @fromBackingInt(@intCast(domain.localAt(source))));
     }
     required.toggleAll();
     aliases.setIntersection(required);
@@ -2151,8 +2154,8 @@ fn buildTailCallTable(
             fact.carriers[position] = tailArgumentCarrier(solver, binding, argument);
             const leader = binding.leader[argument];
             if (!paramIsBorrowed(solver, leader)) continue;
-            if (solver.param_proc[leader] != call.caller) continue;
-            const anchor = solver.param_position[leader];
+            if (solver.param_proc[leader] != OptionalU32.some(call.caller)) continue;
+            const anchor = solver.param_position.get(leader);
             if (anchor >= arc_sig.tracked_param_count) continue;
             fact.anchor_params[position] = @intCast(anchor);
         }
@@ -2180,8 +2183,8 @@ fn tailCallLifetimeLessThan(_: void, left: TailCallLifetime, right: TailCallLife
 fn tailArgumentCarrier(solver: *const Solver, binding: *const BindingResult, argument: u32) u32 {
     var cursor = argument;
     var steps: usize = 0;
-    while (binding.borrowed.isSet(cursor) and solver.alias_source[cursor] != no_local) {
-        cursor = solver.alias_source[cursor];
+    while (binding.borrowed.isSet(cursor)) {
+        cursor = solver.alias_source[cursor].get() orelse break;
         steps += 1;
         if (steps > solver.alias_source.len) solveInvariant("ARC tail-call carrier alias chain contained a cycle");
     }
@@ -2189,9 +2192,8 @@ fn tailArgumentCarrier(solver: *const Solver, binding: *const BindingResult, arg
 }
 
 fn paramIsBorrowed(solver: *const Solver, local_index: u32) bool {
-    const proc_index = solver.param_proc[local_index];
-    if (proc_index == no_local) return false;
-    const position = solver.param_position[local_index];
+    const proc_index = solver.param_proc[local_index].get() orelse return false;
+    const position = solver.param_position.get(local_index);
     if (position >= arc_sig.tracked_param_count) return false;
     return solver.sigs[proc_index].paramMode(position) == .borrowed;
 }
@@ -2246,9 +2248,9 @@ fn retLenders(
         const anchored = binding.borrowed.isSet(value_index) or value_index == leader;
         if (!anchored) return null;
         if (!paramIsBorrowed(solver, leader)) return null;
-        if (solver.param_proc[leader] != proc_index) return null;
+        if (solver.param_proc[leader] != OptionalU32.some(@intCast(proc_index))) return null;
         if (solver.demand[value_index]) return null;
-        const position = solver.param_position[leader];
+        const position = solver.param_position.get(leader);
         const bit = arc_sig.paramBit(position) orelse return null;
         lenders |= bit;
     }
@@ -2331,9 +2333,9 @@ fn liftProcStmtFacts(
             const joins = &solver.proc_join_bodies;
             const join_index: u32 = @intCast(joins.openRows().len);
             const stmt_index = @backingInt(current);
-            if (solver.join_index_by_stmt[stmt_index] == no_local) {
-                solver.join_index_by_stmt[stmt_index] = join_index;
-            } else if (solver.join_index_by_stmt[stmt_index] != join_index) {
+            if (solver.join_index_by_stmt[stmt_index] == .none) {
+                solver.join_index_by_stmt[stmt_index] = .some(join_index);
+            } else if (solver.join_index_by_stmt[stmt_index] != OptionalU32.some(join_index)) {
                 solveInvariant("shared ARC join statement had different structural indices across proc specs");
             }
             try joins.append(solver.allocator, .{
@@ -2349,9 +2351,9 @@ fn liftProcStmtFacts(
         .switch_stmt => |switch_stmt| if (switch_stmt.continuation != null) {
             const stmt_index = @backingInt(current);
             const switch_index = solver.switch_count_by_proc[proc_index];
-            if (solver.switch_index_by_stmt[stmt_index] == no_local) {
-                solver.switch_index_by_stmt[stmt_index] = switch_index;
-            } else if (solver.switch_index_by_stmt[stmt_index] != switch_index) {
+            if (solver.switch_index_by_stmt[stmt_index] == .none) {
+                solver.switch_index_by_stmt[stmt_index] = .some(switch_index);
+            } else if (solver.switch_index_by_stmt[stmt_index] != OptionalU32.some(switch_index)) {
                 solveInvariant("shared ARC switch statement had different structural indices across proc specs");
             }
             solver.switch_count_by_proc[proc_index] += 1;
@@ -2420,11 +2422,11 @@ fn resolveJumpIndices(solver: *Solver) Allocator.Error!void {
             const join_index = slot.index;
             const join = &joins[join_index];
             const stmt_index = @backingInt(pending.stmt);
-            if (solver.jump_target_join_index_by_stmt[stmt_index] == no_local) {
-                solver.jump_target_join_index_by_stmt[stmt_index] = join_index;
-                solver.jump_site_index_by_stmt[stmt_index] = join.jump_count;
-            } else if (solver.jump_target_join_index_by_stmt[stmt_index] != join_index or
-                solver.jump_site_index_by_stmt[stmt_index] != join.jump_count)
+            if (solver.jump_target_join_index_by_stmt[stmt_index] == .none) {
+                solver.jump_target_join_index_by_stmt[stmt_index] = .some(join_index);
+                solver.jump_site_index_by_stmt[stmt_index] = .some(join.jump_count);
+            } else if (solver.jump_target_join_index_by_stmt[stmt_index] != OptionalU32.some(join_index) or
+                solver.jump_site_index_by_stmt[stmt_index] != OptionalU32.some(join.jump_count))
             {
                 solveInvariant("shared ARC jump statement had different structural indices across proc specs");
             }
@@ -2500,7 +2502,7 @@ fn appendProcStatements(
 fn collectAll(solver: *Solver) SolveError!void {
     @memset(solver.defs, .none);
     @memset(solver.demand, false);
-    @memset(solver.alias_source, no_local);
+    @memset(solver.alias_source, .none);
 
     for (solver.binding_facts.items) |fact| switch (fact) {
         .fresh => |local| noteDef(solver, local, .fresh),
@@ -2610,8 +2612,8 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
                 solver.demand[cursor] = true;
                 break;
             }
-            if (solver.defs[cursor] == .multi or solver.alias_source[cursor] == no_local) break;
-            cursor = solver.alias_source[cursor];
+            if (solver.defs[cursor] == .multi) break;
+            cursor = solver.alias_source[cursor].get() orelse break;
         }
     }
 
@@ -2644,9 +2646,8 @@ fn solveParameterModes(solver: *Solver) SolveError!void {
 }
 
 fn flipParamIfRequired(solver: *Solver, local_index: u32, work: *std.ArrayList(u32)) SolveError!void {
-    const proc_index = solver.param_proc[local_index];
-    if (proc_index == no_local) return;
-    const position = solver.param_position[local_index];
+    const proc_index = solver.param_proc[local_index].get() orelse return;
+    const position = solver.param_position.get(local_index);
     if (position >= arc_sig.tracked_param_count) return;
     var sig = &solver.sigs[proc_index];
     if (sig.paramMode(position) == .owned) return;
@@ -2813,11 +2814,11 @@ fn noteAlias(solver: *Solver, target: LIR.LocalId, source: LIR.LocalId) void {
     const index = solver.domain.indexOf(target) orelse return;
     const source_index = solver.domain.indexOf(source) orelse
         solveInvariant("ARC pure-alias source was outside the ARC-local domain");
-    solver.alias_source[index] = if (solver.alias_source[index] == no_local and
+    solver.alias_source[index] = if (solver.alias_source[index] == .none and
         solver.defs[index] != .multi)
-        source_index
+        .some(source_index)
     else
-        no_local;
+        .none;
 }
 
 fn noteDef(solver: *Solver, local: LIR.LocalId, kind: DefKind) void {
@@ -3223,8 +3224,8 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 const mask = GuardedList.at(maybe_uninitialized_condition_masks, index);
                 const param_index = solver.domain.indexOf(param) orelse continue;
                 solver.maybe_uninitialized_join_param.set(param_index);
-                solver.maybe_uninitialized_condition[param_index] = @backingInt(condition);
-                solver.maybe_uninitialized_condition_mask[param_index] = mask;
+                solver.maybe_uninitialized_condition.set(param_index, @backingInt(condition));
+                solver.maybe_uninitialized_condition_mask.set(param_index, mask);
             }
         },
         .ret => |ret_stmt| try solver.unique_facts.append(allocator, .{ .consume = .{ .local = ret_stmt.value, .stmt = current } }),
@@ -3910,7 +3911,7 @@ pub const Uniqueness = struct {
             .field_masks = try allocator.dupe(u64, self.field_masks),
             .conds = try allocator.dupe(arc_sig.ParamMask, self.conds),
             .field_conds = .{
-                .base = try allocator.dupe(u32, self.field_conds.base),
+                .base = try allocator.dupe(OptionalU32, self.field_conds.base),
                 .conds = try allocator.dupe(arc_sig.ParamMask, self.field_conds.conds),
             },
             .consumed = try self.consumed.clone(allocator),
@@ -3922,12 +3923,13 @@ pub const Uniqueness = struct {
 /// owns sixty-four parameter masks, one per field, at `base[container]`,
 /// with no alternative representation for static data.
 pub const FieldConds = struct {
-    base: []u32,
+    /// First slot of each container's masks, absent for a local that is not
+    /// a container.
+    base: []OptionalU32,
     conds: []arc_sig.ParamMask,
 
     pub fn get(self: FieldConds, container: u32, field: u32) arc_sig.ParamMask {
-        const base = self.base[container];
-        if (base == no_local) return 0;
+        const base = self.base[container].get() orelse return 0;
         return self.conds[base + field];
     }
 
@@ -4254,7 +4256,7 @@ fn settleUniqueOrigins(
     multi_def: *const std.bit_set.DynamicBitSetUnmanaged,
     multi_ok: *const std.bit_set.DynamicBitSetUnmanaged,
     destroyed: *std.bit_set.DynamicBitSetUnmanaged,
-    alias_source: []const u32,
+    alias_source: []const OptionalU32,
     alias_targets: []const u32,
     join_incoming: []const UniqueJoinIncoming,
     field_edges: FieldEdges,
@@ -4323,7 +4325,7 @@ fn settleUniqueOrigins(
     const alias_lens = try allocator.alloc(u32, local_count);
     defer allocator.free(alias_lens);
     @memset(alias_lens, 0);
-    for (alias_targets) |target| alias_lens[alias_source[target]] += 1;
+    for (alias_targets) |target| alias_lens[alias_source[target].get().?] += 1;
     const alias_offsets = try allocator.alloc(u32, local_count + 1);
     defer allocator.free(alias_offsets);
     alias_offsets[0] = 0;
@@ -4333,7 +4335,7 @@ fn settleUniqueOrigins(
     const alias_fill = try allocator.dupe(u32, alias_offsets[0..local_count]);
     defer allocator.free(alias_fill);
     for (alias_targets) |target| {
-        const source = alias_source[target];
+        const source = alias_source[target].get().?;
         alias_edges[alias_fill[source]] = target;
         alias_fill[source] += 1;
     }
@@ -4371,7 +4373,7 @@ fn settleUniqueOrigins(
     var container_count: u32 = 0;
     for (0..local_count) |index| {
         const local: u32 = @intCast(index);
-        const derived = alias_source[local] != no_local or join_inputs.row(local).len != 0 or
+        const derived = alias_source[local] != .none or join_inputs.row(local).len != 0 or
             read_inputs.row(local).len != 0 or call_inputs.row(local).len != 0;
         if (derived) {
             if (foreign.isSet(local) or (multi_def.isSet(local) and !multi_ok.isSet(local))) {
@@ -4392,7 +4394,7 @@ fn settleUniqueOrigins(
             seed_inputs.row(local).len != 0 or call_inputs.row(local).len != 0);
         if (has_fields) {
             masks[local] = std.math.maxInt(u64);
-            field_conds.base[local] = container_count * 64;
+            field_conds.base[local] = .some(container_count * 64);
             container_count += 1;
             mask_queued.set(local);
             try mask_work.append(allocator, local);
@@ -4451,7 +4453,7 @@ fn settleUniqueOrigins(
         while (mask_work.pop()) |container| {
             mask_queued.unset(container);
             // Containers without tracked field origins keep an empty mask.
-            if (field_conds.base[container] == no_local) continue;
+            const base = field_conds.base[container].get() orelse continue;
             var meets: [64]Meet = @splat(Meet{});
             var dead: u64 = dead_masks[container];
             var changed = false;
@@ -4493,7 +4495,7 @@ fn settleUniqueOrigins(
                 if (!meet.isBorn()) continue;
                 const bit = @as(u64, 1) << @as(u6, @intCast(field));
                 mask |= bit;
-                const slot = field_conds.base[container] + field;
+                const slot = base + field;
                 if (field_conds.conds[slot] != meet.value.?) {
                     field_conds.conds[slot] = meet.value.?;
                     changed = true;
@@ -4524,8 +4526,7 @@ fn settleUniqueOrigins(
         var meet = Meet{};
         var dead = destroyed.isSet(local);
         var changed = false;
-        if (alias_source[local] != no_local) {
-            const source = alias_source[local];
+        if (alias_source[local].get()) |source| {
             meet.fromLocal(born, conds, source);
             dead = dead or destroyed.isSet(source);
         } else if (join_inputs.row(local).len != 0 or read_inputs.row(local).len != 0) {
@@ -4617,14 +4618,14 @@ const ProcUniquenessDomain = struct {
     count: usize,
     locals: ?[]const u32 = null,
     procs: ?[]const u32 = null,
-    owners: ?[]const u32 = null,
+    owners: ?[]const OptionalU32 = null,
     component: u32 = 0,
 
     fn indexOf(self: ProcUniquenessDomain, local: LIR.LocalId) ?u32 {
         const raw = @backingInt(local);
         if (raw >= self.local_to_dense.len()) return null;
         const dense = self.local_to_dense.get(raw) orelse return null;
-        if (self.owners) |owners| std.debug.assert(owners[raw] == self.component);
+        if (self.owners) |owners| std.debug.assert(owners[raw] == OptionalU32.some(self.component));
         return @backingInt(dense);
     }
 };
@@ -4731,12 +4732,16 @@ const UniquenessStructure = struct {
     proc_stmts: FrozenProcRows(LIR.CFStmtId),
     returns: FrozenProcRows(LIR.LocalId),
     callers: FrozenProcRows(u32),
-    local_owner: []u32,
-    stmt_owner: []u32,
+    /// Component of each refcounted local and reachable statement, absent
+    /// for every other row.
+    local_owner: []OptionalU32,
+    stmt_owner: []OptionalU32,
     proc_component: []u32,
     components: []UniquenessComponent,
     local_to_dense: DenseLocalColumn.View,
-    stmt_to_dense: []u32,
+    /// Position of each owned statement in its component, absent for every
+    /// other statement.
+    stmt_to_dense: []OptionalU32,
     topology: UseOrder.Topology,
 
     /// Builds the structure from the solver's reachable-statement lift, which
@@ -4791,10 +4796,12 @@ const UniquenessStructure = struct {
         const caller_starts = try arena.alloc(u32, proc_count + 1);
         @memset(caller_starts, 0);
         const lists = try arena.alloc([]const LIR.CFStmtId, proc_count);
-        const local_owner = try arena.alloc(u32, store.localCount());
-        @memset(local_owner, no_local);
-        const stmt_owner = try arena.alloc(u32, store.cfStmtCount());
-        @memset(stmt_owner, no_local);
+        // Every refcounted local and reachable statement gets an owner, and
+        // the owner columns are scanned in full below.
+        const local_owner = try arena.alloc(OptionalU32, store.localCount());
+        @memset(local_owner, .none);
+        const stmt_owner = try arena.alloc(OptionalU32, store.cfStmtCount());
+        @memset(stmt_owner, .none);
         var partition = UniquenessPartition{ .sets = try collections.DisjointSets.init(arena, proc_count), .local_owner = local_owner, .rc_local = rc_local };
         var caller_count: usize = 0;
         for (0..proc_count) |proc_index| {
@@ -4805,7 +4812,7 @@ const UniquenessStructure = struct {
             lists[proc_index] = proc_stmts.of(proc_index);
             for (proc_stmts.of(proc_index)) |stmt_id| {
                 const raw = @backingInt(stmt_id);
-                if (stmt_owner[raw] == no_local) stmt_owner[raw] = @intCast(proc_index) else partition.sets.unite(@intCast(proc_index), stmt_owner[raw]);
+                if (stmt_owner[raw].get()) |owner| partition.sets.unite(@intCast(proc_index), owner) else stmt_owner[raw] = .some(@intCast(proc_index));
                 const stmt = store.getCFStmtImmediate(stmt_id);
                 body_clone.forEachStmtRead(store, stmt.*, &partition, UniquenessPartition.local);
                 body_clone.forEachStmtDef(store, stmt.*, &partition, UniquenessPartition.local);
@@ -4830,16 +4837,16 @@ const UniquenessStructure = struct {
             }
         }
         const proc_component = try arena.alloc(u32, proc_count);
-        const root_component = try arena.alloc(u32, proc_count);
-        @memset(root_component, no_local);
+        const root_component = try arena.alloc(OptionalU32, proc_count);
+        @memset(root_component, .none);
         var component_count: u32 = 0;
         for (0..proc_count) |index| {
             const root = partition.sets.find(@intCast(index));
-            if (root_component[root] == no_local) {
-                root_component[root] = component_count;
+            if (root_component[root] == .none) {
+                root_component[root] = .some(component_count);
                 component_count += 1;
             }
-            proc_component[index] = root_component[root];
+            proc_component[index] = root_component[root].get().?;
         }
         const components = try arena.alloc(UniquenessComponent, component_count);
         // Each component's procedures, locals, statements, and unresolved
@@ -4864,20 +4871,22 @@ const UniquenessStructure = struct {
         errdefer topology.deinit(allocator);
         var owned_local_count: usize = 0;
         for (local_owner) |*owner| {
-            if (owner.* == no_local) continue;
-            owner.* = proc_component[owner.*];
-            local_counts[owner.*] += 1;
+            const proc = owner.get() orelse continue;
+            const component = proc_component[proc];
+            owner.* = .some(component);
+            local_counts[component] += 1;
             owned_local_count += 1;
         }
         var owned_stmt_count: usize = 0;
         var unresolved_count: usize = 0;
         for (stmt_owner, 0..) |*owner, raw| {
-            if (owner.* == no_local) continue;
-            owner.* = proc_component[owner.*];
-            stmt_counts[owner.*] += 1;
+            const proc = owner.get() orelse continue;
+            const component = proc_component[proc];
+            owner.* = .some(component);
+            stmt_counts[component] += 1;
             owned_stmt_count += 1;
             if (topology.unresolved.isSet(raw)) {
-                unresolved_counts[owner.*] += 1;
+                unresolved_counts[component] += 1;
                 unresolved_count += 1;
             }
         }
@@ -4913,20 +4922,24 @@ const UniquenessStructure = struct {
             proc_counts[component] += 1;
         }
         var local_to_dense = try DenseLocalColumn.initFilled(arena, store.localCount());
-        for (local_owner, 0..) |owner, raw| {
-            if (owner == no_local) continue;
+        for (local_owner, 0..) |maybe_owner, raw| {
+            const owner = maybe_owner.get() orelse continue;
             const position = local_counts[owner];
             local_to_dense.set(raw, @fromBackingInt(position - local_first[owner]));
             component_locals[position] = @intCast(raw);
             local_counts[owner] += 1;
         }
-        const stmt_to_dense = try arena.alloc(u32, store.cfStmtCount());
-        @memset(stmt_to_dense, no_local);
+        // One sweep over every statement writes every row, so the column
+        // needs no fill.
+        var stmt_to_dense = try WriteFirstSlice(OptionalU32).init(arena, store.cfStmtCount());
         // Ascending statement ids reproduce the legacy whole-store deduplication.
-        for (stmt_owner, 0..) |owner, raw| {
-            if (owner == no_local) continue;
+        for (stmt_owner, 0..) |maybe_owner, raw| {
+            const owner = maybe_owner.get() orelse {
+                stmt_to_dense.set(raw, .none);
+                continue;
+            };
             const position = stmt_counts[owner];
-            stmt_to_dense[raw] = position - stmt_first[owner];
+            stmt_to_dense.set(raw, .some(position - stmt_first[owner]));
             component_stmts[position] = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             stmt_counts[owner] += 1;
             if (topology.unresolved.isSet(raw)) {
@@ -4942,7 +4955,7 @@ const UniquenessStructure = struct {
         self.proc_component = proc_component;
         self.components = components;
         self.local_to_dense = local_to_dense.view();
-        self.stmt_to_dense = stmt_to_dense;
+        self.stmt_to_dense = stmt_to_dense.finish(arena);
         self.topology = topology;
         return self;
     }
@@ -5002,8 +5015,8 @@ const UniquenessComponentTask = struct {
     component: *UniquenessComponent,
     domain: ProcUniquenessDomain,
     topology: *const UseOrder.Topology,
-    stmt_to_dense: []const u32,
-    stmt_owner: []const u32,
+    stmt_to_dense: []const OptionalU32,
+    stmt_owner: []const OptionalU32,
     proc_stmts: FrozenProcRows(LIR.CFStmtId),
     returns: FrozenProcRows(LIR.LocalId),
     failed: bool = false,
@@ -5191,14 +5204,14 @@ const UniquenessComponentTask = struct {
 
 const UniquenessPartition = struct {
     sets: collections.DisjointSets,
-    local_owner: []u32,
+    local_owner: []OptionalU32,
     rc_local: []const bool,
     proc: u32 = 0,
 
     fn local(self: *@This(), id: LIR.LocalId) void {
         const raw = @backingInt(id);
         if (raw >= self.rc_local.len or !self.rc_local[raw]) return;
-        if (self.local_owner[raw] == no_local) self.local_owner[raw] = self.proc else self.sets.unite(self.proc, self.local_owner[raw]);
+        if (self.local_owner[raw].get()) |owner| self.sets.unite(self.proc, owner) else self.local_owner[raw] = .some(self.proc);
     }
 };
 
@@ -5698,23 +5711,24 @@ fn computeUniquenessDetailed(
     defer allocator.free(join_decl_counts);
     @memset(join_decl_counts, 0);
 
-    // Single pure-alias source per target (`no_local` when the local is not
-    // an alias target), plus the list of distinct alias targets to settle.
-    const alias_source = try allocator.alloc(u32, local_count);
+    // Single pure-alias source per target (absent when the local is not an
+    // alias target), plus the list of distinct alias targets to settle. The
+    // defining statement is written with the source and read only for alias
+    // targets.
+    const alias_source = try allocator.alloc(OptionalU32, local_count);
     defer allocator.free(alias_source);
-    @memset(alias_source, no_local);
-    const alias_stmt = try allocator.alloc(u32, local_count);
-    defer allocator.free(alias_stmt);
-    @memset(alias_stmt, no_local);
+    @memset(alias_source, .none);
+    var alias_stmt = try WriteFirstSlice(u32).init(allocator, local_count);
+    defer alias_stmt.deinit(allocator);
     var alias_targets = std.ArrayList(u32).empty;
     defer alias_targets.deinit(allocator);
     // A solved-borrowed alias is a view of its source rather than a holder:
     // it moves no unit, so it is not a consuming use of the source, while a
     // consuming use of the view retains the source's allocation and counts
     // as a consume of the source at that statement.
-    const view_source = try allocator.alloc(u32, local_count);
+    const view_source = try allocator.alloc(OptionalU32, local_count);
     defer allocator.free(view_source);
-    @memset(view_source, no_local);
+    @memset(view_source, .none);
     var view_defs = std.ArrayList(AliasDef).empty;
     defer view_defs.deinit(allocator);
     var join_incoming = std.ArrayList(UniqueJoinIncoming).empty;
@@ -5885,7 +5899,7 @@ fn computeUniquenessDetailed(
                     marks.destroy(&foreign_def, assign.target);
                     if (marks.indexOf(assign.target)) |target| if (marks.indexOf(alias_of.?)) |source| {
                         if (source != target) {
-                            view_source[target] = source;
+                            view_source[target] = .some(source);
                             try view_defs.append(allocator, .{ .target = target, .source = source, .stmt = @intCast(stmt_index) });
                         }
                     };
@@ -6249,7 +6263,7 @@ fn computeUniquenessDetailed(
                             marks.destroy(&foreign_def, target);
                             if (marks.indexOf(target)) |target_index| if (marks.indexOf(source)) |source_index| {
                                 if (source_index != target_index) {
-                                    view_source[target_index] = source_index;
+                                    view_source[target_index] = .some(source_index);
                                     try view_defs.append(allocator, .{ .target = target_index, .source = source_index, .stmt = @intCast(stmt_index) });
                                 }
                             };
@@ -6331,13 +6345,13 @@ fn computeUniquenessDetailed(
     var consumes_scanned: usize = 0;
     while (consumes_scanned < consumes.items.len) {
         for (consumes.items[consumes_scanned..]) |consume| {
-            if (view_source[consume.index] != no_local) consumed_views.set(consume.index);
+            if (view_source[consume.index] != .none) consumed_views.set(consume.index);
         }
         consumes_scanned = consumes.items.len;
         for (view_defs.items) |def| {
             if (!consumed_views.isSet(def.target) or promoted_views.isSet(def.target)) continue;
             promoted_views.set(def.target);
-            view_source[def.target] = no_local;
+            view_source[def.target] = .none;
             foreign_def.unset(def.target);
             try consumes.append(allocator, .{ .index = def.source, .stmt = def.stmt });
             try alias_defs.append(allocator, .{ .target = def.target, .source = def.source, .stmt = def.stmt });
@@ -6366,12 +6380,12 @@ fn computeUniquenessDetailed(
             cell_edge_counts[def.target] += 1;
             continue;
         }
-        if (alias_source[def.target] == no_local) {
-            alias_source[def.target] = def.source;
-            alias_stmt[def.target] = def.stmt;
+        if (alias_source[def.target] == .none) {
+            alias_source[def.target] = .some(def.source);
+            alias_stmt.set(def.target, def.stmt);
             try alias_targets.append(allocator, def.target);
             same_source_alias_counts[def.target] = 1;
-        } else if (alias_source[def.target] != def.source) {
+        } else if (alias_source[def.target] != OptionalU32.some(def.source)) {
             foreign_def.set(def.target);
         } else {
             same_source_alias_counts[def.target] += 1;
@@ -6405,18 +6419,18 @@ fn computeUniquenessDetailed(
     for (consumes.items) |*consume| {
         var root = consume.index;
         var steps: usize = 0;
-        while (view_source[root] != no_local) : (steps += 1) {
-            root = view_source[root];
+        while (view_source[root].get()) |source| : (steps += 1) {
+            root = source;
             if (steps > local_count) solveInvariant("ARC uniqueness view chain contained a cycle");
         }
         consume.index = root;
     }
     for (0..local_count) |index| {
-        if (view_source[index] == no_local or !destroyed.isSet(index)) continue;
+        if (view_source[index] == .none or !destroyed.isSet(index)) continue;
         var root: u32 = @intCast(index);
         var steps: usize = 0;
-        while (view_source[root] != no_local) : (steps += 1) {
-            root = view_source[root];
+        while (view_source[root].get()) |source| : (steps += 1) {
+            root = source;
             if (steps > local_count) solveInvariant("ARC uniqueness view chain contained a cycle");
         }
         destroyed.set(root);
@@ -6477,7 +6491,7 @@ fn computeUniquenessDetailed(
         var checks = std.ArrayList(EdgeCheck).empty;
         defer checks.deinit(allocator);
         for (alias_targets.items) |target| {
-            try places.appendEdgeChecks(allocator, &checks, index_to_local, alias_source[target], alias_stmt[target], target);
+            try places.appendEdgeChecks(allocator, &checks, index_to_local, alias_source[target].get().?, alias_stmt.get(target), target);
         }
         for (repeated_alias_edges.items) |def| {
             try places.appendEdgeChecks(allocator, &checks, index_to_local, def.source, def.stmt, def.target);
@@ -6626,9 +6640,9 @@ fn computeUniquenessDetailed(
     errdefer allocator.free(field_masks);
     const dead_masks = try allocator.alloc(u64, local_count);
     defer allocator.free(dead_masks);
-    var field_conds = FieldConds{ .base = try allocator.alloc(u32, local_count), .conds = &.{} };
+    var field_conds = FieldConds{ .base = try allocator.alloc(OptionalU32, local_count), .conds = &.{} };
     errdefer field_conds.deinit(allocator);
-    @memset(field_conds.base, no_local);
+    @memset(field_conds.base, .none);
     try settleUniqueOrigins(
         allocator,
         &born,
