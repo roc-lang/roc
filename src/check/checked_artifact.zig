@@ -32483,9 +32483,6 @@ pub const ImportedModuleView = struct {
     interface_capabilities: *const ModuleInterfaceCapabilities,
     const_store: *const ConstStore,
     compile_time_root_reads: *const CompileTimeRootReadTable = &no_compile_time_root_reads,
-    /// Live root requests after checked procedure-alias normalization.
-    /// Retained entry-wrapper templates are not themselves evaluation requests.
-    root_requests: *const RootRequestTable = &no_root_requests,
 
     /// The keys of the modules this module imports directly.
     pub fn directImportKeys(self: ImportedModuleView) []const CheckedModuleArtifactKey {
@@ -32494,7 +32491,6 @@ pub const ImportedModuleView = struct {
 };
 
 const no_compile_time_root_reads: CompileTimeRootReadTable = .{};
-const no_root_requests: RootRequestTable = .{};
 
 /// Public `LoweringModuleView` declaration.
 pub const LoweringModuleView = struct {
@@ -32509,7 +32505,6 @@ const empty_platform_requirement_solutions: PlatformRequirementSolutionTable = .
 /// Public `importedView` function.
 pub fn importedView(artifact: *const CheckedModuleArtifact) ImportedModuleView {
     return .{
-        .root_requests = &artifact.root_requests,
         .code_generation_key = if (artifact.pairing_arena != null) artifact.codeGenerationKey() else null,
         .key = artifact.key,
         .module_env = artifact.moduleEnvConst(),
