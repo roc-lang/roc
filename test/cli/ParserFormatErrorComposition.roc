@@ -2,27 +2,31 @@ ParserFormatErrorComposition :: [].{}
 
 State := { bytes : List(U8) }.{ is_eq : _ }
 
+# Each operation owns the complete format error, even when its implementation
+# produces only one branch of it.
+ParseError : [BadByte(U8), NoByte, Separator(Str), Start(U64)]
+
 Format := {}.{
-	parse_u8 : Format, State -> Try({ value : U8, rest : State }, [BadByte(U8), NoByte])
+	parse_u8 : Format, State -> Try({ value : U8, rest : State }, ParseError)
 	parse_u8 = |_, state| match state.bytes {
 		[] => Err(NoByte)
 		[255, ..] => Err(BadByte(255))
 		[value, .. as bytes] => Ok({ value, rest: State.{ bytes } })
 	}
 
-	parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], [Start(U64)])
+	parse_list_start : Format, State -> Try([Counted({ len : U64, rest : State }), Uncounted(State)], ParseError)
 	parse_list_start = |_, state| match state.bytes {
 		[254, ..] => Err(Start(254))
 		_ => Ok(Uncounted(state))
 	}
 
-	parse_list_next : Format, State -> Try([Item(State), Done(State)], _)
+	parse_list_next : Format, State -> Try([Item(State), Done(State)], ParseError)
 	parse_list_next = |_, state| match state.bytes {
 		[] => Ok(Done(state))
 		_ => Ok(Item(state))
 	}
 
-	parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], [Separator(Str)])
+	parse_list_after_item : Format, State -> Try([Continue(State), Done(State)], ParseError)
 	parse_list_after_item = |_, state| match state.bytes {
 		[] => Ok(Done(state))
 		[0, .. as bytes] => Ok(Continue(State.{ bytes }))
@@ -30,7 +34,7 @@ Format := {}.{
 	}
 }
 
-parse : List(U8) -> Try({ value : List(U8), rest : State }, [BadByte(U8), NoByte, Separator(Str), Start(U64)])
+parse : List(U8) -> Try({ value : List(U8), rest : State }, ParseError)
 parse = |bytes| {
 	T : List(U8)
 	parse_ = T.parser_for(Format.{})
@@ -46,7 +50,7 @@ expect parse([1, 2]) == Err(Separator("expected zero"))
 expect {
 	T : U8
 	parse_ = T.parser_for(Format.{})
-	result : Try({ value : U8, rest : State }, [BadByte(U8), NoByte, Unrelated(Str)])
+	result : Try({ value : U8, rest : State }, ParseError)
 	result = parse_(State.{ bytes: [] })
 	result == Err(NoByte) and parse([255]) == Err(BadByte(255))
 }

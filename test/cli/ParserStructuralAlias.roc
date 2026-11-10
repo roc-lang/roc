@@ -1,6 +1,9 @@
 ParserStructuralAlias :: [].{}
 
 Format := [Default].{
+	missing_field : Format, Str -> [FormatError]
+	missing_field = |_, _| FormatError
+
 	rename_field : Format, Str -> Str
 	rename_field = |_, name| name
 
@@ -41,11 +44,11 @@ Format := [Default].{
 
 State := [Present(Str), Done]
 
-main : () -> Try({ foo : Str }, [FormatError, MissingRequiredField(Str)])
+main : () -> Try({ foo : Str }, [FormatError])
 main = || {
 	Shape : { foo : Str }
 
-	parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [FormatError, MissingRequiredField(Str)])
+	parse_shape : State -> Try({ value : { foo : Str }, rest : State }, [FormatError])
 	parse_shape = Shape.parser_for(Format.Default)
 
 	parsed = parse_shape(State.Present(""))?
